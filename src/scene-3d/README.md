@@ -30,3 +30,13 @@ the initial press (object placement/move are discrete actions, never strokes) an
 objects intercept the cell beneath; when absent they're inert and sculpt strokes fall
 through to the cell. As with cells, elevation/URL resolution is the caller's job: the scene
 receives already-derived values.
+
+As of Prompt 28: `MapEditorObject` gained three optional read-only flags for the live-map
+viewer (`/campaigns/[id]/map`), which reuses this scene rather than a second renderer:
+`selectable` (false keeps an object inert even when `onSelectObject` is provided, so a
+player's view only lets them click triggerable objects), `ghost` (renders a wireframe outline
+instead of the model — the DM's view of an object players currently can't see), and `active`
+(shows an activation beacon above a switched-on object). Interactive-behavior state itself
+(what's configured, what's currently triggered) lives in `map_objects.behavior_config`,
+defined and read entirely in `data-access` — the scene only ever receives these three
+booleans, never the raw config.

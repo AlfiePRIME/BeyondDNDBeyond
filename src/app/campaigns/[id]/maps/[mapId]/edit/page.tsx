@@ -48,6 +48,7 @@ export default async function MapEditPage({
       initialCells={cells}
       initialObjects={objects}
       assets={paletteAssets}
+      initialIsLive={campaign.live_map === map.id}
     />
   );
 }

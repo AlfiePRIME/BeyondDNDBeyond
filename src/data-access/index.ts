@@ -76,6 +76,7 @@ export {
   getMap,
   listMapCells,
   upsertMapCells,
+  setLiveMap,
   type CampaignMap,
   type MapCell,
 } from "./maps";
@@ -84,7 +85,13 @@ export {
   createMapObject,
   updateMapObject,
   deleteMapObject,
+  setMapObjectBehavior,
+  triggerMapObject,
+  parseMapObjectBehavior,
+  MAP_OBJECT_ACTIONS,
   type MapObject,
+  type MapObjectAction,
+  type MapObjectBehavior,
   type PlacedObjectAsset,
 } from "./mapObjects";
 export {

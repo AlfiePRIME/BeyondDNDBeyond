@@ -25,6 +25,53 @@ export interface MapObject {
   asset: PlacedObjectAsset;
 }
 
+export const MAP_OBJECT_ACTIONS = [
+  "reveal_text",
+  "reveal_image",
+  "toggle_visibility",
+  "toggle_state",
+] as const;
+
+export type MapObjectAction = (typeof MAP_OBJECT_ACTIONS)[number];
+
+/**
+ * The one place map_objects.behavior_config's shape is defined — the column
+ * is schemaless jsonb (0014 left it '{}', meaning "no behavior"). Stored
+ * keys, all top-level:
+ *
+ *   action            — one of MAP_OBJECT_ACTIONS
+ *   content           — reveal_text: the hidden message; reveal_image: the
+ *                       image URL; omitted for the two toggle actions
+ *   playerTriggerable — whether a non-DM member may trigger it (the
+ *                       trigger_map_object RPC in 0018 checks this key BY
+ *                       NAME — renaming it is a migration, not a refactor)
+ *   triggered         — the CURRENT live state, kept separate from the
+ *                       authoring fields above because it must survive
+ *                       reconnects/new joins: reveal_*: content is shown;
+ *                       toggle_visibility: the object is visible;
+ *                       toggle_state: the switch is on
+ */
+export interface MapObjectBehavior {
+  action: MapObjectAction;
+  content: string | null;
+  playerTriggerable: boolean;
+  triggered: boolean;
+}
+
+/** null for an unconfigured (or unrecognized) config — an inert object. */
+export function parseMapObjectBehavior(config: Record<string, unknown>): MapObjectBehavior | null {
+  const action = config.action;
+  if (typeof action !== "string" || !(MAP_OBJECT_ACTIONS as readonly string[]).includes(action)) {
+    return null;
+  }
+  return {
+    action: action as MapObjectAction,
+    content: typeof config.content === "string" ? config.content : null,
+    playerTriggerable: config.playerTriggerable === true,
+    triggered: config.triggered === true,
+  };
+}
+
 const OBJECT_COLUMNS = "*, asset:asset_library(name, source_type, model_ref)";
 
 export async function listMapObjects(supabase: SupabaseClient, mapId: string): Promise<MapObject[]> {
@@ -39,7 +86,8 @@ export async function listMapObjects(supabase: SupabaseClient, mapId: string): P
 }
 
 /** DM-only, enforced by map_objects' INSERT RLS policy (0015).
- * behavior_config is left at its DB default — POI behavior is Prompt 28. */
+ * behavior_config starts at its DB default ('{}') — a fresh placement is
+ * inert until the DM assigns a behavior via setMapObjectBehavior. */
 export async function createMapObject(
   supabase: SupabaseClient,
   params: { mapId: string; assetId: string; x: number; y: number; elevation: number; rotation: number }
@@ -76,6 +124,54 @@ export async function updateMapObject(
 
   if (error) throw error;
   return data;
+}
+
+/**
+ * Replaces the object's whole behavior config (null clears it back to inert)
+ * — an authoring operation, so it goes through the DM-only UPDATE policy
+ * like rotate/move, not through the trigger RPC.
+ */
+export async function setMapObjectBehavior(
+  supabase: SupabaseClient,
+  objectId: string,
+  behavior: MapObjectBehavior | null
+): Promise<MapObject> {
+  const behavior_config = behavior
+    ? {
+        action: behavior.action,
+        ...(behavior.content !== null ? { content: behavior.content } : {}),
+        playerTriggerable: behavior.playerTriggerable,
+        triggered: behavior.triggered,
+      }
+    : {};
+  const { data, error } = await supabase
+    .from("map_objects")
+    .update({ behavior_config })
+    .eq("id", objectId)
+    .select(OBJECT_COLUMNS)
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Persists the object's current triggered state via the trigger_map_object
+ * RPC (0018) — the DM always may; a non-DM member only for a
+ * playerTriggerable object on the live map. Takes the explicit target state
+ * rather than flipping server-side so the caller's realtime broadcast
+ * always matches what was persisted.
+ */
+export async function triggerMapObject(
+  supabase: SupabaseClient,
+  objectId: string,
+  triggered: boolean
+): Promise<void> {
+  const { error } = await supabase.rpc("trigger_map_object", {
+    p_object_id: objectId,
+    p_triggered: triggered,
+  });
+  if (error) throw error;
 }
 
 export async function deleteMapObject(supabase: SupabaseClient, objectId: string): Promise<void> {

@@ -6,6 +6,7 @@ export interface Campaign {
   creator: string;
   invite_code: string;
   session_active: boolean;
+  live_map: string | null;
   created_at: string;
 }
 

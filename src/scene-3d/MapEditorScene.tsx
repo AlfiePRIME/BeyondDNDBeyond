@@ -107,6 +107,14 @@ export interface MapEditorObject {
   rotation: number;
   /** Loadable model URL, or null to render the placeholder prop. */
   url: string | null;
+  /** false keeps this object inert even when onSelectObject is provided —
+   * the live viewer uses it so only triggerable objects are click targets. */
+  selectable?: boolean;
+  /** Renders a hidden-object outline instead of the model — the DM's view
+   * of an object that players currently can't see at all. */
+  ghost?: boolean;
+  /** Shows an activation beacon above the model (a switched-on object). */
+  active?: boolean;
 }
 
 interface ObjectMarkerProps {
@@ -118,6 +126,8 @@ interface ObjectMarkerProps {
   url: string | null;
   selected: boolean;
   selectable: boolean;
+  ghost: boolean;
+  active: boolean;
   onSelect: (id: string, event: ThreeEvent<PointerEvent>) => void;
 }
 
@@ -125,6 +135,10 @@ interface ObjectMarkerProps {
 // meshes makes thin or holey props (torch, door frame) nearly unclickable —
 // the box gives every object a uniform, cell-sized click target.
 const HIT_BOX_HEIGHT = 0.9;
+
+// Beacon color mirrors DIFFICULT_HIGH's warm family on purpose: "switched
+// on" needs to read against both the cool cell palette and any model color.
+const BEACON_COLOR = "#ffbf47";
 
 const ObjectMarker = memo(function ObjectMarker({
   id,
@@ -135,13 +149,28 @@ const ObjectMarker = memo(function ObjectMarker({
   url,
   selected,
   selectable,
+  ghost,
+  active,
   onSelect,
 }: ObjectMarkerProps) {
   const [hovered, setHovered] = useState(false);
   const top = BASE_HEIGHT + elevation * ELEVATION_STEP_HEIGHT;
   return (
     <group position={[worldX, top, worldZ]} rotation={[0, (rotation * Math.PI) / 180, 0]}>
-      <PlacedObject url={url} />
+      {ghost ? (
+        <mesh position={[0, HIT_BOX_HEIGHT / 2, 0]}>
+          <boxGeometry args={[PLACED_OBJECT_SIZE * 0.7, HIT_BOX_HEIGHT * 0.7, PLACED_OBJECT_SIZE * 0.7]} />
+          <meshBasicMaterial wireframe color={PURPLE} transparent opacity={0.45} />
+        </mesh>
+      ) : (
+        <PlacedObject url={url} />
+      )}
+      {active ? (
+        <mesh position={[0, HIT_BOX_HEIGHT + 0.22, 0]}>
+          <sphereGeometry args={[0.11, 16, 16]} />
+          <meshBasicMaterial color={BEACON_COLOR} />
+        </mesh>
+      ) : null}
       {selectable ? (
         <mesh
           onPointerDown={(event) => {
@@ -324,7 +353,9 @@ export function MapEditorScene({
           rotation={object.rotation}
           url={object.url}
           selected={object.id === selectedObjectId}
-          selectable={Boolean(onSelectObject)}
+          selectable={Boolean(onSelectObject) && object.selectable !== false}
+          ghost={object.ghost ?? false}
+          active={object.active ?? false}
           onSelect={handleSelectObject}
         />
       ))}

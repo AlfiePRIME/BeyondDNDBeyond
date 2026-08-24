@@ -56,6 +56,9 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
               <Link href={`/campaigns/${campaignId}/assets`} className={styles.createLink}>
                 Asset palette
               </Link>
+              <Link href={`/campaigns/${campaignId}/map`} className={styles.createLink}>
+                Live map
+              </Link>
               <Link href={`/campaigns/${campaignId}/room`} className={styles.createLink}>
                 Enter the Game Room →
               </Link>

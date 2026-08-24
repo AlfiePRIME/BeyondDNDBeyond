@@ -13,6 +13,10 @@ import {
   createMapObject,
   updateMapObject,
   deleteMapObject,
+  setLiveMap,
+  setMapObjectBehavior,
+  triggerMapObject,
+  parseMapObjectBehavior,
 } from "@/data-access";
 
 describe("data-access module", () => {
@@ -39,6 +43,13 @@ describe("data-access module", () => {
     expect(createMapObject).toBeTypeOf("function");
     expect(updateMapObject).toBeTypeOf("function");
     expect(deleteMapObject).toBeTypeOf("function");
+  });
+
+  it("exports the behavior and live-map functions from the main barrel", () => {
+    expect(setLiveMap).toBeTypeOf("function");
+    expect(setMapObjectBehavior).toBeTypeOf("function");
+    expect(triggerMapObject).toBeTypeOf("function");
+    expect(parseMapObjectBehavior).toBeTypeOf("function");
   });
 
   it("treats a profile with no display name as incomplete", () => {

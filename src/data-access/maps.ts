@@ -74,6 +74,27 @@ export async function getMap(supabase: SupabaseClient, mapId: string): Promise<C
 }
 
 /**
+ * Points campaigns.live_map at this map (or clears it with null) — the
+ * minimal plumbing that makes a map "the live one" so members' RLS reads
+ * (can_read_map's live-map branch) have something to key off. DM-only via
+ * campaigns' UPDATE policy (0011), with renameCampaign's zero-rows-affected
+ * detection for a non-DM caller.
+ */
+export async function setLiveMap(
+  supabase: SupabaseClient,
+  campaignId: string,
+  mapId: string | null
+): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaigns")
+    .update({ live_map: mapId }, { count: "exact" })
+    .eq("id", campaignId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can change the live map.");
+}
+
+/**
  * The map's stored (non-default) cells only, per the sparse-storage model —
  * callers overlay these onto an all-defaults grid to reconstruct the full
  * grid_width x grid_height picture.
