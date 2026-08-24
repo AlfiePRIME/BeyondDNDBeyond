@@ -38,7 +38,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   return (
     <div className={styles.page}>
       <main className={styles.main}>
-        <Link href="/" className={styles.backLink}>
+        <Link href="/campaigns" className={styles.backLink}>
           ← Back to your campaigns
         </Link>
 

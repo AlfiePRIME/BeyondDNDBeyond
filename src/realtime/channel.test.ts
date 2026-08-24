@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { joinCampaignChannel } from "./campaignChannel";
+import { joinChannel } from "./channel";
 import type { SupabaseClient } from "@/data-access";
 
-// A minimal stand-in for the RealtimeChannel surface joinCampaignChannel() touches — just enough
+// A minimal stand-in for the RealtimeChannel surface joinChannel() touches — just enough
 // to drive the SUBSCRIBED/CHANNEL_ERROR/TIMED_OUT status callback that drop/recovery detection is
 // built on, without a real Supabase client (this module never imports @supabase/supabase-js
 // itself, so there's nothing real to construct here anyway).
@@ -60,10 +60,10 @@ async function flushMicrotasks(times = 5) {
   for (let i = 0; i < times; i++) await Promise.resolve();
 }
 
-describe("joinCampaignChannel reconnection", () => {
+describe("joinChannel reconnection", () => {
   it("fires onReconnect on recovery from a drop, not on the initial connect", async () => {
     const { supabase, channels } = createFakeSupabase();
-    const channel = joinCampaignChannel(supabase, "campaign-1", { userId: "u1" });
+    const channel = joinChannel(supabase, "campaign:campaign-1", { userId: "u1" });
     await flushMicrotasks();
     const fake = channels[0]!;
 
@@ -91,7 +91,7 @@ describe("joinCampaignChannel reconnection", () => {
 
   it("stops firing onReconnect once unsubscribed", async () => {
     const { supabase, channels } = createFakeSupabase();
-    const channel = joinCampaignChannel(supabase, "campaign-2", { userId: "u1" });
+    const channel = joinChannel(supabase, "campaign:campaign-2", { userId: "u1" });
     await flushMicrotasks();
     const fake = channels[0]!;
 
@@ -113,7 +113,7 @@ describe("joinCampaignChannel reconnection", () => {
 
   it("reports connecting, then connected, then reconnecting via onConnectionStateChange", async () => {
     const { supabase, channels } = createFakeSupabase();
-    const channel = joinCampaignChannel(supabase, "campaign-3", { userId: "u1" });
+    const channel = joinChannel(supabase, "campaign:campaign-3", { userId: "u1" });
     await flushMicrotasks();
     const fake = channels[0]!;
 

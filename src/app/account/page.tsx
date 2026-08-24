@@ -25,7 +25,7 @@ export default async function AccountPage() {
   return (
     <div className={styles.page}>
       <main className={styles.main}>
-        <Link href="/" className={styles.backLink}>
+        <Link href="/campaigns" className={styles.backLink}>
           ← Back to your campaigns
         </Link>
 
@@ -77,7 +77,7 @@ export default async function AccountPage() {
           <CharacterCreateLauncher memberships={memberships} />
           {memberships.length === 0 ? (
             <p className={styles.emptyHint}>
-              Join or create a campaign from the <Link href="/">dashboard</Link> first — characters
+              Join or create a campaign from the <Link href="/campaigns">dashboard</Link> first — characters
               live inside a campaign.
             </p>
           ) : null}
@@ -87,7 +87,7 @@ export default async function AccountPage() {
           {memberships.length === 0 ? (
             <p className={styles.emptyHint}>
               You&apos;re not in any campaigns yet — create one or join with an invite code from the{" "}
-              <Link href="/">dashboard</Link>.
+              <Link href="/campaigns">dashboard</Link>.
             </p>
           ) : (
             memberships.map((membership) => (

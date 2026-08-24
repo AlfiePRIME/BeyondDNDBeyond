@@ -5,7 +5,7 @@
   padding: 24px;
 }
 
-.dashboard {
+.lobby {
   width: 100%;
   max-width: 720px;
   display: flex;
@@ -14,13 +14,64 @@
   padding-top: 40px;
 }
 
-.emptyState {
-  color: var(--muted);
-  line-height: 1.6;
-  margin: 0;
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
-.campaignList {
+.navLink {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--teal);
+  text-decoration: none;
+}
+
+.navLink:hover {
+  text-decoration: underline;
+}
+
+.lobbyHint {
+  margin: 0 0 16px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.connectionStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.countRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.count {
+  font-family: var(--font-m);
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--teal);
+}
+
+.countLabel {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.memberList {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -29,54 +80,26 @@
   gap: 12px;
 }
 
-.campaignRow {
+.memberRow {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
   gap: 4px 16px;
   padding: 10px 0;
   border-bottom: 1px solid var(--dim2);
 }
 
-.campaignRow:last-child {
+.memberRow:last-child {
   border-bottom: none;
 }
 
-.campaignName {
+.memberName {
   color: var(--text);
   font-weight: 600;
-  text-decoration: none;
 }
 
-.campaignName:hover {
-  color: var(--teal);
-  text-decoration: underline;
-}
-
-.inviteCode {
-  font-size: 13px;
-  color: var(--dim);
-}
-
-.inviteCode code {
-  font-family: var(--font-m);
-  color: var(--teal);
-  letter-spacing: 0.05em;
-}
-
-.formsRow {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-
-@media (max-width: 560px) {
-  .formsRow {
-    grid-template-columns: 1fr;
-  }
-}
-
-.formPanel {
-  align-self: start;
+.memberBadges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

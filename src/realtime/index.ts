@@ -1,13 +1,14 @@
 // Public entry point for the realtime module. Wraps Supabase Realtime
-// channels/presence behind a typed event-bus — every live-synced feature
-// joins its campaign's channel through joinCampaignChannel() below rather
-// than opening its own raw Realtime channel.
+// channels/presence behind a typed event-bus — one shared core
+// (joinChannel in channel.ts) with a thin topic-scoped wrapper per
+// feature scope, rather than each feature opening its own raw channel.
 export const MODULE_NAME = "realtime" as const;
 
-export {
-  joinCampaignChannel,
-  type CampaignChannel,
-  type CampaignChannelIdentity,
-  type CampaignPresenceMember,
-  type CampaignConnectionState,
-} from "./campaignChannel";
+export type {
+  PresenceChannel,
+  ChannelIdentity,
+  PresenceMember,
+  ConnectionState,
+} from "./channel";
+export { joinCampaignChannel } from "./campaignChannel";
+export { joinLobbyChannel } from "./lobbyChannel";

@@ -3,39 +3,32 @@
 import { useEffect, useState } from "react";
 import { Badge } from "@/ui-components";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
-import { joinCampaignChannel, type ConnectionState } from "@/realtime";
-import type { CampaignMember } from "@/data-access";
-import styles from "./campaign.module.css";
+import { joinLobbyChannel, type ConnectionState, type PresenceMember } from "@/realtime";
+import styles from "./page.module.css";
 
 // How long the "Reconnected" confirmation stays up after recovery before fading back to nothing
-// — long enough to notice, short enough not to linger once the roster is trustworthy again.
+// — long enough to notice, short enough not to linger once the list is trustworthy again.
 const RECONNECTED_CONFIRMATION_MS = 4000;
 
-export function CampaignRoster({
-  campaignId,
+export function LobbyPresence({
   currentUserId,
   currentUserDisplayName,
-  members,
 }: {
-  campaignId: string;
   currentUserId: string;
   currentUserDisplayName: string | null;
-  members: CampaignMember[];
 }) {
-  const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
+  const [members, setMembers] = useState<PresenceMember[]>([]);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [justReconnected, setJustReconnected] = useState(false);
 
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
-    const channel = joinCampaignChannel(supabase, campaignId, {
+    const channel = joinLobbyChannel(supabase, {
       userId: currentUserId,
       displayName: currentUserDisplayName,
     });
 
-    const unsubscribePresence = channel.onPresenceChange((present) => {
-      setOnlineUserIds(new Set(present.map((member) => member.userId)));
-    });
+    const unsubscribePresence = channel.onPresenceChange(setMembers);
 
     // Only a transition INTO "reconnecting" (not the initial "connecting") should arm the
     // post-recovery confirmation — a fresh page load recovering from nothing to show isn't a
@@ -61,7 +54,18 @@ export function CampaignRoster({
       unsubscribeConnection();
       void channel.leave();
     };
-  }, [campaignId, currentUserId, currentUserDisplayName]);
+  }, [currentUserId, currentUserDisplayName]);
+
+  if (connectionState === "connecting") {
+    return (
+      <p className={styles.connectionStatus} role="status">
+        <Badge tone="neutral" pulse>
+          Joining…
+        </Badge>{" "}
+        Connecting you to the lobby.
+      </p>
+    );
+  }
 
   return (
     <>
@@ -77,19 +81,25 @@ export function CampaignRoster({
           <Badge tone="teal">Reconnected</Badge> You&apos;re back online.
         </p>
       ) : null}
+
+      <p className={styles.countRow}>
+        <span className={styles.count} data-testid="lobby-count">
+          {members.length}
+        </span>{" "}
+        <span className={styles.countLabel}>
+          {members.length === 1 ? "adventurer online" : "adventurers online"}
+        </span>
+      </p>
+
       <ul className={styles.memberList}>
         {members.map((member) => (
-          <li key={member.user_id} className={styles.memberRow}>
-            <span>{member.display_name ?? "Unnamed player"}</span>
-            <span className={styles.characterMeta}>
-              <Badge tone={member.role === "dm" ? "pink" : "teal"}>{member.role === "dm" ? "DM" : "Player"}</Badge>
-              {onlineUserIds.has(member.user_id) ? (
-                <Badge tone="teal" pulse>
-                  Online
-                </Badge>
-              ) : (
-                <Badge tone="neutral">Offline</Badge>
-              )}
+          <li key={member.userId} className={styles.memberRow}>
+            <span className={styles.memberName}>{member.displayName ?? "Unnamed adventurer"}</span>
+            <span className={styles.memberBadges}>
+              {member.userId === currentUserId ? <Badge tone="purple">You</Badge> : null}
+              <Badge tone="teal" pulse>
+                Online
+              </Badge>
             </span>
           </li>
         ))}

@@ -1,14 +1,13 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Badge, Button, Panel, SectionHeader } from "@/ui-components";
+import { Button, Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { getProfile, isProfileComplete, listCampaignsForUser } from "@/data-access";
+import { getProfile, isProfileComplete } from "@/data-access";
 import { logout } from "./actions";
-import { CreateCampaignForm } from "./CreateCampaignForm";
-import { JoinCampaignForm } from "./JoinCampaignForm";
+import { LobbyPresence } from "./LobbyPresence";
 import styles from "./page.module.css";
 
-export default async function Home() {
+export default async function LobbyPage() {
   const supabase = await createServerSupabaseClient();
   const {
     data: { user },
@@ -23,59 +22,34 @@ export default async function Home() {
     redirect("/profile-setup");
   }
 
-  const memberships = await listCampaignsForUser(supabase, user.id);
-
   return (
     <div className={styles.page}>
-      <main className={styles.dashboard}>
+      <main className={styles.lobby}>
         <Panel
           title="BeyondDNDBeyond"
           tone="purple"
           headerActions={
-            <form action={logout}>
-              <Button type="submit" variant="ghost" size="sm">
-                Log out
-              </Button>
-            </form>
+            <span className={styles.headerActions}>
+              <Link href="/campaigns" className={styles.navLink}>
+                Your campaigns
+              </Link>
+              <form action={logout}>
+                <Button type="submit" variant="ghost" size="sm">
+                  Log out
+                </Button>
+              </form>
+            </span>
           }
         >
           <SectionHeader eyebrow="Signed in" title={`Welcome, ${profile!.display_name}`} glitch />
         </Panel>
 
-        <Panel title="Your campaigns" tone="purple">
-          {memberships.length === 0 ? (
-            <p className={styles.emptyState}>
-              You&apos;re not in any campaigns yet — create one or join with an invite code below.
-            </p>
-          ) : (
-            <ul className={styles.campaignList}>
-              {memberships.map(({ role, campaign }) => (
-                <li key={campaign.id} className={styles.campaignRow}>
-                  <div>
-                    <Link href={`/campaigns/${campaign.id}`} className={styles.campaignName}>
-                      {campaign.name}
-                    </Link>{" "}
-                    <Badge tone={role === "dm" ? "pink" : "teal"}>{role === "dm" ? "DM" : "Player"}</Badge>
-                  </div>
-                  {role === "dm" ? (
-                    <span className={styles.inviteCode}>
-                      Invite code: <code>{campaign.invite_code}</code>
-                    </span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
+        <Panel title="The Lobby" tone="teal" glow>
+          <p className={styles.lobbyHint}>
+            Everyone signed in right now gathers here — grab a seat while the party assembles.
+          </p>
+          <LobbyPresence currentUserId={user.id} currentUserDisplayName={profile!.display_name} />
         </Panel>
-
-        <div className={styles.formsRow}>
-          <Panel title="Create a campaign" tone="pink" className={styles.formPanel}>
-            <CreateCampaignForm />
-          </Panel>
-          <Panel title="Join a campaign" tone="teal" className={styles.formPanel}>
-            <JoinCampaignForm />
-          </Panel>
-        </div>
       </main>
     </div>
   );

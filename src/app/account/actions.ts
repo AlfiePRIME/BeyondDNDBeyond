@@ -55,7 +55,7 @@ export async function renameCampaignAction(
   }
 
   revalidatePath("/account");
-  revalidatePath("/");
+  revalidatePath("/campaigns");
   revalidatePath(`/campaigns/${campaignId}`);
   return {};
 }
@@ -74,7 +74,7 @@ export async function deleteCampaignAction(campaignId: string): Promise<FormActi
   }
 
   revalidatePath("/account");
-  revalidatePath("/");
+  revalidatePath("/campaigns");
   return {};
 }
 
@@ -92,6 +92,6 @@ export async function leaveCampaignAction(campaignId: string): Promise<FormActio
   }
 
   revalidatePath("/account");
-  revalidatePath("/");
+  revalidatePath("/campaigns");
   return {};
 }

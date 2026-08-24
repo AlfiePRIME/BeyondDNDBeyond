@@ -4,8 +4,16 @@ Wraps Supabase Realtime channels and presence behind a small typed event-bus. Ev
 live-synced feature (map state, tokens, initiative, dice rolls, the lobby, handout reveals)
 publishes/subscribes through this rather than talking to Realtime directly.
 
-`joinCampaignChannel(supabase, campaignId, identity)` joins the one channel for a campaign
-(topic `campaign:<id>`, so concurrent campaigns never cross-talk) and returns:
+One shared core, `joinChannel(supabase, topic, identity)` in `channel.ts`, does all the real
+work; the public API is a thin topic-scoped wrapper per feature scope so topic naming stays in
+one place:
+
+- `joinCampaignChannel(supabase, campaignId, identity)` — the one channel for a campaign
+  (topic `campaign:<id>`, so concurrent campaigns never cross-talk).
+- `joinLobbyChannel(supabase, identity)` — the app-wide Lobby (fixed topic `lobby`); its
+  presence list is "who's online right now" across the whole app.
+
+Both return a `PresenceChannel`:
 
 - `publish(event, payload)` / `subscribe(event, handler)` — typed broadcast pub/sub; any
   number of named events share the one channel, each `subscribe` call returns an unsubscribe
