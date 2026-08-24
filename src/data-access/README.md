@@ -40,6 +40,14 @@ unique object path per upload, private-bucket signed URLs with the usual no-auto
 expiry caveat). `npcs.portrait_ref` stores the returned object path. The first UI on these
 tables, the NPC roster screen, lives at `src/app/campaigns/[id]/npcs/`.
 
+As of Prompt 34, `narrative.ts` gains `listLorePageLinksForCampaign(supabase, campaignId)`:
+one query returning every `lore_page_links` row in a campaign (via a PostgREST inner join
+on the from page's `campaign_id`), so the lore index at `src/app/campaigns/[id]/lore/` can
+show each page's links without a per-page `listLorePageLinks` N+1. It filters only on the
+from side because a link can never cross campaigns — the insert policy requires DM write
+access to both pages. The lore UI lives at `src/app/campaigns/[id]/lore/` (index),
+`lore/new` (DM-only create), and `lore/[pageId]` (detail with DM-only edit/link controls).
+
 This is a schema/RLS/data-access-only prompt (UI for these tables is deferred: NPC roster
 in 33, lore pages in 34, and further prompts for quests/session log/handouts/notes/house
 rules). Every write function is DM-gated purely by the table's own RLS (0020) — no RPC

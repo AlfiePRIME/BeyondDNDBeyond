@@ -128,6 +128,7 @@ export {
   updateLorePage,
   deleteLorePage,
   listLorePageLinks,
+  listLorePageLinksForCampaign,
   linkLorePages,
   unlinkLorePages,
   listQuests,

@@ -179,6 +179,26 @@ export async function listLorePageLinks(supabase: SupabaseClient, pageId: string
   return data ?? [];
 }
 
+/**
+ * Every link in the campaign in one query — for an index screen showing each
+ * page's links without a per-page listLorePageLinks round-trip. Filtering on
+ * the from page's campaign_id alone is sufficient: links between pages of
+ * different campaigns can't exist in practice (writes require DM rights over
+ * both pages), so from-side membership implies to-side membership.
+ */
+export async function listLorePageLinksForCampaign(
+  supabase: SupabaseClient,
+  campaignId: string
+): Promise<LorePageLink[]> {
+  const { data, error } = await supabase
+    .from("lore_page_links")
+    .select("from_page_id, to_page_id, from_page:lore_pages!from_page_id!inner(campaign_id)")
+    .eq("from_page.campaign_id", campaignId);
+
+  if (error) throw error;
+  return (data ?? []).map((row) => ({ from_page_id: row.from_page_id, to_page_id: row.to_page_id }));
+}
+
 /** Enforced by lore_page_links' INSERT RLS policy (0020): the caller must be
  * the DM of both pages' campaign (in practice, always the same campaign). */
 export async function linkLorePages(supabase: SupabaseClient, fromPageId: string, toPageId: string): Promise<void> {
