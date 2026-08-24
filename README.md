@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompt 1 (project scaffolding) and Prompt 2 (module boundaries + performance-testing harness) are complete and verified end to end against a running local Supabase stack.
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompt 1 (project scaffolding), Prompt 2 (module boundaries + performance-testing harness), Prompt 3 (design tokens + component library), and Prompt 4 (core database schema) are complete and verified end to end against a running local Supabase stack.
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 
@@ -115,3 +115,34 @@ yarn perf:all         # run all four in sequence
 `perf:bundle` and `perf:lighthouse` need a production build first (`yarn build`).
 `perf:realtime` needs the Supabase stack running (see above). `perf:render` and
 `perf:lighthouse` share Playwright's Chromium install rather than downloading Chrome twice.
+
+## Database migrations
+
+No Supabase CLI is available in this environment, so migrations are plain numbered `.sql`
+files under `supabase/migrations/`, applied in order and tracked in a `_migrations` table —
+re-running is a no-op for anything already applied, and running against a fresh database
+applies everything from scratch.
+
+```sh
+node scripts/db/migrate.mjs        # apply any pending migrations
+node scripts/db/verify-rls.mjs     # create two throwaway users and verify RLS boundaries
+```
+
+Both connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`) using
+the tenant-qualified username `postgres.$POOLER_TENANT_ID` — plain `postgres` fails with
+"no tenant identifier provided" against a pooled connection.
+
+**A real RLS gotcha worth knowing if you add more policies:** `INSERT ... RETURNING` (what
+`.insert().select()` does in supabase-js, or the `Prefer: return=representation` header)
+applies the table's **SELECT** policy to the returned row, not just the INSERT policy's
+`WITH CHECK`. If a row only becomes visible once a *different* table has a row that doesn't
+exist yet — e.g. a campaign only becomes readable once a matching `campaign_members` row
+exists — inserting-and-immediately-selecting it fails with a misleading "violates row-level
+security policy" error even though the insert itself was allowed. Work around it by inserting
+without `.select()` (generate the id client-side with `crypto.randomUUID()` if you need it
+immediately) and reading the row back afterward, once whatever it depends on exists.
+Relatedly, a policy's own `USING`/`WITH CHECK` subquery against a **different** table is
+subject to *that* table's RLS too — wrap cross-table bootstrap checks (like "is this user the
+creator of this campaign") in a `SECURITY DEFINER` function, or the same chicken-and-egg
+problem shows up one level deeper (see `is_campaign_creator` in
+`supabase/migrations/0004_campaign_rls_policies.sql`).

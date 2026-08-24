@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/three": "^0.185.4",
@@ -33,6 +34,7 @@
     "eslint-config-next": "16.3.2",
     "eslint-plugin-boundaries": "^7.2.0",
     "lighthouse": "^13.4.1",
+    "pg": "^8.23.0",
     "playwright": "^1.62.1",
     "typescript": "^5",
     "vitest": "^4.1.11"
