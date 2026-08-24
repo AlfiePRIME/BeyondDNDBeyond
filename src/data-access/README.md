@@ -16,3 +16,10 @@ UPDATE RLS), and `triggerMapObject` calls a purpose-built `trigger_map_object` S
 DEFINER RPC — not a loosened table policy — since a player triggering a `playerTriggerable`
 object needs a narrower carve-out than the blanket DM-only write rule without opening up
 move/rotate/reconfigure to non-DMs.
+
+`mapTokens.ts` (Prompt 30): CRUD for `map_tokens` (a PC token via `character_id`, an NPC
+placeholder via `npc_name`, never both). Unlike `map_objects`, writes here go through a
+plain RLS policy rather than an RPC — a player placing/moving/removing exactly the token
+bound to a character they own has no atomic multi-row invariant to protect (unlike
+`start_session`'s exactly-one-DM guarantee), so a policy predicate checking
+`characters.owner_id` alongside the existing DM check is sufficient.

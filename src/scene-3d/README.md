@@ -52,3 +52,11 @@ handlers at all (handler-less meshes skip r3f raycasting — the table doesn't p
 per-pointer-move cost it has no use for), keeping only object selection for POI triggering.
 The standalone live-map viewer from Prompt 28 is retired — the table itself is now that
 surface.
+
+As of Prompt 30: `MapSurface` also renders `map_tokens` as allegiance-colored pawns (party/
+hostile/neutral, palette-matched to `tokens.css`), seated at their cell's CURRENT elevation
+the same way placed objects are — a token's stored `elevation` is a placement-time snapshot
+for data purposes, not what's read for rendering. `gridOverlay.ts` builds one `lineSegments`
+draw call outlining every cell's top face at its own height, enabled at table scale only:
+without it, lightened high-elevation cell tops merge into an unreadable slab once a map is
+fit down to the table's small footprint; the editor's larger unit-scale cells don't need it.
