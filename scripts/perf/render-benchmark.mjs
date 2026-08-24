@@ -88,13 +88,42 @@ const browser = await chromium.launch({
   args: ["--use-angle=vulkan", "--ignore-gpu-blocklist", "--enable-gpu"],
 });
 
+// Prompt 21: the benchmark measures a populated table — every seat holding a
+// loaded preset avatar model — not an empty room.
+const SEATED_PLAYER_COUNT = 5;
+const PRESET_IDS = ["vanguard", "mystic", "warden", "corsair", "ember"];
+const extraUserIds = [];
+
 try {
-  await admin.from("profiles").insert({ id: userId, display_name: "Render Benchmark" });
+  await admin.from("profiles").insert({
+    id: userId,
+    display_name: "Render Benchmark",
+    avatar_source: "preset",
+    avatar_ref: PRESET_IDS[0],
+  });
   const { error: campaignError } = await admin
     .from("campaigns")
     .insert({ id: campaignId, name: "Render benchmark", creator: userId });
   if (campaignError) throw new Error(`creating benchmark campaign: ${campaignError.message}`);
   await admin.from("campaign_members").insert({ campaign_id: campaignId, user_id: userId, role: "dm" });
+
+  for (let i = 0; i < SEATED_PLAYER_COUNT; i++) {
+    const { data: playerData, error: playerError } = await admin.auth.admin.createUser({
+      email: `render-benchmark-player-${i}-${Date.now()}@example.test`,
+      password,
+      email_confirm: true,
+    });
+    if (playerError) throw new Error(`creating benchmark player ${i}: ${playerError.message}`);
+    const playerId = playerData.user.id;
+    extraUserIds.push(playerId);
+    await admin.from("profiles").insert({
+      id: playerId,
+      display_name: `Benchmark Player ${i + 1}`,
+      avatar_source: "preset",
+      avatar_ref: PRESET_IDS[(i + 1) % PRESET_IDS.length],
+    });
+    await admin.from("campaign_members").insert({ campaign_id: campaignId, user_id: playerId, role: "player" });
+  }
 
   await waitForServer(`http://localhost:${PORT}/`);
 
@@ -155,4 +184,5 @@ try {
   server.kill();
   await admin.from("campaigns").delete().eq("id", campaignId);
   await admin.auth.admin.deleteUser(userId);
+  for (const extraUserId of extraUserIds) await admin.auth.admin.deleteUser(extraUserId);
 }

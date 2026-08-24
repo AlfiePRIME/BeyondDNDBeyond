@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { OrbitControls, PerspectiveCamera, RoundedBox } from "@react-three/drei";
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y } from "./table";
 import { computeSeatLayout, type CameraMode, type Seat, type SeatMember } from "./seating";
+import { SeatAvatar } from "./SeatAvatar";
 
 // Room ambiance pulls from the app's design tokens (see
 // src/ui-components/tokens.css) — scene-3d can't import CSS custom
@@ -31,26 +32,24 @@ function TableLeg({ x, z }: { x: number; z: number }) {
   );
 }
 
-function SeatMarker({ seat }: { seat: Seat }) {
+// The Prompt 19 stool is gone — an avatar standing on a low dais with the
+// role-colored ring around its feet reads cleaner than a model clipping
+// through a stool.
+function TableSeat({ seat }: { seat: Seat }) {
   const accent = seat.member.role === "dm" ? PURPLE : TEAL;
   return (
     <group position={seat.position} rotation={[0, seat.rotationY, 0]}>
-      <mesh position={[0, 0.03, 0]} castShadow>
-        <cylinderGeometry args={[0.24, 0.28, 0.06, 20]} />
-        <meshStandardMaterial color={WOOD_LEG} roughness={0.8} />
+      <mesh position={[0, 0.02, 0]} receiveShadow>
+        <cylinderGeometry args={[0.5, 0.56, 0.04, 24]} />
+        <meshStandardMaterial color={CUSHION} roughness={0.7} />
       </mesh>
-      <mesh position={[0, 0.32, 0]} castShadow>
-        <cylinderGeometry args={[0.07, 0.09, 0.58, 12]} />
-        <meshStandardMaterial color={WOOD_LEG} roughness={0.8} />
-      </mesh>
-      <mesh position={[0, 0.64, 0]} castShadow>
-        <cylinderGeometry args={[0.34, 0.34, 0.1, 24]} />
-        <meshStandardMaterial color={CUSHION} roughness={0.6} />
-      </mesh>
-      <mesh position={[0, 0.575, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[0.34, 0.028, 10, 32]} />
+      <mesh position={[0, 0.045, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.5, 0.028, 10, 40]} />
         <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={1.7} />
       </mesh>
+      <group position={[0, 0.04, 0]}>
+        <SeatAvatar url={seat.member.avatar_url ?? null} />
+      </group>
     </group>
   );
 }
@@ -133,7 +132,7 @@ export function GameTableScene({
       <TableLeg x={legX} z={legZ} />
 
       {seats.map((seat) => (
-        <SeatMarker key={seat.member.user_id} seat={seat} />
+        <TableSeat key={seat.member.user_id} seat={seat} />
       ))}
     </>
   );

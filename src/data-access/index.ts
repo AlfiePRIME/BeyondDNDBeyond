@@ -27,6 +27,8 @@ export {
   isProfileComplete,
   setProfileAvatar,
   uploadAvatarFile,
+  getAvatarSignedUrl,
+  subscribeToProfileChanges,
   type Profile,
   type AvatarSource,
 } from "./profiles";

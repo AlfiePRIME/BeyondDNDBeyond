@@ -11,6 +11,13 @@ export interface SeatMember {
   user_id: string;
   role: "dm" | "player";
   display_name: string | null;
+  /**
+   * Directly-loadable glTF URL for this member's avatar — resolution
+   * (preset manifest lookup, signed Storage URL) happens in the app layer
+   * because scene-3d can't fetch its own data. null/absent renders the
+   * built-in placeholder.
+   */
+  avatar_url?: string | null;
 }
 
 export type CameraMode = "seat" | "orbit";

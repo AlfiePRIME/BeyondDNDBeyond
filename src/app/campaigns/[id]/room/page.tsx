@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { listCampaignMembers } from "@/data-access";
+import { getProfile, listCampaignMembers } from "@/data-access";
+import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { GameRoom } from "./GameRoom";
 
 export default async function GameRoomPage({ params }: { params: Promise<{ id: string }> }) {
@@ -22,12 +23,25 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   if (!campaign) notFound();
 
   const members = await listCampaignMembers(supabase, campaignId);
+  const roomMembers: RoomMember[] = await Promise.all(
+    members.map(async (member) => {
+      const profile = await getProfile(supabase, member.user_id);
+      return {
+        ...member,
+        avatar_url: await resolveAvatarUrl(
+          supabase,
+          profile?.avatar_source ?? null,
+          profile?.avatar_ref ?? null
+        ),
+      };
+    })
+  );
 
   return (
     <GameRoom
       campaignId={campaignId}
       campaignName={campaign.name}
-      members={members}
+      members={roomMembers}
       currentUserId={user.id}
     />
   );
