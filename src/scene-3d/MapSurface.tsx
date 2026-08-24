@@ -66,6 +66,9 @@ export interface MapSurfaceCell {
   y: number;
   elevation: number;
   terrain: TerrainType;
+  /** Renders the not-yet-committed tint — the editor's AI-generated preview
+   * cells, distinct from both committed terrain and the hover glow. */
+  preview?: boolean;
 }
 
 interface CellBlockProps {
@@ -77,6 +80,7 @@ interface CellBlockProps {
   span: number;
   elevation: number;
   terrain: TerrainType;
+  preview: boolean;
   onDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
   onOver?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
 }
@@ -94,11 +98,13 @@ const CellBlock = memo(function CellBlock({
   span,
   elevation,
   terrain,
+  preview,
   onDown,
   onOver,
 }: CellBlockProps) {
   const [hovered, setHovered] = useState(false);
   const interactive = Boolean(onDown ?? onOver);
+  const hoverLit = interactive && hovered;
   return (
     <mesh
       position={[worldX, height / 2, worldZ]}
@@ -116,11 +122,13 @@ const CellBlock = memo(function CellBlock({
       <boxGeometry args={[span, height, span]} />
       {/* Hover glow gated on interactive too: when the handlers detach
           mid-hover (the table disarming token placement), no pointer-out
-          ever fires, and an unguarded `hovered` would stay lit forever. */}
+          ever fires, and an unguarded `hovered` would stay lit forever.
+          Preview cells glow purple (hover's teal wins while hovered) — the
+          "not committed yet" tint matches the ghost objects' wireframe hue. */}
       <meshStandardMaterial
         color={cellColor(terrain, elevation)}
-        emissive={TEAL}
-        emissiveIntensity={interactive && hovered ? 0.4 : 0}
+        emissive={hoverLit ? TEAL : PURPLE}
+        emissiveIntensity={hoverLit ? 0.4 : preview ? 0.3 : 0}
         roughness={0.65}
       />
     </mesh>
@@ -435,6 +443,7 @@ export function MapSurface({
           span={span}
           elevation={cell.elevation}
           terrain={cell.terrain}
+          preview={cell.preview ?? false}
           onDown={onCellPointerDown}
           onOver={onCellPointerOver}
         />

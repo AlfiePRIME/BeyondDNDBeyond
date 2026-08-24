@@ -15,3 +15,14 @@ export {
   MAX_PROMPT_CHARS,
   type DraftKind,
 } from "./generateDraft";
+export {
+  generateMapArea,
+  validateGeneratedArea,
+  AreaGenerationError,
+  MAX_AREA_CELLS,
+  type AreaAsset,
+  type AreaRegionSize,
+  type GeneratedArea,
+  type GeneratedAreaCell,
+  type GeneratedAreaObject,
+} from "./generateMapArea";

@@ -14,11 +14,12 @@ export const DEFAULT_CELL: CellState = { elevation: 0, terrain: "normal" };
 // a 50 ft cliff at the rules-engine's 5 ft per step.
 export const MAX_ELEVATION = 10;
 
-export type EditorTool = "raise" | "lower" | "terrain" | "object";
+export type EditorTool = "raise" | "lower" | "terrain" | "object" | "generate";
 
 /** The paint-a-cell tools. "object" is excluded because it routes through
- * the discrete place/select/move flow, never through applyTool. */
-export type SculptTool = Exclude<EditorTool, "object">;
+ * the discrete place/select/move flow, never through applyTool; "generate"
+ * because its drag defines a selection rectangle, not per-cell edits. */
+export type SculptTool = Exclude<EditorTool, "object" | "generate">;
 
 export function cellKey(x: number, y: number): string {
   return `${x},${y}`;
@@ -54,17 +55,28 @@ export function applyTool(current: CellState, tool: SculptTool, brush: TerrainTy
 }
 
 /** The full dense grid the scene renders: defaults everywhere, overlaid
- * with whatever sparse state exists. */
+ * with whatever sparse state exists. Cells present in `preview` take that
+ * state instead and are flagged so the scene can render them as
+ * not-yet-committed. */
 export function buildDenseCells(
   width: number,
   height: number,
-  overlay: ReadonlyMap<string, CellState>
+  overlay: ReadonlyMap<string, CellState>,
+  preview?: ReadonlyMap<string, CellState>
 ): MapSurfaceCell[] {
   const cells: MapSurfaceCell[] = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const state = overlay.get(cellKey(x, y)) ?? DEFAULT_CELL;
-      cells.push({ x, y, elevation: state.elevation, terrain: state.terrain });
+      const key = cellKey(x, y);
+      const previewState = preview?.get(key);
+      const state = previewState ?? overlay.get(key) ?? DEFAULT_CELL;
+      cells.push({
+        x,
+        y,
+        elevation: state.elevation,
+        terrain: state.terrain,
+        ...(previewState ? { preview: true } : {}),
+      });
     }
   }
   return cells;

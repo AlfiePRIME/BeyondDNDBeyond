@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { MOUSE } from "three";
+import { BoxGeometry, EdgesGeometry, MOUSE } from "three";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
 import {
@@ -20,6 +20,54 @@ const GROUND = "#1a1338";
 
 const CELL_SIZE = EDITOR_MAP_METRICS.cellSize;
 
+// Tall enough to stay visible around max-elevation terrain (10 steps at
+// 0.35 world units each, on a 0.14 slab).
+const REGION_MARKER_HEIGHT = 10 * EDITOR_MAP_METRICS.elevationStepHeight + 0.4;
+
+/** A DM-selected rectangle of cells, in grid coordinates. */
+export interface EditorRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// The selected-region marker: a teal edge outline plus a faint fill so the
+// rectangle reads from any camera angle without hiding the cells inside it.
+function RegionMarker({
+  region,
+  gridWidth,
+  gridHeight,
+}: {
+  region: EditorRegion;
+  gridWidth: number;
+  gridHeight: number;
+}) {
+  const spanX = region.width * CELL_SIZE;
+  const spanZ = region.height * CELL_SIZE;
+  const centerX = (region.x + region.width / 2 - 0.5) * CELL_SIZE - ((gridWidth - 1) / 2) * CELL_SIZE;
+  const centerZ =
+    (region.y + region.height / 2 - 0.5) * CELL_SIZE - ((gridHeight - 1) / 2) * CELL_SIZE;
+  const edges = useMemo(() => {
+    const box = new BoxGeometry(spanX, REGION_MARKER_HEIGHT, spanZ);
+    const geometry = new EdgesGeometry(box);
+    box.dispose();
+    return geometry;
+  }, [spanX, spanZ]);
+  useEffect(() => () => edges.dispose(), [edges]);
+  return (
+    <group position={[centerX, REGION_MARKER_HEIGHT / 2, centerZ]}>
+      <lineSegments geometry={edges}>
+        <lineBasicMaterial color={TEAL} transparent opacity={0.85} depthWrite={false} />
+      </lineSegments>
+      <mesh>
+        <boxGeometry args={[spanX, REGION_MARKER_HEIGHT, spanZ]} />
+        <meshBasicMaterial color={TEAL} transparent opacity={0.06} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
 export interface MapEditorSceneProps {
   gridWidth: number;
   gridHeight: number;
@@ -33,11 +81,20 @@ export interface MapEditorSceneProps {
    */
   onPaintCell?: (x: number, y: number) => void;
   /**
+   * Fired when a left-button stroke ends (pointer released anywhere) — lets
+   * the caller finalize stroke-scoped state, e.g. turning the cells touched
+   * during a generate-tool drag into a selected region.
+   */
+  onStrokeEnd?: () => void;
+  /**
    * Parallel to onPaintCell but fired only on the initial press, never while
    * dragging across cells — object placement/move are discrete deliberate
    * actions, not strokes, so a drag must not scatter or relocate objects.
    */
   onCellClick?: (x: number, y: number) => void;
+  /** A selected rectangle of cells to highlight (the generate-area region);
+   * null/absent renders no marker. */
+  region?: EditorRegion | null;
   /** Placed objects to render; absent/empty renders none. */
   objects?: readonly MapSurfaceObject[];
   selectedObjectId?: string | null;
@@ -52,19 +109,23 @@ export function MapEditorScene({
   gridHeight,
   cells,
   onPaintCell,
+  onStrokeEnd,
   onCellClick,
+  region,
   objects,
   selectedObjectId,
   onSelectObject,
 }: MapEditorSceneProps) {
   const onPaintCellRef = useRef(onPaintCell);
+  const onStrokeEndRef = useRef(onStrokeEnd);
   const onCellClickRef = useRef(onCellClick);
   const onSelectObjectRef = useRef(onSelectObject);
   useEffect(() => {
     onPaintCellRef.current = onPaintCell;
+    onStrokeEndRef.current = onStrokeEnd;
     onCellClickRef.current = onCellClick;
     onSelectObjectRef.current = onSelectObject;
-  }, [onPaintCell, onCellClick, onSelectObject]);
+  }, [onPaintCell, onStrokeEnd, onCellClick, onSelectObject]);
 
   const paintingRef = useRef(false);
   // One application per cell per stroke: without this, a drag lingering on
@@ -107,7 +168,9 @@ export function MapEditorScene({
   // pointerup listener lives on window, not on the meshes.
   useEffect(() => {
     const endStroke = () => {
+      if (!paintingRef.current) return;
       paintingRef.current = false;
+      onStrokeEndRef.current?.();
     };
     window.addEventListener("pointerup", endStroke);
     return () => window.removeEventListener("pointerup", endStroke);
@@ -155,6 +218,8 @@ export function MapEditorScene({
         onCellPointerDown={handleDown}
         onCellPointerOver={handleOver}
       />
+
+      {region ? <RegionMarker region={region} gridWidth={gridWidth} gridHeight={gridHeight} /> : null}
     </>
   );
 }

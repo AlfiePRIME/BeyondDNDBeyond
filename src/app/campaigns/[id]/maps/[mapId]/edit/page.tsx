@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { getMap, isDM, listAssetsForCampaign, listMapCells, listMapObjects } from "@/data-access";
+import { isAiConfigured } from "@/ai";
 import { MapEditor } from "./MapEditor";
 import { resolvePaletteAssets } from "./lib/assetUrl";
 
@@ -48,6 +49,7 @@ export default async function MapEditPage({
       initialCells={cells}
       initialObjects={objects}
       assets={paletteAssets}
+      aiEnabled={isAiConfigured()}
     />
   );
 }

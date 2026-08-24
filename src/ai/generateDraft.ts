@@ -4,8 +4,10 @@ import Anthropic from "@anthropic-ai/sdk";
 export type DraftKind = "npc" | "lore";
 
 // Haiku 4.5: a short creative-text draft doesn't need Sonnet/Opus-tier
-// reasoning, and the DM is waiting on the response in a modal.
-const MODEL = "claude-haiku-4-5-20251001";
+// reasoning, and the DM is waiting on the response in a modal. Shared with
+// generateMapArea — structured area drafts are schema-constrained fill-in
+// work, not deep reasoning, so the same fast tier fits there too.
+export const MODEL = "claude-haiku-4-5-20251001";
 
 const MAX_DRAFT_TOKENS = 1024;
 

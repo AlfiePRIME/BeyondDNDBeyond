@@ -72,3 +72,16 @@ drag, the existing per-cell `onPointerOver` path reports hovered cells while it'
 disabled mid-drag so grabbing a token doesn't also spin the camera. Movement cost itself is
 computed in the `app` layer from `@/rules-engine`, not here — the scene only ever reports plain
 cell coordinates.
+
+As of Prompt 38: `MapSurfaceCell` gained an optional `preview` flag — the map editor's
+AI-generated area draft renders its cells with a purple emissive tint (the hover glow's teal
+wins while hovered), the cell-level counterpart to the ghost wireframe the editor reuses for
+AI-proposed objects, so "not committed yet" reads unambiguously against both committed
+terrain and committed props. `MapEditorScene` gained `onStrokeEnd` (fired from the existing
+window-`pointerup` stroke terminator, only when a stroke was actually live — the editor uses
+it to turn the cells a generate-tool drag touched into a selected rectangle) and a `region`
+prop rendered by `RegionMarker`: a teal edge outline plus faint fill spanning the selected
+cells, tall enough to stay visible around max-elevation terrain. Region-selection semantics
+(bounding-box accumulation, what the rectangle means) live in the editor, not here — the
+scene only reports per-cell pointer events and draws the marker it's given, the same split
+as every other gesture.

@@ -3,7 +3,11 @@
 export const MODULE_NAME = "scene-3d" as const;
 
 export { GameTableScene, type GameTableSceneProps, type TableLiveMap } from "./GameTableScene";
-export { MapEditorScene, type MapEditorSceneProps } from "./MapEditorScene";
+export {
+  MapEditorScene,
+  type MapEditorSceneProps,
+  type EditorRegion,
+} from "./MapEditorScene";
 export {
   MapSurface,
   type MapSurfaceProps,

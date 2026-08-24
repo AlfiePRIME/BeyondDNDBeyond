@@ -65,6 +65,34 @@ describe("sparse grid reconstruction", () => {
   it("round-trips keys", () => {
     expect(parseCellKey(cellKey(7, 19))).toEqual({ x: 7, y: 19 });
   });
+
+  it("preview cells override the overlay and carry the preview flag", () => {
+    const overlay = overlayFromRows([
+      { map_id: "m", x: 0, y: 0, elevation: 5, terrain_type: "difficult" },
+    ]);
+    const preview = new Map<string, CellState>([
+      [cellKey(0, 0), { elevation: 1, terrain: "normal" }],
+      [cellKey(1, 0), { elevation: 2, terrain: "difficult" }],
+    ]);
+    const dense = buildDenseCells(2, 2, overlay, preview);
+
+    expect(dense.find((cell) => cell.x === 0 && cell.y === 0)).toEqual({
+      x: 0,
+      y: 0,
+      elevation: 1,
+      terrain: "normal",
+      preview: true,
+    });
+    expect(dense.find((cell) => cell.x === 1 && cell.y === 0)).toEqual({
+      x: 1,
+      y: 0,
+      elevation: 2,
+      terrain: "difficult",
+      preview: true,
+    });
+    const untouched = dense.find((cell) => cell.x === 0 && cell.y === 1);
+    expect(untouched).toEqual({ x: 0, y: 1, elevation: 0, terrain: "normal" });
+  });
 });
 
 describe("rowsForSave", () => {
