@@ -16,7 +16,15 @@
 // client — each of the three create*Client functions builds a fresh
 // instance per call. A single shared instance would leak one user's
 // session/cookies into another user's request on the server.
-export { getProfile, upsertProfile, isProfileComplete, type Profile } from "./profiles";
+export {
+  getProfile,
+  upsertProfile,
+  isProfileComplete,
+  setProfileAvatar,
+  uploadAvatarFile,
+  type Profile,
+  type AvatarSource,
+} from "./profiles";
 export {
   listCampaignsForUser,
   createCampaign,

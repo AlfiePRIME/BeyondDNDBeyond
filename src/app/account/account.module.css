@@ -1,0 +1,75 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+.main {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 40px;
+}
+
+.backLink {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.backLink:hover {
+  color: var(--teal);
+}
+
+.pickerHint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 16px;
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.presetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.hiddenFileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.uploadHint {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: 0;
+}
+
+.errorText {
+  color: var(--red);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.savedText {
+  color: var(--teal);
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
