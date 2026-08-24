@@ -69,7 +69,12 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
             <ul className={styles.memberList}>
               {characters.map((character) => (
                 <li key={character.id} className={styles.memberRow}>
-                  <span>{character.name}</span>
+                  <Link
+                    href={`/campaigns/${campaignId}/characters/${character.id}`}
+                    className={styles.characterLink}
+                  >
+                    {character.name}
+                  </Link>
                   <span className={styles.characterMeta}>
                     <Badge tone="purple">{character.race}</Badge>
                     <Badge tone="teal">

@@ -75,3 +75,11 @@
   line-height: 1.6;
   margin: 0 0 16px;
 }
+
+.characterLink {
+  color: var(--text);
+}
+
+.characterLink:hover {
+  color: var(--teal);
+}

@@ -1,0 +1,270 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+.main {
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 40px;
+}
+
+.backLink {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.backLink:hover {
+  color: var(--teal);
+}
+
+.saveError {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--red);
+  margin: 0;
+}
+
+.headerBadges {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.vitalsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+}
+
+.vital {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vitalLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.vitalValue {
+  font-family: var(--font-h);
+  font-size: 22px;
+  color: var(--text);
+}
+
+.vitalMax {
+  font-family: var(--font-m);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.hpControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vitalInput {
+  width: 64px;
+  padding: 6px 8px;
+  font-family: var(--font-h);
+  font-size: 18px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+}
+
+.vitalInput:focus {
+  outline: none;
+  border-color: var(--purple);
+  box-shadow: var(--ga);
+}
+
+.abilityGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.abilityCard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  background: var(--surface2);
+}
+
+.abilityModifier {
+  font-family: var(--font-h);
+  font-size: 18px;
+  color: var(--teal);
+}
+
+.abilitySave {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.rowList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.skillRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--dim2);
+}
+
+.skillRow:last-child {
+  border-bottom: none;
+}
+
+.skillToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.skillToggle:has(.skillCheckbox:disabled) {
+  cursor: default;
+}
+
+.skillCheckbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--purple);
+}
+
+.skillAbility {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.skillBonus {
+  font-family: var(--font-m);
+  font-size: 14px;
+  color: var(--teal);
+}
+
+.itemRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--dim2);
+}
+
+.itemRow:last-child {
+  border-bottom: none;
+}
+
+.itemName {
+  color: var(--text);
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.itemControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.itemQty {
+  font-family: var(--font-m);
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 34px;
+  text-align: center;
+}
+
+.addRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.addName {
+  flex: 1;
+}
+
+.addQty {
+  width: 84px;
+}
+
+.groupLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.spellGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.spellGroup:last-of-type {
+  margin-bottom: 0;
+}
+
+.spellMeta {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.resourceUses {
+  font-family: var(--font-m);
+  font-size: 14px;
+  color: var(--teal);
+  min-width: 48px;
+  text-align: right;
+}
+
+.emptyHint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}

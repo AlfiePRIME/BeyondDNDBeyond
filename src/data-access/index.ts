@@ -32,10 +32,21 @@ export {
 export {
   createCharacter,
   listCharactersForCampaign,
+  getCharacter,
+  updateCharacter,
   type Character,
   type CreateCharacterParams,
+  type UpdateCharacterPatch,
   type InventoryItem,
   type KnownSpell,
 } from "./characters";
+export {
+  listCharacterResources,
+  createCharacterResource,
+  setCharacterResourceUses,
+  type CharacterResource,
+  type CreateCharacterResourceParams,
+  type ResourceRecharge,
+} from "./characterResources";
 
 export const MODULE_NAME = "data-access" as const;
