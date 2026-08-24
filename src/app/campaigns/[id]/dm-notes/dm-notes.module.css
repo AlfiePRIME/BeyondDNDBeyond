@@ -7,7 +7,7 @@
 
 .main {
   width: 100%;
-  max-width: 560px;
+  max-width: 760px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -22,55 +22,24 @@
 }
 
 .backLink:hover {
-  color: var(--teal);
+  color: var(--pink);
 }
 
-.connectionStatus {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 10px;
+.hint {
   color: var(--muted);
-  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 16px;
 }
 
-.memberList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.notes {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 20px;
 }
 
-.memberRow {
+.toolbar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--dim2);
-  color: var(--text);
-}
-
-.memberRow:last-child {
-  border-bottom: none;
-}
-
-.createLink {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--teal);
-}
-
-.createLink:hover {
-  color: var(--text);
-}
-
-.charactersActions {
-  display: inline-flex;
-  gap: 14px;
+  justify-content: flex-end;
 }
 
 .emptyHint {
@@ -79,44 +48,70 @@
   margin: 0;
 }
 
-.characterMeta {
-  display: inline-flex;
-  gap: 6px;
-}
-
-.transferHint {
-  color: var(--muted);
-  line-height: 1.6;
-  margin: 0 0 16px;
-}
-
-.characterLink {
-  color: var(--text);
-}
-
-.characterLink:hover {
-  color: var(--teal);
-}
-
-.houseRulesForm {
+.noteList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
-.houseRulesActions {
+.note {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 14px;
+}
+
+.noteHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.noteDate {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+.noteActions {
+  margin-left: auto;
+  display: flex;
   gap: 8px;
 }
 
-.houseRulesText {
-  color: var(--text);
+.noteBody {
+  color: var(--muted);
+  font-size: 14px;
   line-height: 1.6;
-  margin: 0 0 12px;
+  margin: 0;
   white-space: pre-wrap;
 }
 
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 14px;
+}
+
+.formActions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Multiline sibling of ui-components' TextInput field styles — same local
+ * textarea as NpcRoster/SessionLog, since the shared library has no Textarea
+ * primitive. */
 .textareaField {
   display: flex;
   flex-direction: column;
@@ -138,7 +133,7 @@
 
 .textarea {
   width: 100%;
-  min-height: 84px;
+  min-height: 120px;
   resize: vertical;
   background: var(--surface2);
   border: 1px solid var(--dim2);

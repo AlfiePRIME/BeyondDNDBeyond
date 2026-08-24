@@ -5,6 +5,7 @@ import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { listCampaignMembers, listCharactersForCampaign, isDM } from "@/data-access";
 import { TransferDMForm } from "./TransferDMForm";
 import { CampaignRoster } from "./CampaignRoster";
+import { HouseRules } from "./HouseRules";
 import styles from "./campaign.module.css";
 
 export default async function CampaignDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -51,6 +52,15 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
               {currentUserIsDM ? (
                 <Link href={`/campaigns/${campaignId}/maps`} className={styles.createLink}>
                   Map editor
+                </Link>
+              ) : null}
+              {currentUserIsDM ? (
+                <Link
+                  href={`/campaigns/${campaignId}/dm-notes`}
+                  className={styles.createLink}
+                  data-testid="dm-notes-link"
+                >
+                  DM notes
                 </Link>
               ) : null}
               <Link href={`/campaigns/${campaignId}/assets`} className={styles.createLink}>
@@ -116,6 +126,14 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
               ))}
             </ul>
           )}
+        </Panel>
+
+        <Panel title="House rules" tone="teal">
+          <HouseRules
+            campaignId={campaignId}
+            initialHouseRules={campaign.house_rules}
+            canManage={currentUserIsDM}
+          />
         </Panel>
 
         {currentUserIsDM ? (
