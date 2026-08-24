@@ -1,0 +1,222 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+.main {
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 40px;
+}
+
+.backLink {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.backLink:hover {
+  color: var(--purple);
+}
+
+.rosterHint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 16px;
+}
+
+.roster {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.rosterToolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.emptyHint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 12px;
+}
+
+.portraitFrame {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--dim2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.portrait {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.portraitPlaceholder {
+  font-family: var(--font-m);
+  font-size: 24px;
+  color: var(--dim);
+}
+
+.cardName {
+  font-family: var(--font-m);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.cardText {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.cardSectionLabel {
+  font-family: var(--font-m);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.cardActions {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Multiline sibling of ui-components' TextInput field styles — the shared
+ * library has no Textarea primitive yet, so the roster carries its own
+ * matching one. */
+.textareaField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.textareaLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+  transition: color 0.18s ease;
+}
+
+.textareaField:focus-within .textareaLabel {
+  color: var(--accent);
+}
+
+.textarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: var(--font-b);
+  font-size: 14px;
+  caret-color: var(--pink);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.textarea::placeholder {
+  color: var(--dim);
+}
+
+.textarea:hover:not(:disabled) {
+  border-color: var(--dim);
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ga);
+}
+
+.textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.portraitRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.portraitFileName {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hiddenFileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.uploadHint {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: 0;
+}
+
+.errorText {
+  color: var(--red);
+  line-height: 1.5;
+  margin: 0;
+}

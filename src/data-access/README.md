@@ -31,6 +31,15 @@ thematically-unified prompt rather than six independently-evolving areas. `campa
 gained a seventh, `setHouseRules`, alongside the new `Campaign.house_rules` field, rather
 than a `narrative.ts` function — see design notes below.
 
+As of Prompt 33, `narrative.ts` also owns the NPC portrait pipeline: a new private
+`npc-portraits` Storage bucket (migration `0021_npc_portraits_storage.sql`, image MIME types
+only, 5MB cap) with the same campaign-scoped `{campaign_id}/{uuid}.{ext}` path/policy shape
+as `map-assets` (0017) — members read, the current DM writes — plus `uploadNpcPortraitFile`/
+`getNpcPortraitSignedUrl` mirroring `uploadMapAssetFile`/`getMapAssetSignedUrl` (fresh
+unique object path per upload, private-bucket signed URLs with the usual no-auto-refresh
+expiry caveat). `npcs.portrait_ref` stores the returned object path. The first UI on these
+tables, the NPC roster screen, lives at `src/app/campaigns/[id]/npcs/`.
+
 This is a schema/RLS/data-access-only prompt (UI for these tables is deferred: NPC roster
 in 33, lore pages in 34, and further prompts for quests/session log/handouts/notes/house
 rules). Every write function is DM-gated purely by the table's own RLS (0020) — no RPC

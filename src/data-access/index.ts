@@ -121,6 +121,8 @@ export {
   createNpc,
   updateNpc,
   deleteNpc,
+  uploadNpcPortraitFile,
+  getNpcPortraitSignedUrl,
   listLorePages,
   createLorePage,
   updateLorePage,

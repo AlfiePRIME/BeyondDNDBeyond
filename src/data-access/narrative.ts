@@ -64,6 +64,55 @@ export async function deleteNpc(supabase: SupabaseClient, npcId: string): Promis
   if (error) throw error;
 }
 
+const PORTRAIT_EXTENSIONS: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+};
+
+/**
+ * Uploads an NPC portrait to the npc-portraits bucket (0021) and returns the
+ * object path to store as portrait_ref. Same fresh-unique-path-per-upload
+ * scheme as uploadMapAssetFile — a campaign accumulates many portraits, and
+ * two uploads with the same source filename must not overwrite each other.
+ * The bucket only admits the three image MIME types below; anything else is
+ * rejected here before a doomed network round-trip.
+ */
+export async function uploadNpcPortraitFile(
+  supabase: SupabaseClient,
+  campaignId: string,
+  file: File
+): Promise<string> {
+  const extension = PORTRAIT_EXTENSIONS[file.type];
+  if (!extension) throw new Error(`Unsupported portrait type: ${file.type || "unknown"}`);
+
+  const path = `${campaignId}/${crypto.randomUUID()}.${extension}`;
+  const { error } = await supabase.storage
+    .from("npc-portraits")
+    .upload(path, file, { contentType: file.type });
+
+  if (error) throw error;
+  return path;
+}
+
+/**
+ * Signed download URL for an NPC portrait — same private-bucket signed-URL
+ * model (and no-auto-refresh expiry caveat) as getMapAssetSignedUrl; the
+ * bucket's RLS limits reads to the owning campaign's members.
+ */
+export async function getNpcPortraitSignedUrl(
+  supabase: SupabaseClient,
+  path: string,
+  expiresInSeconds: number
+): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from("npc-portraits")
+    .createSignedUrl(path, expiresInSeconds);
+
+  if (error) throw error;
+  return data.signedUrl;
+}
+
 export interface LorePage {
   id: string;
   campaign_id: string;
