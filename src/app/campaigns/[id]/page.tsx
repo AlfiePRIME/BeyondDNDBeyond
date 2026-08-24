@@ -58,9 +58,14 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           title="Characters"
           tone="teal"
           headerActions={
-            <Link href={`/campaigns/${campaignId}/characters/new`} className={styles.createLink}>
-              + Create a character
-            </Link>
+            <span className={styles.charactersActions}>
+              <Link href={`/campaigns/${campaignId}/characters/new`} className={styles.createLink}>
+                + Create a character
+              </Link>
+              <Link href={`/campaigns/${campaignId}/characters/import`} className={styles.createLink}>
+                Import from D&D Beyond PDF
+              </Link>
+            </span>
           }
         >
           {characters.length === 0 ? (

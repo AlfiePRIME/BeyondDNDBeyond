@@ -1,0 +1,32 @@
+.uploadBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fileInput {
+  font-family: var(--font-m);
+  font-size: 13px;
+  color: var(--text);
+  padding: 10px;
+  border: 1px dashed var(--dim2);
+  border-radius: var(--r);
+  background: var(--surface2);
+}
+
+.warningList {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.identityGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}

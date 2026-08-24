@@ -59,6 +59,11 @@
   color: var(--text);
 }
 
+.charactersActions {
+  display: inline-flex;
+  gap: 14px;
+}
+
 .emptyHint {
   color: var(--muted);
   line-height: 1.6;

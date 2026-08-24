@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-13 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, and the avatar library/upload) are complete and verified end to end against a running local Supabase stack.
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-14 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, the avatar library/upload, and D&D Beyond PDF character import) are complete and verified end to end against a running local Supabase stack.
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 
@@ -70,6 +70,17 @@ check confirming the app can reach Supabase is available at
 **Requires:** the user running Docker commands must be able to access the Docker daemon (in
 the `docker` group, or run via `sudo`) — `sudo usermod -aG docker $USER` and re-login if you
 hit a permission-denied error against `/var/run/docker.sock`.
+
+**Also requires poppler-utils** (for `pdftoppm`) — the D&D Beyond PDF character import feature
+(`/campaigns/[id]/characters/import`) shells out to it to rasterize uploaded PDFs before OCR'ing
+them. `pdfjs-dist` + `@napi-rs/canvas` was tried first but garbles this template's embedded
+font; `pdftoppm` renders it correctly. Install via your distro's package manager (e.g.
+`sudo pacman -S poppler`, `sudo apt install poppler-utils`) — confirm with `which pdftoppm`.
+There's no Docker image for the Next.js app itself yet (only Supabase is containerized so
+far), so this is a local/deployment host prerequisite rather than something baked into an
+image manifest. OCR itself (`tesseract.js`) is pure WASM with no extra system dependency, and
+its English trained-data file is vendored in-repo (under the import route's `tessdata/`
+folder) so the feature works with no external network calls at runtime.
 
 ## Module boundaries
 
