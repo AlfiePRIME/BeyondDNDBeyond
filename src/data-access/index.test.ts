@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { MODULE_NAME, getProfile, upsertProfile, isProfileComplete } from "@/data-access";
+import {
+  MODULE_NAME,
+  getProfile,
+  upsertProfile,
+  isProfileComplete,
+  createMap,
+  listMapsForCampaign,
+  getMap,
+  listMapCells,
+  upsertMapCells,
+} from "@/data-access";
 
 describe("data-access module", () => {
   it("is independently importable and testable", () => {
@@ -10,6 +20,14 @@ describe("data-access module", () => {
     expect(getProfile).toBeTypeOf("function");
     expect(upsertProfile).toBeTypeOf("function");
     expect(isProfileComplete).toBeTypeOf("function");
+  });
+
+  it("exports the map and cell functions from the main barrel", () => {
+    expect(createMap).toBeTypeOf("function");
+    expect(listMapsForCampaign).toBeTypeOf("function");
+    expect(getMap).toBeTypeOf("function");
+    expect(listMapCells).toBeTypeOf("function");
+    expect(upsertMapCells).toBeTypeOf("function");
   });
 
   it("treats a profile with no display name as incomplete", () => {

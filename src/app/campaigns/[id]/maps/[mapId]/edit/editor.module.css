@@ -1,0 +1,101 @@
+.editor {
+  position: fixed;
+  inset: 0;
+  background: var(--surface2);
+}
+
+.overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  pointer-events: none;
+}
+
+.backLink {
+  pointer-events: auto;
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.backLink:hover {
+  color: var(--teal);
+}
+
+.overlayControls {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.mapLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.savedText {
+  color: var(--teal);
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.dirtyText {
+  color: var(--muted);
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.toolbar {
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  max-width: 340px;
+  background: color-mix(in srgb, var(--surface2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
+  border-radius: 8px;
+}
+
+.toolbarLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.toolRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hint {
+  margin: 6px 0 0;
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  color: var(--dim);
+}
+
+.errorText {
+  color: var(--red);
+  line-height: 1.5;
+  margin: 0;
+}

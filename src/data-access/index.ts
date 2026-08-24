@@ -71,6 +71,15 @@ export {
   type AssetSourceType,
 } from "./assets";
 export {
+  createMap,
+  listMapsForCampaign,
+  getMap,
+  listMapCells,
+  upsertMapCells,
+  type CampaignMap,
+  type MapCell,
+} from "./maps";
+export {
   listCharacterResources,
   createCharacterResource,
   setCharacterResourceUses,

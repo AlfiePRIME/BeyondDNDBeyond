@@ -48,6 +48,11 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           glow
           headerActions={
             <span className={styles.charactersActions}>
+              {currentUserIsDM ? (
+                <Link href={`/campaigns/${campaignId}/maps`} className={styles.createLink}>
+                  Map editor
+                </Link>
+              ) : null}
               <Link href={`/campaigns/${campaignId}/assets`} className={styles.createLink}>
                 Asset palette
               </Link>

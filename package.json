@@ -12,9 +12,10 @@
     "perf:bundle": "node scripts/perf/bundle-size.mjs",
     "perf:render": "node scripts/perf/render-benchmark.mjs",
     "perf:assets": "node scripts/perf/asset-render-benchmark.mjs",
+    "perf:map-editor": "node scripts/perf/map-editor-benchmark.mjs",
     "perf:lighthouse": "node scripts/perf/lighthouse.mjs",
     "perf:realtime": "node scripts/perf/realtime-load.mjs",
-    "perf:all": "yarn perf:bundle && yarn perf:render && yarn perf:assets && yarn perf:lighthouse && yarn perf:realtime"
+    "perf:all": "yarn perf:bundle && yarn perf:render && yarn perf:assets && yarn perf:map-editor && yarn perf:lighthouse && yarn perf:realtime"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.8",

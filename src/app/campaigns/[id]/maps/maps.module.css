@@ -1,0 +1,107 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+.main {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 40px;
+}
+
+.backLink {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.backLink:hover {
+  color: var(--teal);
+}
+
+.mapsHint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 16px;
+}
+
+.manager {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.emptyHint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.mapList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mapRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mapLink {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.mapLink:hover {
+  color: var(--teal);
+}
+
+.createSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.createForm {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.createForm > button {
+  margin-top: 24px;
+}
+
+.nameField {
+  flex: 1;
+}
+
+.dimensionField {
+  width: 84px;
+}
+
+.createHint {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: 0;
+}
+
+.errorText {
+  color: var(--red);
+  line-height: 1.5;
+  margin: 0;
+}
