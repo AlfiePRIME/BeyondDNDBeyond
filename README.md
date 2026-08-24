@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-36 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, the avatar library/upload, D&D Beyond PDF character import, the Account page, the real-time campaign channel, reconnection/session resilience, the Lobby screen, the 3D table scene foundation, player seating/camera, rendering seated avatars, the session start/DM assignment flow, the map/asset data model, the built-in preset asset library, the custom asset upload pipeline, the map editor's terrain/elevation tool, object/POI placement, interactive POI behavior, live map rendering/switching on the tabletop, the grid overlay/token placement system, elevation/terrain-aware drag-to-move for tokens, the campaign narrative data model, the NPC roster, the world/lore page wiki, the session log/live handout reveal system, and the private DM notes/house rules editors) are complete and verified end to end against a running local Supabase stack.
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-37 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, the avatar library/upload, D&D Beyond PDF character import, the Account page, the real-time campaign channel, reconnection/session resilience, the Lobby screen, the 3D table scene foundation, player seating/camera, rendering seated avatars, the session start/DM assignment flow, the map/asset data model, the built-in preset asset library, the custom asset upload pipeline, the map editor's terrain/elevation tool, object/POI placement, interactive POI behavior, live map rendering/switching on the tabletop, the grid overlay/token placement system, elevation/terrain-aware drag-to-move for tokens, the campaign narrative data model, the NPC roster, the world/lore page wiki, the session log/live handout reveal system, the private DM notes/house rules editors, and AI-assisted NPC/lore drafting) are complete and verified end to end against a running local Supabase stack.
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 
@@ -56,6 +56,14 @@ cp .env.example .env
 Fill in `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` from `supabase/.env`
 (the `ANON_KEY` / `SERVICE_ROLE_KEY` values generated in step 1).
 
+**Optional — AI-assisted drafting (`ANTHROPIC_API_KEY`).** Everything above is self-hosted;
+this is the **one deliberate exception**: the "Generate a draft" actions on the NPC roster
+and lore-page editors call the external Anthropic API (Claude Haiku), and need an API key
+from [platform.claude.com](https://platform.claude.com). Leave it unset and the app works
+fully — those actions hide themselves with an explanation instead of erroring. The key is
+read only by the server process (the `src/ai` module, called from a Route Handler) and is
+never sent to or readable from the browser.
+
 **3. Start the Next.js dev server:**
 
 ```sh
@@ -84,7 +92,7 @@ folder) so the feature works with no external network calls at runtime.
 
 ## Module boundaries
 
-The app is split into five independently-testable modules under `src/`, each with its own
+The app is split into six independently-testable modules under `src/`, each with its own
 `README.md` and a single public entry point (`index.ts`) — other modules should only ever
 import from that entry point, never reach into a module's internal files:
 
@@ -95,6 +103,7 @@ import from that entry point, never reach into a module's internal files:
 | `rules-engine` | Pure D&D 5e SRD game logic — no UI, no database dependency. Fully unit-testable in isolation. |
 | `realtime` | Wraps Supabase Realtime channels/presence behind a typed event-bus. |
 | `data-access` | The **only** module allowed to import `@supabase/supabase-js` directly — every other module goes through here for persistence. |
+| `ai` | The **only** module allowed to import `@anthropic-ai/sdk` — server-side LLM text generation for AI-assisted drafting (the app's one non-self-hosted integration; optional, see `ANTHROPIC_API_KEY` above). |
 
 This is enforced by ESLint (`eslint-plugin-boundaries`, configured in `eslint.config.mjs`), not
 just convention — e.g. a UI component importing `@supabase/supabase-js` directly, or

@@ -13,6 +13,7 @@ import {
   type LorePageLink,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
+import { GenerateDraftControl } from "../../GenerateDraftControl";
 import styles from "../lore.module.css";
 
 /**
@@ -27,12 +28,15 @@ export function LorePageView({
   initialLinks,
   allPages,
   canManage,
+  aiEnabled,
 }: {
   campaignId: string;
   initialPage: LorePage;
   initialLinks: LorePageLink[];
   allPages: LorePage[];
   canManage: boolean;
+  /** Resolved server-side via isAiConfigured() — gates the generate action. */
+  aiEnabled: boolean;
 }) {
   const router = useRouter();
   const [page, setPage] = useState(initialPage);
@@ -163,6 +167,13 @@ export function LorePageView({
               onChange={(event) => setTitleDraft(event.target.value)}
               disabled={busy}
               data-testid="lore-page-title-input"
+            />
+            <GenerateDraftControl
+              campaignId={campaignId}
+              kind="lore"
+              aiEnabled={aiEnabled}
+              disabled={busy}
+              onDraft={setBodyDraft}
             />
             <label className={styles.textareaField}>
               <span className={styles.textareaLabel}>Content</span>

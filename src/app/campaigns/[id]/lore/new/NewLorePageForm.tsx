@@ -5,9 +5,17 @@ import { useRouter } from "next/navigation";
 import { Button, TextInput } from "@/ui-components";
 import { createLorePage } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
+import { GenerateDraftControl } from "../../GenerateDraftControl";
 import styles from "../lore.module.css";
 
-export function NewLorePageForm({ campaignId }: { campaignId: string }) {
+export function NewLorePageForm({
+  campaignId,
+  aiEnabled,
+}: {
+  campaignId: string;
+  /** Resolved server-side via isAiConfigured() — gates the generate action. */
+  aiEnabled: boolean;
+}) {
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -41,6 +49,13 @@ export function NewLorePageForm({ campaignId }: { campaignId: string }) {
         placeholder="e.g. The Sunken Keep"
         disabled={busy}
         data-testid="lore-page-title-input"
+      />
+      <GenerateDraftControl
+        campaignId={campaignId}
+        kind="lore"
+        aiEnabled={aiEnabled}
+        disabled={busy}
+        onDraft={setBody}
       />
       <label className={styles.textareaField}>
         <span className={styles.textareaLabel}>Content</span>

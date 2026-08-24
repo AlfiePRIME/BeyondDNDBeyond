@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { listLorePages, listLorePageLinks, isDM } from "@/data-access";
+import { isAiConfigured } from "@/ai";
 import { LorePageView } from "./LorePageView";
 import styles from "../lore.module.css";
 
@@ -53,6 +54,7 @@ export default async function LorePageDetailPage({
           initialLinks={links}
           allPages={pages}
           canManage={currentUserIsDM}
+          aiEnabled={isAiConfigured()}
         />
       </main>
     </div>

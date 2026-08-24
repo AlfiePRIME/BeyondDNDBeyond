@@ -16,6 +16,7 @@ const eslintConfig = defineConfig([
         { type: "rules-engine", pattern: "src/rules-engine/**" },
         { type: "realtime", pattern: "src/realtime/**" },
         { type: "data-access", pattern: "src/data-access/**" },
+        { type: "ai", pattern: "src/ai/**" },
       ],
       // Element patterns match folders, not individual files — proxy.ts (the
       // Next.js 16 rename of middleware.ts) is a lone top-level file Next.js
@@ -26,9 +27,10 @@ const eslintConfig = defineConfig([
       "boundaries/files": [{ category: "proxy", pattern: "src/proxy.ts" }],
     },
     rules: {
-      // Every module boundary rule below exists to keep the five modules
-      // established in Prompt 2 independently changeable — see that prompt's
-      // README section on module boundaries before adding a new exception.
+      // Every module boundary rule below exists to keep the modules
+      // established in Prompt 2 (plus src/ai, added in Prompt 37 under the
+      // same pattern) independently changeable — see that prompt's README
+      // section on module boundaries before adding a new exception.
       "boundaries/dependencies": [
         "error",
         {
@@ -60,17 +62,38 @@ const eslintConfig = defineConfig([
                 "proxy.ts may not import @supabase/supabase-js directly — go through @/data-access instead.",
             },
             {
-              // rules-engine is pure game logic: no UI, DB, realtime, or scene deps.
+              // Only the ai module may talk to the Anthropic API directly —
+              // same gatekeeper shape as the Supabase rule above, so the
+              // external LLM credential and client stay in one place.
+              from: { element: { type: "!ai" } },
+              disallow: {
+                to: { module: { origin: "external", source: "@anthropic-ai/sdk" } },
+              },
+              message:
+                "Only the ai module may import @anthropic-ai/sdk directly — go through @/ai instead.",
+            },
+            {
+              from: { file: { categories: { anyOf: ["proxy"] } } },
+              disallow: {
+                to: { module: { origin: "external", source: "@anthropic-ai/sdk" } },
+              },
+              message:
+                "proxy.ts may not import @anthropic-ai/sdk directly — go through @/ai instead.",
+            },
+            {
+              // rules-engine is pure game logic: no UI, DB, realtime, scene, or AI deps.
               from: { element: { type: "rules-engine" } },
               disallow: {
                 to: {
                   element: {
-                    types: { anyOf: ["data-access", "realtime", "scene-3d", "ui-components", "app"] },
+                    types: {
+                      anyOf: ["data-access", "realtime", "scene-3d", "ui-components", "app", "ai"],
+                    },
                   },
                 },
               },
               message:
-                "rules-engine must stay pure — no UI, database, realtime, or 3D scene dependencies.",
+                "rules-engine must stay pure — no UI, database, realtime, 3D scene, or AI dependencies.",
             },
           ],
         },
@@ -86,7 +109,13 @@ const eslintConfig = defineConfig([
         {
           patterns: [
             {
-              group: ["@/ui-components/**", "@/scene-3d/**", "@/rules-engine/**", "@/realtime/**"],
+              group: [
+                "@/ui-components/**",
+                "@/scene-3d/**",
+                "@/rules-engine/**",
+                "@/realtime/**",
+                "@/ai/**",
+              ],
               message:
                 "Import from the module's barrel (e.g. \"@/ui-components\") instead of reaching into its internal files.",
             },

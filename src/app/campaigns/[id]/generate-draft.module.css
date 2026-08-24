@@ -1,0 +1,51 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px dashed var(--dim2);
+  border-radius: var(--r);
+}
+
+.row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.promptField {
+  flex: 1;
+  min-width: 0;
+}
+
+.generateButton {
+  flex-shrink: 0;
+  /* Sit on the input's baseline, clear of TextInput's error/hint line. */
+  margin-bottom: 2px;
+}
+
+.hint {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: 0;
+}
+
+.unavailable {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  line-height: 1.6;
+  color: var(--dim);
+  border: 1px dashed var(--dim2);
+  border-radius: var(--r);
+  padding: 8px 12px;
+  margin: 0;
+}
+
+.error {
+  color: var(--red);
+  line-height: 1.5;
+  margin: 0;
+}

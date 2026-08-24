@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Panel } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { listNpcs, getNpcPortraitSignedUrl, isDM } from "@/data-access";
+import { isAiConfigured } from "@/ai";
 import { NpcRoster, type RosterNpc } from "./NpcRoster";
 import styles from "./npcs.module.css";
 
@@ -62,7 +63,12 @@ export default async function CampaignNpcsPage({ params }: { params: Promise<{ i
           <p className={styles.rosterHint}>
             Everyone {campaign.name}&apos;s party has met — or is yet to meet.
           </p>
-          <NpcRoster campaignId={campaignId} initialNpcs={initialNpcs} canManage={currentUserIsDM} />
+          <NpcRoster
+            campaignId={campaignId}
+            initialNpcs={initialNpcs}
+            canManage={currentUserIsDM}
+            aiEnabled={isAiConfigured()}
+          />
         </Panel>
       </main>
     </div>

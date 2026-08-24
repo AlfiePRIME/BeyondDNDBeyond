@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Panel } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { isDM } from "@/data-access";
+import { isAiConfigured } from "@/ai";
 import { NewLorePageForm } from "./NewLorePageForm";
 import styles from "../lore.module.css";
 
@@ -38,7 +39,7 @@ export default async function NewLorePagePage({ params }: { params: Promise<{ id
 
         <Panel title="New lore page" tone="purple" glow>
           <p className={styles.hint}>Add a page to {campaign.name}&apos;s world.</p>
-          <NewLorePageForm campaignId={campaignId} />
+          <NewLorePageForm campaignId={campaignId} aiEnabled={isAiConfigured()} />
         </Panel>
       </main>
     </div>

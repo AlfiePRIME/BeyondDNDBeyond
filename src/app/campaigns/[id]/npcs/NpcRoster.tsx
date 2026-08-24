@@ -12,6 +12,7 @@ import {
   type UpdateNpcPatch,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
+import { GenerateDraftControl } from "../GenerateDraftControl";
 import styles from "./npcs.module.css";
 
 export interface RosterNpc extends Npc {
@@ -67,10 +68,13 @@ export function NpcRoster({
   campaignId,
   initialNpcs,
   canManage,
+  aiEnabled,
 }: {
   campaignId: string;
   initialNpcs: RosterNpc[];
   canManage: boolean;
+  /** Resolved server-side via isAiConfigured() — gates the generate action. */
+  aiEnabled: boolean;
 }) {
   const [npcs, setNpcs] = useState(initialNpcs);
   const [editing, setEditing] = useState<RosterNpc | "new" | null>(null);
@@ -266,6 +270,13 @@ export function NpcRoster({
             placeholder="e.g. Baron Aldric Vane"
             disabled={busy}
             data-testid="npc-name-input"
+          />
+          <GenerateDraftControl
+            campaignId={campaignId}
+            kind="npc"
+            aiEnabled={aiEnabled}
+            disabled={busy}
+            onDraft={setDescription}
           />
           <TextareaField
             label="Description"
