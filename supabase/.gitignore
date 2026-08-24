@@ -1,0 +1,19 @@
+# Real secrets — .env.example is the committed template
+.env
+.env.old
+
+# Runtime data volumes (created once containers run)
+volumes/db/data
+volumes/storage
+volumes/functions/**
+!volumes/functions/deno.jsonc
+!volumes/functions/main/
+volumes/functions/main/**
+!volumes/functions/main/index.ts
+!volumes/functions/hello/
+volumes/functions/hello/**
+!volumes/functions/hello/index.ts
+
+docker-compose.override.yml
+.supabase-version
+backups
