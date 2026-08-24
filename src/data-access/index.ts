@@ -63,6 +63,14 @@ export {
   type KnownSpell,
 } from "./characters";
 export {
+  listAssetsForCampaign,
+  uploadMapAssetFile,
+  createCustomAsset,
+  getMapAssetSignedUrl,
+  type MapAsset,
+  type AssetSourceType,
+} from "./assets";
+export {
   listCharacterResources,
   createCharacterResource,
   setCharacterResourceUses,

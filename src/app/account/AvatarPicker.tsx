@@ -5,7 +5,7 @@ import { ChoiceCard } from "@/ui-components";
 import { setProfileAvatar, uploadAvatarFile, type AvatarSource } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { AVATAR_PRESETS } from "./avatar-presets";
-import { validateAvatarGlb } from "./validate-glb";
+import { validateGlbFile } from "@/app/lib/validate-glb";
 import styles from "./account.module.css";
 
 export interface AvatarPickerProps {
@@ -53,7 +53,7 @@ export function AvatarPicker({ userId, initialSource, initialRef }: AvatarPicker
     setSaved(false);
     setBusy(true);
     try {
-      const result = await validateAvatarGlb(file);
+      const result = await validateGlbFile(file, "avatars");
       if (!result.ok) {
         setError(result.message);
         return;

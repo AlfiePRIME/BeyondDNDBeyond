@@ -47,9 +47,14 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           tone="purple"
           glow
           headerActions={
-            <Link href={`/campaigns/${campaignId}/room`} className={styles.createLink}>
-              Enter the Game Room →
-            </Link>
+            <span className={styles.charactersActions}>
+              <Link href={`/campaigns/${campaignId}/assets`} className={styles.createLink}>
+                Asset palette
+              </Link>
+              <Link href={`/campaigns/${campaignId}/room`} className={styles.createLink}>
+                Enter the Game Room →
+              </Link>
+            </span>
           }
         >
           <SectionHeader eyebrow="Campaign" title="Roster" />
