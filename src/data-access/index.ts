@@ -16,6 +16,11 @@
 // client — each of the three create*Client functions builds a fresh
 // instance per call. A single shared instance would leak one user's
 // session/cookies into another user's request on the server.
+//
+// SupabaseClient is re-exported (type-only) so other modules can type a
+// "caller passes in a client" parameter (e.g. realtime's joinCampaignChannel)
+// without importing @supabase/supabase-js themselves.
+export type { SupabaseClient } from "@supabase/supabase-js";
 export {
   getProfile,
   upsertProfile,

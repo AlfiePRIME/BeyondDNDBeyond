@@ -4,6 +4,7 @@ import { Badge, Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { listCampaignMembers, listCharactersForCampaign, isDM } from "@/data-access";
 import { TransferDMForm } from "./TransferDMForm";
+import { CampaignRoster } from "./CampaignRoster";
 import styles from "./campaign.module.css";
 
 export default async function CampaignDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -32,6 +33,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   ]);
 
   const otherMembers = members.filter((m) => m.user_id !== user.id);
+  const currentUserDisplayName = members.find((m) => m.user_id === user.id)?.display_name ?? null;
 
   return (
     <div className={styles.page}>
@@ -42,16 +44,12 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
 
         <Panel title={campaign.name} tone="purple" glow>
           <SectionHeader eyebrow="Campaign" title="Roster" />
-          <ul className={styles.memberList}>
-            {members.map((member) => (
-              <li key={member.user_id} className={styles.memberRow}>
-                <span>{member.display_name ?? "Unnamed player"}</span>
-                <Badge tone={member.role === "dm" ? "pink" : "teal"}>
-                  {member.role === "dm" ? "DM" : "Player"}
-                </Badge>
-              </li>
-            ))}
-          </ul>
+          <CampaignRoster
+            campaignId={campaignId}
+            currentUserId={user.id}
+            currentUserDisplayName={currentUserDisplayName}
+            members={members}
+          />
         </Panel>
 
         <Panel
