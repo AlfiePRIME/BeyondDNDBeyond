@@ -9,4 +9,5 @@ export {
   type CampaignChannel,
   type CampaignChannelIdentity,
   type CampaignPresenceMember,
+  type CampaignConnectionState,
 } from "./campaignChannel";

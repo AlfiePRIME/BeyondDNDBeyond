@@ -60,11 +60,87 @@ function makeClient(label) {
   const supabase = createClient(supabaseUrl, anonKey, {
     realtime: { params: { eventsPerSecond: 20 } },
   });
-  return joinCampaignChannel(supabase, CAMPAIGN_ID, { userId: crypto.randomUUID(), displayName: label });
+  const channel = joinCampaignChannel(supabase, CAMPAIGN_ID, { userId: crypto.randomUUID(), displayName: label });
+  return { supabase, channel };
+}
+
+function waitFor(predicate, timeoutMs, intervalMs = 25) {
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      if (predicate()) {
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        reject(new Error(`timed out after ${timeoutMs} ms waiting for condition`));
+        return;
+      }
+      setTimeout(tick, intervalMs);
+    };
+    tick();
+  });
+}
+
+function waitForBroadcast(channel, event, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`timed out after ${timeoutMs} ms waiting for "${event}"`));
+    }, timeoutMs);
+    const unsubscribe = channel.subscribe(event, (payload) => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(payload);
+    });
+  });
+}
+
+// Forces a real network-style drop on one client — closing the raw WebSocket directly rather
+// than calling the client's own disconnect()/leave() (which mark the closure "clean" and skip
+// realtime-js's own reconnect path entirely). This exercises the actual recovery path: realtime-js
+// schedules a reconnect with its own backoff (1s/2s/5s/10s by default), reopens the socket, and
+// the dropped channel rejoins itself and re-tracks presence, all without this script's involvement.
+async function testDroppedConnectionRecovery(dropTarget, observer, budgets) {
+  const RECOVERY_EVENT = "perf:recovery-check";
+  console.log("\nSimulating a dropped connection on one client mid-session...");
+
+  const droppedAt = Date.now();
+  const rawSocket = dropTarget.supabase.realtime.socketAdapter.getSocket();
+  rawSocket.conn?.close();
+
+  await waitFor(() => dropTarget.channel.getConnectionState() === "reconnecting", 5000);
+  console.log(`  Reconnecting indicator observed ${Date.now() - droppedAt} ms after the drop.`);
+
+  await waitFor(() => dropTarget.channel.getConnectionState() === "connected", 30000);
+  console.log(`  Channel reports "connected" again ${Date.now() - droppedAt} ms after the drop.`);
+
+  // "Connected" alone only proves the rejoin handshake succeeded — actually send messages both
+  // ways to confirm the dropped client's broadcast subscriptions and publishes genuinely work
+  // again, not just that its status flipped back.
+  const observerReceived = waitForBroadcast(observer.channel, RECOVERY_EVENT, 5000);
+  await dropTarget.channel.publish(RECOVERY_EVENT, { from: "dropped-client", sentAt: Date.now() });
+  await observerReceived;
+
+  const dropTargetReceived = waitForBroadcast(dropTarget.channel, RECOVERY_EVENT, 5000);
+  await observer.channel.publish(RECOVERY_EVENT, { from: "observer", sentAt: Date.now() });
+  await dropTargetReceived;
+
+  const recoveryTimeMs = Date.now() - droppedAt;
+  const budgetMs = budgets.realtimeLoad.maxReconnectRecoveryMs;
+  console.log(`Recovery time (drop to confirmed round-trip working again): ${recoveryTimeMs} ms (budget: ${budgetMs} ms)`);
+
+  if (recoveryTimeMs > budgetMs) {
+    console.error(`FAIL: recovery time ${recoveryTimeMs} ms exceeds budget ${budgetMs} ms.`);
+    process.exitCode = 1;
+  } else {
+    console.log("PASS");
+  }
 }
 
 const latencies = [];
-const channels = Array.from({ length: CLIENT_COUNT }, (_, i) => makeClient(`perf-client-${i}`));
+const clients = Array.from({ length: CLIENT_COUNT }, (_, i) => makeClient(`perf-client-${i}`));
+const channels = clients.map((client) => client.channel);
 
 for (const channel of channels) {
   channel.subscribe(PING_EVENT, (payload) => {
@@ -106,6 +182,8 @@ try {
       console.log("PASS");
     }
   }
+
+  await testDroppedConnectionRecovery(clients[0], clients[1] ?? clients[0], budgets);
 } finally {
   await Promise.all(channels.map((channel) => channel.leave()));
 }

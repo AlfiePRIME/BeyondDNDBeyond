@@ -14,6 +14,8 @@
   },
   "realtimeLoad": {
     "concurrentClients": 10,
-    "maxAvgLatencyMs": 500
+    "maxAvgLatencyMs": 500,
+    "maxReconnectRecoveryMs": 8000,
+    "_reconnectNote": "Prompt 17. Dominated by realtime-js's own first reconnect backoff step (~1s by default) plus socket reopen, channel rejoin, presence re-track, and a confirmatory broadcast round trip in both directions — generous starting budget per the same rationale as the rest of this file."
   }
 }

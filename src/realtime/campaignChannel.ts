@@ -10,6 +10,14 @@ export interface CampaignPresenceMember {
   displayName: string | null;
 }
 
+/**
+ * `connecting` — the initial join hasn't reached SUBSCRIBED yet (nothing to resync from, so no
+ * "reconnecting" indicator or `onReconnect` firing applies here).
+ * `connected` — subscribed and current.
+ * `reconnecting` — was connected, the underlying socket/channel dropped, and it's mid-retry.
+ */
+export type CampaignConnectionState = "connecting" | "connected" | "reconnecting";
+
 export interface CampaignChannel {
   /** Broadcasts `payload` under `event` to every other subscriber of this campaign's channel. */
   publish<T>(event: string, payload: T): Promise<void>;
@@ -18,6 +26,17 @@ export interface CampaignChannel {
   /** Registers `handler` for presence changes — called immediately with the current snapshot, then again on every join/leave. */
   onPresenceChange(handler: (members: CampaignPresenceMember[]) => void): () => void;
   getPresentMembers(): CampaignPresenceMember[];
+  /**
+   * Registers `handler` to run after this channel recovers from an unexpected connection drop —
+   * NOT after the initial join, since a fresh caller has no prior state to resync. Presence
+   * resyncs itself automatically (re-tracked, snapshot re-received) and needs no handler here;
+   * this is for feature modules with their own authoritative state (map, tokens, combat, HP, ...)
+   * that need to refetch after reconnecting. Returns an unsubscribe function.
+   */
+  onReconnect(handler: () => void | Promise<void>): () => void;
+  getConnectionState(): CampaignConnectionState;
+  /** Registers `handler` for connection-state changes — called immediately with the current state, then again on every change. */
+  onConnectionStateChange(handler: (state: CampaignConnectionState) => void): () => void;
   /** Leaves the channel and releases its socket subscription — call on unmount. */
   leave(): Promise<void>;
 }
@@ -53,8 +72,22 @@ export function joinCampaignChannel(
 
   const eventHandlers = new Map<string, Set<(payload: unknown) => void>>();
   const presenceHandlers = new Set<(members: CampaignPresenceMember[]) => void>();
+  const reconnectHandlers = new Set<() => void | Promise<void>>();
+  const connectionStateHandlers = new Set<(state: CampaignConnectionState) => void>();
   const onChannelReady: Array<(channel: RealtimeChannelHandle) => void> = [];
   let channelRef: RealtimeChannelHandle | null = null;
+
+  // Reached SUBSCRIBED at least once — distinguishes "still doing the initial join" (any
+  // CHANNEL_ERROR/TIMED_OUT here is just part of connecting, not a drop) from "was connected and
+  // dropped" (same statuses now mean reconnecting). onReconnect only fires for the latter.
+  let hasConnectedOnce = false;
+  let connectionState: CampaignConnectionState = "connecting";
+
+  function setConnectionState(next: CampaignConnectionState): void {
+    if (connectionState === next) return;
+    connectionState = next;
+    for (const handler of connectionStateHandlers) handler(connectionState);
+  }
 
   function withChannel(fn: (channel: RealtimeChannelHandle) => void): void {
     if (channelRef) fn(channelRef);
@@ -88,10 +121,30 @@ export function joinCampaignChannel(
 
     for (const fn of onChannelReady.splice(0)) fn(channel);
 
+    // realtime-js/Phoenix already reconnects the socket with backoff and rejoins this same
+    // channel object automatically once it reopens — resending the original join push replays
+    // this very callback with SUBSCRIBED again, and channel.on() bindings registered above
+    // (broadcast, presence sync) survive the drop since the channel is never torn down, only
+    // this callback's SUBSCRIBED/CHANNEL_ERROR/TIMED_OUT statuses need watching here to know
+    // which state we're in and to re-track presence (which SUBSCRIBED already does below).
     channel.subscribe(async (status) => {
       if (status === "SUBSCRIBED") {
         await channel.track({ display_name: identity.displayName ?? null } satisfies PresenceTrackPayload);
+        const isRecovery = hasConnectedOnce && connectionState === "reconnecting";
+        hasConnectedOnce = true;
+        setConnectionState("connected");
         markReady();
+        if (isRecovery) {
+          for (const handler of reconnectHandlers) {
+            Promise.resolve()
+              .then(() => handler())
+              .catch((error: unknown) => {
+                console.error("[realtime] onReconnect handler threw", error);
+              });
+          }
+        }
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        if (hasConnectedOnce) setConnectionState("reconnecting");
       }
     });
   });
@@ -128,9 +181,27 @@ export function joinCampaignChannel(
       };
     },
     getPresentMembers,
+    onReconnect(handler: () => void | Promise<void>): () => void {
+      reconnectHandlers.add(handler);
+      return () => {
+        reconnectHandlers.delete(handler);
+      };
+    },
+    getConnectionState(): CampaignConnectionState {
+      return connectionState;
+    },
+    onConnectionStateChange(handler: (state: CampaignConnectionState) => void): () => void {
+      connectionStateHandlers.add(handler);
+      handler(connectionState);
+      return () => {
+        connectionStateHandlers.delete(handler);
+      };
+    },
     async leave(): Promise<void> {
       presenceHandlers.clear();
       eventHandlers.clear();
+      reconnectHandlers.clear();
+      connectionStateHandlers.clear();
       const donePromise = (async () => {
         if (!channelRef) {
           await new Promise<void>((resolve) => onChannelReady.push(() => resolve()));

@@ -12,6 +12,13 @@ publishes/subscribes through this rather than talking to Realtime directly.
   function.
 - `onPresenceChange(handler)` / `getPresentMembers()` — who else is currently connected,
   called immediately with the current snapshot and again on every join/leave.
+- `getConnectionState()` / `onConnectionStateChange(handler)` — `"connecting" | "connected" |
+  "reconnecting"`, called immediately with the current state and again on every change. Backed by
+  realtime-js/Phoenix's own socket reconnect-with-backoff and automatic channel rejoin; this module
+  just observes those transitions rather than reimplementing them.
+- `onReconnect(handler)` — fires after recovering from an unexpected drop, never after the initial
+  join. Presence resyncs itself automatically and needs no handler; this is for feature modules
+  (map, tokens, combat, HP, ...) with their own authoritative state to refetch after reconnecting.
 - `leave()` — untracks presence and releases the channel; call on unmount.
 
 Callers supply their own `SupabaseClient` (from `@/data-access/supabase-browser` or
