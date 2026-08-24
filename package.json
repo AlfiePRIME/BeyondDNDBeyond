@@ -6,18 +6,27 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "perf:bundle": "node scripts/perf/bundle-size.mjs",
+    "perf:render": "node scripts/perf/render-benchmark.mjs",
+    "perf:lighthouse": "node scripts/perf/lighthouse.mjs",
+    "perf:realtime": "node scripts/perf/realtime-load.mjs",
+    "perf:all": "yarn perf:bundle && yarn perf:render && yarn perf:lighthouse && yarn perf:realtime"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
     "next": "16.3.2",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "^0.185.4",
     "@vitest/coverage-v8": "^4.1.11",
     "chrome-launcher": "^1.2.1",
     "eslint": "^9",

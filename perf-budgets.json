@@ -1,0 +1,19 @@
+{
+  "_comment": "Generous starting budgets per Prompt 2 — the point right now is having the harness in place with a recorded baseline, not hitting a final target on a near-empty app. Tighten these as the app grows and re-baseline in later prompts as directed.",
+  "bundleSize": {
+    "mainPageFirstLoadKb": 1000,
+    "_note": "Near-empty app currently baselines around ~550KB (React + Next.js runtime chunks only). Budget set generously above that per Prompt 2's notes; tighten as real app code is added."
+  },
+  "render3d": {
+    "maxAvgFrameTimeMs": 33.3,
+    "_note": "33.3ms = 30fps floor. Prompt 2 benchmarks a trivial placeholder scene; Prompt 19 re-baselines against the real Game Room scene."
+  },
+  "lighthouse": {
+    "minPerformanceScore": 70,
+    "minAccessibilityScore": 80
+  },
+  "realtimeLoad": {
+    "concurrentClients": 10,
+    "maxAvgLatencyMs": 500
+  }
+}

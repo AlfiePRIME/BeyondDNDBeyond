@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Render benchmark fixture</title>
+    <style>
+      html, body { margin: 0; padding: 0; }
+      canvas { display: block; }
+    </style>
+    <script type="importmap">
+      { "imports": { "three": "/node_modules/three/build/three.module.js" } }
+    </script>
+  </head>
+  <body>
+    <canvas id="c" width="1280" height="720"></canvas>
+    <script type="module">
+      import * as THREE from "three";
+
+      // Placeholder scene for Prompt 2's baseline — Prompt 19 points this
+      // harness at the real Game Room scene once it exists.
+      const canvas = document.getElementById("c");
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setSize(1280, 720, false);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(50, 1280 / 720, 0.1, 100);
+      camera.position.set(0, 2, 5);
+      camera.lookAt(0, 0, 0);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(3, 5, 2);
+      scene.add(dirLight);
+
+      const table = new THREE.Mesh(
+        new THREE.BoxGeometry(3, 0.2, 1.8),
+        new THREE.MeshStandardMaterial({ color: 0x8855ff })
+      );
+      scene.add(table);
+
+      const params = new URLSearchParams(location.search);
+      const frameCount = Number(params.get("frames") || 180);
+
+      const frameTimes = [];
+      let lastTime = performance.now();
+      let frame = 0;
+
+      function tick() {
+        const now = performance.now();
+        frameTimes.push(now - lastTime);
+        lastTime = now;
+
+        table.rotation.y += 0.01;
+        renderer.render(scene, camera);
+
+        frame++;
+        if (frame < frameCount) {
+          requestAnimationFrame(tick);
+        } else {
+          // Drop the first few frames (warm-up/compile jitter) before averaging.
+          const warm = frameTimes.slice(5);
+          const avg = warm.reduce((a, b) => a + b, 0) / warm.length;
+          window.__BENCHMARK_RESULT__ = {
+            frameCount,
+            avgFrameTimeMs: avg,
+            frameTimes: warm,
+          };
+        }
+      }
+
+      requestAnimationFrame(tick);
+    </script>
+  </body>
+</html>

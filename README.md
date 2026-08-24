@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompt 1 (project scaffolding) is in progress — Next.js, module folders, and the self-hosted Supabase Docker Compose config are in place; bringing the stack up is currently blocked locally on Docker permissions (see below).
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompt 1 (project scaffolding) and Prompt 2 (module boundaries + performance-testing harness) are complete and verified end to end against a running local Supabase stack.
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 
@@ -43,7 +43,9 @@ sh utils/generate-keys.sh --update-env
 ```
 
 Studio is reachable at [http://localhost:8000](http://localhost:8000) once the stack is healthy
-(`docker compose ps` to check container status).
+(`docker compose ps` to check container status). This self-hosted version protects the
+dashboard behind HTTP Basic Auth — log in with `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD`
+from `supabase/.env`.
 
 **2. Configure the app's environment:**
 
@@ -67,3 +69,49 @@ the app can reach Supabase is available at
 **Requires:** the user running Docker commands must be able to access the Docker daemon (in
 the `docker` group, or run via `sudo`) — `sudo usermod -aG docker $USER` and re-login if you
 hit a permission-denied error against `/var/run/docker.sock`.
+
+## Module boundaries
+
+The app is split into five independently-testable modules under `src/`, each with its own
+`README.md` and a single public entry point (`index.ts`) — other modules should only ever
+import from that entry point, never reach into a module's internal files:
+
+| Module | Responsibility |
+|---|---|
+| `ui-components` | Shared design-system components (buttons, panels, inputs, modals, badges), built on the design tokens and CanvasUI. |
+| `scene-3d` | React Three Fiber scene code — the table, seating, avatars, live map rendering, tokens, vision masking. |
+| `rules-engine` | Pure D&D 5e SRD game logic — no UI, no database dependency. Fully unit-testable in isolation. |
+| `realtime` | Wraps Supabase Realtime channels/presence behind a typed event-bus. |
+| `data-access` | The **only** module allowed to import `@supabase/supabase-js` directly — every other module goes through here for persistence. |
+
+This is enforced by ESLint (`eslint-plugin-boundaries`, configured in `eslint.config.mjs`), not
+just convention — e.g. a UI component importing `@supabase/supabase-js` directly, or
+`rules-engine` importing anything outside itself, both fail `yarn lint`.
+
+## Testing
+
+```sh
+yarn test          # run once
+yarn test:watch    # watch mode
+```
+
+Vitest is configured (`vitest.config.ts`) to run every `*.test.ts`/`*.test.tsx` file under
+`src/`, loading `.env` so tests that touch modules needing real config (like `data-access`)
+work without extra setup.
+
+## Performance budgets
+
+Four checks, with generous starting budgets recorded in `perf-budgets.json` (tightened as the
+app grows past this early-scaffolding baseline):
+
+```sh
+yarn perf:bundle      # client JS bundle size vs. budget
+yarn perf:render      # headless 3D frame-time benchmark (Playwright + Three.js)
+yarn perf:lighthouse  # Lighthouse performance/accessibility scores
+yarn perf:realtime    # concurrent-client Supabase Realtime latency test
+yarn perf:all         # run all four in sequence
+```
+
+`perf:bundle` and `perf:lighthouse` need a production build first (`yarn build`).
+`perf:realtime` needs the Supabase stack running (see above). `perf:render` and
+`perf:lighthouse` share Playwright's Chromium install rather than downloading Chrome twice.
