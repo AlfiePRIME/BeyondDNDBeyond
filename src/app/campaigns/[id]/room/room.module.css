@@ -35,6 +35,15 @@
   gap: 16px;
 }
 
+.endError {
+  position: absolute;
+  top: 64px;
+  right: 24px;
+  margin: 0;
+  color: var(--red);
+  font-size: 13px;
+}
+
 .roomLabel {
   font-family: var(--font-m);
   font-size: 11px;

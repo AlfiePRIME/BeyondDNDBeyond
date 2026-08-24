@@ -42,6 +42,8 @@ export {
   isDM,
   listCampaignMembers,
   transferDM,
+  startSession,
+  endSession,
   type Campaign,
   type CampaignRole,
   type CampaignMembership,

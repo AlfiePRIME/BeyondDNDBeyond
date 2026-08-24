@@ -5,6 +5,7 @@ export interface Campaign {
   name: string;
   creator: string;
   invite_code: string;
+  session_active: boolean;
   created_at: string;
 }
 
@@ -190,10 +191,41 @@ export async function listCampaignMembers(
 }
 
 /**
- * Transfers the DM role to a different, existing member — a shared function
- * callable from anywhere authorized to initiate a handoff, not just the
- * Transfer DM UI button here. Prompt 22's lobby session-start flow calls
- * this same function later.
+ * Marks the campaign's session as active and makes the caller its DM
+ * (demoting the previous DM if that's someone else) — any member may call
+ * this, unlike transferDM. Throws with the RPC's specific message when a
+ * session is already in progress. `reclaimAbandoned` skips that guard: pass
+ * it only after verifying via Realtime presence that the "active" session's
+ * room is actually empty (a crashed last member leaves the flag stranded,
+ * and Postgres can't see presence to clear it itself).
+ */
+export async function startSession(
+  supabase: SupabaseClient,
+  campaignId: string,
+  options?: { reclaimAbandoned?: boolean }
+): Promise<void> {
+  const { error } = await supabase.rpc("start_session", {
+    p_campaign_id: campaignId,
+    p_reclaim_abandoned: options?.reclaimAbandoned ?? false,
+  });
+  if (error) throw error;
+}
+
+/**
+ * DM-only (the RPC checks is_campaign_dm). Idempotent — ending an
+ * already-ended session is a no-op, since the last-leaver courtesy cleanup
+ * and an explicit End Session click can race.
+ */
+export async function endSession(supabase: SupabaseClient, campaignId: string): Promise<void> {
+  const { error } = await supabase.rpc("end_session", { p_campaign_id: campaignId });
+  if (error) throw error;
+}
+
+/**
+ * Transfers the DM role to a different, existing member — DM-initiated
+ * handoff only (the RPC rejects non-DM callers). The lobby's session-start
+ * flow does NOT use this: startSession has member-level authorization and
+ * promotes the caller, which is a different auth rule, not a handoff.
  */
 export async function transferDM(
   supabase: SupabaseClient,

@@ -9,7 +9,13 @@ work; the public API is a thin topic-scoped wrapper per feature scope so topic n
 one place:
 
 - `joinCampaignChannel(supabase, campaignId, identity)` — the one channel for a campaign
-  (topic `campaign:<id>`, so concurrent campaigns never cross-talk).
+  (topic `campaign:<id>`, so concurrent campaigns never cross-talk). Presence here means
+  "somewhere in this campaign's pages" (e.g. the campaign detail page's roster).
+- `joinCampaignRoomChannel(supabase, campaignId, identity)` — a separate channel scoped to
+  that campaign's Game Room specifically (topic `campaign:<id>:room`), used where presence
+  needs to mean "actually at the table" — session lifecycle (last-leaver auto-end, abandoned-
+  session reclaim probes, the session-ended broadcast) cares about this narrower meaning, not
+  "viewing any page for this campaign."
 - `joinLobbyChannel(supabase, identity)` — the app-wide Lobby (fixed topic `lobby`); its
   presence list is "who's online right now" across the whole app.
 

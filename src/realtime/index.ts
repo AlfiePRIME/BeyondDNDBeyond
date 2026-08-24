@@ -11,4 +11,5 @@ export type {
   ConnectionState,
 } from "./channel";
 export { joinCampaignChannel } from "./campaignChannel";
+export { joinCampaignRoomChannel } from "./campaignRoomChannel";
 export { joinLobbyChannel } from "./lobbyChannel";

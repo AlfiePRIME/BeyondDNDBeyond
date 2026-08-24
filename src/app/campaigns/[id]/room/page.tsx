@@ -37,12 +37,16 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     })
   );
 
+  const currentMember = roomMembers.find((member) => member.user_id === user.id);
+
   return (
     <GameRoom
       campaignId={campaignId}
       campaignName={campaign.name}
       members={roomMembers}
       currentUserId={user.id}
+      currentUserIsDM={currentMember?.role === "dm"}
+      currentUserDisplayName={currentMember?.display_name ?? null}
     />
   );
 }

@@ -103,3 +103,79 @@
   align-items: center;
   gap: 8px;
 }
+
+.sessionNotice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.startControl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--dim2);
+}
+
+.startHint {
+  margin: 0;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.startModalHint {
+  margin: 0 0 16px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.startModalStatus {
+  margin: 0;
+  color: var(--dim);
+}
+
+.startList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.startRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--dim2);
+}
+
+.startRow:last-child {
+  border-bottom: none;
+}
+
+.startName {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.startRowActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.startError {
+  margin: 12px 0 0;
+  color: var(--red);
+  font-size: 13px;
+}

@@ -1,9 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/ui-components";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
-import { joinLobbyChannel, type ConnectionState, type PresenceMember } from "@/realtime";
+import { listCampaignsForUser } from "@/data-access";
+import {
+  joinLobbyChannel,
+  type ConnectionState,
+  type PresenceChannel,
+  type PresenceMember,
+} from "@/realtime";
+import {
+  StartSessionControl,
+  SESSION_STARTED_EVENT,
+  type SessionStartedPayload,
+} from "./StartSessionControl";
 import styles from "./page.module.css";
 
 // How long the "Reconnected" confirmation stays up after recovery before fading back to nothing
@@ -17,9 +29,16 @@ export function LobbyPresence({
   currentUserId: string;
   currentUserDisplayName: string | null;
 }) {
+  const router = useRouter();
   const [members, setMembers] = useState<PresenceMember[]>([]);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [justReconnected, setJustReconnected] = useState(false);
+  const [sessionNotice, setSessionNotice] = useState<SessionStartedPayload | null>(null);
+  const lobbyChannelRef = useRef<PresenceChannel | null>(null);
+
+  const publishSessionStarted = useCallback(async (payload: SessionStartedPayload) => {
+    await lobbyChannelRef.current?.publish(SESSION_STARTED_EVENT, payload);
+  }, []);
 
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
@@ -27,8 +46,28 @@ export function LobbyPresence({
       userId: currentUserId,
       displayName: currentUserDisplayName,
     });
+    lobbyChannelRef.current = channel;
 
     const unsubscribePresence = channel.onPresenceChange(setMembers);
+
+    // Membership decides the reaction to a started session: members are
+    // pulled straight into the room, everyone else just gets told about it.
+    // Checked at receipt time (not join time) so a membership gained while
+    // sitting in the lobby still counts.
+    const unsubscribeSessionStarted = channel.subscribe<SessionStartedPayload>(
+      SESSION_STARTED_EVENT,
+      (payload) => {
+        void listCampaignsForUser(supabase, currentUserId)
+          .then((memberships) => {
+            if (memberships.some((m) => m.campaign.id === payload.campaignId)) {
+              router.push(`/campaigns/${payload.campaignId}/room`);
+            } else {
+              setSessionNotice(payload);
+            }
+          })
+          .catch(() => setSessionNotice(payload));
+      }
+    );
 
     // Only a transition INTO "reconnecting" (not the initial "connecting") should arm the
     // post-recovery confirmation — a fresh page load recovering from nothing to show isn't a
@@ -51,10 +90,12 @@ export function LobbyPresence({
     return () => {
       clearTimeout(hideConfirmationTimer);
       unsubscribePresence();
+      unsubscribeSessionStarted();
       unsubscribeConnection();
+      lobbyChannelRef.current = null;
       void channel.leave();
     };
-  }, [currentUserId, currentUserDisplayName]);
+  }, [currentUserId, currentUserDisplayName, router]);
 
   if (connectionState === "connecting") {
     return (
@@ -82,6 +123,16 @@ export function LobbyPresence({
         </p>
       ) : null}
 
+      {sessionNotice ? (
+        <p className={styles.sessionNotice} role="status" data-testid="session-in-progress-notice">
+          <Badge tone="orange" pulse>
+            Session in progress
+          </Badge>{" "}
+          A session just started for “{sessionNotice.campaignName}” — you&apos;re not in that
+          campaign, so the lobby is still your spot.
+        </p>
+      ) : null}
+
       <p className={styles.countRow}>
         <span className={styles.count} data-testid="lobby-count">
           {members.length}
@@ -104,6 +155,13 @@ export function LobbyPresence({
           </li>
         ))}
       </ul>
+
+      <StartSessionControl
+        currentUserId={currentUserId}
+        currentUserDisplayName={currentUserDisplayName}
+        lobbyMemberCount={members.length}
+        publishSessionStarted={publishSessionStarted}
+      />
     </>
   );
 }
