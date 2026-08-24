@@ -23,3 +23,39 @@ plain RLS policy rather than an RPC — a player placing/moving/removing exactly
 bound to a character they own has no atomic multi-row invariant to protect (unlike
 `start_session`'s exactly-one-DM guarantee), so a policy predicate checking
 `characters.owner_id` alongside the existing DM check is sufficient.
+
+`narrative.ts` (Prompt 32): CRUD for the six new narrative tables (`npcs`, `lore_pages` +
+its `lore_page_links` join table, `quests`, `session_log`, `handouts`, `dm_notes`) added in
+migration `0020_narrative_content.sql`, one file for all six since they're a single
+thematically-unified prompt rather than six independently-evolving areas. `campaigns.ts`
+gained a seventh, `setHouseRules`, alongside the new `Campaign.house_rules` field, rather
+than a `narrative.ts` function — see design notes below.
+
+This is a schema/RLS/data-access-only prompt (UI for these tables is deferred: NPC roster
+in 33, lore pages in 34, and further prompts for quests/session log/handouts/notes/house
+rules). Every write function is DM-gated purely by the table's own RLS (0020) — no RPC
+needed anywhere here, same reasoning as `map_tokens`: each write touches one row the DM
+either may or may not write, with no atomic multi-row invariant to protect (unlike
+`start_session`/`transfer_dm`).
+
+Design calls, since the prompt left these open:
+- **`house_rules` placement**: a plain `text` column on `campaigns` itself, not a separate
+  table. Campaigns' existing SELECT policy (0004, all members) and UPDATE policy (0011,
+  DM-only) already give exactly "all members read, only the DM writes" with nothing
+  per-row to derive — a new table would only add a join for no benefit.
+- **`session_log`'s ordering field**: a nullable free-text `label` (e.g. "Session 12", or a
+  date the DM types in) plus `created_at` for actual chronological ordering, rather than
+  both a typed date column and a session-number column, which could disagree with each
+  other about order.
+- **`handouts`' reference shape**: a single nullable `reference` text column (a Storage path
+  or URL) — not the `avatar_source`/`avatar_ref` two-column XOR pattern from `profiles`
+  (0010), since a handout never needs to distinguish an uploaded file from an external link
+  at the schema level. No upload pipeline is built here — that's later, UI-prompt territory.
+- **`lore_pages` links**: a real join table (`lore_page_links`, composite PK on
+  `(from_page_id, to_page_id)`, both FK `on delete cascade`), not a `uuid[]` column — a link
+  to a deleted page disappears automatically instead of needing a trigger to keep an array
+  in sync. Two new SECURITY DEFINER helpers, `can_read_lore_page`/`can_write_lore_page`,
+  derive access from the linked pages' `campaign_id`, mirroring `can_read_map`/
+  `can_write_map` (0015) deriving `map_cells`/`map_objects` access from `campaign_maps`.
+- **`quests.status`**: a CHECK-constrained enum, `active` / `completed` / `abandoned` — the
+  same pattern as `map_tokens.allegiance`.

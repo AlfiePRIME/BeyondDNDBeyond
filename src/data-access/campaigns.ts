@@ -7,6 +7,7 @@ export interface Campaign {
   invite_code: string;
   session_active: boolean;
   live_map: string | null;
+  house_rules: string | null;
   created_at: string;
 }
 
@@ -220,6 +221,24 @@ export async function startSession(
 export async function endSession(supabase: SupabaseClient, campaignId: string): Promise<void> {
   const { error } = await supabase.rpc("end_session", { p_campaign_id: campaignId });
   if (error) throw error;
+}
+
+/**
+ * DM-only, enforced by campaigns' existing UPDATE RLS policy (0011) — same
+ * zero-rows-affected detection as renameCampaign. House rules live directly
+ * on campaigns (Prompt 32) rather than a separate table: the existing
+ * member-readable SELECT policy and DM-only UPDATE policy already match
+ * exactly what a single "visible to all, writable only by the DM" text field
+ * needs.
+ */
+export async function setHouseRules(supabase: SupabaseClient, campaignId: string, houseRules: string): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaigns")
+    .update({ house_rules: houseRules }, { count: "exact" })
+    .eq("id", campaignId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can update house rules.");
 }
 
 /**

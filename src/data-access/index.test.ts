@@ -24,6 +24,36 @@ import {
   setTokenAllegiance,
   deleteMapToken,
   TOKEN_ALLEGIANCES,
+  setHouseRules,
+  listNpcs,
+  createNpc,
+  updateNpc,
+  deleteNpc,
+  listLorePages,
+  createLorePage,
+  updateLorePage,
+  deleteLorePage,
+  listLorePageLinks,
+  linkLorePages,
+  unlinkLorePages,
+  listQuests,
+  createQuest,
+  updateQuest,
+  setQuestStatus,
+  deleteQuest,
+  QUEST_STATUSES,
+  listSessionLogEntries,
+  createSessionLogEntry,
+  updateSessionLogEntry,
+  deleteSessionLogEntry,
+  listHandouts,
+  createHandout,
+  setHandoutRevealed,
+  deleteHandout,
+  listDmNotes,
+  createDmNote,
+  updateDmNote,
+  deleteDmNote,
 } from "@/data-access";
 
 describe("data-access module", () => {
@@ -83,5 +113,53 @@ describe("data-access module", () => {
     expect(
       isProfileComplete({ id: "x", display_name: "Vex", avatar_source: null, avatar_ref: null, created_at: "" })
     ).toBe(true);
+  });
+
+  it("exports house rules and NPC functions from the main barrel", () => {
+    expect(setHouseRules).toBeTypeOf("function");
+    expect(listNpcs).toBeTypeOf("function");
+    expect(createNpc).toBeTypeOf("function");
+    expect(updateNpc).toBeTypeOf("function");
+    expect(deleteNpc).toBeTypeOf("function");
+  });
+
+  it("exports the lore page and lore page link functions from the main barrel", () => {
+    expect(listLorePages).toBeTypeOf("function");
+    expect(createLorePage).toBeTypeOf("function");
+    expect(updateLorePage).toBeTypeOf("function");
+    expect(deleteLorePage).toBeTypeOf("function");
+    expect(listLorePageLinks).toBeTypeOf("function");
+    expect(linkLorePages).toBeTypeOf("function");
+    expect(unlinkLorePages).toBeTypeOf("function");
+  });
+
+  it("exports the quest functions from the main barrel", () => {
+    expect(listQuests).toBeTypeOf("function");
+    expect(createQuest).toBeTypeOf("function");
+    expect(updateQuest).toBeTypeOf("function");
+    expect(setQuestStatus).toBeTypeOf("function");
+    expect(deleteQuest).toBeTypeOf("function");
+    expect(QUEST_STATUSES).toEqual(["active", "completed", "abandoned"]);
+  });
+
+  it("exports the session log functions from the main barrel", () => {
+    expect(listSessionLogEntries).toBeTypeOf("function");
+    expect(createSessionLogEntry).toBeTypeOf("function");
+    expect(updateSessionLogEntry).toBeTypeOf("function");
+    expect(deleteSessionLogEntry).toBeTypeOf("function");
+  });
+
+  it("exports the handout functions from the main barrel", () => {
+    expect(listHandouts).toBeTypeOf("function");
+    expect(createHandout).toBeTypeOf("function");
+    expect(setHandoutRevealed).toBeTypeOf("function");
+    expect(deleteHandout).toBeTypeOf("function");
+  });
+
+  it("exports the DM note functions from the main barrel", () => {
+    expect(listDmNotes).toBeTypeOf("function");
+    expect(createDmNote).toBeTypeOf("function");
+    expect(updateDmNote).toBeTypeOf("function");
+    expect(deleteDmNote).toBeTypeOf("function");
   });
 });
