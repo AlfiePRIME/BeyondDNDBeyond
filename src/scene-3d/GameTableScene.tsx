@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OrbitControls, PerspectiveCamera, RoundedBox } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y } from "./table";
@@ -85,6 +85,15 @@ export interface GameTableSceneProps {
    * placement/move, so the cells stay raycast-free the rest of the time
    * (the Prompt 29 no-cell-handlers reasoning, now conditional). */
   onCellClick?: (x: number, y: number) => void;
+  /** Press on a draggable token started a drag-to-move. The scene owns only
+   * the gesture (which token, which cell is hovered, when the pointer
+   * released); the app layer owns the semantics — origin cell, path cost,
+   * committing the move. */
+  onTokenDragStart?: (tokenId: string) => void;
+  /** The cell the pointer is currently over during an active token drag. */
+  onTokenDragOverCell?: (x: number, y: number) => void;
+  /** Pointer released — the app commits at the last drag-over cell. */
+  onTokenDragEnd?: () => void;
 }
 
 export function GameTableScene({
@@ -94,6 +103,9 @@ export function GameTableScene({
   liveMap = null,
   onSelectMapObject,
   onCellClick,
+  onTokenDragStart,
+  onTokenDragOverCell,
+  onTokenDragEnd,
 }: GameTableSceneProps) {
   const legX = TABLE_TOP.width / 2 - 0.45;
   const legZ = TABLE_TOP.depth / 2 - 0.45;
@@ -115,6 +127,44 @@ export function GameTableScene({
     [onCellClick]
   );
 
+  // Same ref pattern as MapEditorScene: the window pointerup listener below
+  // must see the latest callbacks without re-subscribing per render.
+  const onTokenDragStartRef = useRef(onTokenDragStart);
+  const onTokenDragOverCellRef = useRef(onTokenDragOverCell);
+  const onTokenDragEndRef = useRef(onTokenDragEnd);
+  useEffect(() => {
+    onTokenDragStartRef.current = onTokenDragStart;
+    onTokenDragOverCellRef.current = onTokenDragOverCell;
+    onTokenDragEndRef.current = onTokenDragEnd;
+  }, [onTokenDragStart, onTokenDragOverCell, onTokenDragEnd]);
+
+  // State rather than a ref: cells only get pointer-over handlers (and the
+  // orbit camera only releases the left button) while a drag is live, which
+  // needs a render — the conditional-raycasting reasoning of onCellClick.
+  const [dragging, setDragging] = useState(false);
+
+  const handleTokenPointerDown = useCallback((tokenId: string) => {
+    setDragging(true);
+    onTokenDragStartRef.current?.(tokenId);
+  }, []);
+
+  const handleCellDragOver = useCallback((x: number, y: number, event: ThreeEvent<PointerEvent>) => {
+    event.stopPropagation();
+    onTokenDragOverCellRef.current?.(x, y);
+  }, []);
+
+  // The release can land anywhere — off the map, off the canvas — so the
+  // pointerup listener lives on window, same as the editor's stroke end.
+  useEffect(() => {
+    if (!dragging) return;
+    const endDrag = () => {
+      setDragging(false);
+      onTokenDragEndRef.current?.();
+    };
+    window.addEventListener("pointerup", endDrag);
+    return () => window.removeEventListener("pointerup", endDrag);
+  }, [dragging]);
+
   return (
     <>
       {/* Keyed by mode so leaving orbit remounts the camera at the seat
@@ -127,7 +177,11 @@ export function GameTableScene({
         onUpdate={(camera) => camera.lookAt(...LOOK_TARGET)}
       />
       {cameraMode === "orbit" && (
+        // Disabled mid-drag so grabbing a token doesn't also orbit the
+        // camera — OrbitControls checks enabled per pointermove, so flipping
+        // it mid-gesture halts the rotation immediately.
         <OrbitControls
+          enabled={!dragging}
           target={[...LOOK_TARGET]}
           minDistance={1.5}
           maxDistance={22}
@@ -182,6 +236,8 @@ export function GameTableScene({
             gridOverlay
             onSelectObject={onSelectMapObject}
             onCellPointerDown={onCellClick ? handleCellPointerDown : undefined}
+            onCellPointerOver={dragging ? handleCellDragOver : undefined}
+            onTokenPointerDown={onTokenDragStart ? handleTokenPointerDown : undefined}
           />
         </group>
       ) : null}

@@ -197,3 +197,50 @@
   line-height: 1.5;
   margin: 0;
 }
+
+.moveReadout {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 16px;
+  /* Never intercepts the pointer — a drag release over the readout must
+     still land on the table. */
+  pointer-events: none;
+  background: color-mix(in srgb, var(--surface2) 85%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
+  border-radius: 8px;
+}
+
+.moveReadoutOver {
+  border-color: var(--red);
+}
+
+.moveReadoutLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.moveReadoutCost {
+  font-family: var(--font-m);
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  color: var(--teal);
+}
+
+.moveReadoutOver .moveReadoutCost {
+  color: var(--red);
+}
+
+.moveReadoutFlag {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--red);
+}

@@ -35,3 +35,51 @@ export function gridCellDistance(from: GridPoint, to: GridPoint): number {
 export function gridDistanceFeet(from: GridPoint, to: GridPoint): number {
   return gridCellDistance(from, to) * FEET_PER_CELL;
 }
+
+// One stored elevation step is 5 vertical feet — the same unit as the flat
+// 5 ft cell, so "one step up" and "one cell over" read as the same distance.
+// map_cells.elevation deliberately stores steps, not feet (0014_maps.sql);
+// this constant is the single place that conversion decision lives.
+export const FEET_PER_ELEVATION_STEP = 5;
+
+/**
+ * The straight walk from `from` to `to`, excluding `from` itself: step
+ * diagonally while both axes differ, then straight. Its length equals
+ * gridCellDistance, so a plain drag over normal level ground costs exactly
+ * the ruler distance. Movement UIs recompute this from the origin on every
+ * hover — cost depends only on where you are, not how the mouse wobbled.
+ */
+export function straightCellPath(from: GridPoint, to: GridPoint): GridPoint[] {
+  const path: GridPoint[] = [];
+  let { x, y } = from;
+  while (x !== to.x || y !== to.y) {
+    x += Math.sign(to.x - x);
+    y += Math.sign(to.y - y);
+    path.push({ x, y });
+  }
+  return path;
+}
+
+export interface PathCell {
+  terrain: TerrainType;
+  elevationSteps: number;
+}
+
+/** Total cost of entering each cell in sequence, starting from a cell at
+ * `originElevationSteps` — climbs are charged per cell-to-cell delta, so a
+ * plateau costs its ascent once, not per cell walked along the top. */
+export function pathMovementCost(
+  originElevationSteps: number,
+  entered: readonly PathCell[]
+): number {
+  let previousElevation = originElevationSteps;
+  let total = 0;
+  for (const cell of entered) {
+    total += cellMovementCost({
+      terrain: cell.terrain,
+      elevationDeltaFeet: (cell.elevationSteps - previousElevation) * FEET_PER_ELEVATION_STEP,
+    });
+    previousElevation = cell.elevationSteps;
+  }
+  return total;
+}

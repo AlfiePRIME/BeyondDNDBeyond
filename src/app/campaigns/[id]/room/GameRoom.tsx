@@ -28,6 +28,7 @@ import {
   type TokenAllegiance,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
+import { pathMovementCost, straightCellPath, type GridPoint } from "@/rules-engine";
 import { Button } from "@/ui-components";
 import { GameTableScene, type CameraMode, type TableLiveMap } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
@@ -36,6 +37,7 @@ import {
   cellKey,
   DEFAULT_CELL,
   overlayFromRows,
+  type CellState,
 } from "../maps/[mapId]/edit/lib/cellGrid";
 import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
@@ -76,9 +78,33 @@ export interface LiveMapData {
   tokens: MapToken[];
 }
 
+/** An in-flight drag-to-move gesture: nothing is persisted until release. */
+interface TokenDrag {
+  tokenId: string;
+  origin: GridPoint;
+  current: GridPoint;
+}
+
 // Sparse rows: an absent cell is the default (elevation 0).
 function cellElevation(cells: MapCell[], x: number, y: number): number {
   return cells.find((cell) => cell.x === x && cell.y === y)?.elevation ?? 0;
+}
+
+/** Cost of the straight walk from the drag's origin to the hovered cell,
+ * charged against the same overlay the table renders from. */
+function dragPathCost(
+  overlay: ReadonlyMap<string, CellState>,
+  origin: GridPoint,
+  current: GridPoint
+): number {
+  const stateAt = (point: GridPoint) => overlay.get(cellKey(point.x, point.y)) ?? DEFAULT_CELL;
+  return pathMovementCost(
+    stateAt(origin).elevation,
+    straightCellPath(origin, current).map((point) => {
+      const state = stateAt(point);
+      return { terrain: state.terrain, elevationSteps: state.elevation };
+    })
+  );
 }
 
 // Structural message read, not `instanceof Error` — the browser-bundled
@@ -154,6 +180,10 @@ export function GameRoom({
   const [armedToken, setArmedToken] = useState<TokenArm | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  // Same ahead-of-React ref pattern as liveMapRef: drag-over and drag-end
+  // arrive from raw pointer events, often several per frame.
+  const [tokenDrag, setTokenDrag] = useState<TokenDrag | null>(null);
+  const tokenDragRef = useRef<TokenDrag | null>(null);
 
   const applyTokenChange = useCallback((tokenId: string, token: MapToken | null) => {
     const current = liveMapRef.current;
@@ -192,8 +222,11 @@ export function GameRoom({
     if (seq !== refreshSeqRef.current) return;
     liveMapRef.current = next;
     setLiveMapState(next);
-    // Whatever was armed referred to the previous map's cells/tokens.
+    // Whatever was armed or mid-drag referred to the previous map's
+    // cells/tokens.
     setArmedToken(null);
+    tokenDragRef.current = null;
+    setTokenDrag(null);
   }, []);
 
   // Live avatar sync: a postgres_changes feed on profiles (see data-access's
@@ -394,6 +427,53 @@ export function GameRoom({
     [armedToken, tokenBusy, applyTokenChange, publishTokenChange]
   );
 
+  const handleTokenDragStart = useCallback(
+    (tokenId: string) => {
+      const current = liveMapRef.current;
+      if (!current || tokenBusy) return;
+      const token = current.tokens.find((candidate) => candidate.id === tokenId);
+      if (!token) return;
+      const origin = { x: token.x, y: token.y };
+      tokenDragRef.current = { tokenId, origin, current: origin };
+      setTokenDrag(tokenDragRef.current);
+    },
+    [tokenBusy]
+  );
+
+  const handleTokenDragOverCell = useCallback((x: number, y: number) => {
+    const drag = tokenDragRef.current;
+    if (!drag || (drag.current.x === x && drag.current.y === y)) return;
+    tokenDragRef.current = { ...drag, current: { x, y } };
+    setTokenDrag(tokenDragRef.current);
+  }, []);
+
+  const handleTokenDragEnd = useCallback(async () => {
+    const drag = tokenDragRef.current;
+    tokenDragRef.current = null;
+    setTokenDrag(null);
+    const current = liveMapRef.current;
+    if (!drag || !current || tokenBusy) return;
+    // A press-and-release in place is a grab, not a move — no write, and no
+    // 0 ft "move" broadcast to the table.
+    if (drag.current.x === drag.origin.x && drag.current.y === drag.origin.y) return;
+    setTokenBusy(true);
+    setTokenError(null);
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const token = await moveMapToken(supabase, drag.tokenId, {
+        x: drag.current.x,
+        y: drag.current.y,
+        elevation: cellElevation(current.cells, drag.current.x, drag.current.y),
+      });
+      applyTokenChange(token.id, token);
+      await publishTokenChange(token.id, token);
+    } catch (err) {
+      setTokenError(errorMessage(err) ?? "Could not move that token.");
+    } finally {
+      setTokenBusy(false);
+    }
+  }, [tokenBusy, applyTokenChange, publishTokenChange]);
+
   const handleRemoveToken = useCallback(
     async (token: MapToken) => {
       if (tokenBusy) return;
@@ -446,9 +526,30 @@ export function GameRoom({
 
   const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
 
+  // One overlay for both rendering and drag-cost lookups, so the cost the
+  // readout charges is computed from exactly the surface being rendered.
+  const cellOverlay = useMemo(
+    () => (liveMap ? overlayFromRows(liveMap.cells) : null),
+    [liveMap]
+  );
+
+  const ownCharacterIds = useMemo(
+    () =>
+      new Set(
+        characters
+          .filter((character) => character.owner_id === currentUserId)
+          .map((character) => character.id)
+      ),
+    [characters, currentUserId]
+  );
+
+  // Identity only — depending on the whole drag would rebuild the table
+  // model on every hovered cell.
+  const draggingTokenId = tokenDrag?.tokenId ?? null;
+
   const tableMap = useMemo<TableLiveMap | null>(() => {
-    if (!liveMap) return null;
-    const overlay = overlayFromRows(liveMap.cells);
+    if (!liveMap || !cellOverlay) return null;
+    const overlay = cellOverlay;
     return {
       gridWidth: liveMap.map.grid_width,
       gridHeight: liveMap.map.grid_height,
@@ -479,10 +580,39 @@ export function GameRoom({
         // token elevation is a placement-time snapshot, not the render input.
         elevation: (overlay.get(cellKey(token.x, token.y)) ?? DEFAULT_CELL).elevation,
         allegiance: token.allegiance,
-        selected: armedToken?.kind === "move" && armedToken.tokenId === token.id,
+        selected:
+          (armedToken?.kind === "move" && armedToken.tokenId === token.id) ||
+          token.id === draggingTokenId,
+        // Mirrors TokenPanel's canControl: the DM, or the owner of the
+        // token's linked character (the RLS write rule, applied client-side
+        // so uncontrollable tokens never become grab targets).
+        draggable: currentUserIsDM || (token.character_id !== null && ownCharacterIds.has(token.character_id)),
       })),
     };
-  }, [liveMap, assetUrlById, currentUserIsDM, armedToken]);
+  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds]);
+
+  // Recomputed from the ORIGIN to the hovered cell on every update (the
+  // straight path a deliberate walk would take), not accumulated from the
+  // pointer's literal trail — mouse wobble must not inflate the cost.
+  const dragReadout = useMemo(() => {
+    if (!tokenDrag || !liveMap || !cellOverlay) return null;
+    const token = liveMap.tokens.find((candidate) => candidate.id === tokenDrag.tokenId);
+    if (!token) return null;
+    const cost = dragPathCost(cellOverlay, tokenDrag.origin, tokenDrag.current);
+    // NPC placeholders have no stat block until Prompt 61, so no budget —
+    // just the running cost. PC budgets come from the linked character,
+    // which every viewer allowed to drag the token can read (owner or DM).
+    const character = token.character_id
+      ? (characters.find((candidate) => candidate.id === token.character_id) ?? null)
+      : null;
+    const speed = character?.speed ?? null;
+    return {
+      label: character?.name ?? token.npc_name ?? "token",
+      cost,
+      speed,
+      over: speed !== null && cost > speed,
+    };
+  }, [tokenDrag, liveMap, cellOverlay, characters]);
 
   const interactiveEntries = useMemo<InteractiveEntry[]>(
     () =>
@@ -518,8 +648,28 @@ export function GameRoom({
           liveMap={tableMap}
           onSelectMapObject={handleSelectMapObject}
           onCellClick={armedToken ? handleCellClick : undefined}
+          onTokenDragStart={handleTokenDragStart}
+          onTokenDragOverCell={handleTokenDragOverCell}
+          onTokenDragEnd={handleTokenDragEnd}
         />
       </Canvas>
+      {dragReadout ? (
+        <div
+          className={`${styles.moveReadout}${dragReadout.over ? ` ${styles.moveReadoutOver}` : ""}`}
+          data-testid="move-cost-readout"
+        >
+          <span className={styles.moveReadoutLabel}>Moving {dragReadout.label}</span>
+          <span className={styles.moveReadoutCost} data-testid="move-cost-feet">
+            {dragReadout.cost} ft
+            {dragReadout.speed !== null ? ` / ${dragReadout.speed} ft speed` : ""}
+          </span>
+          {dragReadout.over ? (
+            <span className={styles.moveReadoutFlag} data-testid="move-over-budget">
+              Over speed
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <header className={styles.overlay}>
         <Link href={`/campaigns/${campaignId}`} className={styles.backLink}>
           ← {campaignName}

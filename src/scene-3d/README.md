@@ -60,3 +60,15 @@ for data purposes, not what's read for rendering. `gridOverlay.ts` builds one `l
 draw call outlining every cell's top face at its own height, enabled at table scale only:
 without it, lightened high-elevation cell tops merge into an unreadable slab once a map is
 fit down to the table's small footprint; the editor's larger unit-scale cells don't need it.
+
+As of Prompt 31: tokens gained a `draggable` flag (set by the caller per viewer — the DM, or
+the owner of the linked character) that attaches an invisible cell-sized hit cylinder and a
+raw `onTokenPointerDown` hook, mirroring `ObjectMarker`'s hit-box pattern; non-draggable pawns
+stay raycast-free. `MapSurface` itself only reports the press — drag semantics (which cell is
+hovered, committing on release) live in the wrapping scene, same split as `onCellPointerDown`/
+`onCellPointerOver`. `GameTableScene` owns the gesture: a press on a draggable token starts a
+drag, the existing per-cell `onPointerOver` path reports hovered cells while it's live, a
+`window` `pointerup` ends it (same pattern as the editor's stroke end), and `OrbitControls` is
+disabled mid-drag so grabbing a token doesn't also spin the camera. Movement cost itself is
+computed in the `app` layer from `@/rules-engine`, not here — the scene only ever reports plain
+cell coordinates.

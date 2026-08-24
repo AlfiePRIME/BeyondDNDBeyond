@@ -21,8 +21,9 @@ const DIFFICULT_HIGH = "#ffd9a0";
 
 const CELL_GAP_RATIO = 0.08;
 
-// Stable stand-in for an absent onSelectObject — an inline fallback would be
-// a fresh function every render and defeat ObjectMarker's memo.
+// Stable stand-in for an absent onSelectObject/onTokenPointerDown — an inline
+// fallback would be a fresh function every render and defeat the markers'
+// memo.
 const NOOP_SELECT = () => undefined;
 
 /**
@@ -258,26 +259,36 @@ export interface MapSurfaceToken {
   allegiance: MapTokenAllegiance;
   /** Draws the armed-for-move highlight ring. */
   selected?: boolean;
+  /** Makes the token a grab target for onTokenPointerDown — the caller sets
+   * it per viewer (DM, or the owner of the linked character). */
+  draggable?: boolean;
 }
 
 // A pawn silhouette (disc + stem + head) rather than a flat disc: the seat
 // cameras view the table at a shallow angle, where a flat disc on a small
 // cell all but disappears.
 const TokenMarker = memo(function TokenMarker({
+  id,
   worldX,
   worldZ,
   topY,
   scale,
   allegiance,
   selected,
+  draggable,
+  onPointerDown,
 }: {
+  id: string;
   worldX: number;
   worldZ: number;
   topY: number;
   scale: number;
   allegiance: MapTokenAllegiance;
   selected: boolean;
+  draggable: boolean;
+  onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
 }) {
+  const [hovered, setHovered] = useState(false);
   const color = ALLEGIANCE_COLOR[allegiance];
   return (
     <group position={[worldX, topY, worldZ]} scale={scale}>
@@ -293,10 +304,29 @@ const TokenMarker = memo(function TokenMarker({
         <sphereGeometry args={[0.17, 16, 16]} />
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} roughness={0.35} />
       </mesh>
-      {selected ? (
+      {draggable ? (
+        // Same uniform-hit-box reasoning as ObjectMarker: raycasting the
+        // pawn's thin stem makes grabbing fiddly at table scale. Attached
+        // only for draggable tokens so everyone else's pawns stay
+        // raycast-free.
+        <mesh
+          position={[0, 0.34, 0]}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.stopPropagation();
+            onPointerDown(id, event);
+          }}
+          onPointerOver={() => setHovered(true)}
+          onPointerOut={() => setHovered(false)}
+        >
+          <cylinderGeometry args={[0.42, 0.42, 0.72, 12]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ) : null}
+      {selected || (draggable && hovered) ? (
         <mesh position={[0, 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[0.44, 0.035, 10, 32]} />
-          <meshBasicMaterial color="#ede0ff" />
+          <meshBasicMaterial color="#ede0ff" transparent opacity={selected ? 1 : 0.45} />
         </mesh>
       ) : null}
     </group>
@@ -361,6 +391,10 @@ export interface MapSurfaceProps {
    * drag) stay in the editor scene, not here. Omit both for an inert map. */
   onCellPointerDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
   onCellPointerOver?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
+  /** Raw press on a draggable token — drag semantics (tracking the hovered
+   * cell, committing on release) stay in the wrapping scene, same split as
+   * the cell hooks above. */
+  onTokenPointerDown?: (id: string, event: ThreeEvent<PointerEvent>) => void;
 }
 
 /**
@@ -381,6 +415,7 @@ export function MapSurface({
   onSelectObject,
   onCellPointerDown,
   onCellPointerOver,
+  onTokenPointerDown,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
   const offsetX = ((gridWidth - 1) / 2) * cellSize;
@@ -426,12 +461,15 @@ export function MapSurface({
       {tokens?.map((token) => (
         <TokenMarker
           key={token.id}
+          id={token.id}
           worldX={token.x * cellSize - offsetX}
           worldZ={token.y * cellSize - offsetZ}
           topY={baseHeight + token.elevation * elevationStepHeight}
           scale={cellSize}
           allegiance={token.allegiance}
           selected={token.selected ?? false}
+          draggable={Boolean(onTokenPointerDown) && (token.draggable ?? false)}
+          onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
         />
       ))}
 
