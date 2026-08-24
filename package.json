@@ -18,9 +18,15 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.11",
+    "chrome-launcher": "^1.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.3.2",
-    "typescript": "^5"
+    "eslint-plugin-boundaries": "^7.2.0",
+    "lighthouse": "^13.4.1",
+    "playwright": "^1.62.1",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   },
   "packageManager": "yarn@1.22.22"
 }
