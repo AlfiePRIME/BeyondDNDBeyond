@@ -11,6 +11,7 @@ export { Select, type SelectProps } from "./Select";
 export { Modal, type ModalProps } from "./Modal";
 export { Badge, type BadgeProps, type BadgeTone } from "./Badge";
 export { SectionHeader, type SectionHeaderProps } from "./SectionHeader";
+export { ChoiceCard, type ChoiceCardProps } from "./ChoiceCard";
 
 // CanvasUI WebGL effects (installed via `shadcn add @canvas-ui/...`).
 // Glitch: broadcast glitch bursts — matches the ported glitch-a/glitch-b

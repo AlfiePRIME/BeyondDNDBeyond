@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { Badge, Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { listCampaignMembers, isDM } from "@/data-access";
+import { listCampaignMembers, listCharactersForCampaign, isDM } from "@/data-access";
 import { TransferDMForm } from "./TransferDMForm";
 import styles from "./campaign.module.css";
 
@@ -25,8 +25,9 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   // point of view, so a 404 is the right response either way.
   if (!campaign) notFound();
 
-  const [members, currentUserIsDM] = await Promise.all([
+  const [members, characters, currentUserIsDM] = await Promise.all([
     listCampaignMembers(supabase, campaignId),
+    listCharactersForCampaign(supabase, campaignId),
     isDM(supabase, campaignId, user.id),
   ]);
 
@@ -51,6 +52,34 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
               </li>
             ))}
           </ul>
+        </Panel>
+
+        <Panel
+          title="Characters"
+          tone="teal"
+          headerActions={
+            <Link href={`/campaigns/${campaignId}/characters/new`} className={styles.createLink}>
+              + Create a character
+            </Link>
+          }
+        >
+          {characters.length === 0 ? (
+            <p className={styles.emptyHint}>No characters yet — create one to join the adventure.</p>
+          ) : (
+            <ul className={styles.memberList}>
+              {characters.map((character) => (
+                <li key={character.id} className={styles.memberRow}>
+                  <span>{character.name}</span>
+                  <span className={styles.characterMeta}>
+                    <Badge tone="purple">{character.race}</Badge>
+                    <Badge tone="teal">
+                      {character.class} {character.level}
+                    </Badge>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Panel>
 
         {currentUserIsDM ? (

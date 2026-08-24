@@ -29,5 +29,13 @@ export {
   type CampaignMembership,
   type CampaignMember,
 } from "./campaigns";
+export {
+  createCharacter,
+  listCharactersForCampaign,
+  type Character,
+  type CreateCharacterParams,
+  type InventoryItem,
+  type KnownSpell,
+} from "./characters";
 
 export const MODULE_NAME = "data-access" as const;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   Badge,
   Button,
+  ChoiceCard,
   Glitch,
   Modal,
   MODULE_NAME,
@@ -18,7 +19,7 @@ describe("ui-components module", () => {
   });
 
   it("exports the shared component library from the barrel", () => {
-    for (const component of [Button, Panel, TextInput, Select, Modal, Badge, SectionHeader]) {
+    for (const component of [Button, Panel, TextInput, Select, Modal, Badge, SectionHeader, ChoiceCard]) {
       expect(component).toBeTypeOf("function");
     }
   });
