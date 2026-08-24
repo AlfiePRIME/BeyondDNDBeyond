@@ -2,6 +2,63 @@
 // import from "@/rules-engine" (this file), never reach into internal files —
 // enforced by eslint-plugin-boundaries (see eslint.config.mjs).
 //
-// Placeholder export to prove the module/test/lint wiring end to end. Real 5e
-// rules logic (ability modifiers, saves, spell slots, etc.) arrives in Prompt 9.
+// Pure D&D 5e SRD mechanics: ability modifiers, saves, skills, spell slots,
+// attack bonuses, movement cost, and range/targeting queries, plus the
+// static SRD content dataset (races, classes, skills, spells, starting
+// equipment) they operate over. Perception/vision and advantage/
+// disadvantage are out of scope here — see Prompt 56 and Prompt 59.
 export const MODULE_NAME = "rules-engine" as const;
+
+export type {
+  AbilityScore,
+  AbilityScores,
+  Size,
+  AbilityScoreIncrease,
+  RaceTrait,
+  DraconicAncestry,
+  RaceName,
+  SubraceDefinition,
+  RaceDefinition,
+  ClassName,
+  CasterProgression,
+  ClassFeature,
+  ClassDefinition,
+  SkillName,
+  SkillDefinition,
+  SpellSchool,
+  SpellLevel,
+  SpellRange,
+  TargetType,
+  Spell,
+  EquipmentChoice,
+  ClassStartingEquipment,
+} from "./srd/types";
+
+export { RACES } from "./srd/races";
+export { CLASSES } from "./srd/classes";
+export { SKILLS, SKILL_ABILITY } from "./srd/skills";
+export { SPELLS } from "./srd/spells";
+export { STARTING_EQUIPMENT } from "./srd/equipment";
+
+export { abilityModifier, proficiencyBonus } from "./abilityScores";
+export { savingThrowBonus, skillCheckBonus, passiveScore } from "./checks";
+export {
+  getSpellSlots,
+  spellSlotsForClass,
+  getPactMagicSlots,
+  type SpellSlotLevel,
+  type SpellSlots,
+} from "./spellSlots";
+export { attackBonus, type AttackKind } from "./attackBonus";
+
+export {
+  cellMovementCost,
+  gridCellDistance,
+  gridDistanceFeet,
+  FEET_PER_CELL,
+  type TerrainType,
+  type CellMovementParams,
+  type GridPoint,
+} from "./movement";
+
+export { usableAtRange, isUsableAtRange, type RangedAction } from "./range";
