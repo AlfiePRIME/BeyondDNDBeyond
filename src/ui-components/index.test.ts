@@ -7,6 +7,7 @@ import {
   MODULE_NAME,
   Panel,
   SectionHeader,
+  Select,
   TextInput,
   VHS,
 } from "@/ui-components";
@@ -17,7 +18,7 @@ describe("ui-components module", () => {
   });
 
   it("exports the shared component library from the barrel", () => {
-    for (const component of [Button, Panel, TextInput, Modal, Badge, SectionHeader]) {
+    for (const component of [Button, Panel, TextInput, Select, Modal, Badge, SectionHeader]) {
       expect(component).toBeTypeOf("function");
     }
   });

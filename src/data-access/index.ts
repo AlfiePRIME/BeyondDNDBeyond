@@ -21,9 +21,13 @@ export {
   listCampaignsForUser,
   createCampaign,
   joinCampaignByInviteCode,
+  isDM,
+  listCampaignMembers,
+  transferDM,
   type Campaign,
   type CampaignRole,
   type CampaignMembership,
+  type CampaignMember,
 } from "./campaigns";
 
 export const MODULE_NAME = "data-access" as const;

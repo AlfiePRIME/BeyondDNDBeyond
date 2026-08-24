@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { Badge, Button, Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { getProfile, isProfileComplete, listCampaignsForUser } from "@/data-access";
@@ -51,7 +52,9 @@ export default async function Home() {
               {memberships.map(({ role, campaign }) => (
                 <li key={campaign.id} className={styles.campaignRow}>
                   <div>
-                    <span className={styles.campaignName}>{campaign.name}</span>{" "}
+                    <Link href={`/campaigns/${campaign.id}`} className={styles.campaignName}>
+                      {campaign.name}
+                    </Link>{" "}
                     <Badge tone={role === "dm" ? "pink" : "teal"}>{role === "dm" ? "DM" : "Player"}</Badge>
                   </div>
                   {role === "dm" ? (

@@ -46,6 +46,12 @@
 .campaignName {
   color: var(--text);
   font-weight: 600;
+  text-decoration: none;
+}
+
+.campaignName:hover {
+  color: var(--teal);
+  text-decoration: underline;
 }
 
 .inviteCode {
