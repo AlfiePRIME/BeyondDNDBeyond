@@ -1,10 +1,11 @@
 "use client";
 
-import { memo, useState } from "react";
-import { Color } from "three";
+import { memo, useEffect, useMemo, useState } from "react";
+import { BufferAttribute, BufferGeometry, Color } from "three";
 import type { ThreeEvent } from "@react-three/fiber";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
+import { buildGridOverlayPositions } from "./gridOverlay";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
 // — same hex-mirroring reasoning as GameTableScene.
@@ -112,10 +113,13 @@ const CellBlock = memo(function CellBlock({
       onPointerOut={interactive ? () => setHovered(false) : undefined}
     >
       <boxGeometry args={[span, height, span]} />
+      {/* Hover glow gated on interactive too: when the handlers detach
+          mid-hover (the table disarming token placement), no pointer-out
+          ever fires, and an unguarded `hovered` would stay lit forever. */}
       <meshStandardMaterial
         color={cellColor(terrain, elevation)}
         emissive={TEAL}
-        emissiveIntensity={hovered ? 0.4 : 0}
+        emissiveIntensity={interactive && hovered ? 0.4 : 0}
         roughness={0.65}
       />
     </mesh>
@@ -234,6 +238,102 @@ const ObjectMarker = memo(function ObjectMarker({
   );
 });
 
+export type MapTokenAllegiance = "party" | "hostile" | "neutral";
+
+// Allegiance colors from the app's token palette (tokens.css): party shares
+// the member-accent teal, hostile is --red, neutral is --orange — three
+// hues that stay distinct against both the cool cell colors and each other.
+const ALLEGIANCE_COLOR: Record<MapTokenAllegiance, string> = {
+  party: TEAL,
+  hostile: "#ff3b3b",
+  neutral: "#ff9a3c",
+};
+
+export interface MapSurfaceToken {
+  id: string;
+  x: number;
+  y: number;
+  /** The cell's current elevation in steps, caller-derived like objects'. */
+  elevation: number;
+  allegiance: MapTokenAllegiance;
+  /** Draws the armed-for-move highlight ring. */
+  selected?: boolean;
+}
+
+// A pawn silhouette (disc + stem + head) rather than a flat disc: the seat
+// cameras view the table at a shallow angle, where a flat disc on a small
+// cell all but disappears.
+const TokenMarker = memo(function TokenMarker({
+  worldX,
+  worldZ,
+  topY,
+  scale,
+  allegiance,
+  selected,
+}: {
+  worldX: number;
+  worldZ: number;
+  topY: number;
+  scale: number;
+  allegiance: MapTokenAllegiance;
+  selected: boolean;
+}) {
+  const color = ALLEGIANCE_COLOR[allegiance];
+  return (
+    <group position={[worldX, topY, worldZ]} scale={scale}>
+      <mesh position={[0, 0.05, 0]}>
+        <cylinderGeometry args={[0.3, 0.36, 0.1, 20]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} roughness={0.45} />
+      </mesh>
+      <mesh position={[0, 0.26, 0]}>
+        <cylinderGeometry args={[0.12, 0.16, 0.32, 12]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} roughness={0.45} />
+      </mesh>
+      <mesh position={[0, 0.5, 0]}>
+        <sphereGeometry args={[0.17, 16, 16]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} roughness={0.35} />
+      </mesh>
+      {selected ? (
+        <mesh position={[0, 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.44, 0.035, 10, 32]} />
+          <meshBasicMaterial color="#ede0ff" />
+        </mesh>
+      ) : null}
+    </group>
+  );
+});
+
+// Accent purple, semi-transparent: legible on both the dark low cells and
+// the near-white high ones, without competing with the teal/red token hues.
+const GRID_LINE_COLOR = "#cc55ff";
+
+function GridOverlay({
+  gridWidth,
+  gridHeight,
+  cells,
+  metrics,
+}: {
+  gridWidth: number;
+  gridHeight: number;
+  cells: readonly MapSurfaceCell[];
+  metrics: MapSurfaceMetrics;
+}) {
+  const geometry = useMemo(() => {
+    const g = new BufferGeometry();
+    g.setAttribute(
+      "position",
+      new BufferAttribute(buildGridOverlayPositions(cells, metrics, gridWidth, gridHeight), 3)
+    );
+    return g;
+  }, [cells, metrics, gridWidth, gridHeight]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return (
+    <lineSegments geometry={geometry}>
+      <lineBasicMaterial color={GRID_LINE_COLOR} transparent opacity={0.4} depthWrite={false} />
+    </lineSegments>
+  );
+}
+
 export interface MapSurfaceProps {
   gridWidth: number;
   gridHeight: number;
@@ -246,6 +346,13 @@ export interface MapSurfaceProps {
   /** Placed objects to render; absent/empty renders none. */
   objects?: readonly MapSurfaceObject[];
   selectedObjectId?: string | null;
+  /** Placed tokens to render; absent/empty renders none. */
+  tokens?: readonly MapSurfaceToken[];
+  /** Draws the per-cell top-face grid outline — the game table turns this
+   * on because its fitted cells are too small for the gap shadows alone to
+   * keep the grid and its terracing legible; the editor's unit-scale cells
+   * don't need it. */
+  gridOverlay?: boolean;
   /** When provided, placed objects become click targets that intercept the
    * cell beneath; when absent they're inert and clicks fall through to the
    * cell, so sculpt tools still paint occupied cells. */
@@ -269,6 +376,8 @@ export function MapSurface({
   metrics = EDITOR_MAP_METRICS,
   objects,
   selectedObjectId,
+  tokens,
+  gridOverlay = false,
   onSelectObject,
   onCellPointerDown,
   onCellPointerOver,
@@ -313,6 +422,22 @@ export function MapSurface({
           onSelect={onSelectObject ?? NOOP_SELECT}
         />
       ))}
+
+      {tokens?.map((token) => (
+        <TokenMarker
+          key={token.id}
+          worldX={token.x * cellSize - offsetX}
+          worldZ={token.y * cellSize - offsetZ}
+          topY={baseHeight + token.elevation * elevationStepHeight}
+          scale={cellSize}
+          allegiance={token.allegiance}
+          selected={token.selected ?? false}
+        />
+      ))}
+
+      {gridOverlay ? (
+        <GridOverlay gridWidth={gridWidth} gridHeight={gridHeight} cells={cells} metrics={metrics} />
+      ) : null}
     </>
   );
 }

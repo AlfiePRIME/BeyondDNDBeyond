@@ -1,11 +1,17 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { OrbitControls, PerspectiveCamera, RoundedBox } from "@react-three/drei";
+import type { ThreeEvent } from "@react-three/fiber";
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y } from "./table";
 import { computeSeatLayout, type CameraMode, type Seat, type SeatMember } from "./seating";
 import { SeatAvatar } from "./SeatAvatar";
-import { MapSurface, type MapSurfaceCell, type MapSurfaceObject } from "./MapSurface";
+import {
+  MapSurface,
+  type MapSurfaceCell,
+  type MapSurfaceObject,
+  type MapSurfaceToken,
+} from "./MapSurface";
 import { computeTableMapMetrics } from "./mapFit";
 
 // Room ambiance pulls from the app's design tokens (see
@@ -63,6 +69,7 @@ export interface TableLiveMap {
   gridHeight: number;
   cells: readonly MapSurfaceCell[];
   objects: readonly MapSurfaceObject[];
+  tokens: readonly MapSurfaceToken[];
 }
 
 export interface GameTableSceneProps {
@@ -74,6 +81,10 @@ export interface GameTableSceneProps {
   liveMap?: TableLiveMap | null;
   /** Makes the map's selectable objects click targets (POI triggering). */
   onSelectMapObject?: (id: string) => void;
+  /** Left-click on a map cell — provided only while a token is armed for
+   * placement/move, so the cells stay raycast-free the rest of the time
+   * (the Prompt 29 no-cell-handlers reasoning, now conditional). */
+  onCellClick?: (x: number, y: number) => void;
 }
 
 export function GameTableScene({
@@ -82,6 +93,7 @@ export function GameTableScene({
   cameraMode = "seat",
   liveMap = null,
   onSelectMapObject,
+  onCellClick,
 }: GameTableSceneProps) {
   const legX = TABLE_TOP.width / 2 - 0.45;
   const legZ = TABLE_TOP.depth / 2 - 0.45;
@@ -93,6 +105,15 @@ export function GameTableScene({
   );
   const mySeat = seats.find((seat) => seat.member.user_id === currentUserId);
   const cameraPosition = mySeat ? mySeat.cameraPosition : FALLBACK_CAMERA_POSITION;
+
+  const handleCellPointerDown = useCallback(
+    (x: number, y: number, event: ThreeEvent<PointerEvent>) => {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      onCellClick?.(x, y);
+    },
+    [onCellClick]
+  );
 
   return (
     <>
@@ -157,7 +178,10 @@ export function GameTableScene({
             cells={liveMap.cells}
             metrics={mapMetrics}
             objects={liveMap.objects}
+            tokens={liveMap.tokens}
+            gridOverlay
             onSelectObject={onSelectMapObject}
+            onCellPointerDown={onCellClick ? handleCellPointerDown : undefined}
           />
         </group>
       ) : null}

@@ -17,6 +17,13 @@ import {
   setMapObjectBehavior,
   triggerMapObject,
   parseMapObjectBehavior,
+  listMapTokens,
+  placeCharacterToken,
+  placeNpcToken,
+  moveMapToken,
+  setTokenAllegiance,
+  deleteMapToken,
+  TOKEN_ALLEGIANCES,
 } from "@/data-access";
 
 describe("data-access module", () => {
@@ -50,6 +57,16 @@ describe("data-access module", () => {
     expect(setMapObjectBehavior).toBeTypeOf("function");
     expect(triggerMapObject).toBeTypeOf("function");
     expect(parseMapObjectBehavior).toBeTypeOf("function");
+  });
+
+  it("exports the map token functions from the main barrel", () => {
+    expect(listMapTokens).toBeTypeOf("function");
+    expect(placeCharacterToken).toBeTypeOf("function");
+    expect(placeNpcToken).toBeTypeOf("function");
+    expect(moveMapToken).toBeTypeOf("function");
+    expect(setTokenAllegiance).toBeTypeOf("function");
+    expect(deleteMapToken).toBeTypeOf("function");
+    expect(TOKEN_ALLEGIANCES).toEqual(["party", "hostile", "neutral"]);
   });
 
   it("treats a profile with no display name as incomplete", () => {

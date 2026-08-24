@@ -5,18 +5,27 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import {
+  deleteMapToken,
   endSession,
   getMap,
   listMapCells,
   listMapObjects,
+  listMapTokens,
+  moveMapToken,
   parseMapObjectBehavior,
+  placeCharacterToken,
+  placeNpcToken,
   setLiveMap,
+  setTokenAllegiance,
   subscribeToProfileChanges,
   triggerMapObject,
   type CampaignMap,
+  type Character,
   type MapCell,
   type MapObject,
+  type MapToken,
   type SupabaseClient,
+  type TokenAllegiance,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { Button } from "@/ui-components";
@@ -31,15 +40,17 @@ import {
 import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
+import { TokenPanel, type TokenArm } from "./TokenPanel";
 import styles from "./room.module.css";
 
 const SESSION_ENDED_EVENT = "session-ended";
-// Both on the CAMPAIGN channel, not the room channel — the room topic's
+// All on the CAMPAIGN channel, not the room channel — the room topic's
 // presence is load-bearing for session lifecycle (last-leaver auto-end,
 // reclaim probes), while map state is campaign-scoped sync, which is exactly
 // campaignChannel's stated purpose.
 const LIVE_MAP_EVENT = "live-map-changed";
 const TRIGGER_EVENT = "map-object-triggered";
+const TOKEN_EVENT = "token-changed";
 
 interface LiveMapPayload {
   mapId: string | null;
@@ -50,11 +61,24 @@ interface TriggerPayload {
   triggered: boolean;
 }
 
+/** token null means removed; otherwise the token's full new state, so
+ * receivers never need a follow-up fetch. */
+interface TokenPayload {
+  tokenId: string;
+  token: MapToken | null;
+}
+
 /** The live map plus everything needed to render/interact with it. */
 export interface LiveMapData {
   map: CampaignMap;
   cells: MapCell[];
   objects: MapObject[];
+  tokens: MapToken[];
+}
+
+// Sparse rows: an absent cell is the default (elevation 0).
+function cellElevation(cells: MapCell[], x: number, y: number): number {
+  return cells.find((cell) => cell.x === x && cell.y === y)?.elevation ?? 0;
 }
 
 // Structural message read, not `instanceof Error` — the browser-bundled
@@ -75,6 +99,7 @@ export function GameRoom({
   initialLiveMap,
   availableMaps,
   assets,
+  characters,
 }: {
   campaignId: string;
   campaignName: string;
@@ -85,6 +110,8 @@ export function GameRoom({
   initialLiveMap: LiveMapData | null;
   availableMaps: CampaignMap[];
   assets: PaletteAsset[];
+  /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
+  characters: Character[];
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
@@ -124,6 +151,28 @@ export function GameRoom({
     setLiveMapState(liveMapRef.current);
   }, []);
 
+  const [armedToken, setArmedToken] = useState<TokenArm | null>(null);
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+
+  const applyTokenChange = useCallback((tokenId: string, token: MapToken | null) => {
+    const current = liveMapRef.current;
+    if (!current) return;
+    // A broadcast can race a live-map switch — a token for some other map
+    // must not be spliced into this one's list.
+    if (token && token.map_id !== current.map.id) return;
+    const exists = current.tokens.some((candidate) => candidate.id === tokenId);
+    liveMapRef.current = {
+      ...current,
+      tokens: token
+        ? exists
+          ? current.tokens.map((candidate) => (candidate.id === tokenId ? token : candidate))
+          : [...current.tokens, token]
+        : current.tokens.filter((candidate) => candidate.id !== tokenId),
+    };
+    setLiveMapState(liveMapRef.current);
+  }, []);
+
   // Two switches landing close together race their fetches — only the
   // latest requested map may win, whatever order the responses arrive in.
   const refreshSeqRef = useRef(0);
@@ -133,15 +182,18 @@ export function GameRoom({
     if (mapId) {
       const map = await getMap(supabase, mapId);
       if (!map) return;
-      const [cells, objects] = await Promise.all([
+      const [cells, objects, tokens] = await Promise.all([
         listMapCells(supabase, mapId),
         listMapObjects(supabase, mapId),
+        listMapTokens(supabase, mapId),
       ]);
-      next = { map, cells, objects };
+      next = { map, cells, objects, tokens };
     }
     if (seq !== refreshSeqRef.current) return;
     liveMapRef.current = next;
     setLiveMapState(next);
+    // Whatever was armed referred to the previous map's cells/tokens.
+    setArmedToken(null);
   }, []);
 
   // Live avatar sync: a postgres_changes feed on profiles (see data-access's
@@ -219,6 +271,9 @@ export function GameRoom({
     const unsubscribeTrigger = channel.subscribe<TriggerPayload>(TRIGGER_EVENT, (payload) => {
       applyTriggered(payload.objectId, payload.triggered);
     });
+    const unsubscribeToken = channel.subscribe<TokenPayload>(TOKEN_EVENT, (payload) => {
+      applyTokenChange(payload.tokenId, payload.token);
+    });
     // The DB is the source of truth after a drop: any live-map-changed or
     // trigger broadcasts sent while disconnected are simply gone, so re-read
     // campaigns.live_map itself rather than trusting local state.
@@ -235,11 +290,12 @@ export function GameRoom({
     return () => {
       unsubscribeLiveMap();
       unsubscribeTrigger();
+      unsubscribeToken();
       unsubscribeReconnect();
       campaignChannelRef.current = null;
       void channel.leave();
     };
-  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered]);
+  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered, applyTokenChange]);
 
   const triggeringRef = useRef(false);
   const handleTrigger = useCallback(
@@ -298,6 +354,82 @@ export function GameRoom({
     [campaignId, switching, refreshLiveMap]
   );
 
+  // Same persist-then-broadcast ordering as triggering and map switching:
+  // the DB is the source of truth for anyone joining or reconnecting.
+  const publishTokenChange = useCallback(async (tokenId: string, token: MapToken | null) => {
+    await campaignChannelRef.current?.publish<TokenPayload>(TOKEN_EVENT, { tokenId, token });
+  }, []);
+
+  const handleCellClick = useCallback(
+    async (x: number, y: number) => {
+      const current = liveMapRef.current;
+      if (!armedToken || !current || tokenBusy) return;
+      setTokenBusy(true);
+      setTokenError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const elevation = cellElevation(current.cells, x, y);
+        const mapId = current.map.id;
+        const token =
+          armedToken.kind === "place-character"
+            ? await placeCharacterToken(supabase, {
+                mapId,
+                characterId: armedToken.characterId,
+                x,
+                y,
+                elevation,
+              })
+            : armedToken.kind === "place-npc"
+              ? await placeNpcToken(supabase, { mapId, npcName: armedToken.npcName, x, y, elevation })
+              : await moveMapToken(supabase, armedToken.tokenId, { x, y, elevation });
+        applyTokenChange(token.id, token);
+        setArmedToken(null);
+        await publishTokenChange(token.id, token);
+      } catch (err) {
+        setTokenError(errorMessage(err) ?? "Could not place that token.");
+      } finally {
+        setTokenBusy(false);
+      }
+    },
+    [armedToken, tokenBusy, applyTokenChange, publishTokenChange]
+  );
+
+  const handleRemoveToken = useCallback(
+    async (token: MapToken) => {
+      if (tokenBusy) return;
+      setTokenBusy(true);
+      setTokenError(null);
+      try {
+        await deleteMapToken(createBrowserSupabaseClient(), token.id);
+        applyTokenChange(token.id, null);
+        await publishTokenChange(token.id, null);
+      } catch (err) {
+        setTokenError(errorMessage(err) ?? "Could not remove that token.");
+      } finally {
+        setTokenBusy(false);
+      }
+    },
+    [tokenBusy, applyTokenChange, publishTokenChange]
+  );
+
+  const handleSetAllegiance = useCallback(
+    async (token: MapToken, allegiance: TokenAllegiance) => {
+      if (tokenBusy) return;
+      setTokenBusy(true);
+      setTokenError(null);
+      try {
+        const updated = await setTokenAllegiance(createBrowserSupabaseClient(), token.id, allegiance);
+        applyTokenChange(updated.id, updated);
+        await publishTokenChange(updated.id, updated);
+      } catch (err) {
+        setTokenError(errorMessage(err) ?? "Could not change that token's allegiance.");
+      } finally {
+        setTokenBusy(false);
+      }
+    },
+    [tokenBusy, applyTokenChange, publishTokenChange]
+  );
+
   async function handleEndSession() {
     setEnding(true);
     setEndError(null);
@@ -339,8 +471,18 @@ export function GameRoom({
           },
         ];
       }),
+      tokens: liveMap.tokens.map((token) => ({
+        id: token.id,
+        x: token.x,
+        y: token.y,
+        // Rides the cell's CURRENT elevation, same as objects — the stored
+        // token elevation is a placement-time snapshot, not the render input.
+        elevation: (overlay.get(cellKey(token.x, token.y)) ?? DEFAULT_CELL).elevation,
+        allegiance: token.allegiance,
+        selected: armedToken?.kind === "move" && armedToken.tokenId === token.id,
+      })),
     };
-  }, [liveMap, assetUrlById, currentUserIsDM]);
+  }, [liveMap, assetUrlById, currentUserIsDM, armedToken]);
 
   const interactiveEntries = useMemo<InteractiveEntry[]>(
     () =>
@@ -375,6 +517,7 @@ export function GameRoom({
           cameraMode={cameraMode}
           liveMap={tableMap}
           onSelectMapObject={handleSelectMapObject}
+          onCellClick={armedToken ? handleCellClick : undefined}
         />
       </Canvas>
       <header className={styles.overlay}>
@@ -415,6 +558,21 @@ export function GameRoom({
         onTrigger={handleTrigger}
         triggerError={triggerError}
       />
+      {liveMap ? (
+        <TokenPanel
+          isDM={currentUserIsDM}
+          currentUserId={currentUserId}
+          characters={characters}
+          tokens={liveMap.tokens}
+          armed={armedToken}
+          busy={tokenBusy}
+          error={tokenError}
+          onArm={setArmedToken}
+          onCancel={() => setArmedToken(null)}
+          onRemove={handleRemoveToken}
+          onSetAllegiance={handleSetAllegiance}
+        />
+      ) : null}
       {endError ? (
         <p role="alert" className={styles.endError} data-testid="end-session-error">
           {endError}

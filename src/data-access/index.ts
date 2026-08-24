@@ -95,6 +95,17 @@ export {
   type PlacedObjectAsset,
 } from "./mapObjects";
 export {
+  listMapTokens,
+  placeCharacterToken,
+  placeNpcToken,
+  moveMapToken,
+  setTokenAllegiance,
+  deleteMapToken,
+  TOKEN_ALLEGIANCES,
+  type MapToken,
+  type TokenAllegiance,
+} from "./mapTokens";
+export {
   listCharacterResources,
   createCharacterResource,
   setCharacterResourceUses,

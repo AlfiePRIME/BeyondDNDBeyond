@@ -5,9 +5,11 @@ import {
   getProfile,
   listAssetsForCampaign,
   listCampaignMembers,
+  listCharactersForCampaign,
   listMapCells,
   listMapObjects,
   listMapsForCampaign,
+  listMapTokens,
 } from "@/data-access";
 import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
@@ -52,11 +54,14 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   // The DB read here (not any broadcast) is what makes fresh joins and
   // reloads land on the currently-live map — a client that wasn't connected
   // when the DM switched never saw the live-map-changed event.
-  const [assets, availableMaps] = await Promise.all([
+  const [assets, availableMaps, characters] = await Promise.all([
     listAssetsForCampaign(supabase, campaignId),
     // Non-DM RLS only exposes the live map anyway, and only the DM gets the
     // picker — no point fetching a list for players.
     currentUserIsDM ? listMapsForCampaign(supabase, campaignId) : Promise.resolve([]),
+    // Characters RLS trims this per viewer: a player gets only their own,
+    // the DM gets every campaign character — exactly who each may place.
+    listCharactersForCampaign(supabase, campaignId),
   ]);
   const paletteAssets = await resolvePaletteAssets(supabase, assets);
 
@@ -64,11 +69,12 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   if (campaign.live_map) {
     const map = await getMap(supabase, campaign.live_map);
     if (map) {
-      const [cells, objects] = await Promise.all([
+      const [cells, objects, tokens] = await Promise.all([
         listMapCells(supabase, map.id),
         listMapObjects(supabase, map.id),
+        listMapTokens(supabase, map.id),
       ]);
-      initialLiveMap = { map, cells, objects };
+      initialLiveMap = { map, cells, objects, tokens };
     }
   }
 
@@ -83,6 +89,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialLiveMap={initialLiveMap}
       availableMaps={availableMaps}
       assets={paletteAssets}
+      characters={characters}
     />
   );
 }

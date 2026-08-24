@@ -9,9 +9,12 @@ export {
   type MapSurfaceProps,
   type MapSurfaceCell,
   type MapSurfaceObject,
+  type MapSurfaceToken,
+  type MapTokenAllegiance,
   type MapSurfaceMetrics,
 } from "./MapSurface";
 export { computeTableMapMetrics } from "./mapFit";
+export { buildGridOverlayPositions } from "./gridOverlay";
 export { PlacedObject } from "./PlacedObject";
 export {
   computeSeatLayout,

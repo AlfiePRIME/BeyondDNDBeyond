@@ -68,6 +68,52 @@
   border-radius: 8px;
 }
 
+.tokenPanel {
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  width: 300px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
+  border-radius: 8px;
+}
+
+.tokenSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--teal) 20%, transparent);
+}
+
+.tokenSection:last-of-type {
+  border-bottom: none;
+}
+
+.armedHint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  color: var(--teal);
+}
+
+.tokenPos {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
 .panelLabel {
   font-family: var(--font-m);
   font-size: 11px;
