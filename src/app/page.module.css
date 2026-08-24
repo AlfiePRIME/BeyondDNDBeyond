@@ -1,18 +1,76 @@
 .page {
   min-height: 100vh;
   display: flex;
-  align-items: center;
   justify-content: center;
   padding: 24px;
 }
 
-.main {
+.dashboard {
   width: 100%;
-  max-width: 560px;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 40px;
 }
 
-.welcomePanel p {
+.emptyState {
   color: var(--muted);
   line-height: 1.6;
-  margin: 12px 0 20px;
+  margin: 0;
+}
+
+.campaignList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.campaignRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--dim2);
+}
+
+.campaignRow:last-child {
+  border-bottom: none;
+}
+
+.campaignName {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.inviteCode {
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.inviteCode code {
+  font-family: var(--font-m);
+  color: var(--teal);
+  letter-spacing: 0.05em;
+}
+
+.formsRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 560px) {
+  .formsRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+.formPanel {
+  align-self: start;
 }

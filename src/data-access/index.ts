@@ -17,5 +17,13 @@
 // instance per call. A single shared instance would leak one user's
 // session/cookies into another user's request on the server.
 export { getProfile, upsertProfile, isProfileComplete, type Profile } from "./profiles";
+export {
+  listCampaignsForUser,
+  createCampaign,
+  joinCampaignByInviteCode,
+  type Campaign,
+  type CampaignRole,
+  type CampaignMembership,
+} from "./campaigns";
 
 export const MODULE_NAME = "data-access" as const;

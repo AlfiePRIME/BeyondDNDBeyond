@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-5 (scaffolding, module boundaries, design system, database schema, and email/password auth) are complete and verified end to end against a running local Supabase stack.
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-6 (scaffolding, module boundaries, design system, database schema, email/password auth, and campaign creation/join) are complete and verified end to end against a running local Supabase stack.
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 
@@ -125,11 +125,12 @@ re-running is a no-op for anything already applied, and running against a fresh 
 applies everything from scratch.
 
 ```sh
-node scripts/db/migrate.mjs        # apply any pending migrations
-node scripts/db/verify-rls.mjs     # create two throwaway users and verify RLS boundaries
+node scripts/db/migrate.mjs           # apply any pending migrations
+node scripts/db/verify-rls.mjs        # create two throwaway users and verify RLS boundaries
+node scripts/db/verify-campaigns.mjs  # verify campaign creation + invite-code join end to end
 ```
 
-Both connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`) using
+All three connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`) using
 the tenant-qualified username `postgres.$POOLER_TENANT_ID` — plain `postgres` fails with
 "no tenant identifier provided" against a pooled connection.
 
@@ -147,3 +148,11 @@ subject to *that* table's RLS too — wrap cross-table bootstrap checks (like "i
 creator of this campaign") in a `SECURITY DEFINER` function, or the same chicken-and-egg
 problem shows up one level deeper (see `is_campaign_creator` in
 `supabase/migrations/0004_campaign_rls_policies.sql`).
+
+One more, unrelated to RLS but easy to hit in the same kind of function: a PL/pgSQL function
+declared with `RETURNS TABLE (campaign_id uuid, ...)` implicitly declares `campaign_id` as an
+in-scope variable for the *entire function body* — if the body also does DML against a real
+table with a `campaign_id` column (e.g. inserting into `campaign_members`), Postgres reports
+`column reference "campaign_id" is ambiguous`. Give `RETURNS TABLE` columns names that can't
+collide with real column names (see `join_campaign_by_invite_code`'s `result_campaign_id` in
+`supabase/migrations/0005_campaign_invite_codes.sql`).
