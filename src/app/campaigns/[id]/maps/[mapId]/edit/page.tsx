@@ -1,7 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { getMap, isDM, listMapCells } from "@/data-access";
+import { getMap, isDM, listAssetsForCampaign, listMapCells, listMapObjects } from "@/data-access";
 import { MapEditor } from "./MapEditor";
+import { resolvePaletteAssets } from "./lib/assetUrl";
 
 export default async function MapEditPage({
   params,
@@ -32,7 +33,12 @@ export default async function MapEditPage({
   const map = await getMap(supabase, mapId);
   if (!map || map.campaign_id !== campaignId) notFound();
 
-  const cells = await listMapCells(supabase, mapId);
+  const [cells, objects, assets] = await Promise.all([
+    listMapCells(supabase, mapId),
+    listMapObjects(supabase, mapId),
+    listAssetsForCampaign(supabase, campaignId),
+  ]);
+  const paletteAssets = await resolvePaletteAssets(supabase, assets);
 
   return (
     <MapEditor
@@ -40,6 +46,8 @@ export default async function MapEditPage({
       campaignName={campaign.name}
       map={map}
       initialCells={cells}
+      initialObjects={objects}
+      assets={paletteAssets}
     />
   );
 }

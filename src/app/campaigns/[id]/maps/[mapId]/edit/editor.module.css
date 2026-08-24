@@ -85,6 +85,26 @@
   flex-wrap: wrap;
 }
 
+.assetGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  max-height: 190px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.assetCard {
+  padding: 8px 10px;
+}
+
+.selectedMeta {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--teal);
+}
+
 .hint {
   margin: 6px 0 0;
   font-family: var(--font-m);

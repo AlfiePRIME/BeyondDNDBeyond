@@ -7,7 +7,9 @@ export {
   MapEditorScene,
   type MapEditorSceneProps,
   type MapEditorCell,
+  type MapEditorObject,
 } from "./MapEditorScene";
+export { PlacedObject } from "./PlacedObject";
 export {
   computeSeatLayout,
   type CameraMode,

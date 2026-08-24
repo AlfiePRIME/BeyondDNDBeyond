@@ -9,6 +9,10 @@ import {
   getMap,
   listMapCells,
   upsertMapCells,
+  listMapObjects,
+  createMapObject,
+  updateMapObject,
+  deleteMapObject,
 } from "@/data-access";
 
 describe("data-access module", () => {
@@ -28,6 +32,13 @@ describe("data-access module", () => {
     expect(getMap).toBeTypeOf("function");
     expect(listMapCells).toBeTypeOf("function");
     expect(upsertMapCells).toBeTypeOf("function");
+  });
+
+  it("exports the map object functions from the main barrel", () => {
+    expect(listMapObjects).toBeTypeOf("function");
+    expect(createMapObject).toBeTypeOf("function");
+    expect(updateMapObject).toBeTypeOf("function");
+    expect(deleteMapObject).toBeTypeOf("function");
   });
 
   it("treats a profile with no display name as incomplete", () => {

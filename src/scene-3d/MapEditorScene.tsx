@@ -5,6 +5,7 @@ import { Color, MOUSE } from "three";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
 import type { TerrainType } from "@/rules-engine";
+import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
 // — same hex-mirroring reasoning as GameTableScene.
@@ -95,6 +96,82 @@ const CellBlock = memo(function CellBlock({
   );
 });
 
+export interface MapEditorObject {
+  id: string;
+  x: number;
+  y: number;
+  /** The cell's current elevation in steps — the caller derives it from the
+   * same overlay the cells render from, so props ride the sculpted surface. */
+  elevation: number;
+  /** Degrees around the vertical axis. */
+  rotation: number;
+  /** Loadable model URL, or null to render the placeholder prop. */
+  url: string | null;
+}
+
+interface ObjectMarkerProps {
+  id: string;
+  worldX: number;
+  worldZ: number;
+  elevation: number;
+  rotation: number;
+  url: string | null;
+  selected: boolean;
+  selectable: boolean;
+  onSelect: (id: string, event: ThreeEvent<PointerEvent>) => void;
+}
+
+// The invisible hit box exists because raycasting against the glTF's own
+// meshes makes thin or holey props (torch, door frame) nearly unclickable —
+// the box gives every object a uniform, cell-sized click target.
+const HIT_BOX_HEIGHT = 0.9;
+
+const ObjectMarker = memo(function ObjectMarker({
+  id,
+  worldX,
+  worldZ,
+  elevation,
+  rotation,
+  url,
+  selected,
+  selectable,
+  onSelect,
+}: ObjectMarkerProps) {
+  const [hovered, setHovered] = useState(false);
+  const top = BASE_HEIGHT + elevation * ELEVATION_STEP_HEIGHT;
+  return (
+    <group position={[worldX, top, worldZ]} rotation={[0, (rotation * Math.PI) / 180, 0]}>
+      <PlacedObject url={url} />
+      {selectable ? (
+        <mesh
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.stopPropagation();
+            onSelect(id, event);
+          }}
+          onPointerOver={(event) => {
+            event.stopPropagation();
+            setHovered(true);
+          }}
+          onPointerOut={() => setHovered(false)}
+          position={[0, HIT_BOX_HEIGHT / 2, 0]}
+        >
+          <boxGeometry args={[PLACED_OBJECT_SIZE, HIT_BOX_HEIGHT, PLACED_OBJECT_SIZE]} />
+          {/* opacity-0 rather than visible={false}: an invisible mesh is
+              skipped by the raycaster, which would defeat the hit box. */}
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ) : null}
+      {selected || (selectable && hovered) ? (
+        <mesh position={[0, HIT_BOX_HEIGHT / 2, 0]}>
+          <boxGeometry args={[PLACED_OBJECT_SIZE + 0.03, HIT_BOX_HEIGHT, PLACED_OBJECT_SIZE + 0.03]} />
+          <meshBasicMaterial wireframe color={TEAL} transparent opacity={selected ? 0.9 : 0.3} />
+        </mesh>
+      ) : null}
+    </group>
+  );
+});
+
 export interface MapEditorSceneProps {
   gridWidth: number;
   gridHeight: number;
@@ -107,13 +184,39 @@ export interface MapEditorSceneProps {
    * is the caller's tool state, not the scene's.
    */
   onPaintCell?: (x: number, y: number) => void;
+  /**
+   * Parallel to onPaintCell but fired only on the initial press, never while
+   * dragging across cells — object placement/move are discrete deliberate
+   * actions, not strokes, so a drag must not scatter or relocate objects.
+   */
+  onCellClick?: (x: number, y: number) => void;
+  /** Placed objects to render; absent/empty renders none. */
+  objects?: readonly MapEditorObject[];
+  selectedObjectId?: string | null;
+  /** When provided, placed objects become click targets that intercept the
+   * cell beneath; when absent they're inert and clicks fall through to the
+   * cell, so sculpt tools still paint occupied cells. */
+  onSelectObject?: (id: string) => void;
 }
 
-export function MapEditorScene({ gridWidth, gridHeight, cells, onPaintCell }: MapEditorSceneProps) {
+export function MapEditorScene({
+  gridWidth,
+  gridHeight,
+  cells,
+  onPaintCell,
+  onCellClick,
+  objects,
+  selectedObjectId,
+  onSelectObject,
+}: MapEditorSceneProps) {
   const onPaintCellRef = useRef(onPaintCell);
+  const onCellClickRef = useRef(onCellClick);
+  const onSelectObjectRef = useRef(onSelectObject);
   useEffect(() => {
     onPaintCellRef.current = onPaintCell;
-  }, [onPaintCell]);
+    onCellClickRef.current = onCellClick;
+    onSelectObjectRef.current = onSelectObject;
+  }, [onPaintCell, onCellClick, onSelectObject]);
 
   const paintingRef = useRef(false);
   // One application per cell per stroke: without this, a drag lingering on
@@ -134,9 +237,14 @@ export function MapEditorScene({ gridWidth, gridHeight, cells, onPaintCell }: Ma
       paintingRef.current = true;
       strokeRef.current = new Set();
       paint(x, y);
+      onCellClickRef.current?.(x, y);
     },
     [paint]
   );
+
+  const handleSelectObject = useCallback((id: string) => {
+    onSelectObjectRef.current?.(id);
+  }, []);
 
   const handleOver = useCallback(
     (x: number, y: number, event: ThreeEvent<PointerEvent>) => {
@@ -203,6 +311,21 @@ export function MapEditorScene({ gridWidth, gridHeight, cells, onPaintCell }: Ma
           terrain={cell.terrain}
           onDown={handleDown}
           onOver={handleOver}
+        />
+      ))}
+
+      {objects?.map((object) => (
+        <ObjectMarker
+          key={object.id}
+          id={object.id}
+          worldX={object.x * CELL_SIZE - offsetX}
+          worldZ={object.y * CELL_SIZE - offsetZ}
+          elevation={object.elevation}
+          rotation={object.rotation}
+          url={object.url}
+          selected={object.id === selectedObjectId}
+          selectable={Boolean(onSelectObject)}
+          onSelect={handleSelectObject}
         />
       ))}
     </>

@@ -80,6 +80,14 @@ export {
   type MapCell,
 } from "./maps";
 export {
+  listMapObjects,
+  createMapObject,
+  updateMapObject,
+  deleteMapObject,
+  type MapObject,
+  type PlacedObjectAsset,
+} from "./mapObjects";
+export {
   listCharacterResources,
   createCharacterResource,
   setCharacterResourceUses,

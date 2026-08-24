@@ -14,7 +14,11 @@ export const DEFAULT_CELL: CellState = { elevation: 0, terrain: "normal" };
 // a 50 ft cliff at the rules-engine's 5 ft per step.
 export const MAX_ELEVATION = 10;
 
-export type EditorTool = "raise" | "lower" | "terrain";
+export type EditorTool = "raise" | "lower" | "terrain" | "object";
+
+/** The paint-a-cell tools. "object" is excluded because it routes through
+ * the discrete place/select/move flow, never through applyTool. */
+export type SculptTool = Exclude<EditorTool, "object">;
 
 export function cellKey(x: number, y: number): string {
   return `${x},${y}`;
@@ -36,7 +40,7 @@ export function overlayFromRows(rows: readonly MapCell[]): Map<string, CellState
 
 /** Returns `current` (same reference) when the tool would change nothing,
  * so callers can skip dirty-marking no-op paints. */
-export function applyTool(current: CellState, tool: EditorTool, brush: TerrainType): CellState {
+export function applyTool(current: CellState, tool: SculptTool, brush: TerrainType): CellState {
   if (tool === "raise") {
     if (current.elevation >= MAX_ELEVATION) return current;
     return { ...current, elevation: current.elevation + 1 };

@@ -19,3 +19,14 @@ overlay/reconstruction logic lives in the editor page, not here) and fires an
 `onPaintCell(x, y)` callback per cell per left-button stroke; what "painting" means (raise,
 lower, terrain) is the caller's tool state, kept out of the scene itself. Live map rendering
 in the actual Game Room (tokens, POIs, vision masking) is still future work (Prompts 27-29).
+
+As of Prompt 27: `MapEditorScene` also renders placed map objects. `PlacedObject` follows
+`SeatAvatar`'s exact glTF shape (drei `useGLTF` + `Clone`, bounding-box normalization to the
+cell footprint, Suspense fallback + URL-keyed error boundary degrading to a placeholder
+prop), and each object gets an invisible cell-sized hit box so thin props stay clickable.
+Two parallel callbacks keep the interaction split clean: `onCellClick(x, y)` fires only on
+the initial press (object placement/move are discrete actions, never strokes) and
+`onSelectObject(id)` — provided only when the caller's object tool is active — lets placed
+objects intercept the cell beneath; when absent they're inert and sculpt strokes fall
+through to the cell. As with cells, elevation/URL resolution is the caller's job: the scene
+receives already-derived values.
