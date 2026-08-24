@@ -6,7 +6,7 @@
   },
   "render3d": {
     "maxAvgFrameTimeMs": 33.3,
-    "_note": "33.3ms = 30fps floor. Prompt 2 benchmarks a trivial placeholder scene; Prompt 19 re-baselines against the real Game Room scene."
+    "_note": "33.3ms = 30fps floor. Re-pointed at the real Game Room scene in Prompt 19; baseline there is 16.7ms (vsync-capped 60fps) with GPU rendering. Headless software rendering (SwiftShader, the fallback on GPU-less machines) measures ~60ms for the same scene — run on a GPU machine for meaningful numbers."
   },
   "lighthouse": {
     "minPerformanceScore": 70,

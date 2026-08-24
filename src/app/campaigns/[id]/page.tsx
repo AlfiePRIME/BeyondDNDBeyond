@@ -42,7 +42,16 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           ← Back to your campaigns
         </Link>
 
-        <Panel title={campaign.name} tone="purple" glow>
+        <Panel
+          title={campaign.name}
+          tone="purple"
+          glow
+          headerActions={
+            <Link href={`/campaigns/${campaignId}/room`} className={styles.createLink}>
+              Enter the Game Room →
+            </Link>
+          }
+        >
           <SectionHeader eyebrow="Campaign" title="Roster" />
           <CampaignRoster
             campaignId={campaignId}
