@@ -1,0 +1,29 @@
+.wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.panel {
+  width: 100%;
+  max-width: 380px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.switchLink {
+  font-size: 13px;
+  color: var(--dim);
+  text-align: center;
+  margin: 4px 0 0;
+}
+
+.switchLink a {
+  color: var(--teal);
+}

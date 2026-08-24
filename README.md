@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompt 1 (project scaffolding), Prompt 2 (module boundaries + performance-testing harness), Prompt 3 (design tokens + component library), and Prompt 4 (core database schema) are complete and verified end to end against a running local Supabase stack.
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-5 (scaffolding, module boundaries, design system, database schema, and email/password auth) are complete and verified end to end against a running local Supabase stack.
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 
@@ -62,8 +62,9 @@ Fill in `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` from `su
 yarn dev
 ```
 
-The app is served at [http://localhost:3000](http://localhost:3000). A health check confirming
-the app can reach Supabase is available at
+The app is served at [http://localhost:3000](http://localhost:3000) — sign up at `/signup`,
+you'll be prompted for a display name on first login, then land on the home page. A health
+check confirming the app can reach Supabase is available at
 [http://localhost:3000/api/health](http://localhost:3000/api/health).
 
 **Requires:** the user running Docker commands must be able to access the Docker daemon (in

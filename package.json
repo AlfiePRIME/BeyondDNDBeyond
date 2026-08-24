@@ -16,6 +16,7 @@
     "perf:all": "yarn perf:bundle && yarn perf:render && yarn perf:lighthouse && yarn perf:realtime"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.112.4",
     "next": "16.3.2",
     "react": "19.2.8",

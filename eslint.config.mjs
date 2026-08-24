@@ -17,6 +17,13 @@ const eslintConfig = defineConfig([
         { type: "realtime", pattern: "src/realtime/**" },
         { type: "data-access", pattern: "src/data-access/**" },
       ],
+      // Element patterns match folders, not individual files — proxy.ts (the
+      // Next.js 16 rename of middleware.ts) is a lone top-level file Next.js
+      // requires at this exact path, so it needs a file descriptor instead
+      // (see the boundaries/dependencies policies below, which check
+      // `file.category` for it in addition to `element.type` for everything
+      // else).
+      "boundaries/files": [{ category: "proxy", pattern: "src/proxy.ts" }],
     },
     rules: {
       // Every module boundary rule below exists to keep the five modules
@@ -42,6 +49,17 @@ const eslintConfig = defineConfig([
                 "Only the data-access module may import @supabase/supabase-js directly — go through @/data-access instead.",
             },
             {
+              // Same rule for proxy.ts specifically — it's a lone file (not
+              // a folder), so it's matched via file.category rather than
+              // element.type and needs its own explicit entry.
+              from: { file: { categories: { anyOf: ["proxy"] } } },
+              disallow: {
+                to: { module: { origin: "external", source: "@supabase/supabase-js" } },
+              },
+              message:
+                "proxy.ts may not import @supabase/supabase-js directly — go through @/data-access instead.",
+            },
+            {
               // rules-engine is pure game logic: no UI, DB, realtime, or scene deps.
               from: { element: { type: "rules-engine" } },
               disallow: {
@@ -53,6 +71,38 @@ const eslintConfig = defineConfig([
               },
               message:
                 "rules-engine must stay pure — no UI, database, realtime, or 3D scene dependencies.",
+            },
+          ],
+        },
+      ],
+      // Entry-point enforcement: import a module's barrel (@/data-access),
+      // never its internal files (@/data-access/supabase-server). A plain
+      // core-ESLint rule rather than eslint-plugin-boundaries' equivalent
+      // (boundaries/no-private) since that rule is deprecated in favor of a
+      // relationship-graph API (parent/child/sibling/uncle) that isn't a
+      // straightforward fit for a simple "entry point only" restriction.
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@/ui-components/**", "@/scene-3d/**", "@/rules-engine/**", "@/realtime/**"],
+              message:
+                "Import from the module's barrel (e.g. \"@/ui-components\") instead of reaching into its internal files.",
+            },
+            {
+              // data-access has three additional, deliberate entry points
+              // beyond its main barrel — see the comment atop
+              // src/data-access/index.ts for why (Next.js runtime
+              // restrictions on next/headers, next/server, etc.).
+              group: [
+                "@/data-access/**",
+                "!@/data-access/supabase-server",
+                "!@/data-access/supabase-browser",
+                "!@/data-access/supabase-middleware",
+              ],
+              message:
+                "Import from the module's barrel (\"@/data-access\") or one of its three documented sub-entry-points, not another internal file.",
             },
           ],
         },
