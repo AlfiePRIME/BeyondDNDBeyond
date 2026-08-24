@@ -1,0 +1,182 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+.main {
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 40px;
+}
+
+.backLink {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.backLink:hover {
+  color: var(--purple);
+}
+
+.hint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 16px;
+}
+
+.log {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.emptyHint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.entryList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.entry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 14px;
+}
+
+.entryHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.entryLabel {
+  font-family: var(--font-m);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.entryDate {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+.entryActions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.entryRecap {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 14px;
+}
+
+.formActions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Multiline sibling of ui-components' TextInput field styles — same local
+ * textarea as NpcRoster, since the shared library has no Textarea primitive. */
+.textareaField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.textareaLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+  transition: color 0.18s ease;
+}
+
+.textareaField:focus-within .textareaLabel {
+  color: var(--accent);
+}
+
+.textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: var(--font-b);
+  font-size: 14px;
+  caret-color: var(--pink);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.textarea::placeholder {
+  color: var(--dim);
+}
+
+.textarea:hover:not(:disabled) {
+  border-color: var(--dim);
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ga);
+}
+
+.textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.errorText {
+  color: var(--red);
+  line-height: 1.5;
+  margin: 0;
+}

@@ -62,6 +62,9 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
               <Link href={`/campaigns/${campaignId}/lore`} className={styles.createLink}>
                 World &amp; lore
               </Link>
+              <Link href={`/campaigns/${campaignId}/session-log`} className={styles.createLink}>
+                Session log
+              </Link>
               <Link href={`/campaigns/${campaignId}/room`} className={styles.createLink}>
                 Enter the Game Room →
               </Link>

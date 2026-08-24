@@ -48,6 +48,26 @@ from side because a link can never cross campaigns — the insert policy require
 access to both pages. The lore UI lives at `src/app/campaigns/[id]/lore/` (index),
 `lore/new` (DM-only create), and `lore/[pageId]` (detail with DM-only edit/link controls).
 
+As of Prompt 35, `narrative.ts` also owns the handout file pipeline: a new private
+`handouts` Storage bucket (migration `0022_handout_storage.sql`, image MIME types plus
+`application/pdf`, 10MB cap) with the usual campaign-scoped `{campaign_id}/{uuid}.{ext}`
+paths, plus `uploadHandoutFile`/`getHandoutSignedUrl` mirroring the NPC-portrait pair.
+Unlike `map-assets`/`npc-portraits`, the bucket's SELECT policy is NOT a folder-prefix
+membership check: handout visibility depends on the row's `revealed` flag, so reads go
+through a `can_read_handout_object(p_path)` SECURITY DEFINER helper that joins
+`handouts.reference = p_path` and applies the table's own SELECT rule (DM always, members
+only once revealed) — otherwise a player could mint a signed URL for a hidden handout's
+file even though the row is hidden from them. Writes keep the simpler foldername-derived
+DM check, since the upload happens before the `handouts` row exists (same
+object-before-row ordering as portraits); consequence: signing a URL only works after
+`createHandout` lands the row. The UI is a Game Room panel
+(`src/app/campaigns/[id]/room/HandoutPanel.tsx`) — not a standalone page — so the live
+reveal rides the room's existing campaign-channel subscription (a `handout-revealed`
+broadcast carrying the full row on reveal, null on hide/delete; receivers sign their own
+file URL so Storage RLS stays the authority). The session log UI (same-prompt sibling)
+is a plain page at `src/app/campaigns/[id]/session-log/` over the existing
+`session_log` CRUD — no realtime, chronological oldest-first.
+
 This is a schema/RLS/data-access-only prompt (UI for these tables is deferred: NPC roster
 in 33, lore pages in 34, and further prompts for quests/session log/handouts/notes/house
 rules). Every write function is DM-gated purely by the table's own RLS (0020) — no RPC

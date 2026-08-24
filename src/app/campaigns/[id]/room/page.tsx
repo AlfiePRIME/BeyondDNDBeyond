@@ -6,6 +6,7 @@ import {
   listAssetsForCampaign,
   listCampaignMembers,
   listCharactersForCampaign,
+  listHandouts,
   listMapCells,
   listMapObjects,
   listMapsForCampaign,
@@ -13,6 +14,7 @@ import {
 } from "@/data-access";
 import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
+import { resolveHandout } from "./handout-url";
 import { GameRoom, type LiveMapData } from "./GameRoom";
 
 export default async function GameRoomPage({ params }: { params: Promise<{ id: string }> }) {
@@ -54,7 +56,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   // The DB read here (not any broadcast) is what makes fresh joins and
   // reloads land on the currently-live map — a client that wasn't connected
   // when the DM switched never saw the live-map-changed event.
-  const [assets, availableMaps, characters] = await Promise.all([
+  const [assets, availableMaps, characters, handoutRows] = await Promise.all([
     listAssetsForCampaign(supabase, campaignId),
     // Non-DM RLS only exposes the live map anyway, and only the DM gets the
     // picker — no point fetching a list for players.
@@ -62,7 +64,13 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // Characters RLS trims this per viewer: a player gets only their own,
     // the DM gets every campaign character — exactly who each may place.
     listCharactersForCampaign(supabase, campaignId),
+    // Handouts RLS trims per viewer too: every row for the DM, revealed
+    // rows only for a player.
+    listHandouts(supabase, campaignId),
   ]);
+  const initialHandouts = await Promise.all(
+    handoutRows.map((handout) => resolveHandout(supabase, handout))
+  );
   const paletteAssets = await resolvePaletteAssets(supabase, assets);
 
   let initialLiveMap: LiveMapData | null = null;
@@ -90,6 +98,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       availableMaps={availableMaps}
       assets={paletteAssets}
       characters={characters}
+      initialHandouts={initialHandouts}
     />
   );
 }

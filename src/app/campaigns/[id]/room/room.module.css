@@ -84,6 +84,70 @@
   border-radius: 8px;
 }
 
+.handoutPanel {
+  position: absolute;
+  right: 24px;
+  top: 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  width: 320px;
+  /* Shares the right edge with .sidePanel (bottom-anchored, 70vh max) —
+     capping well short of that keeps the two from overlapping on all but
+     the shortest viewports. */
+  max-height: 26vh;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pink) 35%, transparent);
+  border-radius: 8px;
+}
+
+.handoutForm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--pink) 20%, transparent);
+}
+
+.handoutFileName {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hiddenFileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.handoutLink {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--teal);
+}
+
+.handoutLink:hover {
+  text-decoration: underline;
+}
+
+.handoutModalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
 .tokenSection {
   display: flex;
   flex-direction: column;

@@ -5,9 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import {
+  createHandout,
+  deleteHandout,
   deleteMapToken,
   endSession,
   getMap,
+  listHandouts,
   listMapCells,
   listMapObjects,
   listMapTokens,
@@ -15,12 +18,15 @@ import {
   parseMapObjectBehavior,
   placeCharacterToken,
   placeNpcToken,
+  setHandoutRevealed,
   setLiveMap,
   setTokenAllegiance,
   subscribeToProfileChanges,
   triggerMapObject,
+  uploadHandoutFile,
   type CampaignMap,
   type Character,
+  type Handout,
   type MapCell,
   type MapObject,
   type MapToken,
@@ -29,7 +35,7 @@ import {
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { pathMovementCost, straightCellPath, type GridPoint } from "@/rules-engine";
-import { Button } from "@/ui-components";
+import { Button, Modal } from "@/ui-components";
 import { GameTableScene, type CameraMode, type TableLiveMap } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
 import {
@@ -41,6 +47,8 @@ import {
 } from "../maps/[mapId]/edit/lib/cellGrid";
 import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
+import { resolveHandout, type RoomHandout } from "./handout-url";
+import { HandoutContent, HandoutPanel } from "./HandoutPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
 import { TokenPanel, type TokenArm } from "./TokenPanel";
 import styles from "./room.module.css";
@@ -53,6 +61,7 @@ const SESSION_ENDED_EVENT = "session-ended";
 const LIVE_MAP_EVENT = "live-map-changed";
 const TRIGGER_EVENT = "map-object-triggered";
 const TOKEN_EVENT = "token-changed";
+const HANDOUT_EVENT = "handout-revealed";
 
 interface LiveMapPayload {
   mapId: string | null;
@@ -68,6 +77,18 @@ interface TriggerPayload {
 interface TokenPayload {
   tokenId: string;
   token: MapToken | null;
+}
+
+/** Same shape as TokenPayload: the full new row on reveal, so receivers
+ * never need a follow-up fetch; null for "no longer visible to you" (hidden
+ * again or deleted — receivers drop the row without learning which, so a
+ * hidden handout's content never rides the broadcast past players). Cost of
+ * that opacity: a DM's SECOND open room also drops a merely-hidden row from
+ * its list until reload/reconnect — the single-DM case is the one worth
+ * being right for. */
+interface HandoutPayload {
+  handoutId: string;
+  handout: Handout | null;
 }
 
 /** The live map plus everything needed to render/interact with it. */
@@ -126,6 +147,7 @@ export function GameRoom({
   availableMaps,
   assets,
   characters,
+  initialHandouts,
 }: {
   campaignId: string;
   campaignName: string;
@@ -138,6 +160,8 @@ export function GameRoom({
   assets: PaletteAsset[];
   /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
   characters: Character[];
+  /** RLS-filtered per viewer: every handout for the DM, revealed only for players. */
+  initialHandouts: RoomHandout[];
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
@@ -175,6 +199,25 @@ export function GameRoom({
       ),
     };
     setLiveMapState(liveMapRef.current);
+  }, []);
+
+  const [handouts, setHandouts] = useState(initialHandouts);
+  const [handoutBusy, setHandoutBusy] = useState(false);
+  const [handoutError, setHandoutError] = useState<string | null>(null);
+  // The live-reveal popup: set from an incoming broadcast, never by the
+  // revealing DM's own client (publish doesn't echo to its sender).
+  const [handoutPopup, setHandoutPopup] = useState<RoomHandout | null>(null);
+
+  const applyHandoutChange = useCallback((handoutId: string, handout: RoomHandout | null) => {
+    setHandouts((current) => {
+      if (!handout) return current.filter((candidate) => candidate.id !== handoutId);
+      return current.some((candidate) => candidate.id === handoutId)
+        ? current.map((candidate) => (candidate.id === handoutId ? handout : candidate))
+        : [...current, handout];
+    });
+    if (!handout) {
+      setHandoutPopup((current) => (current?.id === handoutId ? null : current));
+    }
   }, []);
 
   const [armedToken, setArmedToken] = useState<TokenArm | null>(null);
@@ -307,6 +350,21 @@ export function GameRoom({
     const unsubscribeToken = channel.subscribe<TokenPayload>(TOKEN_EVENT, (payload) => {
       applyTokenChange(payload.tokenId, payload.token);
     });
+    const unsubscribeHandout = channel.subscribe<HandoutPayload>(HANDOUT_EVENT, (payload) => {
+      const row = payload.handout;
+      if (!row) {
+        applyHandoutChange(payload.handoutId, null);
+        return;
+      }
+      void (async () => {
+        // Each receiver signs the file URL with its OWN client — the
+        // broadcast carries only the row, so Storage RLS (0022) stays the
+        // authority on who may actually load the file.
+        const resolved = await resolveHandout(supabase, row);
+        applyHandoutChange(resolved.id, resolved);
+        if (resolved.revealed) setHandoutPopup(resolved);
+      })();
+    });
     // The DB is the source of truth after a drop: any live-map-changed or
     // trigger broadcasts sent while disconnected are simply gone, so re-read
     // campaigns.live_map itself rather than trusting local state.
@@ -319,16 +377,25 @@ export function GameRoom({
       if (error) return;
       await refreshLiveMap(supabase, data?.live_map ?? null);
     });
+    // Same dropped-broadcast reasoning for handouts — a reveal sent while
+    // disconnected is gone, so re-read the RLS-filtered list.
+    const unsubscribeHandoutReconnect = channel.onReconnect(async () => {
+      const rows = await listHandouts(supabase, campaignId).catch(() => null);
+      if (!rows) return;
+      setHandouts(await Promise.all(rows.map((row) => resolveHandout(supabase, row))));
+    });
 
     return () => {
       unsubscribeLiveMap();
       unsubscribeTrigger();
       unsubscribeToken();
+      unsubscribeHandout();
       unsubscribeReconnect();
+      unsubscribeHandoutReconnect();
       campaignChannelRef.current = null;
       void channel.leave();
     };
-  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered, applyTokenChange]);
+  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered, applyTokenChange, applyHandoutChange]);
 
   const triggeringRef = useRef(false);
   const handleTrigger = useCallback(
@@ -508,6 +575,75 @@ export function GameRoom({
       }
     },
     [tokenBusy, applyTokenChange, publishTokenChange]
+  );
+
+  const handleCreateHandout = useCallback(
+    async (title: string, file: File) => {
+      if (handoutBusy) return;
+      setHandoutBusy(true);
+      setHandoutError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        // Upload before createHandout so reference always points at a real
+        // object; resolveHandout signs after, which the bucket's read
+        // policy (0022) requires — it authorizes through the row.
+        const reference = await uploadHandoutFile(supabase, campaignId, file);
+        const handout = await createHandout(supabase, { campaignId, title, reference });
+        applyHandoutChange(handout.id, await resolveHandout(supabase, handout));
+        // No broadcast: a fresh handout is hidden, so no other client may
+        // see anything yet.
+      } catch (err) {
+        setHandoutError(errorMessage(err) ?? "Could not upload that handout.");
+      } finally {
+        setHandoutBusy(false);
+      }
+    },
+    [campaignId, handoutBusy, applyHandoutChange]
+  );
+
+  const handleToggleHandoutRevealed = useCallback(
+    async (handout: RoomHandout) => {
+      if (handoutBusy) return;
+      setHandoutBusy(true);
+      setHandoutError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        // Persist first, broadcast second — same ordering rationale as
+        // triggering and map switching.
+        const updated = await setHandoutRevealed(supabase, handout.id, !handout.revealed);
+        applyHandoutChange(updated.id, { ...updated, url: handout.url });
+        await campaignChannelRef.current?.publish<HandoutPayload>(HANDOUT_EVENT, {
+          handoutId: updated.id,
+          handout: updated.revealed ? updated : null,
+        });
+      } catch (err) {
+        setHandoutError(errorMessage(err) ?? "Could not change that handout's visibility.");
+      } finally {
+        setHandoutBusy(false);
+      }
+    },
+    [handoutBusy, applyHandoutChange]
+  );
+
+  const handleDeleteHandout = useCallback(
+    async (handout: RoomHandout) => {
+      if (handoutBusy) return;
+      setHandoutBusy(true);
+      setHandoutError(null);
+      try {
+        await deleteHandout(createBrowserSupabaseClient(), handout.id);
+        applyHandoutChange(handout.id, null);
+        await campaignChannelRef.current?.publish<HandoutPayload>(HANDOUT_EVENT, {
+          handoutId: handout.id,
+          handout: null,
+        });
+      } catch (err) {
+        setHandoutError(errorMessage(err) ?? "Could not delete that handout.");
+      } finally {
+        setHandoutBusy(false);
+      }
+    },
+    [handoutBusy, applyHandoutChange]
   );
 
   async function handleEndSession() {
@@ -723,6 +859,27 @@ export function GameRoom({
           onSetAllegiance={handleSetAllegiance}
         />
       ) : null}
+      <HandoutPanel
+        isDM={currentUserIsDM}
+        handouts={handouts}
+        busy={handoutBusy}
+        error={handoutError}
+        onCreate={handleCreateHandout}
+        onToggleReveal={handleToggleHandoutRevealed}
+        onDelete={handleDeleteHandout}
+      />
+      <Modal
+        open={handoutPopup !== null}
+        onClose={() => setHandoutPopup(null)}
+        title="The DM reveals a handout"
+      >
+        {handoutPopup ? (
+          <div className={styles.handoutModalBody} data-testid="handout-reveal-modal">
+            <span className={styles.objectName}>{handoutPopup.title}</span>
+            <HandoutContent handout={handoutPopup} />
+          </div>
+        ) : null}
+      </Modal>
       {endError ? (
         <p role="alert" className={styles.endError} data-testid="end-session-error">
           {endError}

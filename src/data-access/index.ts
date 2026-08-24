@@ -145,6 +145,8 @@ export {
   createHandout,
   setHandoutRevealed,
   deleteHandout,
+  uploadHandoutFile,
+  getHandoutSignedUrl,
   listDmNotes,
   createDmNote,
   updateDmNote,

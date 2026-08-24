@@ -388,6 +388,58 @@ export async function deleteHandout(supabase: SupabaseClient, handoutId: string)
   if (error) throw error;
 }
 
+const HANDOUT_EXTENSIONS: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "application/pdf": "pdf",
+};
+
+/**
+ * Uploads a handout file to the handouts bucket (0022) and returns the
+ * object path to store as reference — same fresh-unique-path scheme as
+ * uploadNpcPortraitFile. Upload must precede createHandout (the row's
+ * reference has to point at an existing object), and signing must FOLLOW
+ * createHandout: the bucket's read policy authorizes through the handouts
+ * row, so a just-uploaded, not-yet-cataloged object is unreadable even to
+ * its own uploader.
+ */
+export async function uploadHandoutFile(
+  supabase: SupabaseClient,
+  campaignId: string,
+  file: File
+): Promise<string> {
+  const extension = HANDOUT_EXTENSIONS[file.type];
+  if (!extension) throw new Error(`Unsupported handout type: ${file.type || "unknown"}`);
+
+  const path = `${campaignId}/${crypto.randomUUID()}.${extension}`;
+  const { error } = await supabase.storage
+    .from("handouts")
+    .upload(path, file, { contentType: file.type });
+
+  if (error) throw error;
+  return path;
+}
+
+/**
+ * Signed download URL for a handout file — private-bucket signed-URL model
+ * (and no-auto-refresh expiry caveat) as getNpcPortraitSignedUrl, except the
+ * bucket's RLS (0022) authorizes through the handouts row itself: the DM
+ * always, a player only once that row is revealed.
+ */
+export async function getHandoutSignedUrl(
+  supabase: SupabaseClient,
+  path: string,
+  expiresInSeconds: number
+): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from("handouts")
+    .createSignedUrl(path, expiresInSeconds);
+
+  if (error) throw error;
+  return data.signedUrl;
+}
+
 export interface DmNote {
   id: string;
   campaign_id: string;
