@@ -1,11 +1,15 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Color, MOUSE } from "three";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { MOUSE } from "three";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
-import type { TerrainType } from "@/rules-engine";
-import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
+import {
+  EDITOR_MAP_METRICS,
+  MapSurface,
+  type MapSurfaceCell,
+  type MapSurfaceObject,
+} from "./MapSurface";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
 // — same hex-mirroring reasoning as GameTableScene.
@@ -14,199 +18,14 @@ const PURPLE = "#9b00ff"; // --purple
 const TEAL = "#1ec8c8"; // --teal
 const GROUND = "#1a1338";
 
-// Terrain reads by hue (cool slate = normal, warm amber = difficult), not
-// just brightness — elevation already owns the light/dark axis below.
-const NORMAL_BASE = "#463a70";
-const NORMAL_HIGH = "#cfc4ff";
-const DIFFICULT_BASE = "#a85a24";
-const DIFFICULT_HIGH = "#ffd9a0";
-
-export const CELL_SIZE = 1;
-const CELL_GAP = 0.08;
-const BASE_HEIGHT = 0.14;
-export const ELEVATION_STEP_HEIGHT = 0.35;
-
-const colorCache = new Map<string, string>();
-
-function cellColor(terrain: TerrainType, elevation: number): string {
-  const key = `${terrain}:${elevation}`;
-  let hex = colorCache.get(key);
-  if (!hex) {
-    const [base, high] =
-      terrain === "difficult" ? [DIFFICULT_BASE, DIFFICULT_HIGH] : [NORMAL_BASE, NORMAL_HIGH];
-    // Each step also lightens the block so distinct elevations stay
-    // distinguishable even from directly overhead, where extruded height
-    // alone is invisible.
-    hex = `#${new Color(base).lerp(new Color(high), Math.min(elevation * 0.11, 0.66)).getHexString()}`;
-    colorCache.set(key, hex);
-  }
-  return hex;
-}
-
-export interface MapEditorCell {
-  x: number;
-  y: number;
-  elevation: number;
-  terrain: TerrainType;
-}
-
-interface CellBlockProps {
-  x: number;
-  y: number;
-  worldX: number;
-  worldZ: number;
-  elevation: number;
-  terrain: TerrainType;
-  onDown: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
-  onOver: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
-}
-
-// Memoized on primitive props so a single-cell edit re-renders one block,
-// not the whole grid.
-const CellBlock = memo(function CellBlock({
-  x,
-  y,
-  worldX,
-  worldZ,
-  elevation,
-  terrain,
-  onDown,
-  onOver,
-}: CellBlockProps) {
-  const [hovered, setHovered] = useState(false);
-  const height = BASE_HEIGHT + elevation * ELEVATION_STEP_HEIGHT;
-  return (
-    <mesh
-      position={[worldX, height / 2, worldZ]}
-      onPointerDown={(event) => onDown(x, y, event)}
-      onPointerOver={(event) => {
-        setHovered(true);
-        onOver(x, y, event);
-      }}
-      onPointerOut={() => setHovered(false)}
-    >
-      <boxGeometry args={[CELL_SIZE - CELL_GAP, height, CELL_SIZE - CELL_GAP]} />
-      <meshStandardMaterial
-        color={cellColor(terrain, elevation)}
-        emissive={TEAL}
-        emissiveIntensity={hovered ? 0.4 : 0}
-        roughness={0.65}
-      />
-    </mesh>
-  );
-});
-
-export interface MapEditorObject {
-  id: string;
-  x: number;
-  y: number;
-  /** The cell's current elevation in steps — the caller derives it from the
-   * same overlay the cells render from, so props ride the sculpted surface. */
-  elevation: number;
-  /** Degrees around the vertical axis. */
-  rotation: number;
-  /** Loadable model URL, or null to render the placeholder prop. */
-  url: string | null;
-  /** false keeps this object inert even when onSelectObject is provided —
-   * the live viewer uses it so only triggerable objects are click targets. */
-  selectable?: boolean;
-  /** Renders a hidden-object outline instead of the model — the DM's view
-   * of an object that players currently can't see at all. */
-  ghost?: boolean;
-  /** Shows an activation beacon above the model (a switched-on object). */
-  active?: boolean;
-}
-
-interface ObjectMarkerProps {
-  id: string;
-  worldX: number;
-  worldZ: number;
-  elevation: number;
-  rotation: number;
-  url: string | null;
-  selected: boolean;
-  selectable: boolean;
-  ghost: boolean;
-  active: boolean;
-  onSelect: (id: string, event: ThreeEvent<PointerEvent>) => void;
-}
-
-// The invisible hit box exists because raycasting against the glTF's own
-// meshes makes thin or holey props (torch, door frame) nearly unclickable —
-// the box gives every object a uniform, cell-sized click target.
-const HIT_BOX_HEIGHT = 0.9;
-
-// Beacon color mirrors DIFFICULT_HIGH's warm family on purpose: "switched
-// on" needs to read against both the cool cell palette and any model color.
-const BEACON_COLOR = "#ffbf47";
-
-const ObjectMarker = memo(function ObjectMarker({
-  id,
-  worldX,
-  worldZ,
-  elevation,
-  rotation,
-  url,
-  selected,
-  selectable,
-  ghost,
-  active,
-  onSelect,
-}: ObjectMarkerProps) {
-  const [hovered, setHovered] = useState(false);
-  const top = BASE_HEIGHT + elevation * ELEVATION_STEP_HEIGHT;
-  return (
-    <group position={[worldX, top, worldZ]} rotation={[0, (rotation * Math.PI) / 180, 0]}>
-      {ghost ? (
-        <mesh position={[0, HIT_BOX_HEIGHT / 2, 0]}>
-          <boxGeometry args={[PLACED_OBJECT_SIZE * 0.7, HIT_BOX_HEIGHT * 0.7, PLACED_OBJECT_SIZE * 0.7]} />
-          <meshBasicMaterial wireframe color={PURPLE} transparent opacity={0.45} />
-        </mesh>
-      ) : (
-        <PlacedObject url={url} />
-      )}
-      {active ? (
-        <mesh position={[0, HIT_BOX_HEIGHT + 0.22, 0]}>
-          <sphereGeometry args={[0.11, 16, 16]} />
-          <meshBasicMaterial color={BEACON_COLOR} />
-        </mesh>
-      ) : null}
-      {selectable ? (
-        <mesh
-          onPointerDown={(event) => {
-            if (event.button !== 0) return;
-            event.stopPropagation();
-            onSelect(id, event);
-          }}
-          onPointerOver={(event) => {
-            event.stopPropagation();
-            setHovered(true);
-          }}
-          onPointerOut={() => setHovered(false)}
-          position={[0, HIT_BOX_HEIGHT / 2, 0]}
-        >
-          <boxGeometry args={[PLACED_OBJECT_SIZE, HIT_BOX_HEIGHT, PLACED_OBJECT_SIZE]} />
-          {/* opacity-0 rather than visible={false}: an invisible mesh is
-              skipped by the raycaster, which would defeat the hit box. */}
-          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-        </mesh>
-      ) : null}
-      {selected || (selectable && hovered) ? (
-        <mesh position={[0, HIT_BOX_HEIGHT / 2, 0]}>
-          <boxGeometry args={[PLACED_OBJECT_SIZE + 0.03, HIT_BOX_HEIGHT, PLACED_OBJECT_SIZE + 0.03]} />
-          <meshBasicMaterial wireframe color={TEAL} transparent opacity={selected ? 0.9 : 0.3} />
-        </mesh>
-      ) : null}
-    </group>
-  );
-});
+const CELL_SIZE = EDITOR_MAP_METRICS.cellSize;
 
 export interface MapEditorSceneProps {
   gridWidth: number;
   gridHeight: number;
   /** Full dense grid — one entry per cell; the caller overlays sparse
    * storage onto defaults before passing it in (scene-3d can't fetch). */
-  cells: readonly MapEditorCell[];
+  cells: readonly MapSurfaceCell[];
   /**
    * Fired at most once per cell per left-button stroke (a click, or a drag
    * sweeping across cells). What "painting" means — raise, lower, terrain —
@@ -220,7 +39,7 @@ export interface MapEditorSceneProps {
    */
   onCellClick?: (x: number, y: number) => void;
   /** Placed objects to render; absent/empty renders none. */
-  objects?: readonly MapEditorObject[];
+  objects?: readonly MapSurfaceObject[];
   selectedObjectId?: string | null;
   /** When provided, placed objects become click targets that intercept the
    * cell beneath; when absent they're inert and clicks fall through to the
@@ -300,9 +119,6 @@ export function MapEditorScene({
     [span]
   );
 
-  const offsetX = ((gridWidth - 1) / 2) * CELL_SIZE;
-  const offsetZ = ((gridHeight - 1) / 2) * CELL_SIZE;
-
   return (
     <>
       <PerspectiveCamera makeDefault position={cameraPosition} fov={45} />
@@ -329,36 +145,16 @@ export function MapEditorScene({
         <meshStandardMaterial color={GROUND} roughness={0.95} />
       </mesh>
 
-      {cells.map((cell) => (
-        <CellBlock
-          key={`${cell.x},${cell.y}`}
-          x={cell.x}
-          y={cell.y}
-          worldX={cell.x * CELL_SIZE - offsetX}
-          worldZ={cell.y * CELL_SIZE - offsetZ}
-          elevation={cell.elevation}
-          terrain={cell.terrain}
-          onDown={handleDown}
-          onOver={handleOver}
-        />
-      ))}
-
-      {objects?.map((object) => (
-        <ObjectMarker
-          key={object.id}
-          id={object.id}
-          worldX={object.x * CELL_SIZE - offsetX}
-          worldZ={object.y * CELL_SIZE - offsetZ}
-          elevation={object.elevation}
-          rotation={object.rotation}
-          url={object.url}
-          selected={object.id === selectedObjectId}
-          selectable={Boolean(onSelectObject) && object.selectable !== false}
-          ghost={object.ghost ?? false}
-          active={object.active ?? false}
-          onSelect={handleSelectObject}
-        />
-      ))}
+      <MapSurface
+        gridWidth={gridWidth}
+        gridHeight={gridHeight}
+        cells={cells}
+        objects={objects}
+        selectedObjectId={selectedObjectId}
+        onSelectObject={onSelectObject ? handleSelectObject : undefined}
+        onCellPointerDown={handleDown}
+        onCellPointerOver={handleOver}
+      />
     </>
   );
 }

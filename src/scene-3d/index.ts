@@ -2,13 +2,16 @@
 // the table, seating, avatars, live map rendering, tokens, vision masking.
 export const MODULE_NAME = "scene-3d" as const;
 
-export { GameTableScene, type GameTableSceneProps } from "./GameTableScene";
+export { GameTableScene, type GameTableSceneProps, type TableLiveMap } from "./GameTableScene";
+export { MapEditorScene, type MapEditorSceneProps } from "./MapEditorScene";
 export {
-  MapEditorScene,
-  type MapEditorSceneProps,
-  type MapEditorCell,
-  type MapEditorObject,
-} from "./MapEditorScene";
+  MapSurface,
+  type MapSurfaceProps,
+  type MapSurfaceCell,
+  type MapSurfaceObject,
+  type MapSurfaceMetrics,
+} from "./MapSurface";
+export { computeTableMapMetrics } from "./mapFit";
 export { PlacedObject } from "./PlacedObject";
 export {
   computeSeatLayout,

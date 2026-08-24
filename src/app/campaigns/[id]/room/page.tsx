@@ -1,8 +1,17 @@
 import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { getProfile, listCampaignMembers } from "@/data-access";
+import {
+  getMap,
+  getProfile,
+  listAssetsForCampaign,
+  listCampaignMembers,
+  listMapCells,
+  listMapObjects,
+  listMapsForCampaign,
+} from "@/data-access";
+import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
-import { GameRoom } from "./GameRoom";
+import { GameRoom, type LiveMapData } from "./GameRoom";
 
 export default async function GameRoomPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
@@ -38,6 +47,30 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   );
 
   const currentMember = roomMembers.find((member) => member.user_id === user.id);
+  const currentUserIsDM = currentMember?.role === "dm";
+
+  // The DB read here (not any broadcast) is what makes fresh joins and
+  // reloads land on the currently-live map — a client that wasn't connected
+  // when the DM switched never saw the live-map-changed event.
+  const [assets, availableMaps] = await Promise.all([
+    listAssetsForCampaign(supabase, campaignId),
+    // Non-DM RLS only exposes the live map anyway, and only the DM gets the
+    // picker — no point fetching a list for players.
+    currentUserIsDM ? listMapsForCampaign(supabase, campaignId) : Promise.resolve([]),
+  ]);
+  const paletteAssets = await resolvePaletteAssets(supabase, assets);
+
+  let initialLiveMap: LiveMapData | null = null;
+  if (campaign.live_map) {
+    const map = await getMap(supabase, campaign.live_map);
+    if (map) {
+      const [cells, objects] = await Promise.all([
+        listMapCells(supabase, map.id),
+        listMapObjects(supabase, map.id),
+      ]);
+      initialLiveMap = { map, cells, objects };
+    }
+  }
 
   return (
     <GameRoom
@@ -45,8 +78,11 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       campaignName={campaign.name}
       members={roomMembers}
       currentUserId={user.id}
-      currentUserIsDM={currentMember?.role === "dm"}
+      currentUserIsDM={currentUserIsDM}
       currentUserDisplayName={currentMember?.display_name ?? null}
+      initialLiveMap={initialLiveMap}
+      availableMaps={availableMaps}
+      assets={paletteAssets}
     />
   );
 }

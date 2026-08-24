@@ -94,6 +94,13 @@ const SEATED_PLAYER_COUNT = 5;
 const PRESET_IDS = ["vanguard", "mystic", "warden", "corsair", "ember"];
 const extraUserIds = [];
 
+// Prompt 29: the table also carries a live map now, so the benchmark seeds a
+// representative one — 20x20, every cell a stored row (varied elevations,
+// scattered difficult terrain), several placed preset objects — and points
+// campaigns.live_map at it before the page loads.
+const MAP_GRID = 20;
+const MAP_OBJECT_COUNT = 6;
+
 try {
   await admin.from("profiles").insert({
     id: userId,
@@ -124,6 +131,51 @@ try {
     });
     await admin.from("campaign_members").insert({ campaign_id: campaignId, user_id: playerId, role: "player" });
   }
+
+  const { data: mapData, error: mapError } = await admin
+    .from("campaign_maps")
+    .insert({ campaign_id: campaignId, name: "Benchmark live map", grid_width: MAP_GRID, grid_height: MAP_GRID })
+    .select()
+    .single();
+  if (mapError) throw new Error(`creating benchmark map: ${mapError.message}`);
+
+  const cells = [];
+  for (let y = 0; y < MAP_GRID; y++) {
+    for (let x = 0; x < MAP_GRID; x++) {
+      cells.push({
+        map_id: mapData.id,
+        x,
+        y,
+        elevation: (x + y) % 5,
+        terrain_type: (x * 7 + y * 3) % 9 === 0 ? "difficult" : "normal",
+      });
+    }
+  }
+  const { error: cellsError } = await admin.from("map_cells").insert(cells);
+  if (cellsError) throw new Error(`populating benchmark cells: ${cellsError.message}`);
+
+  const { data: presetAssets, error: assetsError } = await admin
+    .from("asset_library")
+    .select("id")
+    .eq("source_type", "preset")
+    .limit(MAP_OBJECT_COUNT);
+  if (assetsError) throw new Error(`listing preset assets: ${assetsError.message}`);
+  const objects = presetAssets.map((asset, i) => ({
+    map_id: mapData.id,
+    asset_id: asset.id,
+    x: (i * 3 + 2) % MAP_GRID,
+    y: (i * 5 + 4) % MAP_GRID,
+    elevation: ((i * 3 + 2) % MAP_GRID) % 5 ? 0 : 1,
+    rotation: (i * 90) % 360,
+  }));
+  const { error: objectsError } = await admin.from("map_objects").insert(objects);
+  if (objectsError) throw new Error(`placing benchmark objects: ${objectsError.message}`);
+
+  const { error: liveError } = await admin
+    .from("campaigns")
+    .update({ live_map: mapData.id })
+    .eq("id", campaignId);
+  if (liveError) throw new Error(`setting benchmark live map: ${liveError.message}`);
 
   await waitForServer(`http://localhost:${PORT}/`);
 
@@ -167,7 +219,9 @@ try {
 
   const budgetMs = budgets.render3d.maxAvgFrameTimeMs;
 
-  console.log(`3D render benchmark (real Game Room scene): ${result.frameCount} frames`);
+  console.log(
+    `3D render benchmark (real Game Room scene, ${MAP_GRID}x${MAP_GRID} live map with ${MAP_OBJECT_COUNT} objects): ${result.frameCount} frames`
+  );
   console.log(`Average frame time: ${result.avgFrameTimeMs.toFixed(2)} ms (budget: ${budgetMs} ms)`);
   console.log(`Implied fps: ${(1000 / result.avgFrameTimeMs).toFixed(1)}`);
 

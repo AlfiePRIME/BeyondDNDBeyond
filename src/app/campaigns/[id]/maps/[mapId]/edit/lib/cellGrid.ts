@@ -1,6 +1,6 @@
 import type { TerrainType } from "@/rules-engine";
 import type { MapCell } from "@/data-access";
-import type { MapEditorCell } from "@/scene-3d";
+import type { MapSurfaceCell } from "@/scene-3d";
 
 export interface CellState {
   elevation: number;
@@ -59,8 +59,8 @@ export function buildDenseCells(
   width: number,
   height: number,
   overlay: ReadonlyMap<string, CellState>
-): MapEditorCell[] {
-  const cells: MapEditorCell[] = [];
+): MapSurfaceCell[] {
+  const cells: MapSurfaceCell[] = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const state = overlay.get(cellKey(x, y)) ?? DEFAULT_CELL;

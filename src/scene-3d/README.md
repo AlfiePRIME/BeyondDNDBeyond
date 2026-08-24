@@ -31,12 +31,24 @@ objects intercept the cell beneath; when absent they're inert and sculpt strokes
 through to the cell. As with cells, elevation/URL resolution is the caller's job: the scene
 receives already-derived values.
 
-As of Prompt 28: `MapEditorObject` gained three optional read-only flags for the live-map
-viewer (`/campaigns/[id]/map`), which reuses this scene rather than a second renderer:
-`selectable` (false keeps an object inert even when `onSelectObject` is provided, so a
-player's view only lets them click triggerable objects), `ghost` (renders a wireframe outline
-instead of the model — the DM's view of an object players currently can't see), and `active`
-(shows an activation beacon above a switched-on object). Interactive-behavior state itself
-(what's configured, what's currently triggered) lives in `map_objects.behavior_config`,
-defined and read entirely in `data-access` — the scene only ever receives these three
-booleans, never the raw config.
+As of Prompt 28: placed objects gained three optional read-only flags: `selectable` (false
+keeps an object inert even when a selection callback is provided, so a player's view only
+lets them click triggerable objects), `ghost` (renders a wireframe outline instead of the
+model — the DM's view of an object players currently can't see), and `active` (shows an
+activation beacon above a switched-on object). Interactive-behavior state itself (what's
+configured, what's currently triggered) lives in `map_objects.behavior_config`, defined and
+read entirely in `data-access` — the scene only ever receives these three booleans, never the
+raw config.
+
+As of Prompt 29: the cell/object rendering that was `MapEditorScene`'s own is extracted into
+`MapSurface` (types renamed `MapSurfaceCell`/`MapSurfaceObject`), parameterized by
+`MapSurfaceMetrics` (`cellSize`/`baseHeight`/`elevationStepHeight`) instead of a fixed 1-unit
+cell — one renderer, two very different wrappers. `MapEditorScene` wraps it at the default
+unit metrics with its own overhead/orbit camera and full paint-stroke interaction.
+`GameTableScene` wraps it via `mapFit.computeTableMapMetrics` (fits any grid onto the
+physical table's fixed footprint, uniform cell size from the tighter axis, elevation step
+height floored so dense grids don't compress into an unreadable smear) with no cell pointer
+handlers at all (handler-less meshes skip r3f raycasting — the table doesn't pay a
+per-pointer-move cost it has no use for), keeping only object selection for POI triggering.
+The standalone live-map viewer from Prompt 28 is retired — the table itself is now that
+surface.

@@ -5,6 +5,8 @@ import { OrbitControls, PerspectiveCamera, RoundedBox } from "@react-three/drei"
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y } from "./table";
 import { computeSeatLayout, type CameraMode, type Seat, type SeatMember } from "./seating";
 import { SeatAvatar } from "./SeatAvatar";
+import { MapSurface, type MapSurfaceCell, type MapSurfaceObject } from "./MapSurface";
+import { computeTableMapMetrics } from "./mapFit";
 
 // Room ambiance pulls from the app's design tokens (see
 // src/ui-components/tokens.css) — scene-3d can't import CSS custom
@@ -54,22 +56,41 @@ function TableSeat({ seat }: { seat: Seat }) {
   );
 }
 
+/** The currently-live map, already resolved to renderable form by the app
+ * layer (dense cells, viewer-appropriate object flags, loadable URLs). */
+export interface TableLiveMap {
+  gridWidth: number;
+  gridHeight: number;
+  cells: readonly MapSurfaceCell[];
+  objects: readonly MapSurfaceObject[];
+}
+
 export interface GameTableSceneProps {
   /** Ordered campaign member list — seat index is position in this list. */
   members?: readonly SeatMember[];
   currentUserId?: string | null;
   cameraMode?: CameraMode;
+  /** Rendered as a miniature on the tabletop; null keeps the bare table. */
+  liveMap?: TableLiveMap | null;
+  /** Makes the map's selectable objects click targets (POI triggering). */
+  onSelectMapObject?: (id: string) => void;
 }
 
 export function GameTableScene({
   members = [],
   currentUserId = null,
   cameraMode = "seat",
+  liveMap = null,
+  onSelectMapObject,
 }: GameTableSceneProps) {
   const legX = TABLE_TOP.width / 2 - 0.45;
   const legZ = TABLE_TOP.depth / 2 - 0.45;
 
   const seats = useMemo(() => computeSeatLayout(members), [members]);
+  const mapMetrics = useMemo(
+    () => (liveMap ? computeTableMapMetrics(liveMap.gridWidth, liveMap.gridHeight) : null),
+    [liveMap]
+  );
   const mySeat = seats.find((seat) => seat.member.user_id === currentUserId);
   const cameraPosition = mySeat ? mySeat.cameraPosition : FALLBACK_CAMERA_POSITION;
 
@@ -125,6 +146,21 @@ export function GameTableScene({
       >
         <meshStandardMaterial color={WOOD_TOP} roughness={0.72} />
       </RoundedBox>
+
+      {liveMap && mapMetrics ? (
+        // Nudged just above the tabletop so the map's base slab never
+        // z-fights the wood.
+        <group position={[0, TABLE_SURFACE_Y + 0.002, 0]}>
+          <MapSurface
+            gridWidth={liveMap.gridWidth}
+            gridHeight={liveMap.gridHeight}
+            cells={liveMap.cells}
+            metrics={mapMetrics}
+            objects={liveMap.objects}
+            onSelectObject={onSelectMapObject}
+          />
+        </group>
+      ) : null}
 
       <TableLeg x={-legX} z={-legZ} />
       <TableLeg x={legX} z={-legZ} />

@@ -7,7 +7,6 @@ import { Button, ChoiceCard } from "@/ui-components";
 import {
   createMapObject,
   deleteMapObject,
-  setLiveMap,
   setMapObjectBehavior,
   updateMapObject,
   upsertMapCells,
@@ -18,7 +17,7 @@ import {
   type SupabaseClient,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
-import { MapEditorScene, type MapEditorObject } from "@/scene-3d";
+import { MapEditorScene, type MapSurfaceObject } from "@/scene-3d";
 import type { TerrainType } from "@/rules-engine";
 import {
   applyTool,
@@ -48,7 +47,6 @@ export function MapEditor({
   initialCells,
   initialObjects,
   assets,
-  initialIsLive,
 }: {
   campaignId: string;
   campaignName: string;
@@ -56,7 +54,6 @@ export function MapEditor({
   initialCells: MapCell[];
   initialObjects: MapObject[];
   assets: PaletteAsset[];
-  initialIsLive: boolean;
 }) {
   const [overlay, setOverlay] = useState(() => overlayFromRows(initialCells));
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
@@ -65,10 +62,6 @@ export function MapEditor({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const [isLive, setIsLive] = useState(initialIsLive);
-  const [settingLive, setSettingLive] = useState(false);
-  const [liveError, setLiveError] = useState<string | null>(null);
 
   const [objects, setObjects] = useState<MapObject[]>(initialObjects);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(assets[0]?.id ?? null);
@@ -207,20 +200,6 @@ export function MapEditor({
     });
   }
 
-  async function handleSetLive() {
-    if (settingLive || isLive) return;
-    setSettingLive(true);
-    setLiveError(null);
-    try {
-      await setLiveMap(createBrowserSupabaseClient(), campaignId, map.id);
-      setIsLive(true);
-    } catch (err) {
-      setLiveError(errorMessage(err) ?? "Could not set the live map.");
-    } finally {
-      setSettingLive(false);
-    }
-  }
-
   function handleRemove() {
     if (!selectedObject) return;
     const removedId = selectedObject.id;
@@ -246,7 +225,7 @@ export function MapEditor({
 
   const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
 
-  const sceneObjects = useMemo<MapEditorObject[]>(
+  const sceneObjects = useMemo<MapSurfaceObject[]>(
     () =>
       objects.map((object) => ({
         id: object.id,
@@ -300,21 +279,6 @@ export function MapEditor({
           <span className={styles.mapLabel}>
             {map.name} · {map.grid_width}×{map.grid_height}
           </span>
-          {isLive ? (
-            <span role="status" className={styles.savedText} data-testid="live-status">
-              Live map
-            </span>
-          ) : (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={settingLive}
-              onClick={handleSetLive}
-              data-testid="set-live-map"
-            >
-              {settingLive ? "Setting…" : "Set as live map"}
-            </Button>
-          )}
           {saved ? (
             <span role="status" className={styles.savedText} data-testid="save-status">
               Saved
@@ -460,11 +424,6 @@ export function MapEditor({
         {error ? (
           <p role="alert" className={styles.errorText} data-testid="save-error">
             {error}
-          </p>
-        ) : null}
-        {liveError ? (
-          <p role="alert" className={styles.errorText} data-testid="live-error">
-            {liveError}
           </p>
         ) : null}
       </div>
