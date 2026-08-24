@@ -1,0 +1,257 @@
+/*
+ * BeyondDNDBeyond — ported design tokens (Prompt 3).
+ *
+ * Source of truth: AlfiePrime Hub's
+ * /home/alfie/git/sex/hub/app/frontend/src/lib/theme/tokens.css, which is
+ * itself a verbatim port of that project's original index.html `:root`
+ * block and its scanline/vignette/glitch/fade-up vocabulary. Values below
+ * are copied verbatim — this is a port, not a reinterpretation. Do not
+ * "improve" or retune these colors; the neon/CRT theme is locked in.
+ *
+ * Every UI component imports this file (transitively via
+ * src/app/globals.css) and should reference these custom properties
+ * rather than hardcoding hex values, so the theme stays centrally
+ * editable.
+ *
+ * Note for later prompts: the tabletop game surface (character sheets,
+ * HP numbers, map text) has stricter legibility needs than dashboard
+ * chrome — keep body copy on --text/--surface pairs and reserve the glow
+ * treatment for accents and chrome.
+ */
+
+:root {
+  /* Surfaces */
+  --bg: #12082a;
+  --surface: #060012;
+  --surface2: #0d0520;
+
+  /* Accent palette */
+  --purple: #9b00ff;
+  --pink: #ff2d78;
+  --accent: #cc55ff;
+  --teal: #1ec8c8;
+  --orange: #ff9a3c;
+  --red: #ff3b3b;
+
+  /* Text */
+  --text: #ede0ff;
+  --dim: #6b4f8c;
+  --dim2: #3d2560;
+  --muted: #9b8bbb;
+
+  /* Fonts */
+  --font-h: 'Share Tech', 'Orbitron', 'Rajdhani', 'Trebuchet MS', system-ui, sans-serif;
+  --font-b: 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
+  --font-m: 'Courier New', 'Lucida Console', monospace;
+
+  /* Layout constants */
+  --nav-h: 60px;
+  --max: 1180px;
+  --r: 6px;
+
+  /* Glow shadows — gp: purple glow, gk: pink glow ("kiss"), ga: accent glow, gt: teal glow */
+  --gp: 0 0 18px #9b00ff55, 0 0 40px #9b00ff22;
+  --gk: 0 0 18px #ff2d7855, 0 0 40px #ff2d7822;
+  --ga: 0 0 18px #cc55ff55;
+  --gt: 0 0 18px #1ec8c855;
+}
+
+/*
+ * ── Base animation vocabulary ──
+ * Ported verbatim. Any component wanting an "organic" entrance/exit or
+ * the CRT feel should reuse these rather than inventing new easing/timing
+ * conventions.
+ */
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes glitch-a {
+  0%,
+  90%,
+  100% {
+    transform: none;
+    opacity: 0;
+  }
+  91% {
+    transform: skewX(-4deg) translateX(-6px);
+    opacity: 0.8;
+    clip-path: polygon(0 20%, 100% 20%, 100% 50%, 0 50%);
+  }
+  93% {
+    transform: skewX(3deg) translateX(5px);
+    opacity: 0.6;
+    clip-path: polygon(0 60%, 100% 60%, 100% 80%, 0 80%);
+  }
+  95% {
+    transform: none;
+    opacity: 0.9;
+  }
+  97% {
+    transform: skewX(-5deg) translateX(-8px);
+    opacity: 0.7;
+    clip-path: polygon(0 10%, 100% 10%, 100% 40%, 0 40%);
+  }
+}
+
+@keyframes glitch-b {
+  0%,
+  91%,
+  100% {
+    transform: none;
+    opacity: 0;
+  }
+  92% {
+    transform: skewX(4deg) translateX(6px);
+    opacity: 0.7;
+    clip-path: polygon(0 58%, 100% 58%, 100% 75%, 0 75%);
+  }
+  94% {
+    transform: skewX(-3deg) translateX(-4px);
+    opacity: 0.9;
+    clip-path: polygon(0 70%, 100% 70%, 100% 90%, 0 90%);
+  }
+  96% {
+    transform: none;
+    opacity: 0.8;
+  }
+  98% {
+    transform: skewX(5deg) translateX(7px);
+    opacity: 0.6;
+    clip-path: polygon(0 42%, 100% 42%, 100% 65%, 0 65%);
+  }
+}
+
+@keyframes scan-drift {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 100vh;
+  }
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/*
+ * ── Ambient idle motion ──
+ * Ported verbatim from the source project's "breathing" vocabulary:
+ * slow ease-in-out glow/opacity oscillation for elements that sit on
+ * screen for minutes at a time, opted into via a shared --breathe-color
+ * custom property. Deliberately subtle/slow (4.5-6s cycles) — ambient
+ * "alive" motion, not an attention-grabbing effect, and gated by the
+ * prefers-reduced-motion block below like everything else here.
+ */
+
+@keyframes breathe-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 6px var(--breathe-color, var(--purple)));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px var(--breathe-color, var(--purple)));
+  }
+}
+
+@keyframes breathe-opacity {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/*
+ * ── Reusable effect classes ──
+ * Ported as classes so any layout root can opt in — e.g.
+ * `<div class="ap-scanlines"></div>` mounted once near the app root,
+ * plus `ap-crt-vignette` on a full-viewport wrapper.
+ */
+
+.ap-scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    rgba(0, 0, 0, 0.07) 3px,
+    rgba(0, 0, 0, 0.07) 4px
+  );
+  animation: scan-drift 12s linear infinite;
+}
+
+.ap-crt-vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9998;
+  background: radial-gradient(ellipse at 50% 50%, transparent 65%, rgba(0, 0, 0, 0.65) 100%);
+}
+
+/*
+ * ── Shared text/label conventions ──
+ * The monospace-uppercase-letterspaced label pattern (nav links, eyebrow
+ * text, category badges).
+ */
+
+.ap-label {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.ap-glow-purple {
+  box-shadow: var(--gp);
+}
+
+.ap-glow-pink {
+  box-shadow: var(--gk);
+}
+
+.ap-glow-accent {
+  box-shadow: var(--ga);
+}
+
+.ap-glow-teal {
+  box-shadow: var(--gt);
+}
+
+/*
+ * Respect prefers-reduced-motion: the fade-up/glitch vocabulary is purely
+ * decorative entrance motion — collapse it to (near-)instant for anyone
+ * (or any automated check) with reduced motion set, rather than leaving
+ * content stuck at its animation-start opacity.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: -0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

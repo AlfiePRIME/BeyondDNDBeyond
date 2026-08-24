@@ -1,17 +1,14 @@
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/*
+ * Global styles. The neon/CRT design tokens live in the ui-components
+ * module and are pulled in here so they apply app-wide (the root layout
+ * imports this file). Components should use those custom properties —
+ * never hardcoded hex values.
+ */
+@import "../ui-components/tokens.css";
 
 html {
   height: 100%;
+  color-scheme: dark;
 }
 
 html,
@@ -24,9 +21,9 @@ body {
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--font-b);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -42,8 +39,7 @@ a {
   text-decoration: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
+::selection {
+  background: var(--purple);
+  color: var(--text);
 }

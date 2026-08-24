@@ -1,0 +1,481 @@
+/*
+ * Shared styles for the ui-components library. Every color, radius, font
+ * and glow below comes from the ported design tokens in ./tokens.css —
+ * no hardcoded theme hex values in this file or in component files.
+ *
+ * Legibility rule (see tokens.css header): actual content — button
+ * labels, input text, panel body copy — stays on solid --text/--muted;
+ * the neon treatment is reserved for borders, chrome, and hover/focus
+ * glows.
+ */
+
+/* ───────────────────────── Button ───────────────────────── */
+
+.button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  font-family: var(--font-m);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  border: 1px solid;
+  border-radius: var(--r);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.buttonSm {
+  font-size: 11px;
+  padding: 6px 12px;
+}
+
+.buttonMd {
+  font-size: 12px;
+  padding: 9px 18px;
+}
+
+.buttonLg {
+  font-size: 13px;
+  padding: 12px 26px;
+}
+
+.buttonPrimary {
+  border-color: var(--purple);
+  color: var(--text);
+  background: color-mix(in srgb, var(--purple) 20%, transparent);
+}
+
+.buttonPrimary:hover:not(:disabled),
+.buttonPrimary:focus-visible {
+  background: color-mix(in srgb, var(--purple) 36%, transparent);
+  box-shadow: var(--gp);
+}
+
+.buttonAccent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.buttonAccent:hover:not(:disabled),
+.buttonAccent:focus-visible {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  box-shadow: var(--ga);
+}
+
+.buttonTeal {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+
+.buttonTeal:hover:not(:disabled),
+.buttonTeal:focus-visible {
+  background: color-mix(in srgb, var(--teal) 14%, transparent);
+  color: var(--text);
+  box-shadow: var(--gt);
+}
+
+.buttonDanger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.buttonDanger:hover:not(:disabled),
+.buttonDanger:focus-visible {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--text);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--red) 33%, transparent);
+}
+
+.buttonGhost {
+  border-color: var(--dim2);
+  color: var(--muted);
+}
+
+.buttonGhost:hover:not(:disabled),
+.buttonGhost:focus-visible {
+  border-color: var(--dim);
+  color: var(--text);
+}
+
+/* ───────────────────────── Panel ───────────────────────── */
+
+.panel {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+/* 1px energized top edge in the panel's tone color. */
+.panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--panel-tone, var(--dim2)), transparent 75%);
+}
+
+.panelTonePurple {
+  --panel-tone: var(--purple);
+}
+
+.panelTonePink {
+  --panel-tone: var(--pink);
+}
+
+.panelToneTeal {
+  --panel-tone: var(--teal);
+}
+
+.panelGlowPurple {
+  box-shadow: var(--gp);
+}
+
+.panelGlowPink {
+  box-shadow: var(--gk);
+}
+
+.panelGlowTeal {
+  box-shadow: var(--gt);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--dim2);
+}
+
+.panelTitle {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--panel-tone, var(--dim));
+}
+
+.panelBody {
+  padding: 18px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* ───────────────────────── TextInput ───────────────────────── */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fieldLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+  transition: color 0.18s ease;
+}
+
+.field:focus-within .fieldLabel {
+  color: var(--accent);
+}
+
+.fieldInput {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  /* Content stays solidly legible: full-strength text on a flat surface. */
+  color: var(--text);
+  font-family: var(--font-b);
+  font-size: 14px;
+  caret-color: var(--pink);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.fieldInput::placeholder {
+  color: var(--dim);
+}
+
+.fieldInput:hover:not(:disabled) {
+  border-color: var(--dim);
+}
+
+.fieldInput:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ga);
+}
+
+.fieldInput:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fieldError .fieldInput {
+  border-color: var(--red);
+}
+
+.fieldError .fieldInput:focus {
+  box-shadow: 0 0 18px color-mix(in srgb, var(--red) 33%, transparent);
+}
+
+.fieldError .fieldLabel,
+.field:focus-within.fieldError .fieldLabel {
+  color: var(--red);
+}
+
+.fieldHint {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.fieldErrorText {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--red);
+}
+
+/* ───────────────────────── Badge ───────────────────────── */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-m);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: var(--r);
+  color: var(--badge-tone, var(--muted));
+  border: 1px solid color-mix(in srgb, var(--badge-tone, var(--dim)) 55%, transparent);
+  background: color-mix(in srgb, var(--badge-tone, var(--dim)) 12%, transparent);
+}
+
+.badgeTonePurple {
+  --badge-tone: var(--accent);
+}
+
+.badgeTonePink {
+  --badge-tone: var(--pink);
+}
+
+.badgeToneTeal {
+  --badge-tone: var(--teal);
+}
+
+.badgeToneOrange {
+  --badge-tone: var(--orange);
+}
+
+.badgeToneRed {
+  --badge-tone: var(--red);
+}
+
+.badgeDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  /* Ambient idle motion — ported breathe vocabulary, not a new effect. */
+  animation: breathe-opacity 4.5s ease-in-out infinite;
+}
+
+/* ───────────────────────── SectionHeader ───────────────────────── */
+
+.sectionHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sectionEyebrow {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.sectionEyebrow::before {
+  content: "// ";
+  color: var(--teal);
+}
+
+.sectionTitleRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sectionTitleWrap {
+  position: relative;
+  display: inline-block;
+}
+
+.sectionTitle {
+  font-family: var(--font-h);
+  font-size: 22px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--purple) 55%, transparent);
+}
+
+/* CRT glitch layers — reuse the ported glitch-a/glitch-b keyframes. */
+.sectionGlitchLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--font-h);
+  font-size: 22px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0;
+}
+
+.sectionGlitchA {
+  color: var(--pink);
+  animation: glitch-a 5s linear infinite;
+}
+
+.sectionGlitchB {
+  color: var(--teal);
+  animation: glitch-b 5s linear infinite;
+}
+
+.sectionRule {
+  height: 1px;
+  background: linear-gradient(90deg, var(--purple), var(--pink) 35%, transparent 80%);
+}
+
+/* ───────────────────────── Modal ───────────────────────── */
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  /* Above the ap-scanlines/ap-crt-vignette fixed layers (z 9998/9999). */
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.modalDialog {
+  width: min(92vw, 480px);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  box-shadow:
+    var(--gp),
+    0 24px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  /* Ported entrance vocabulary — no bespoke easing. */
+  animation: fade-up 0.3s ease both;
+  outline: none;
+}
+
+.modalDialog::before {
+  content: "";
+  height: 1px;
+  flex: none;
+  background: linear-gradient(90deg, var(--purple), var(--pink) 50%, transparent 90%);
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--dim2);
+}
+
+.modalTitle {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.modalClose {
+  font-family: var(--font-m);
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  color: var(--dim);
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.modalClose:hover {
+  color: var(--pink);
+  border-color: var(--dim2);
+}
+
+.modalClose:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.modalBody {
+  padding: 18px;
+  overflow-y: auto;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--dim2);
+}

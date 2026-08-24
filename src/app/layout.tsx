@@ -20,7 +20,25 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        {/*
+          Display faces for the ported neon/CRT tokens: the locked token
+          stacks reference the literal family names 'Share Tech' and
+          'Orbitron' (see src/ui-components/tokens.css), so they must be
+          loaded under those exact names — next/font registers hashed
+          family names the verbatim stacks could never match.
+        */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/* eslint-disable-next-line @next/next/no-page-custom-font --
+            Pages-Router rule misfiring on the App Router root layout,
+            which applies to every route (exactly what the rule asks for). */}
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400..700&family=Share+Tech&display=swap"
+        />
+        {children}
+      </body>
     </html>
   );
 }
