@@ -106,7 +106,7 @@ try {
     { character_id: characterId, name: "Amulet Charge", max_uses: 3, current_uses: 1, recharge: "daily" },
   ]);
 
-  const { error: strangerShortRestError, data: strangerShortRestData } = await stranger.client.rpc("short_rest", {
+  const { error: strangerShortRestError } = await stranger.client.rpc("short_rest", {
     p_character_id: characterId,
   });
   const { data: resourcesAfterStrangerAttempt } = await admin
