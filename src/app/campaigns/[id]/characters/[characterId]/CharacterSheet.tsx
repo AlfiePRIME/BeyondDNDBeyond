@@ -20,6 +20,8 @@ import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
   updateCharacter,
   setCharacterResourceUses,
+  shortRest,
+  longRest,
   type Character,
   type CharacterResource,
   type InventoryItem,
@@ -225,6 +227,30 @@ export function CharacterSheet({
       setResources((rs) => rs.map((r) => (r.id === updated.id ? updated : r)));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Could not update the resource.");
+    }
+  }
+
+  async function takeShortRest() {
+    setSaveError(null);
+    const supabase = createBrowserSupabaseClient();
+    try {
+      await shortRest(supabase, character.id);
+      setResources((rs) => rs.map((r) => (r.recharge === "short_rest" ? { ...r, current_uses: r.max_uses } : r)));
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not take a short rest.");
+    }
+  }
+
+  async function takeLongRest() {
+    setSaveError(null);
+    const supabase = createBrowserSupabaseClient();
+    try {
+      await longRest(supabase, character.id);
+      setResources((rs) => rs.map((r) => ({ ...r, current_uses: r.max_uses })));
+      setCharacter((c) => ({ ...c, current_hp: c.max_hp }));
+      setHpDraft(String(character.max_hp));
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not take a long rest.");
     }
   }
 
@@ -562,7 +588,22 @@ export function CharacterSheet({
           </Panel>
         ) : null}
 
-        <Panel title="Resources" tone="teal">
+        <Panel
+          title="Resources"
+          tone="teal"
+          headerActions={
+            canEdit ? (
+              <span className={styles.headerBadges}>
+                <Button variant="ghost" size="sm" onClick={takeShortRest}>
+                  Short rest
+                </Button>
+                <Button variant="ghost" size="sm" onClick={takeLongRest}>
+                  Long rest
+                </Button>
+              </span>
+            ) : null
+          }
+        >
           {resources.length === 0 ? (
             <p className={styles.emptyHint}>No limited-use resources tracked.</p>
           ) : (

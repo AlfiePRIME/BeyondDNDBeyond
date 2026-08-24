@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-11 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, and the full character sheet) are complete and verified end to end against a running local Supabase stack.
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-12 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, and the rest mechanic) are complete and verified end to end against a running local Supabase stack.
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 

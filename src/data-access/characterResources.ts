@@ -62,3 +62,19 @@ export async function setCharacterResourceUses(
   if (error) throw error;
   return data as CharacterResource;
 }
+
+/** Resets only short_rest resources — see the short_rest() SQL function. */
+export async function shortRest(supabase: SupabaseClient, characterId: string): Promise<void> {
+  const { error } = await supabase.rpc("short_rest", { p_character_id: characterId });
+  if (error) throw error;
+}
+
+/**
+ * Resets every resource (including spell slots, which are ordinary
+ * character_resources rows) and restores HP to max — see the long_rest()
+ * SQL function.
+ */
+export async function longRest(supabase: SupabaseClient, characterId: string): Promise<void> {
+  const { error } = await supabase.rpc("long_rest", { p_character_id: characterId });
+  if (error) throw error;
+}

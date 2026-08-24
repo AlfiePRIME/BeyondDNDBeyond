@@ -44,6 +44,8 @@ export {
   listCharacterResources,
   createCharacterResource,
   setCharacterResourceUses,
+  shortRest,
+  longRest,
   type CharacterResource,
   type CreateCharacterResourceParams,
   type ResourceRecharge,
