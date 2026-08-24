@@ -73,3 +73,132 @@
   letter-spacing: 0.08em;
   margin: 0;
 }
+
+.displayNameForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.rowList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--dim2);
+  color: var(--text);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.characterLink {
+  color: var(--text);
+}
+
+.characterLink:hover {
+  color: var(--teal);
+}
+
+.characterMeta {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.emptyHint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.emptyHint a {
+  color: var(--teal);
+}
+
+.launcher {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.launcherLinks {
+  display: inline-flex;
+  gap: 14px;
+}
+
+.createLink {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+
+.createLink:hover {
+  color: var(--text);
+}
+
+.manageRow {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--dim2);
+}
+
+.manageRow:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.manageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.campaignName {
+  color: var(--text);
+}
+
+.campaignName:hover {
+  color: var(--teal);
+}
+
+.renameForm {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.renameForm > button {
+  margin-top: 24px;
+}
+
+.renameField {
+  flex: 1;
+}
+
+.actionRow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.confirmHint {
+  color: var(--muted);
+  line-height: 1.5;
+}

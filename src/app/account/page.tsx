@@ -1,13 +1,14 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Panel, SectionHeader } from "@/ui-components";
+import { Badge, Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { getProfile } from "@/data-access";
+import { getProfile, listCampaignsForUser, listCharactersForUser } from "@/data-access";
 import { AvatarPicker } from "./AvatarPicker";
+import { DisplayNameForm } from "./DisplayNameForm";
+import { CharacterCreateLauncher } from "./CharacterCreateLauncher";
+import { CampaignManageRow } from "./CampaignManageRow";
 import styles from "./account.module.css";
 
-// Minimal for now — Prompt 15 expands this route into the full Account page
-// (profile settings, character library, campaign management).
 export default async function AccountPage() {
   const supabase = await createServerSupabaseClient();
   const {
@@ -15,7 +16,11 @@ export default async function AccountPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const profile = await getProfile(supabase, user.id);
+  const [profile, memberships, characters] = await Promise.all([
+    getProfile(supabase, user.id),
+    listCampaignsForUser(supabase, user.id),
+    listCharactersForUser(supabase, user.id),
+  ]);
 
   return (
     <div className={styles.page}>
@@ -24,8 +29,11 @@ export default async function AccountPage() {
           ← Back to your campaigns
         </Link>
 
-        <Panel title="Account" tone="purple" glow>
-          <SectionHeader eyebrow="Profile" title="Your avatar" />
+        <Panel title="Profile" tone="purple" glow>
+          <SectionHeader eyebrow="Account" title="Display name" />
+          <DisplayNameForm initialDisplayName={profile?.display_name ?? ""} />
+
+          <SectionHeader eyebrow="Account" title="Your avatar" />
           <p className={styles.pickerHint}>
             Pick a preset figure or upload your own low-poly model. This is how the table will see
             you.
@@ -35,6 +43,57 @@ export default async function AccountPage() {
             initialSource={profile?.avatar_source ?? null}
             initialRef={profile?.avatar_ref ?? null}
           />
+        </Panel>
+
+        <Panel title="Character library" tone="teal">
+          {characters.length === 0 ? (
+            <p className={styles.emptyHint}>
+              You don&apos;t own any characters yet — create or import one below.
+            </p>
+          ) : (
+            <ul className={styles.rowList}>
+              {characters.map((character) => (
+                <li key={character.id} className={styles.row}>
+                  {character.campaign ? (
+                    <Link
+                      href={`/campaigns/${character.campaign.id}/characters/${character.id}`}
+                      className={styles.characterLink}
+                    >
+                      {character.name}
+                    </Link>
+                  ) : (
+                    <span>{character.name}</span>
+                  )}
+                  <span className={styles.characterMeta}>
+                    <Badge tone="teal">
+                      {character.class} {character.level}
+                    </Badge>
+                    <Badge tone="purple">{character.campaign?.name ?? "No campaign"}</Badge>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <CharacterCreateLauncher memberships={memberships} />
+          {memberships.length === 0 ? (
+            <p className={styles.emptyHint}>
+              Join or create a campaign from the <Link href="/">dashboard</Link> first — characters
+              live inside a campaign.
+            </p>
+          ) : null}
+        </Panel>
+
+        <Panel title="Campaigns" tone="pink">
+          {memberships.length === 0 ? (
+            <p className={styles.emptyHint}>
+              You&apos;re not in any campaigns yet — create one or join with an invite code from the{" "}
+              <Link href="/">dashboard</Link>.
+            </p>
+          ) : (
+            memberships.map((membership) => (
+              <CampaignManageRow key={membership.campaign.id} membership={membership} />
+            ))
+          )}
         </Panel>
       </main>
     </div>

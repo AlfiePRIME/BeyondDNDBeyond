@@ -85,6 +85,67 @@ export async function joinCampaignByInviteCode(
   return { campaignId: row.result_campaign_id, campaignName: row.result_campaign_name };
 }
 
+/**
+ * DM-only, enforced by campaigns' UPDATE RLS policy (0011). Postgres
+ * reports an RLS-blocked UPDATE as success with zero rows affected rather
+ * than an error (verified against the local stack), so the affected count
+ * is checked explicitly — a non-DM's attempt throws instead of silently
+ * no-oping.
+ */
+export async function renameCampaign(
+  supabase: SupabaseClient,
+  campaignId: string,
+  name: string
+): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaigns")
+    .update({ name: name.trim() }, { count: "exact" })
+    .eq("id", campaignId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can rename it.");
+}
+
+/**
+ * DM-only, enforced by campaigns' DELETE RLS policy (0011) — same
+ * zero-rows-affected detection as renameCampaign. Campaign-scoped rows
+ * (campaign_members, characters, character_resources) go with it via the
+ * existing ON DELETE CASCADE foreign keys.
+ */
+export async function deleteCampaign(supabase: SupabaseClient, campaignId: string): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaigns")
+    .delete({ count: "exact" })
+    .eq("id", campaignId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can delete it.");
+}
+
+/**
+ * Removes the caller's own membership row. Players only: campaign_members'
+ * DELETE policy (0011) blocks a DM from leaving — that would orphan the
+ * campaign with zero DMs — so a DM transfers the role first or deletes the
+ * campaign. Zero rows affected means the caller is the DM (or not a member
+ * at all).
+ */
+export async function leaveCampaign(
+  supabase: SupabaseClient,
+  campaignId: string,
+  userId: string
+): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaign_members")
+    .delete({ count: "exact" })
+    .eq("campaign_id", campaignId)
+    .eq("user_id", userId);
+
+  if (error) throw error;
+  if (count === 0) {
+    throw new Error("A DM can't leave their own campaign — transfer the DM role or delete it instead.");
+  }
+}
+
 export interface CampaignMember {
   user_id: string;
   role: CampaignRole;

@@ -93,6 +93,27 @@ export async function updateCharacter(
   return data as Character;
 }
 
+export interface OwnedCharacter extends Character {
+  /** Null only if the owner is no longer a member of the character's
+   * campaign (campaigns' SELECT policy hides it from non-members). */
+  campaign: { id: string; name: string } | null;
+}
+
+export async function listCharactersForUser(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<OwnedCharacter[]> {
+  const { data, error } = await supabase
+    .from("characters")
+    .select("*, campaign:campaigns(id, name)")
+    .eq("owner_id", userId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+  // Same to-one embed typing caveat as listCampaignsForUser.
+  return (data ?? []) as unknown as OwnedCharacter[];
+}
+
 export async function listCharactersForCampaign(
   supabase: SupabaseClient,
   campaignId: string
