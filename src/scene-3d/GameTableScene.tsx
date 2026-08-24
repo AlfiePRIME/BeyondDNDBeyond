@@ -1,10 +1,9 @@
 "use client";
 
-import { PerspectiveCamera, RoundedBox } from "@react-three/drei";
-
-const TABLE_TOP = { width: 7, thickness: 0.35, depth: 4.4 } as const;
-const LEG = { radius: 0.14, height: 1.05 } as const;
-const TABLE_SURFACE_Y = LEG.height + TABLE_TOP.thickness;
+import { useMemo } from "react";
+import { OrbitControls, PerspectiveCamera, RoundedBox } from "@react-three/drei";
+import { LEG, TABLE_TOP, TABLE_SURFACE_Y } from "./table";
+import { computeSeatLayout, type CameraMode, type Seat, type SeatMember } from "./seating";
 
 // Room ambiance pulls from the app's design tokens (see
 // src/ui-components/tokens.css) — scene-3d can't import CSS custom
@@ -19,6 +18,10 @@ const TEAL = "#1ec8c8"; // --teal
 const WOOD_TOP = "#5a4028";
 const WOOD_LEG = "#42301c";
 
+const CUSHION = "#2a2140";
+const LOOK_TARGET = [0, TABLE_SURFACE_Y, 0] as const;
+const FALLBACK_CAMERA_POSITION: readonly [number, number, number] = [0, 10.5, 7.5];
+
 function TableLeg({ x, z }: { x: number; z: number }) {
   return (
     <mesh position={[x, LEG.height / 2, z]} castShadow>
@@ -28,18 +31,68 @@ function TableLeg({ x, z }: { x: number; z: number }) {
   );
 }
 
-export function GameTableScene() {
+function SeatMarker({ seat }: { seat: Seat }) {
+  const accent = seat.member.role === "dm" ? PURPLE : TEAL;
+  return (
+    <group position={seat.position} rotation={[0, seat.rotationY, 0]}>
+      <mesh position={[0, 0.03, 0]} castShadow>
+        <cylinderGeometry args={[0.24, 0.28, 0.06, 20]} />
+        <meshStandardMaterial color={WOOD_LEG} roughness={0.8} />
+      </mesh>
+      <mesh position={[0, 0.32, 0]} castShadow>
+        <cylinderGeometry args={[0.07, 0.09, 0.58, 12]} />
+        <meshStandardMaterial color={WOOD_LEG} roughness={0.8} />
+      </mesh>
+      <mesh position={[0, 0.64, 0]} castShadow>
+        <cylinderGeometry args={[0.34, 0.34, 0.1, 24]} />
+        <meshStandardMaterial color={CUSHION} roughness={0.6} />
+      </mesh>
+      <mesh position={[0, 0.575, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.34, 0.028, 10, 32]} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={1.7} />
+      </mesh>
+    </group>
+  );
+}
+
+export interface GameTableSceneProps {
+  /** Ordered campaign member list — seat index is position in this list. */
+  members?: readonly SeatMember[];
+  currentUserId?: string | null;
+  cameraMode?: CameraMode;
+}
+
+export function GameTableScene({
+  members = [],
+  currentUserId = null,
+  cameraMode = "seat",
+}: GameTableSceneProps) {
   const legX = TABLE_TOP.width / 2 - 0.45;
   const legZ = TABLE_TOP.depth / 2 - 0.45;
 
+  const seats = useMemo(() => computeSeatLayout(members), [members]);
+  const mySeat = seats.find((seat) => seat.member.user_id === currentUserId);
+  const cameraPosition = mySeat ? mySeat.cameraPosition : FALLBACK_CAMERA_POSITION;
+
   return (
     <>
+      {/* Keyed by mode so leaving orbit remounts the camera at the seat
+          position/orientation instead of wherever orbiting dragged it. */}
       <PerspectiveCamera
+        key={cameraMode}
         makeDefault
-        position={[0, 10.5, 7.5]}
-        fov={42}
-        onUpdate={(camera) => camera.lookAt(0, TABLE_SURFACE_Y, 0)}
+        position={cameraPosition as [number, number, number]}
+        fov={mySeat ? 50 : 42}
+        onUpdate={(camera) => camera.lookAt(...LOOK_TARGET)}
       />
+      {cameraMode === "orbit" && (
+        <OrbitControls
+          target={[...LOOK_TARGET]}
+          minDistance={1.5}
+          maxDistance={22}
+          maxPolarAngle={Math.PI / 2 - 0.05}
+        />
+      )}
 
       <color attach="background" args={[ROOM_BG]} />
       <fog attach="fog" args={[ROOM_BG, 16, 34]} />
@@ -78,6 +131,10 @@ export function GameTableScene() {
       <TableLeg x={legX} z={-legZ} />
       <TableLeg x={-legX} z={legZ} />
       <TableLeg x={legX} z={legZ} />
+
+      {seats.map((seat) => (
+        <SeatMarker key={seat.member.user_id} seat={seat} />
+      ))}
     </>
   );
 }

@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
+import { listCampaignMembers } from "@/data-access";
 import { GameRoom } from "./GameRoom";
 
 export default async function GameRoomPage({ params }: { params: Promise<{ id: string }> }) {
@@ -20,5 +21,14 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   // reasoning as the campaign detail page.
   if (!campaign) notFound();
 
-  return <GameRoom campaignId={campaignId} campaignName={campaign.name} />;
+  const members = await listCampaignMembers(supabase, campaignId);
+
+  return (
+    <GameRoom
+      campaignId={campaignId}
+      campaignName={campaign.name}
+      members={members}
+      currentUserId={user.id}
+    />
+  );
 }
