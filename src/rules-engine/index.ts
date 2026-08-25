@@ -100,12 +100,15 @@ export {
   gridDistanceFeet,
   straightCellPath,
   pathMovementCost,
+  computeReachableCells,
   FEET_PER_CELL,
   FEET_PER_ELEVATION_STEP,
   type TerrainType,
   type CellMovementParams,
   type GridPoint,
   type PathCell,
+  type MovementCellInput,
+  type ComputeReachableCellsParams,
 } from "./movement";
 
 export { usableAtRange, isUsableAtRange, type RangedAction } from "./range";
