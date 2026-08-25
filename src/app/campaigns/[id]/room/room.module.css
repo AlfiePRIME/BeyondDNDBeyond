@@ -103,6 +103,71 @@
   border-radius: 8px;
 }
 
+.combatPanel {
+  position: absolute;
+  left: 24px;
+  top: 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  width: 300px;
+  /* Shares the left edge with .tokenPanel (bottom-anchored, 70vh max) —
+     same short-viewport reasoning as .handoutPanel on the right edge. */
+  max-height: 26vh;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+  border-radius: 8px;
+}
+
+.combatRound {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--red);
+}
+
+.currentTurn {
+  font-family: var(--font-m);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
+.combatantRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.combatantCurrent {
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.initiativeValue {
+  font-family: var(--font-m);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--teal);
+}
+
+.initiativeInput {
+  width: 90px;
+  padding: 4px 8px;
+  font-family: var(--font-m);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
+  border-radius: 6px;
+}
+
 .handoutForm {
   display: flex;
   flex-direction: column;

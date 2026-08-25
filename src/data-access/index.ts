@@ -134,6 +134,16 @@ export {
   type MapTransition,
 } from "./mapTransitions";
 export {
+  getActiveCombatEncounter,
+  listCombatCombatants,
+  startCombat,
+  advanceTurn,
+  endCombat,
+  setCombatantInitiative,
+  type CombatEncounter,
+  type CombatCombatant,
+} from "./combat";
+export {
   listCharacterResources,
   createCharacterResource,
   setCharacterResourceUses,

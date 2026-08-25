@@ -1,11 +1,13 @@
 import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
+  getActiveCombatEncounter,
   getMap,
   getProfile,
   listAssetsForCampaign,
   listCampaignMembers,
   listCharactersForCampaign,
+  listCombatCombatants,
   listHandouts,
   listMapCells,
   listMapObjects,
@@ -15,6 +17,7 @@ import {
 import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { resolveHandout } from "./handout-url";
+import type { CombatState } from "./CombatPanel";
 import { GameRoom, type LiveMapData } from "./GameRoom";
 
 export default async function GameRoomPage({ params }: { params: Promise<{ id: string }> }) {
@@ -73,6 +76,13 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   );
   const paletteAssets = await resolvePaletteAssets(supabase, assets);
 
+  // Same DB-read reasoning as the live map above: a fresh join or reload
+  // lands on the current combat state without having seen any broadcast.
+  const activeEncounter = await getActiveCombatEncounter(supabase, campaignId);
+  const initialCombat: CombatState | null = activeEncounter
+    ? { encounter: activeEncounter, combatants: await listCombatCombatants(supabase, activeEncounter.id) }
+    : null;
+
   let initialLiveMap: LiveMapData | null = null;
   if (campaign.live_map) {
     const map = await getMap(supabase, campaign.live_map);
@@ -99,6 +109,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       assets={paletteAssets}
       characters={characters}
       initialHandouts={initialHandouts}
+      initialCombat={initialCombat}
     />
   );
 }

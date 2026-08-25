@@ -5,11 +5,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import {
+  advanceTurn,
   createHandout,
   deleteHandout,
   deleteMapToken,
+  endCombat,
   endSession,
+  getActiveCombatEncounter,
   getMap,
+  listCombatCombatants,
   listHandouts,
   listMapCells,
   listMapObjects,
@@ -19,15 +23,18 @@ import {
   parseMapObjectBehavior,
   placeCharacterToken,
   placeNpcToken,
+  setCombatantInitiative,
   setHandoutRevealed,
   setLiveMap,
   setTokenAllegiance,
+  startCombat,
   subscribeToProfileChanges,
   transitionMapToken,
   triggerMapObject,
   uploadHandoutFile,
   type CampaignMap,
   type Character,
+  type CombatCombatant,
   type Handout,
   type MapCell,
   type MapObject,
@@ -51,6 +58,7 @@ import {
 import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { resolveHandout, type RoomHandout } from "./handout-url";
+import { CombatPanel, type CombatState } from "./CombatPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
 import { TokenPanel, type TokenArm } from "./TokenPanel";
@@ -65,6 +73,7 @@ const LIVE_MAP_EVENT = "live-map-changed";
 const TRIGGER_EVENT = "map-object-triggered";
 const TOKEN_EVENT = "token-changed";
 const HANDOUT_EVENT = "handout-revealed";
+const COMBAT_EVENT = "combat-changed";
 
 interface LiveMapPayload {
   mapId: string | null;
@@ -92,6 +101,14 @@ interface TokenPayload {
 interface HandoutPayload {
   handoutId: string;
   handout: Handout | null;
+}
+
+/** A poke, not a snapshot — combat state is one encounter row plus its whole
+ * combatant list, so receivers re-read the DB (the LIVE_MAP_EVENT shape)
+ * rather than trusting a broadcast copy that a concurrent change could make
+ * stale. */
+interface CombatPayload {
+  campaignId: string;
 }
 
 /** The live map plus everything needed to render/interact with it. */
@@ -158,6 +175,7 @@ export function GameRoom({
   assets,
   characters,
   initialHandouts,
+  initialCombat,
 }: {
   campaignId: string;
   campaignName: string;
@@ -172,6 +190,7 @@ export function GameRoom({
   characters: Character[];
   /** RLS-filtered per viewer: every handout for the DM, revealed only for players. */
   initialHandouts: RoomHandout[];
+  initialCombat: CombatState | null;
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
@@ -229,6 +248,23 @@ export function GameRoom({
       setHandoutPopup((current) => (current?.id === handoutId ? null : current));
     }
   }, []);
+
+  const [combat, setCombat] = useState<CombatState | null>(initialCombat);
+  const [combatBusy, setCombatBusy] = useState(false);
+  const [combatError, setCombatError] = useState<string | null>(null);
+  // Same latest-wins sequencing as refreshLiveMap: two combat refreshes
+  // racing must resolve to the most recently requested one.
+  const combatSeqRef = useRef(0);
+  const refreshCombat = useCallback(
+    async (supabase: SupabaseClient) => {
+      const seq = ++combatSeqRef.current;
+      const encounter = await getActiveCombatEncounter(supabase, campaignId);
+      const combatants = encounter ? await listCombatCombatants(supabase, encounter.id) : [];
+      if (seq !== combatSeqRef.current) return;
+      setCombat(encounter ? { encounter, combatants } : null);
+    },
+    [campaignId]
+  );
 
   // A pending transition offer, shown to the DM only (see maybeOfferTransition).
   const [transitionOffer, setTransitionOffer] = useState<{
@@ -460,6 +496,14 @@ export function GameRoom({
       if (!rows) return;
       setHandouts(await Promise.all(rows.map((row) => resolveHandout(supabase, row))));
     });
+    const unsubscribeCombat = channel.subscribe<CombatPayload>(COMBAT_EVENT, () => {
+      void refreshCombat(supabase).catch(() => undefined);
+    });
+    // Same dropped-broadcast reasoning for combat — a start/advance/end sent
+    // while disconnected is gone, so re-read the active encounter.
+    const unsubscribeCombatReconnect = channel.onReconnect(async () => {
+      await refreshCombat(supabase).catch(() => undefined);
+    });
 
     return () => {
       unsubscribeLiveMap();
@@ -468,10 +512,12 @@ export function GameRoom({
       unsubscribeHandout();
       unsubscribeReconnect();
       unsubscribeHandoutReconnect();
+      unsubscribeCombat();
+      unsubscribeCombatReconnect();
       campaignChannelRef.current = null;
       void channel.leave();
     };
-  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered, applyTokenChange, applyHandoutChange, maybeOfferTransition]);
+  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered, applyTokenChange, applyHandoutChange, maybeOfferTransition, refreshCombat]);
 
   const triggeringRef = useRef(false);
   const handleTrigger = useCallback(
@@ -679,6 +725,59 @@ export function GameRoom({
       }
     },
     [tokenBusy, applyTokenChange, publishTokenChange]
+  );
+
+  // Persist first, refresh from the DB, broadcast last — the same ordering
+  // as triggering/map switching, and the refresh doubles as the sender's own
+  // UI update since publish doesn't echo back to its sender.
+  const runCombatAction = useCallback(
+    async (action: (supabase: SupabaseClient) => Promise<void>, fallback: string) => {
+      if (combatBusy) return;
+      setCombatBusy(true);
+      setCombatError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        await action(supabase);
+        await refreshCombat(supabase);
+        await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+      } catch (err) {
+        setCombatError(errorMessage(err) ?? fallback);
+      } finally {
+        setCombatBusy(false);
+      }
+    },
+    [campaignId, combatBusy, refreshCombat]
+  );
+
+  const handleStartCombat = useCallback(() => {
+    void runCombatAction(async (supabase) => {
+      await startCombat(supabase, campaignId);
+    }, "Could not start combat.");
+  }, [campaignId, runCombatAction]);
+
+  const handleAdvanceTurn = useCallback(() => {
+    const encounter = combat?.encounter;
+    if (!encounter) return;
+    void runCombatAction(
+      (supabase) => advanceTurn(supabase, encounter.id),
+      "Could not advance the turn."
+    );
+  }, [combat, runCombatAction]);
+
+  const handleEndCombat = useCallback(() => {
+    void runCombatAction(
+      (supabase) => endCombat(supabase, campaignId),
+      "Could not end combat."
+    );
+  }, [campaignId, runCombatAction]);
+
+  const handleSetInitiative = useCallback(
+    (combatant: CombatCombatant, initiative: number) => {
+      void runCombatAction(async (supabase) => {
+        await setCombatantInitiative(supabase, combatant.id, initiative);
+      }, "Could not set that initiative.");
+    },
+    [runCombatAction]
   );
 
   const handleConfirmTransition = useCallback(
@@ -1055,6 +1154,18 @@ export function GameRoom({
           onSetAllegiance={handleSetAllegiance}
         />
       ) : null}
+      <CombatPanel
+        isDM={currentUserIsDM}
+        currentUserId={currentUserId}
+        characters={characters}
+        combat={combat}
+        busy={combatBusy}
+        error={combatError}
+        onStart={handleStartCombat}
+        onAdvance={handleAdvanceTurn}
+        onEnd={handleEndCombat}
+        onSetInitiative={handleSetInitiative}
+      />
       <HandoutPanel
         isDM={currentUserIsDM}
         handouts={handouts}

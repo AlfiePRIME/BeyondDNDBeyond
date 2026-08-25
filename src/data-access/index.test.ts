@@ -50,6 +50,12 @@ import {
   createHandout,
   setHandoutRevealed,
   deleteHandout,
+  getActiveCombatEncounter,
+  listCombatCombatants,
+  startCombat,
+  advanceTurn,
+  endCombat,
+  setCombatantInitiative,
   listDmNotes,
   createDmNote,
   updateDmNote,
@@ -97,6 +103,15 @@ describe("data-access module", () => {
     expect(setTokenAllegiance).toBeTypeOf("function");
     expect(deleteMapToken).toBeTypeOf("function");
     expect(TOKEN_ALLEGIANCES).toEqual(["party", "hostile", "neutral"]);
+  });
+
+  it("exports the combat functions from the main barrel", () => {
+    expect(getActiveCombatEncounter).toBeTypeOf("function");
+    expect(listCombatCombatants).toBeTypeOf("function");
+    expect(startCombat).toBeTypeOf("function");
+    expect(advanceTurn).toBeTypeOf("function");
+    expect(endCombat).toBeTypeOf("function");
+    expect(setCombatantInitiative).toBeTypeOf("function");
   });
 
   it("treats a profile with no display name as incomplete", () => {

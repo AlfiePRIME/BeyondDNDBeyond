@@ -175,3 +175,47 @@ Design calls, since the prompt left these open:
   `can_write_map` (0015) deriving `map_cells`/`map_objects` access from `campaign_maps`.
 - **`quests.status`**: a CHECK-constrained enum, `active` / `completed` / `abandoned` — the
   same pattern as `map_tokens.allegiance`.
+
+As of Prompt 45, `combat.ts` owns the combat data model — the foundation the later combat
+prompts (HP tracking, conditions, death saves, concentration, action economy) extend. Two
+tables (migration `0027_combat.sql`), deliberately NOT fields on `campaigns` the way
+`live_map`/`session_active` are, because later prompts need per-combatant rows to hang
+state off:
+
+- `combat_encounters (id, campaign_id, round_number, current_turn_index, started_at,
+  ended_at)` — "the active encounter" is the one with `ended_at is null`, at most one per
+  campaign via a partial unique index on `(campaign_id) where ended_at is null`.
+- `combat_combatants (id, encounter_id, token_id, character_id, npc_name, initiative,
+  created_at)` — seeded by `start_combat` from every token on the LIVE map at that instant
+  (party AND hostile/neutral alike: "present" means on the table, not allegiance- or
+  roster-based; a character with no placed token is simply absent). `character_id`/
+  `npc_name` snapshot the source token's PC-xor-NPC pair (same CHECK as 0019) so the row
+  stays meaningful without joining through `token_id` if the token later leaves the live
+  map; `token_id` is `on delete cascade`, so removing a token from the table removes its
+  combatant from the fight. `initiative` starts null — manual entry until Prompt 48 wires
+  the dice roller's roll-initiative button through it.
+
+Turn order is `initiative desc nulls last, created_at asc, id asc` — defined ONCE in
+`advance_turn`'s current-combatant lookup and mirrored exactly by `listCombatCombatants`'
+ORDER BY, so `current_turn_index` indexes the same row in SQL and in the returned array.
+(The `id` tiebreak matters: combatants seeded in one INSERT share a `created_at`.) No
+DEX-tiebreak or manual reorder — deliberate scope restraint for the foundational prompt.
+
+Writes split on the established RPC-vs-policy line (see `map_tokens` vs `start_session`):
+`start_combat`/`advance_turn`/`end_combat` are SECURITY DEFINER RPCs because they carry
+multi-row invariants — seeding combatants atomically with the encounter, and moving the
+shared turn pointer exactly one step (wrap to 0 + `round_number` increment past the last
+combatant) under a `SELECT ... FOR UPDATE` row lock, 0013's race-avoidance pattern.
+`advance_turn` also needs a cross-row authorization no plain policy can express: the
+caller is the DM OR owns the CURRENT combatant's character (so an NPC's turn is DM-only).
+Initiative entry, by contrast, is a plain UPDATE policy (`can_write_combatant`, mirroring
+`can_write_map_token`'s DM-or-owner shape including the cross-campaign guard) — one row,
+no cross-row atomicity. The DM-or-owner choice (rather than DM-only) is deliberate: the
+player who physically rolled types their own number, and NPC rows have no owner so they
+fall to the DM by construction, consistently in both the RLS and the UI.
+
+Realtime reuses the room's existing campaign-channel mechanism: a `combat-changed`
+broadcast (consumed by `CombatPanel` in `src/app/campaigns/[id]/room/`) that is a poke,
+not a snapshot — receivers re-read the active encounter + combatants from the DB (the
+`live-map-changed` shape, also used on reconnect and initial page load), since combat
+state spans multiple rows a stale broadcast copy could misrepresent.
