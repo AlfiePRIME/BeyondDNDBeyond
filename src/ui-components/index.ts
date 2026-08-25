@@ -15,8 +15,12 @@ export { ChoiceCard, type ChoiceCardProps } from "./ChoiceCard";
 
 // CanvasUI WebGL effects (installed via `shadcn add @canvas-ui/...`).
 // Glitch: broadcast glitch bursts — matches the ported glitch-a/glitch-b
-// vocabulary. VHS: worn-tape scanline/chroma-bleed CRT texture. Both are
-// dependency-free, degrade gracefully without html-in-canvas support, and
-// respect prefers-reduced-motion. Reserve for hero moments and accents.
+// vocabulary. VHS: worn-tape scanline/chroma-bleed CRT texture. ForceField:
+// energy-shield lattice with click shockwaves. Peel: peels the page back
+// from an edge in 3D, book-page style. All are dependency-free, degrade
+// gracefully without html-in-canvas support, and respect
+// prefers-reduced-motion. Reserve for hero moments and accents.
 export { Glitch, type GlitchProps, type GlitchOptions } from "./canvasui/Glitch";
 export { VHS, type VHSProps, type VHSOptions } from "./canvasui/VHS";
+export { ForceField, type ForceFieldProps, type ForceFieldOptions } from "./canvasui/ForceField";
+export { Peel, type PeelProps, type PeelOptions } from "./canvasui/Peel";
