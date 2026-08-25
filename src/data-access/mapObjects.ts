@@ -21,6 +21,11 @@ export interface MapObject {
    * back as float approximations that can't be compared for equality. */
   rotation: number;
   behavior_config: Record<string, unknown>;
+  /** INERT (Prompt 55, migration 0036): whether this object blocks line of
+   * sight. The DM can author it (see the map editor's toggle), but NO code
+   * branches on its value yet — a future full-line-of-sight prompt reads
+   * it. Do not add a consumer without that prompt's design. */
+  blocks_line_of_sight: boolean;
   created_at: string;
   asset: PlacedObjectAsset;
 }
@@ -131,6 +136,7 @@ export async function restoreMapObject(
       elevation: object.elevation,
       rotation: object.rotation,
       behavior_config: object.behavior_config,
+      blocks_line_of_sight: object.blocks_line_of_sight,
       created_at: object.created_at,
     })
     .select(OBJECT_COLUMNS)
@@ -140,11 +146,18 @@ export async function restoreMapObject(
   return data;
 }
 
-/** Repositions and/or rotates one placed object. */
+/** Repositions and/or rotates one placed object — and, as of Prompt 55,
+ * toggles its (inert, see MapObject) blocks_line_of_sight flag. */
 export async function updateMapObject(
   supabase: SupabaseClient,
   objectId: string,
-  patch: { x?: number; y?: number; elevation?: number; rotation?: number }
+  patch: {
+    x?: number;
+    y?: number;
+    elevation?: number;
+    rotation?: number;
+    blocks_line_of_sight?: boolean;
+  }
 ): Promise<MapObject> {
   const { data, error } = await supabase
     .from("map_objects")

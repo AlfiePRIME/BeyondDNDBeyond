@@ -6,8 +6,10 @@ import { Canvas } from "@react-three/fiber";
 import { Button, ChoiceCard, Select, TextInput } from "@/ui-components";
 import {
   clearMapReferenceImage,
+  createLightSource,
   createMapObject,
   createMapTransition,
+  deleteLightSource,
   deleteMapObject,
   deleteMapReferenceImageFile,
   deleteMapTransition,
@@ -15,13 +17,19 @@ import {
   restoreMapObject,
   setMapObjectBehavior,
   setMapReferenceImage,
+  updateLightSource,
   updateMapObject,
   uploadMapReferenceImageFile,
   upsertMapCells,
   type CampaignMap,
+  type LightLevel,
+  type LightSource,
+  type LightSourceAnchor,
+  type LightSourceBrightness,
   type MapCell,
   type MapObject,
   type MapObjectBehavior,
+  type MapToken,
   type MapTransition,
   type SupabaseClient,
 } from "@/data-access";
@@ -113,6 +121,9 @@ export function MapEditor({
   aiEnabled,
   campaignMaps,
   initialTransitions,
+  initialTokens,
+  initialLightSources,
+  characterNameById,
 }: {
   campaignId: string;
   campaignName: string;
@@ -123,11 +134,18 @@ export function MapEditor({
   aiEnabled: boolean;
   campaignMaps: CampaignMap[];
   initialTransitions: MapTransition[];
+  /** Tokens currently placed on this map — anchor options for token-carried
+   * light sources; the editor never moves or creates tokens. */
+  initialTokens: MapToken[];
+  initialLightSources: LightSource[];
+  /** PC token labels for the anchor picker (tokens store only character_id). */
+  characterNameById: Record<string, string>;
 }) {
   const [overlay, setOverlay] = useState(() => overlayFromRows(initialCells));
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
   const [tool, setTool] = useState<EditorTool>("raise");
   const [brush, setBrush] = useState<TerrainType>("difficult");
+  const [lightBrush, setLightBrush] = useState<LightLevel>("dim");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -150,6 +168,20 @@ export function MapEditor({
   const [destY, setDestY] = useState("0");
   const [transitionBusy, setTransitionBusy] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
+
+  // Light-source authoring (Prompt 55) — the transition tool's form-based
+  // shape: pick an anchor, fill in radius/brightness, create; each existing
+  // light lists with Edit (radius/brightness only) and Remove.
+  const [lightSources, setLightSources] = useState<LightSource[]>(initialLightSources);
+  const [lightAnchorKind, setLightAnchorKind] = useState<"cell" | "object" | "token">("cell");
+  const [lightCell, setLightCell] = useState<{ x: number; y: number } | null>(null);
+  const [lightObjectId, setLightObjectId] = useState<string>("");
+  const [lightTokenId, setLightTokenId] = useState<string>("");
+  const [lightRadius, setLightRadius] = useState("20");
+  const [lightBrightness, setLightBrightness] = useState<LightSourceBrightness>("bright");
+  const [editingLightId, setEditingLightId] = useState<string | null>(null);
+  const [lightBusy, setLightBusy] = useState(false);
+  const [lightError, setLightError] = useState<string | null>(null);
 
   const [referenceRef, setReferenceRef] = useState(map.reference_image_ref);
   // Keyed by the ref it was signed for, so a removed/replaced image derives
@@ -188,6 +220,7 @@ export function MapEditor({
   const previewRef = useRef(preview);
   const toolRef = useRef(tool);
   const brushRef = useRef(brush);
+  const lightBrushRef = useRef(lightBrush);
   const selectedAssetIdRef = useRef(selectedAssetId);
   const selectedObjectIdRef = useRef(selectedObjectId);
   const moveArmedRef = useRef(moveArmed);
@@ -195,11 +228,12 @@ export function MapEditor({
   useEffect(() => {
     toolRef.current = tool;
     brushRef.current = brush;
+    lightBrushRef.current = lightBrush;
     selectedAssetIdRef.current = selectedAssetId;
     selectedObjectIdRef.current = selectedObjectId;
     moveArmedRef.current = moveArmed;
     regionRef.current = region;
-  }, [tool, brush, selectedAssetId, selectedObjectId, moveArmed, region]);
+  }, [tool, brush, lightBrush, selectedAssetId, selectedObjectId, moveArmed, region]);
 
   // The last PERSISTED cell state: initialCells at mount, advanced whenever
   // cells actually reach the database (Save, AI-draft accept). Undo/redo
@@ -242,7 +276,12 @@ export function MapEditor({
       const next = new Set(prev);
       for (const [key, state] of states) {
         const base = baselineRef.current.get(key) ?? DEFAULT_CELL;
-        if (state.elevation === base.elevation && state.terrain === base.terrain) next.delete(key);
+        if (
+          state.elevation === base.elevation &&
+          state.terrain === base.terrain &&
+          state.light === base.light
+        )
+          next.delete(key);
         else next.add(key);
       }
       return next;
@@ -306,7 +345,7 @@ export function MapEditor({
   const handlePaintCell = useCallback(
     (x: number, y: number) => {
       const tool = toolRef.current;
-      if (tool === "object" || tool === "transition") return;
+      if (tool === "object" || tool === "transition" || tool === "light-source") return;
       if (historyBusyRef.current) return;
 
       if (tool === "generate") {
@@ -340,7 +379,7 @@ export function MapEditor({
       const preview = previewRef.current;
       if (preview && inRegion(x, y)) {
         const current = preview.cells.get(key) ?? DEFAULT_CELL;
-        const next = applyTool(current, tool, brushRef.current);
+        const next = applyTool(current, tool, brushRef.current, lightBrushRef.current);
         if (next === current) return;
         const cells = new Map(preview.cells);
         cells.set(key, next);
@@ -349,7 +388,7 @@ export function MapEditor({
       }
 
       const current = overlayRef.current.get(key) ?? DEFAULT_CELL;
-      const next = applyTool(current, tool, brushRef.current);
+      const next = applyTool(current, tool, brushRef.current, lightBrushRef.current);
       if (next === current) return;
       const changes = (strokeChangesRef.current ??= new Map());
       const touched = changes.get(key);
@@ -866,6 +905,96 @@ export function MapEditor({
     }
   }
 
+  const handleLightSourceCellClick = useCallback((x: number, y: number) => {
+    setLightCell({ x, y });
+    setLightError(null);
+  }, []);
+
+  function resetLightForm() {
+    setLightCell(null);
+    setEditingLightId(null);
+    setLightRadius("20");
+    setLightBrightness("bright");
+    setLightError(null);
+  }
+
+  // Light-source authoring stays OUTSIDE undo/redo for the transition
+  // tool's reasons exactly: deliberate low-frequency form submits, each
+  // light with its own immediate Remove.
+  async function handleCreateLightSource() {
+    const radius = Number(lightRadius);
+    if (lightBusy || !Number.isInteger(radius) || radius <= 0) return;
+    const anchor: LightSourceAnchor | null =
+      lightAnchorKind === "cell"
+        ? lightCell && { kind: "cell", x: lightCell.x, y: lightCell.y }
+        : lightAnchorKind === "object"
+          ? lightObjectId !== ""
+            ? { kind: "object", objectId: lightObjectId }
+            : null
+          : lightTokenId !== ""
+            ? { kind: "token", tokenId: lightTokenId }
+            : null;
+    if (!anchor) return;
+    setLightBusy(true);
+    setLightError(null);
+    try {
+      const created = await createLightSource(createBrowserSupabaseClient(), {
+        mapId: map.id,
+        radiusFeet: radius,
+        brightness: lightBrightness,
+        anchor,
+      });
+      setLightSources((prev) => [...prev, created]);
+      resetLightForm();
+    } catch (err) {
+      setLightError(errorMessage(err) ?? "Could not create that light source.");
+    } finally {
+      setLightBusy(false);
+    }
+  }
+
+  async function handleUpdateLightSource() {
+    const radius = Number(lightRadius);
+    if (!editingLightId || lightBusy || !Number.isInteger(radius) || radius <= 0) return;
+    setLightBusy(true);
+    setLightError(null);
+    try {
+      const updated = await updateLightSource(createBrowserSupabaseClient(), editingLightId, {
+        radiusFeet: radius,
+        brightness: lightBrightness,
+      });
+      setLightSources((prev) => prev.map((light) => (light.id === updated.id ? updated : light)));
+      resetLightForm();
+    } catch (err) {
+      setLightError(errorMessage(err) ?? "Could not update that light source.");
+    } finally {
+      setLightBusy(false);
+    }
+  }
+
+  async function handleRemoveLightSource(lightSourceId: string) {
+    if (lightBusy) return;
+    setLightBusy(true);
+    setLightError(null);
+    try {
+      await deleteLightSource(createBrowserSupabaseClient(), lightSourceId);
+      setLightSources((prev) => prev.filter((light) => light.id !== lightSourceId));
+      if (editingLightId === lightSourceId) resetLightForm();
+    } catch (err) {
+      setLightError(errorMessage(err) ?? "Could not remove that light source.");
+    } finally {
+      setLightBusy(false);
+    }
+  }
+
+  function startEditingLight(light: LightSource) {
+    setEditingLightId(light.id);
+    setLightRadius(String(light.radius_feet));
+    setLightBrightness(light.brightness);
+    setLightCell(null);
+    setLightError(null);
+  }
+
   function switchTool(next: EditorTool) {
     setTool(next);
     setSelectedObjectId(null);
@@ -874,6 +1003,7 @@ export function MapEditor({
       setTransitionCell(null);
       setTransitionError(null);
     }
+    if (next !== "light-source") resetLightForm();
     // The selection rectangle only outlives the generate tool while a draft
     // is under review — it marks where the preview branch applies.
     if (!previewRef.current && next !== "generate") {
@@ -917,9 +1047,12 @@ export function MapEditor({
         }
       }
       for (const cell of payload.area.cells) {
+        // Generated drafts don't author lighting — every draft cell starts
+        // bright, and the DM paints light afterwards like on any other cell.
         cells.set(cellKey(bounds.x + cell.x, bounds.y + cell.y), {
           elevation: cell.elevation,
           terrain: cell.terrain,
+          light: "bright",
         });
       }
       const previewObjects = payload.area.objects.map((object) => ({
@@ -948,7 +1081,14 @@ export function MapEditor({
       const supabase = createBrowserSupabaseClient();
       const rows: MapCell[] = [...current.cells.entries()].map(([key, state]) => {
         const { x, y } = parseCellKey(key);
-        return { map_id: map.id, x, y, elevation: state.elevation, terrain_type: state.terrain };
+        return {
+          map_id: map.id,
+          x,
+          y,
+          elevation: state.elevation,
+          terrain_type: state.terrain,
+          light_level: state.light,
+        };
       });
       await upsertMapCells(supabase, rows);
       const created: MapObject[] = [];
@@ -1010,8 +1150,11 @@ export function MapEditor({
     setMoveArmed(false);
   }
 
+  // includeLight: the editor is the one surface that renders the authored
+  // light level (as a darkening authoring tint) — the game table's
+  // buildDenseCells call doesn't pass it, so the live table is untouched.
   const cells = useMemo(
-    () => buildDenseCells(map.grid_width, map.grid_height, overlay, preview?.cells),
+    () => buildDenseCells(map.grid_width, map.grid_height, overlay, preview?.cells, true),
     [map.grid_width, map.grid_height, overlay, preview]
   );
 
@@ -1070,6 +1213,31 @@ export function MapEditor({
     () => new Map(campaignMaps.map((candidate) => [candidate.id, candidate.name])),
     [campaignMaps]
   );
+
+  const tokenLabel = (token: MapToken): string =>
+    token.npc_name ?? characterNameById[token.character_id ?? ""] ?? "Unnamed token";
+
+  // Human-readable anchor for the light list. Anchors cascade-delete their
+  // lights, so the "removed" fallbacks only cover a token moved off this
+  // map mid-session (initialTokens is a load-time snapshot).
+  const describeLightAnchor = (light: LightSource): string => {
+    if (light.x !== null && light.y !== null) return `cell (${light.x},${light.y})`;
+    if (light.object_id !== null) {
+      const object = objects.find((candidate) => candidate.id === light.object_id);
+      return object ? `${object.asset.name} (${object.x},${object.y})` : "a removed object";
+    }
+    const token = initialTokens.find((candidate) => candidate.id === light.token_id);
+    return token ? `${tokenLabel(token)} (${token.x},${token.y})` : "a removed token";
+  };
+
+  const lightRadiusNum = Number(lightRadius);
+  const lightRadiusValid = Number.isInteger(lightRadiusNum) && lightRadiusNum > 0;
+  const lightAnchorValid =
+    lightAnchorKind === "cell"
+      ? lightCell !== null
+      : lightAnchorKind === "object"
+        ? lightObjectId !== ""
+        : lightTokenId !== "";
   const destMap = otherMaps.find((candidate) => candidate.id === destMapId) ?? null;
   const destXNum = Number(destX);
   const destYNum = Number(destY);
@@ -1098,14 +1266,20 @@ export function MapEditor({
               ? handleCellClick
               : tool === "transition"
                 ? handleTransitionCellClick
-                : undefined
+                : tool === "light-source" && lightAnchorKind === "cell" && !editingLightId
+                  ? handleLightSourceCellClick
+                  : undefined
           }
           region={
             tool === "transition"
               ? transitionCell
                 ? { x: transitionCell.x, y: transitionCell.y, width: 1, height: 1 }
                 : null
-              : region
+              : tool === "light-source"
+                ? lightCell
+                  ? { x: lightCell.x, y: lightCell.y, width: 1, height: 1 }
+                  : null
+                : region
           }
           objects={sceneObjects}
           selectedObjectId={selectedObjectId}
@@ -1251,6 +1425,45 @@ export function MapEditor({
             </>
           ) : null}
         </div>
+        <span className={styles.toolbarLabel}>Lighting</span>
+        <div className={styles.toolRow}>
+          <Button
+            size="sm"
+            variant={tool === "light" ? "accent" : "ghost"}
+            onClick={() => switchTool("light")}
+            data-testid="tool-light"
+          >
+            Paint light
+          </Button>
+          {tool === "light" ? (
+            <>
+              <Button
+                size="sm"
+                variant={lightBrush === "bright" ? "accent" : "ghost"}
+                onClick={() => setLightBrush("bright")}
+                data-testid="brush-bright"
+              >
+                Bright
+              </Button>
+              <Button
+                size="sm"
+                variant={lightBrush === "dim" ? "accent" : "ghost"}
+                onClick={() => setLightBrush("dim")}
+                data-testid="brush-dim"
+              >
+                Dim
+              </Button>
+              <Button
+                size="sm"
+                variant={lightBrush === "dark" ? "accent" : "ghost"}
+                onClick={() => setLightBrush("dark")}
+                data-testid="brush-dark"
+              >
+                Dark
+              </Button>
+            </>
+          ) : null}
+        </div>
         <span className={styles.toolbarLabel}>Objects</span>
         <div className={styles.toolRow}>
           <Button
@@ -1305,11 +1518,37 @@ export function MapEditor({
                   </Button>
                 </div>
                 {selectedLiveObject ? (
-                  <BehaviorEditor
-                    key={selectedLiveObject.id}
-                    object={selectedLiveObject}
-                    onSave={handleSaveBehavior}
-                  />
+                  <>
+                    {/* Authoring-only toggle for the (inert) LOS flag —
+                        persisted like move/rotate, read by nothing yet; a
+                        future full-line-of-sight prompt consumes it. */}
+                    <div className={styles.toolRow}>
+                      <Button
+                        size="sm"
+                        variant={selectedLiveObject.blocks_line_of_sight ? "accent" : "ghost"}
+                        onClick={() => {
+                          const objectId = selectedLiveObject.id;
+                          const next = !selectedLiveObject.blocks_line_of_sight;
+                          void runObjectMutation(async (supabase) => {
+                            replaceObject(
+                              await updateMapObject(supabase, objectId, {
+                                blocks_line_of_sight: next,
+                              })
+                            );
+                          });
+                        }}
+                        data-testid="object-blocks-los"
+                      >
+                        Blocks line of sight:{" "}
+                        {selectedLiveObject.blocks_line_of_sight ? "yes" : "no"}
+                      </Button>
+                    </div>
+                    <BehaviorEditor
+                      key={selectedLiveObject.id}
+                      object={selectedLiveObject}
+                      onSave={handleSaveBehavior}
+                    />
+                  </>
                 ) : (
                   <p className={styles.hint}>
                     Behaviors can be configured after the draft is accepted.
@@ -1434,6 +1673,193 @@ export function MapEditor({
             {transitionError ? (
               <p role="alert" className={styles.errorText} data-testid="transition-error">
                 {transitionError}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+        <span className={styles.toolbarLabel}>Light sources</span>
+        <div className={styles.toolRow}>
+          <Button
+            size="sm"
+            variant={tool === "light-source" ? "primary" : "ghost"}
+            onClick={() => switchTool("light-source")}
+            data-testid="tool-light-source"
+          >
+            Place lights
+          </Button>
+        </div>
+        {tool === "light-source" ? (
+          <>
+            {editingLightId === null ? (
+              <>
+                <Select
+                  label="Attach to"
+                  value={lightAnchorKind}
+                  onChange={(event) => {
+                    setLightAnchorKind(event.target.value as "cell" | "object" | "token");
+                    setLightCell(null);
+                    setLightError(null);
+                  }}
+                  disabled={lightBusy}
+                  data-testid="light-anchor-kind"
+                >
+                  <option value="cell">A fixed cell</option>
+                  <option value="object">A placed object (moves with it)</option>
+                  <option value="token">A token (moves with its carrier)</option>
+                </Select>
+                {lightAnchorKind === "cell" ? (
+                  lightCell ? (
+                    <span className={styles.selectedMeta} data-testid="light-cell-label">
+                      Anchor cell ({lightCell.x},{lightCell.y})
+                    </span>
+                  ) : (
+                    <p className={styles.hint}>Click the cell the light sits on.</p>
+                  )
+                ) : lightAnchorKind === "object" ? (
+                  <Select
+                    label="Object"
+                    value={lightObjectId}
+                    onChange={(event) => setLightObjectId(event.target.value)}
+                    disabled={lightBusy}
+                    data-testid="light-anchor-object"
+                  >
+                    <option value="">Choose an object…</option>
+                    {objects.map((object) => (
+                      <option key={object.id} value={object.id}>
+                        {object.asset.name} · ({object.x},{object.y})
+                      </option>
+                    ))}
+                  </Select>
+                ) : initialTokens.length === 0 ? (
+                  <p className={styles.hint}>
+                    No tokens are placed on this map yet — place one from the Game Room first.
+                  </p>
+                ) : (
+                  <Select
+                    label="Token"
+                    value={lightTokenId}
+                    onChange={(event) => setLightTokenId(event.target.value)}
+                    disabled={lightBusy}
+                    data-testid="light-anchor-token"
+                  >
+                    <option value="">Choose a token…</option>
+                    {initialTokens.map((token) => (
+                      <option key={token.id} value={token.id}>
+                        {tokenLabel(token)} · ({token.x},{token.y})
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </>
+            ) : (
+              <span className={styles.selectedMeta} data-testid="light-editing-label">
+                Editing the light at {describeLightAnchor(
+                  lightSources.find((light) => light.id === editingLightId)!
+                )}
+              </span>
+            )}
+            <TextInput
+              label="Radius (feet)"
+              type="number"
+              min={5}
+              step={5}
+              value={lightRadius}
+              onChange={(event) => setLightRadius(event.target.value)}
+              disabled={lightBusy}
+              data-testid="light-radius"
+            />
+            <div className={styles.toolRow}>
+              <Button
+                size="sm"
+                variant={lightBrightness === "bright" ? "accent" : "ghost"}
+                onClick={() => setLightBrightness("bright")}
+                disabled={lightBusy}
+                data-testid="light-brightness-bright"
+              >
+                Bright
+              </Button>
+              <Button
+                size="sm"
+                variant={lightBrightness === "dim" ? "accent" : "ghost"}
+                onClick={() => setLightBrightness("dim")}
+                disabled={lightBusy}
+                data-testid="light-brightness-dim"
+              >
+                Dim
+              </Button>
+            </div>
+            <div className={styles.toolRow}>
+              {editingLightId === null ? (
+                <Button
+                  size="sm"
+                  variant="teal"
+                  disabled={lightBusy || !lightRadiusValid || !lightAnchorValid}
+                  onClick={() => void handleCreateLightSource()}
+                  data-testid="create-light-source"
+                >
+                  {lightBusy ? "Placing…" : "Place light"}
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    variant="teal"
+                    disabled={lightBusy || !lightRadiusValid}
+                    onClick={() => void handleUpdateLightSource()}
+                    data-testid="update-light-source"
+                  >
+                    {lightBusy ? "Saving…" : "Save light"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={lightBusy}
+                    onClick={resetLightForm}
+                    data-testid="cancel-light-edit"
+                  >
+                    Cancel
+                  </Button>
+                </>
+              )}
+            </div>
+            {lightSources.length > 0 ? (
+              <div data-testid="light-source-list">
+                {lightSources.map((light) => (
+                  <div key={light.id} className={styles.toolRow} data-testid={`light-source-${light.id}`}>
+                    <span className={styles.selectedMeta}>
+                      {light.brightness === "bright" ? "Bright" : "Dim"} · {light.radius_feet} ft ·{" "}
+                      {describeLightAnchor(light)}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={lightBusy}
+                      onClick={() => startEditingLight(light)}
+                      data-testid={`edit-light-source-${light.id}`}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      disabled={lightBusy}
+                      onClick={() => void handleRemoveLightSource(light.id)}
+                      data-testid={`remove-light-source-${light.id}`}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className={styles.hint}>
+                No lights yet — lighting data is stored now; the table renders vision from it in a
+                later prompt.
+              </p>
+            )}
+            {lightError ? (
+              <p role="alert" className={styles.errorText} data-testid="light-source-error">
+                {lightError}
               </p>
             ) : null}
           </>

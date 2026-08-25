@@ -562,3 +562,49 @@ spent this turn" reason in `OpportunityAttackPanel`. `subscribeToOpportunityAtta
 make the banner disappear as promptly as inserts make it land) because the mover and the
 reactor's controller may be on different pages entirely; the table joins the realtime
 publication in 0035. No DELETE policy: resolved offers are an audit trail.
+
+As of Prompt 55, the vision/lighting data model (migration `0036_vision_data_model.sql`) —
+schema and authoring CRUD only; NOTHING computes visibility from any of it yet (the
+perception/vision engine is Prompt 56, and two pieces below are deliberately inert even
+past that). `characters.ts` gains `darkvision_feet: number | null` on `Character` — null
+is normal vision, a number is the darkvision range in feet. Unlike the death-save/
+concentration columns it is NOT a `ServerManagedCharacterField`: it's initialized at
+creation by the character wizard from the chosen race/subrace's `darkvisionFeet` (the
+static SRD catalog; subrace overrides race, the speed precedence rule exactly — a Drow
+stores 120 over the Elf's 60) and rides `CreateCharacterParams`/`UpdateCharacterPatch`
+like `speed`, since a character can gain darkvision from sources the catalog doesn't
+model and no recompute-from-race mechanism exists or is wanted. `maps.ts`'s `MapCell`
+gains `light_level` (`bright`/`dim`/`dark`, the `LIGHT_LEVELS` vocabulary defined here
+like `TOKEN_ALLEGIANCES` since no rules calculation consumes it yet) — the exact
+`terrain_type` convention: sibling CHECK-constrained column on `map_cells`, `'bright'`
+as the sparse-storage default, written through the same `upsertMapCells` rows (note:
+PostgREST null-fills missing keys across a BULK payload, so upserted rows must always
+carry `light_level` explicitly — the `MapCell` type makes that structural). The editor
+paints it with a third brush set beside terrain. `mapObjects.ts`'s `MapObject` gains
+`blocks_line_of_sight` (INERT: authored via a toggle in the editor's object controls
+through the widened `updateMapObject` patch, round-tripped by `restoreMapObject`, copied
+by `duplicateMap` — but read by NOTHING, documented as waiting for a future
+full-line-of-sight prompt). New `lightSources.ts` (the `mapTransitions.ts` small-feature
+precedent): a `light_sources` table — radius + brightness (`bright`/`dim`) anchored to
+exactly ONE of a fixed cell (x/y), a placed object, or a token via a three-way XOR CHECK
+(the `map_tokens` `character_id`/`npc_name` pattern extended), all anchors
+`on delete cascade` so a light dies with whatever carried it. RLS mirrors
+`map_cells`/`map_objects` VERBATIM (`can_read_map` reads, `can_write_map` writes):
+lighting is table-visible authored map state, same as terrain. CRUD is
+`listLightSources`/`createLightSource` (takes a `LightSourceAnchor` union so the XOR is
+unrepresentable app-side)/`updateLightSource` (radius/brightness only — re-anchoring is
+delete + create)/`deleteLightSource`, authored in the map editor's form-based "Place
+lights" tool. New `mapSeenCells.ts`: `map_seen_cells` — per-player memory of a cell's
+terrain/elevation/light as last perceived, `unique(map_id, user_id, x, y)` (whose index
+doubles as the future `(map_id, user_id)` lookup), object-level memory deliberately NOT
+captured. Its RLS is the build's one deliberate break from the everyone-sees-everything
+posture: SELECT/INSERT/UPDATE are `user_id = auth.uid()` rows only, gated on campaign
+MEMBERSHIP via a new `is_map_campaign_member` SECURITY DEFINER helper (membership, not
+`can_read_map`, so memory of a formerly-live map survives the DM switching away; a
+helper because campaign_maps' own SELECT policy would hide non-live maps from a plain
+policy subquery) — another player reading your explored cells would leak exactly what
+fog-of-war hides. No DELETE policy: players don't un-remember. `listSeenCells` returns
+the caller's own rows (RLS-guaranteed); `recordSeenCells` upserts on the unique
+constraint, writing `seen_at` explicitly since column defaults only apply on the INSERT
+path of an upsert. Nothing calls either yet — they exist, typed and verified, for the
+prompt that renders from them.

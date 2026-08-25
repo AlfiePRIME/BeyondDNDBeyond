@@ -43,6 +43,14 @@ export interface Character {
   max_hp: number;
   armor_class: number;
   speed: number;
+  /** Vision capability (Prompt 55, migration 0036): null is normal vision
+   * only; a number is the darkvision range in feet. Initialized at creation
+   * from the chosen race/subrace's `darkvisionFeet` (the static SRD catalog)
+   * by the creation UI — caller-supplied like `speed`, not re-derived — and
+   * thereafter a plain stored, patchable stat like the rest of the sheet
+   * (a character can gain darkvision from sources the catalog doesn't
+   * model). Nothing computes visibility from it yet — that's Prompt 56. */
+  darkvision_feet: number | null;
   proficiencies: string[];
   inventory: InventoryItem[];
   spells: KnownSpell[];

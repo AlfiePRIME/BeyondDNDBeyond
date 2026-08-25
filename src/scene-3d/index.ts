@@ -13,6 +13,7 @@ export {
   MapSurface,
   type MapSurfaceProps,
   type MapSurfaceCell,
+  type MapSurfaceLightLevel,
   type MapSurfaceObject,
   type MapSurfaceToken,
   type MapTokenAllegiance,

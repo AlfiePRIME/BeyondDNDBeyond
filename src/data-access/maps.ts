@@ -23,12 +23,22 @@ export interface MapFolder {
   created_at: string;
 }
 
+/** map_cells.light_level's vocabulary (0036) — defined here like
+ * TOKEN_ALLEGIANCES rather than in the rules engine, since no rules
+ * calculation consumes it yet (the perception engine is Prompt 56). */
+export const LIGHT_LEVELS = ["bright", "dim", "dark"] as const;
+
+export type LightLevel = (typeof LIGHT_LEVELS)[number];
+
 export interface MapCell {
   map_id: string;
   x: number;
   y: number;
   elevation: number;
   terrain_type: TerrainType;
+  /** Ambient light (Prompt 55) — authored per cell exactly like
+   * terrain_type; 'bright' is the sparse-storage default. */
+  light_level: LightLevel;
 }
 
 /**
@@ -65,6 +75,10 @@ export interface NewMapCell {
   y: number;
   elevation: number;
   terrain_type: TerrainType;
+  /** Optional so pre-0036 callers (starter templates) stay valid — an
+   * omitted value stores the 'bright' default, same as terrain omitting
+   * nothing would. */
+  light_level?: LightLevel;
 }
 
 export interface NewMapObjectSeed {
@@ -74,6 +88,9 @@ export interface NewMapObjectSeed {
   elevation: number;
   rotation: number;
   behavior_config?: Record<string, unknown>;
+  /** Optional for the same reason as light_level above; omitted means the
+   * DB default (false). */
+  blocks_line_of_sight?: boolean;
 }
 
 /**
@@ -119,6 +136,7 @@ export async function createPopulatedMap(
     y: cell.y,
     elevation: cell.elevation,
     terrain_type: cell.terrain_type,
+    light_level: cell.light_level ?? "bright",
   }));
   await upsertMapCells(supabase, cells);
 
@@ -134,6 +152,9 @@ export async function createPopulatedMap(
         ...(object.behavior_config !== undefined
           ? { behavior_config: object.behavior_config }
           : {}),
+        ...(object.blocks_line_of_sight !== undefined
+          ? { blocks_line_of_sight: object.blocks_line_of_sight }
+          : {}),
       }))
     );
     if (objectsError) throw objectsError;
@@ -143,11 +164,14 @@ export async function createPopulatedMap(
 }
 
 /**
- * Clones a map — terrain, elevation, and objects — as a new independent map
- * in the same campaign and folder. Objects keep their authored behavior
- * (action/content/playerTriggerable) but `triggered` resets to false: the
- * copy is a fresh authoring artifact that hasn't been played through, so a
- * sprung trap or opened chest on the source starts un-triggered here.
+ * Clones a map — terrain, elevation, lighting, and objects — as a new
+ * independent map in the same campaign and folder. Objects keep their
+ * authored behavior (action/content/playerTriggerable) and LOS flag but
+ * `triggered` resets to false: the copy is a fresh authoring artifact that
+ * hasn't been played through, so a sprung trap or opened chest on the
+ * source starts un-triggered here. Light sources are NOT copied — they can
+ * anchor to tokens, which duplication never copies, so a faithful partial
+ * copy would be misleading; re-authoring lights on a duplicate is cheap.
  */
 export async function duplicateMap(
   supabase: SupabaseClient,
@@ -160,7 +184,7 @@ export async function duplicateMap(
     listMapCells(supabase, sourceMapId),
     supabase
       .from("map_objects")
-      .select("asset_id, x, y, elevation, rotation, behavior_config")
+      .select("asset_id, x, y, elevation, rotation, behavior_config, blocks_line_of_sight")
       .eq("map_id", sourceMapId),
   ]);
   if (objectsResult.error) throw objectsResult.error;

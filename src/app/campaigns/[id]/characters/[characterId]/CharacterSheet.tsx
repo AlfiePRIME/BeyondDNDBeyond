@@ -652,6 +652,14 @@ export function CharacterSheet({
               <span className={styles.vitalValue}>{character.speed} ft</span>
             </div>
             <div className={styles.vital}>
+              <span className={styles.vitalLabel}>Vision</span>
+              <span className={styles.vitalValue} data-testid="sheet-vision">
+                {character.darkvision_feet !== null
+                  ? `Darkvision ${character.darkvision_feet} ft`
+                  : "Normal"}
+              </span>
+            </div>
+            <div className={styles.vital}>
               <span className={styles.vitalLabel}>Proficiency</span>
               <span className={styles.vitalValue}>
                 {formatModifier(proficiencyBonus(character.level))}

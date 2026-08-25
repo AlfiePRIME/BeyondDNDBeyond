@@ -100,11 +100,13 @@ export {
   getMapReferenceImageSignedUrl,
   setMapReferenceImage,
   clearMapReferenceImage,
+  LIGHT_LEVELS,
   type CampaignMap,
   type MapCell,
   type MapFolder,
   type NewMapCell,
   type NewMapObjectSeed,
+  type LightLevel,
 } from "./maps";
 export {
   listMapObjects,
@@ -140,6 +142,22 @@ export {
   deleteMapTransition,
   type MapTransition,
 } from "./mapTransitions";
+export {
+  listLightSources,
+  createLightSource,
+  updateLightSource,
+  deleteLightSource,
+  LIGHT_SOURCE_BRIGHTNESSES,
+  type LightSource,
+  type LightSourceAnchor,
+  type LightSourceBrightness,
+} from "./lightSources";
+export {
+  listSeenCells,
+  recordSeenCells,
+  type MapSeenCell,
+  type SeenCellSnapshot,
+} from "./mapSeenCells";
 export {
   getActiveCombatEncounter,
   getActiveCombatantForCharacter,

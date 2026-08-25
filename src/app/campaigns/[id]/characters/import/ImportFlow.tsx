@@ -43,6 +43,20 @@ const ABILITY_LABEL: Record<AbilityScore, string> = {
 
 const RACE_OPTIONS = RACES.flatMap((r) => [r.name, ...(r.subraces?.map((s) => s.name) ?? [])]);
 
+/** The wizard's subrace-overrides-race darkvision rule, resolved from the
+ * stored race string (which, like the wizard's, is a race OR subrace name
+ * from RACE_OPTIONS). D&D Beyond PDFs don't carry darkvision as a parsed
+ * field, so it derives from the reviewed race pick; an unknown race means
+ * normal vision. */
+function darkvisionForRaceName(name: string): number | null {
+  for (const race of RACES) {
+    if (race.name === name) return race.darkvisionFeet ?? null;
+    const subrace = race.subraces?.find((s) => s.name === name);
+    if (subrace) return subrace.darkvisionFeet ?? race.darkvisionFeet ?? null;
+  }
+  return null;
+}
+
 function formatModifier(value: number): string {
   return value >= 0 ? `+${value}` : `${value}`;
 }
@@ -201,6 +215,7 @@ export function ImportFlow({
         max_hp: parseIntIn(maxHp, 1, 999) ?? 10,
         armor_class: parseIntIn(armorClass, 0, 40) ?? 10,
         speed: parseIntIn(speed, 0, 300) ?? 30,
+        darkvision_feet: darkvisionForRaceName(raceName),
         proficiencies,
         inventory,
         spells,

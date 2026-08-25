@@ -47,8 +47,25 @@ export const EDITOR_MAP_METRICS: MapSurfaceMetrics = {
 
 const colorCache = new Map<string, string>();
 
-function cellColor(terrain: TerrainType, elevation: number): string {
-  const key = `${terrain}:${elevation}`;
+/** Structurally matches data-access's LightLevel (the seating.ts
+ * CampaignMember precedent — scene-3d stays decoupled from data-access). */
+export type MapSurfaceLightLevel = "bright" | "dim" | "dark";
+
+// Authored-light darkening for the map EDITOR's authoring tint (see
+// MapSurfaceCell.light) — bright is untouched, dim/dark scale the terrain
+// color down so the DM can see what they've painted.
+const LIGHT_SCALE: Record<MapSurfaceLightLevel, number> = {
+  bright: 1,
+  dim: 0.55,
+  dark: 0.24,
+};
+
+function cellColor(
+  terrain: TerrainType,
+  elevation: number,
+  light: MapSurfaceLightLevel | undefined
+): string {
+  const key = `${terrain}:${elevation}:${light ?? "none"}`;
   let hex = colorCache.get(key);
   if (!hex) {
     const [base, high] =
@@ -56,7 +73,9 @@ function cellColor(terrain: TerrainType, elevation: number): string {
     // Each step also lightens the block so distinct elevations stay
     // distinguishable even from directly overhead, where extruded height
     // alone is invisible.
-    hex = `#${new Color(base).lerp(new Color(high), Math.min(elevation * 0.11, 0.66)).getHexString()}`;
+    const color = new Color(base).lerp(new Color(high), Math.min(elevation * 0.11, 0.66));
+    if (light) color.multiplyScalar(LIGHT_SCALE[light]);
+    hex = `#${color.getHexString()}`;
     colorCache.set(key, hex);
   }
   return hex;
@@ -70,6 +89,11 @@ export interface MapSurfaceCell {
   /** Renders the not-yet-committed tint — the editor's AI-generated preview
    * cells, distinct from both committed terrain and the hover glow. */
   preview?: boolean;
+  /** Authored ambient light (Prompt 55) as an EDITOR-ONLY authoring tint:
+   * only the map editor's buildDenseCells call passes it, so the DM can see
+   * the light levels they paint. The game table never sets it — rendering
+   * actual illumination/visibility on the live table is Prompt 56's job. */
+  light?: MapSurfaceLightLevel;
 }
 
 interface CellBlockProps {
@@ -82,6 +106,7 @@ interface CellBlockProps {
   elevation: number;
   terrain: TerrainType;
   preview: boolean;
+  light: MapSurfaceLightLevel | undefined;
   onDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
   onOver?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
 }
@@ -100,6 +125,7 @@ const CellBlock = memo(function CellBlock({
   elevation,
   terrain,
   preview,
+  light,
   onDown,
   onOver,
 }: CellBlockProps) {
@@ -127,7 +153,7 @@ const CellBlock = memo(function CellBlock({
           Preview cells glow purple (hover's teal wins while hovered) — the
           "not committed yet" tint matches the ghost objects' wireframe hue. */}
       <meshStandardMaterial
-        color={cellColor(terrain, elevation)}
+        color={cellColor(terrain, elevation, light)}
         emissive={hoverLit ? TEAL : PURPLE}
         emissiveIntensity={hoverLit ? 0.4 : preview ? 0.3 : 0}
         roughness={0.65}
@@ -685,6 +711,7 @@ export function MapSurface({
           elevation={cell.elevation}
           terrain={cell.terrain}
           preview={cell.preview ?? false}
+          light={cell.light}
           onDown={onCellPointerDown}
           onOver={onCellPointerOver}
         />

@@ -149,6 +149,10 @@ export function CharacterWizard({
   }, [equipment, equipmentPicks]);
 
   const speed = subrace?.speedFeet ?? race?.speedFeet ?? 30;
+  // Subrace overrides race where both define it — the speed precedence rule
+  // exactly (e.g. a Drow's 120 ft over the Elf's 60 ft); null means normal
+  // vision only. Stored on the character at creation, like speed.
+  const darkvisionFeet = subrace?.darkvisionFeet ?? race?.darkvisionFeet ?? null;
   const maxHp = klass && finalScores ? levelOneHitPoints(klass.hitDie, finalScores.constitution) : null;
   const armorClass = finalScores ? 10 + abilityModifier(finalScores.dexterity) : null;
 
@@ -220,6 +224,7 @@ export function CharacterWizard({
         max_hp: maxHp,
         armor_class: armorClass,
         speed,
+        darkvision_feet: darkvisionFeet,
         proficiencies: klass.savingThrowProficiencies.map(
           (ability) => `${ABILITY_LABEL[ability]} Saving Throws`
         ),
@@ -316,6 +321,9 @@ export function CharacterWizard({
                 {subrace ? (
                   <div className={styles.detailRow}>
                     {subrace.speedFeet ? <Badge tone="teal">{subrace.speedFeet} ft</Badge> : null}
+                    {subrace.darkvisionFeet ? (
+                      <Badge tone="teal">Darkvision {subrace.darkvisionFeet} ft</Badge>
+                    ) : null}
                     {subrace.traits.map((trait) => (
                       <Badge key={trait.name}>{trait.name}</Badge>
                     ))}
@@ -552,6 +560,12 @@ export function CharacterWizard({
                 <li className={styles.summaryRow}>
                   <span className={styles.summaryLabel}>Speed</span>
                   <span className={styles.summaryValue}>{speed} ft</span>
+                </li>
+                <li className={styles.summaryRow}>
+                  <span className={styles.summaryLabel}>Vision</span>
+                  <span className={styles.summaryValue} data-testid="wizard-vision">
+                    {darkvisionFeet !== null ? `Darkvision ${darkvisionFeet} ft` : "Normal vision"}
+                  </span>
                 </li>
                 <li className={styles.summaryRow}>
                   <span className={styles.summaryLabel}>Saving throws</span>

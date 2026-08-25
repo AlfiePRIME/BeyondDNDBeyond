@@ -133,3 +133,15 @@ no font asset. Inside `TokenMarker` the array rides as one comma-joined string p
 keeping the memo's shallow compare effective (the `hpCurrent`/`hpMax` primitive-splitting
 reasoning). Like the HP bar, this lives on the shared surface on purpose: only the Game
 Room ever renders tokens, so there is no editor leak to guard.
+
+As of Prompt 55: `MapSurfaceCell` gained an optional `light` field
+(`MapSurfaceLightLevel`, a structural copy of data-access's `LightLevel` — the seating.ts
+CampaignMember decoupling precedent) rendered as a darkening of the cell's terrain color
+(dim ×0.55, dark ×0.24), so the DM can SEE the ambient light they paint with the editor's
+new light brush. This is an AUTHORING tint, not lighting: only the map editor's
+`buildDenseCells` call passes the field (an explicit `includeLight` opt-in), the Game
+Room's call omits it, and an absent field renders exactly as before — the live table's
+appearance is untouched by this prompt, because rendering actual illumination/visibility
+from the lighting data model is Prompt 56's job. Unlike the reference image this rides
+the shared `MapSurface` (a per-cell color input, not a whole new concept), with the
+editor-only guarantee held at the call site the way `preview` already is.

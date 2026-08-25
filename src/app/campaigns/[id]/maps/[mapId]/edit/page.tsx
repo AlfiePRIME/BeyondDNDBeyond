@@ -4,9 +4,12 @@ import {
   getMap,
   isDM,
   listAssetsForCampaign,
+  listCharactersForCampaign,
+  listLightSources,
   listMapCells,
   listMapObjects,
   listMapsForCampaign,
+  listMapTokens,
   listMapTransitions,
 } from "@/data-access";
 import { isAiConfigured } from "@/ai";
@@ -42,13 +45,19 @@ export default async function MapEditPage({
   const map = await getMap(supabase, mapId);
   if (!map || map.campaign_id !== campaignId) notFound();
 
-  const [cells, objects, assets, campaignMaps, transitions] = await Promise.all([
-    listMapCells(supabase, mapId),
-    listMapObjects(supabase, mapId),
-    listAssetsForCampaign(supabase, campaignId),
-    listMapsForCampaign(supabase, campaignId),
-    listMapTransitions(supabase, mapId),
-  ]);
+  const [cells, objects, assets, campaignMaps, transitions, tokens, lightSources, characters] =
+    await Promise.all([
+      listMapCells(supabase, mapId),
+      listMapObjects(supabase, mapId),
+      listAssetsForCampaign(supabase, campaignId),
+      listMapsForCampaign(supabase, campaignId),
+      listMapTransitions(supabase, mapId),
+      listMapTokens(supabase, mapId),
+      listLightSources(supabase, mapId),
+      // Names for PC-token anchor options in the light-source picker — the
+      // DM reads every campaign character under 0008's SELECT policy.
+      listCharactersForCampaign(supabase, campaignId),
+    ]);
   const paletteAssets = await resolvePaletteAssets(supabase, assets);
 
   return (
@@ -62,6 +71,11 @@ export default async function MapEditPage({
       aiEnabled={isAiConfigured()}
       campaignMaps={campaignMaps}
       initialTransitions={transitions}
+      initialTokens={tokens}
+      initialLightSources={lightSources}
+      characterNameById={Object.fromEntries(
+        characters.map((character) => [character.id, character.name])
+      )}
     />
   );
 }
