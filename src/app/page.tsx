@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
-import { ForceField, Panel, SectionHeader } from "@/ui-components";
+import Link from "next/link";
+import { Badge, ForceField, Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { getProfile, isProfileComplete } from "@/data-access";
+import { getProfile, isProfileComplete, listCampaignsForUser, listCharactersForUser } from "@/data-access";
 import { AppNav } from "./AppNav";
 import { LobbyPresence } from "./LobbyPresence";
 import styles from "./page.module.css";
@@ -20,6 +21,11 @@ export default async function LobbyPage() {
   if (!isProfileComplete(profile)) {
     redirect("/profile-setup");
   }
+
+  const [memberships, characters] = await Promise.all([
+    listCampaignsForUser(supabase, user.id),
+    listCharactersForUser(supabase, user.id),
+  ]);
 
   return (
     <ForceField
@@ -60,6 +66,72 @@ export default async function LobbyPage() {
 
           <Panel title="BeyondDNDBeyond" tone="purple">
             <SectionHeader eyebrow="Signed in" title={`Welcome, ${profile!.display_name}`} glitch />
+          </Panel>
+
+          <Panel title="Your campaigns" tone="pink">
+            {memberships.length === 0 ? (
+              <div className={styles.zeroState} data-testid="lobby-campaigns-zero-state">
+                <p className={styles.zeroStateText}>
+                  You&apos;re not in any campaigns yet — create one or join with an invite code to
+                  get your first adventure going.
+                </p>
+                <Link
+                  href="/campaigns"
+                  className={styles.zeroStateCta}
+                  data-testid="lobby-campaigns-cta"
+                >
+                  Go to Campaigns →
+                </Link>
+              </div>
+            ) : (
+              <ul className={styles.dashboardList}>
+                {memberships.map(({ role, campaign }) => {
+                  const character = characters.find((c) => c.campaign?.id === campaign.id);
+                  return (
+                    <li
+                      key={campaign.id}
+                      className={styles.dashboardRow}
+                      data-testid={`lobby-campaign-row-${campaign.id}`}
+                    >
+                      <div className={styles.dashboardRowHeader}>
+                        <Link href={`/campaigns/${campaign.id}`} className={styles.campaignName}>
+                          {campaign.name}
+                        </Link>
+                        <Badge tone={role === "dm" ? "pink" : "teal"}>
+                          {role === "dm" ? "DM" : "Player"}
+                        </Badge>
+                      </div>
+                      <div className={styles.characterStatus}>
+                        {character ? (
+                          <>
+                            <Link
+                              href={`/campaigns/${campaign.id}/characters/${character.id}`}
+                              className={styles.characterLink}
+                              data-testid={`lobby-character-link-${campaign.id}`}
+                            >
+                              {character.name}
+                            </Link>
+                            <Badge tone="teal">
+                              {character.class} {character.level}
+                            </Badge>
+                          </>
+                        ) : (
+                          <span
+                            className={styles.noCharacterHint}
+                            data-testid={`lobby-no-character-${campaign.id}`}
+                          >
+                            No character here yet —{" "}
+                            <Link href={`/campaigns/${campaign.id}/characters/new`}>
+                              create one
+                            </Link>
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </Panel>
 
           <Panel title="The Lobby" tone="teal" glow>

@@ -20,6 +20,107 @@
   line-height: 1.6;
 }
 
+.zeroState {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 8px 0 4px;
+}
+
+.zeroStateText {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+  max-width: 52ch;
+}
+
+.zeroStateCta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-m);
+  font-size: 14px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text);
+  padding: 14px 30px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: var(--ga);
+  transition:
+    background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.zeroStateCta:hover,
+.zeroStateCta:focus-visible {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  box-shadow: 0 0 24px #cc55ff88, 0 0 52px #cc55ff33;
+}
+
+.dashboardList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.dashboardRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+}
+
+.dashboardRowHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.campaignName {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.campaignName:hover {
+  color: var(--teal);
+}
+
+.characterStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.characterLink {
+  color: var(--text);
+}
+
+.characterLink:hover {
+  color: var(--teal);
+}
+
+.noCharacterHint {
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.noCharacterHint a {
+  color: var(--teal);
+}
+
 .connectionStatus {
   display: flex;
   align-items: center;
