@@ -39,13 +39,27 @@ export interface Character {
   death_save_failures: number;
   is_stable: boolean;
   is_dead: boolean;
+  /** Concentration state (Prompt 50, migration 0032). The spell's name as
+   * plain text (spells are a static rules-engine catalog, nothing to FK),
+   * or null when not concentrating. Written only by startConcentrating/
+   * stopConcentrating below and the damage/condition/save flows, never a
+   * direct sheet patch. */
+  concentrating_on: string | null;
+  /** Server-authoritative "owes a Constitution save" flag: set by
+   * apply_hp_delta/resolve_attack_damage when a concentrating character
+   * takes damage without dropping to 0 HP, cleared only by
+   * resolve_concentration_save (or by starting/stopping concentration,
+   * which moots it). The roll route re-reads this rather than trusting a
+   * client-sent DC. */
+  pending_concentration_dc: number | null;
   created_at: string;
   updated_at: string;
 }
 
-/** The death-save columns are excluded along with the timestamps: they
- * start at their DB defaults (0/false) and only ever move through the
- * RPCs, so no creation or sheet-edit path supplies them. */
+/** The death-save and concentration columns are excluded along with the
+ * timestamps: they start at their DB defaults (0/false/null) and only ever
+ * move through the RPCs and the dedicated functions below, so no creation
+ * or sheet-edit path supplies them. */
 type ServerManagedCharacterField =
   | "id"
   | "created_at"
@@ -53,7 +67,9 @@ type ServerManagedCharacterField =
   | "death_save_successes"
   | "death_save_failures"
   | "is_stable"
-  | "is_dead";
+  | "is_dead"
+  | "concentrating_on"
+  | "pending_concentration_dc";
 
 export type CreateCharacterParams = Omit<Character, ServerManagedCharacterField>;
 
@@ -139,6 +155,57 @@ export async function applyHpDelta(
     p_character_id: characterId,
     p_delta: delta,
   });
+
+  if (error) throw error;
+  return data as Character;
+}
+
+/**
+ * Starts (or switches) concentration on a spell — a plain update through
+ * 0008's characters UPDATE RLS (owner or DM), no RPC, the map_tokens
+ * reasoning: one row, no cross-row invariant, and "silently replaces any
+ * previous spell" is just what an overwrite does. Clearing
+ * pending_concentration_dc alongside is deliberate: a still-unresolved
+ * check belonged to the OLD spell, and starting a new one moots it.
+ */
+export async function startConcentrating(
+  supabase: SupabaseClient,
+  characterId: string,
+  spellName: string
+): Promise<Character> {
+  const { data, error } = await supabase
+    .from("characters")
+    .update({
+      concentrating_on: spellName,
+      pending_concentration_dc: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", characterId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Character;
+}
+
+/** Ends concentration manually (the owner/DM "Stop concentrating" action,
+ * and the incapacitating-condition hook's second step) — same plain-RLS
+ * reasoning as startConcentrating. Clears the pending check too: with no
+ * spell left to protect, there is nothing to save for. */
+export async function stopConcentrating(
+  supabase: SupabaseClient,
+  characterId: string
+): Promise<Character> {
+  const { data, error } = await supabase
+    .from("characters")
+    .update({
+      concentrating_on: null,
+      pending_concentration_dc: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", characterId)
+    .select()
+    .single();
 
   if (error) throw error;
   return data as Character;

@@ -285,6 +285,10 @@ export interface MapSurfaceToken {
    * (the conditions reasoning: TokenMarker's memo shallow-compares its
    * props). Absent/null renders no badge. */
   deathSaveLabel?: string | null;
+  /** Shows the concentration chip beside the HP bar — a flat primitive
+   * derived by the caller from the linked character's concentrating_on,
+   * same visibility caveats as `hp`. Absent renders no chip. */
+  concentrating?: boolean;
 }
 
 const HP_BAR_WIDTH = 0.7;
@@ -442,6 +446,54 @@ const TokenDeathSaveBadge = memo(function TokenDeathSaveBadge({ label }: { label
   );
 });
 
+const CONCENTRATION_CHIP_WIDTH = 0.32;
+const CONCENTRATION_CHIP_HEIGHT = 0.13;
+
+// One state, one texture — the cached 2D-canvas mechanism the condition
+// and death-save badges use, lazily built so it never runs during SSR.
+// Purple (the app accent) so it reads apart from the orange condition
+// badges and the red/teal death-save chip.
+let concentrationChipTexture: CanvasTexture | null = null;
+
+function getConcentrationChipTexture(): CanvasTexture {
+  if (!concentrationChipTexture) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 128;
+    canvas.height = 52;
+    const context = canvas.getContext("2d");
+    if (context) {
+      context.fillStyle = "#16102a";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.strokeStyle = PURPLE;
+      context.lineWidth = 4;
+      context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+      context.fillStyle = PURPLE;
+      context.font = "bold 28px monospace";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText("CONC", canvas.width / 2, canvas.height / 2 + 2);
+    }
+    concentrationChipTexture = new CanvasTexture(canvas);
+    concentrationChipTexture.colorSpace = SRGBColorSpace;
+  }
+  return concentrationChipTexture;
+}
+
+// Anchored just LEFT of the HP bar at the bar's own height — its own slot,
+// because a token can in principle show HP + conditions (1.02+, stacking
+// upward) + a death-save badge (0.68) + this all at once, and none of the
+// occupied heights has spare width except the bar row's flanks.
+const TokenConcentrationBadge = memo(function TokenConcentrationBadge() {
+  return (
+    <Billboard position={[-(HP_BAR_WIDTH / 2 + CONCENTRATION_CHIP_WIDTH / 2 + 0.05), 0.82, 0]}>
+      <mesh>
+        <planeGeometry args={[CONCENTRATION_CHIP_WIDTH, CONCENTRATION_CHIP_HEIGHT]} />
+        <meshBasicMaterial map={getConcentrationChipTexture()} />
+      </mesh>
+    </Billboard>
+  );
+});
+
 // A pawn silhouette (disc + stem + head) rather than a flat disc: the seat
 // cameras view the table at a shallow angle, where a flat disc on a small
 // cell all but disappears.
@@ -463,6 +515,7 @@ const TokenMarker = memo(function TokenMarker({
   conditionLabels,
   // One flat label string, "" for none — same shallow-compare reasoning.
   deathSaveLabel,
+  concentrating,
   onPointerDown,
 }: {
   id: string;
@@ -477,6 +530,7 @@ const TokenMarker = memo(function TokenMarker({
   hpMax: number | null;
   conditionLabels: string;
   deathSaveLabel: string;
+  concentrating: boolean;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -498,6 +552,7 @@ const TokenMarker = memo(function TokenMarker({
       {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
       {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
       {deathSaveLabel !== "" ? <TokenDeathSaveBadge label={deathSaveLabel} /> : null}
+      {concentrating ? <TokenConcentrationBadge /> : null}
       {draggable ? (
         // Same uniform-hit-box reasoning as ObjectMarker: raycasting the
         // pawn's thin stem makes grabbing fiddly at table scale. Attached
@@ -668,6 +723,7 @@ export function MapSurface({
           hpMax={token.hp?.max ?? null}
           conditionLabels={token.conditions?.join(",") ?? ""}
           deathSaveLabel={token.deathSaveLabel ?? ""}
+          concentrating={token.concentrating ?? false}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
         />
       ))}

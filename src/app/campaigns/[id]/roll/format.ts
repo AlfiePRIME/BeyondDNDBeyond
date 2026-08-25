@@ -1,5 +1,6 @@
 import type {
   AttackResolution,
+  ConcentrationSaveResolution,
   D20RollBreakdown,
   DeathSaveResolution,
   RollBreakdown,
@@ -74,6 +75,16 @@ export function deathSaveOutcomeText(
     : `Failure (${deathSave.failuresAfter}/3)`;
 }
 
+/** "Success (DC 10)" / "Failed, concentration broken (DC 14)" — the
+ * concentration-save analogue of attackOutcomeText/deathSaveOutcomeText.
+ * The verdict is stored, not re-derived: the resolution IS the record of
+ * what the server compared. */
+export function concentrationSaveOutcomeText(save: ConcentrationSaveResolution): string {
+  return save.passed
+    ? `Success (DC ${save.dc})`
+    : `Failed, concentration broken (DC ${save.dc})`;
+}
+
 /** One-line headline for a log entry, e.g. "Perception check — 17" or
  * "Melee attack vs AC 15 — 18 · Hit". */
 export function rollHeadline(entry: RollLogEntry): string {
@@ -86,6 +97,11 @@ export function rollHeadline(entry: RollLogEntry): string {
   }
   if (breakdown.deathSave) {
     return `${breakdown.label} — ${entry.total} · ${deathSaveOutcomeText(breakdown.deathSave, breakdown.d20Result)}`;
+  }
+  if (breakdown.concentrationSave) {
+    // The bare kind name, not breakdown.label — the label already carries
+    // the DC, which the outcome text repeats.
+    return `Concentration save — ${entry.total} · ${concentrationSaveOutcomeText(breakdown.concentrationSave)}`;
   }
   return `${breakdown.label} — ${entry.total}`;
 }

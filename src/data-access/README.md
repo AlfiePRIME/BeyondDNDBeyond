@@ -383,3 +383,51 @@ transaction roll_log INSERT, publication membership — is unchanged;
 (0, 1, or 2), which `resolveAttackDamage` splices into `breakdown.attack`
 (`instantDeath`/`deathSaveFailureAdded`, defaulting false/0) alongside `applied` so the
 room's roll log can say "instant death" / "+1 failed death save".
+
+As of Prompt 50, concentration tracking (migration `0032_concentration.sql`). Two new
+`characters` columns on the `Character` type, both excluded from
+`CreateCharacterParams`/`UpdateCharacterPatch` for the Prompt 49 reason (they only ever
+move through the functions/RPCs below, never a direct sheet patch): `concentrating_on` —
+the spell's name as plain text (spells are a static rules-engine catalog, nothing to FK),
+null when not concentrating — and `pending_concentration_dc`, a server-authoritative
+"owes a Constitution save" flag. Starting/stopping outside the damage/condition/save
+paths is `startConcentrating(supabase, characterId, spellName)` /
+`stopConcentrating(supabase, characterId)` — plain updates through 0008's characters
+UPDATE RLS (owner or DM), no RPC, the `map_tokens` reasoning (one row, no cross-row
+invariant); starting a new spell silently replaces the old one AND clears any stale
+pending DC, since an unresolved check belonged to the spell being replaced.
+
+The damage-side rules live INSIDE `apply_hp_delta` and `resolve_attack_damage` (both
+reshaped a third time, `create or replace` this round — neither signature nor RETURNS
+TABLE shape changes), as a branch on the same locked pre-damage row the 0031 death-save
+bookkeeping already reads, because they're deterministic functions of values those RPCs
+already hold and must never be missed: damage that lands the character at 0 HP clears
+`concentrating_on`/`pending_concentration_dc` outright (SRD: incapacitated ends
+concentration, no save — and a later hit while already at 0 has nothing left to end,
+since the transition to 0 already cleared it), while damage that leaves a CONCENTRATING
+character above 0 sets `pending_concentration_dc = max(10, floor(damage / 2))` — the two
+cases are mutually exclusive per hit. A second hit before the first check resolves
+OVERWRITES the pending DC rather than queuing (a deliberate scope simplification,
+documented in the migration: RAW 5e wants one check per damage instance). Storing the DC
+on the row makes the "needs a CON save" prompt live-synced to every viewer and
+unspoofable — the roll route re-reads it and never trusts a client-sent DC. The third
+no-save ending — an incapacitating condition being applied — is client-orchestrated in
+the Game Room's `handleToggleCondition` (apply via the untouched `applyCondition` path,
+then `stopConcentrating`): self/DM-scoped, no cross-player security concern, the accepted
+write-then-side-effect shape.
+
+`rollConcentrationSave(supabase, campaignId, rollerUserId, characterId, passed,
+breakdown, total)` calls the new `resolve_concentration_save(p_character_id, p_passed)`
+RPC — SECURITY INVOKER with `apply_death_save_roll`'s exact SELECT-FOR-UPDATE
+authorization trick, re-validating `pending_concentration_dc is not null` server-side
+(a distinct exception guards stale double-submits), then always clearing the pending DC
+and clearing `concentrating_on` only on a failure — and THEN logs
+`kind: "concentration_save"` (the widened `roll_log` CHECK, constraint name re-read from
+the live DB as 0031 did) as a separate insert, the `rollDeathSave` write-then-log shape
+rather than `resolve_attack_damage`'s atomic merge: always self/DM-scoped on ONE
+character, never the cross-player case, and a rejected roll logs nothing. The d20 is
+rolled only in the roll Route Handler (plain normal mode, the death-save reasoning) plus
+the Constitution SAVE bonus via the same shared `savingThrowModifiers` logic the "save"
+kind uses; the breakdown's `concentrationSave` (`ConcentrationSaveResolution`: `dc`,
+`total`, `passed`, `spellName` — the at-risk spell captured before the roll) is fully
+formed before the RPC runs, so unlike `rollDeathSave` nothing is spliced in afterward.

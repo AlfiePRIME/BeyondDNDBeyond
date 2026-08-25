@@ -340,3 +340,31 @@
   letter-spacing: 0.06em;
   color: var(--text);
 }
+
+.concentrationStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.concentrationSpell {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--purple);
+}
+
+/* The deathSaveRow shape in the concentration accent — same call-to-action
+   weight, visibly a different ask. */
+.concentrationPromptRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--purple);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--purple) 18%, transparent);
+}

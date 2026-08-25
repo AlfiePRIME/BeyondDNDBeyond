@@ -15,6 +15,7 @@ import {
   endCombat,
   endSession,
   getActiveCombatEncounter,
+  getCharacter,
   getMap,
   listCharactersForCampaign,
   listCombatCombatants,
@@ -34,6 +35,7 @@ import {
   setLiveMap,
   setTokenAllegiance,
   startCombat,
+  stopConcentrating,
   subscribeToProfileChanges,
   transitionMapToken,
   triggerMapObject,
@@ -864,6 +866,20 @@ export function GameRoom({
       void runCombatAction(async (supabase) => {
         if (active) await applyCondition(supabase, combatant.id, key);
         else await removeCondition(supabase, combatant.id, key);
+        // Concentration-breaking hook (Prompt 50): an incapacitating
+        // condition landing on a concentrating PC ends concentration
+        // outright, no save. A client-orchestrated second write after the
+        // untouched applyCondition path — the accepted write-then-side-
+        // effect shape (initiative, death saves): self/DM-scoped, no
+        // cross-player security concern. The character is re-read fresh
+        // rather than taken from this render's rows so a concentration
+        // started elsewhere (the sheet page) moments ago still counts.
+        if (active && combatant.character_id && CONDITION_BY_KEY.get(key)?.effects.incapacitated) {
+          const character = await getCharacter(supabase, combatant.character_id);
+          if (character && character.concentrating_on !== null) {
+            await stopConcentrating(supabase, character.id);
+          }
+        }
       }, "Could not change that combatant's conditions.");
     },
     [runCombatAction]
@@ -889,6 +905,21 @@ export function GameRoom({
       void runCombatAction(async () => {
         await postRoll(campaignId, { kind: "death_save", characterId });
       }, "Could not roll that death save.");
+    },
+    [campaignId, runCombatAction]
+  );
+
+  // Same shape as handleRollDeathSave: the route re-reads the stored
+  // pending DC (nothing client-sent), rolls d20 + CON save bonus, and
+  // resolves via resolve_concentration_save; then the usual refresh +
+  // combat-changed poke so every open room sees the outcome.
+  const handleRollConcentrationSave = useCallback(
+    (combatant: CombatCombatant) => {
+      const characterId = combatant.character_id;
+      if (!characterId) return;
+      void runCombatAction(async () => {
+        await postRoll(campaignId, { kind: "concentration_save", characterId });
+      }, "Could not roll that concentration save.");
     },
     [campaignId, runCombatAction]
   );
@@ -1136,6 +1167,9 @@ export function GameRoom({
                   ? "STABLE"
                   : `${character.death_save_successes}✓ ${character.death_save_failures}✗`
               : null,
+          // Same flat-primitive derivation as deathSaveLabel: true for a
+          // PC token whose (viewer-readable) character is concentrating.
+          concentrating: character ? character.concentrating_on !== null : false,
         };
       }),
     };
@@ -1331,6 +1365,7 @@ export function GameRoom({
         onToggleCondition={handleToggleCondition}
         onExhaustionDelta={handleExhaustionDelta}
         onRollDeathSave={handleRollDeathSave}
+        onRollConcentrationSave={handleRollConcentrationSave}
       />
       <DiceLogPanel
         campaignId={campaignId}

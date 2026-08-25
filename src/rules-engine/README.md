@@ -74,7 +74,12 @@ under a row lock, which trusts these pre-computed numbers the same way
 hit/crit in SQL. Unit-tested at every band boundary (1, 2, 9, 10, 19, 20, plus an
 exactly-one-outcome sweep of all twenty rolls), the resolveAttackOutcome pattern.
 
+Prompt 50 (concentration) landed as promised without adding any rules-engine surface: the
+spell catalog's `concentration` flag, the conditions catalog's `effects.incapacitated`,
+`rollD20`, and `savingThrowBonus` already covered everything the mechanic needs — the DC
+arithmetic (`max(10, floor(damage / 2))`) lives in the damage RPCs' SQL, where the damage
+number already is, not here.
+
 Still future work: the perception/vision engine (Prompt 56) and advantage/disadvantage
 enforcement from conditions/vision (Prompt 59) — Prompt 48 provides the manual toggle and
-the two-d20 mechanics it will drive, and Prompt 50 (concentration) is the next d20
-consumer in line.
+the two-d20 mechanics it will drive.

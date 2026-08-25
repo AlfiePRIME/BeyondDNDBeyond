@@ -49,7 +49,12 @@ export interface CombatState {
  * dying and actionable by this viewer (DM or owner) — gets a prominent
  * roll-death-save call-to-action. The turn-based prompt is a UI nicety
  * only: the RPC/route is deliberately not turn-gated, matching how
- * checks/saves/attacks aren't either (the table self-polices).
+ * checks/saves/attacks aren't either (the table self-polices). As of
+ * Prompt 50 a concentrating PC combatant's row shows what it's
+ * concentrating on (table-wide, the death-save-state visibility
+ * reasoning), and a pending concentration check gets the same prominent
+ * roll prompt — NOT gated to the current turn, unlike the death-save
+ * prompt: the check is triggered by damage on ANY turn.
  */
 export function CombatPanel({
   isDM,
@@ -67,6 +72,7 @@ export function CombatPanel({
   onToggleCondition,
   onExhaustionDelta,
   onRollDeathSave,
+  onRollConcentrationSave,
 }: {
   isDM: boolean;
   currentUserId: string;
@@ -91,6 +97,9 @@ export function CombatPanel({
   /** Posts kind: "death_save" via the roll route — a plain server-rolled
    * d20, no modifiers, no advantage toggle. */
   onRollDeathSave: (combatant: CombatCombatant) => void;
+  /** Posts kind: "concentration_save" via the roll route — a plain
+   * server-rolled d20 + CON save bonus against the stored pending DC. */
+  onRollConcentrationSave: (combatant: CombatCombatant) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
@@ -298,6 +307,45 @@ export function CombatPanel({
                     </span>
                   </>
                 )}
+              </div>
+            ) : null}
+            {character && character.concentrating_on !== null ? (
+              // Table-wide like the death-save state — concentration is
+              // relevant to everyone, not turn-gated.
+              <div
+                className={styles.concentrationState}
+                data-testid={`concentration-state-${combatant.id}`}
+              >
+                <Badge tone="purple" data-testid={`concentration-badge-${combatant.id}`}>
+                  Concentrating
+                </Badge>
+                <span className={styles.concentrationSpell}>{character.concentrating_on}</span>
+              </div>
+            ) : null}
+            {character &&
+            character.pending_concentration_dc !== null &&
+            (isDM || ownsCombatant(combatant)) ? (
+              // The damage-triggered call-to-action, the death-save
+              // prompt's visual shape — but deliberately NOT gated to the
+              // current turn: a concentration check can be triggered by
+              // damage on any turn, not just this character's own.
+              <div
+                className={styles.concentrationPrompt}
+                data-testid={`concentration-prompt-${combatant.id}`}
+              >
+                <span className={styles.deathSavePromptText}>
+                  {combatantLabel(combatant)} took damage — roll a concentration save (DC{" "}
+                  {character.pending_concentration_dc})
+                </span>
+                <Button
+                  size="sm"
+                  variant="accent"
+                  disabled={busy}
+                  onClick={() => onRollConcentrationSave(combatant)}
+                  data-testid={`roll-concentration-save-${combatant.id}`}
+                >
+                  Roll concentration save
+                </Button>
               </div>
             ) : null}
             {character &&

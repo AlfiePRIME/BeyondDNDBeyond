@@ -31,6 +31,8 @@ import {
   setCharacterResourceUses,
   shortRest,
   longRest,
+  startConcentrating,
+  stopConcentrating,
   type Character,
   type CharacterResource,
   type CombatantCondition,
@@ -290,6 +292,29 @@ export function CharacterSheet({
     await persist({ spells: character.spells.filter((s) => s.name !== name) });
   }
 
+  // Both plain owner-or-DM RLS writes (startConcentrating/stopConcentrating
+  // in data-access) — no optimistic step: the returned row is the whole
+  // update, and the sheet's postgres_changes subscription echoes it to any
+  // other open view. Casting-cost enforcement (slots, action economy) is
+  // deliberately absent — Prompts 51/53 own that.
+  async function handleStartConcentrating(spellName: string) {
+    setSaveError(null);
+    try {
+      setCharacter(await startConcentrating(createBrowserSupabaseClient(), character.id, spellName));
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not start concentrating.");
+    }
+  }
+
+  async function handleStopConcentrating() {
+    setSaveError(null);
+    try {
+      setCharacter(await stopConcentrating(createBrowserSupabaseClient(), character.id));
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not stop concentrating.");
+    }
+  }
+
   async function setResourceUses(resource: CharacterResource, nextUses: number) {
     setSaveError(null);
     const supabase = createBrowserSupabaseClient();
@@ -439,6 +464,24 @@ export function CharacterSheet({
                   )}
                 </span>
               ) : null}
+              {character.concentrating_on !== null ? (
+                <span className={styles.concentrationStatus} data-testid="sheet-concentration-status">
+                  <Badge tone="purple">Concentrating</Badge>
+                  <span className={styles.concentrationSpell} data-testid="sheet-concentration-spell">
+                    {character.concentrating_on}
+                  </span>
+                  {canEdit ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleStopConcentrating}
+                      data-testid="sheet-stop-concentrating"
+                    >
+                      Stop concentrating
+                    </Button>
+                  ) : null}
+                </span>
+              ) : null}
             </div>
             <div className={styles.vital}>
               <span className={styles.vitalLabel}>Armor class</span>
@@ -544,6 +587,29 @@ export function CharacterSheet({
                 data-testid="sheet-roll-death-save"
               >
                 Roll death save
+              </Button>
+            </div>
+          ) : null}
+          {canEdit && character.pending_concentration_dc !== null ? (
+            // The death-save prompt's shape for the damage-triggered
+            // concentration check — server-authoritative (the stored
+            // pending DC, live-synced via the row subscription), so it
+            // persists here until resolved no matter whose click dealt
+            // the damage.
+            <div className={styles.concentrationPromptRow} data-testid="sheet-concentration-prompt">
+              <span className={styles.deathSavePromptText}>
+                {character.name} took damage while concentrating
+                {character.concentrating_on ? ` on ${character.concentrating_on}` : ""} — roll a
+                Constitution save (DC {character.pending_concentration_dc}).
+              </span>
+              <Button
+                variant="accent"
+                size="sm"
+                disabled={rolling}
+                onClick={() => doRoll({ kind: "concentration_save", characterId: character.id })}
+                data-testid="sheet-roll-concentration-save"
+              >
+                Roll concentration save
               </Button>
             </div>
           ) : null}
@@ -791,6 +857,24 @@ export function CharacterSheet({
                                   {spell.school} · {formatRange(spell.range)}
                                   {spell.concentration ? " · conc." : ""}
                                 </span>
+                              ) : null}
+                              {canEdit && spell?.concentration ? (
+                                // The Prompt 50 "casting" surface: a manual
+                                // toggle only — no slot spend, no action
+                                // economy (Prompts 51/53). Starting while
+                                // already concentrating silently replaces
+                                // the old spell.
+                                <Button
+                                  variant="teal"
+                                  size="sm"
+                                  disabled={character.concentrating_on === known.name}
+                                  onClick={() => handleStartConcentrating(known.name)}
+                                  data-testid={`start-concentrating-${known.name.toLowerCase().replace(/\s+/g, "-")}`}
+                                >
+                                  {character.concentrating_on === known.name
+                                    ? "Concentrating"
+                                    : "Start concentrating"}
+                                </Button>
                               ) : null}
                               {canEdit ? (
                                 <Button

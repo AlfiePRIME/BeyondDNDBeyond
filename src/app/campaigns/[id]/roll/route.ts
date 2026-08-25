@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
   getCharacter,
   resolveAttackDamage,
+  rollConcentrationSave,
   rollDeathSave,
   setCombatantInitiative,
   type AttackResolution,
@@ -90,6 +91,29 @@ function abilityScoresOf(character: Character): AbilityScores {
 
 function badRequest(message: string) {
   return NextResponse.json({ ok: false, message }, { status: 400 });
+}
+
+/** The saving-throw bonus as displayable parts — ability modifier plus
+ * proficiency when the character's class has this ability among its
+ * saving-throw proficiencies. Shared by the "save" kind and the
+ * concentration save (which is exactly a Constitution save), with the same
+ * parts-must-sum-to-the-rules-engine-bonus assertion either way. */
+function savingThrowModifiers(character: Character, ability: AbilityScore): RollModifierPart[] {
+  const scores = abilityScoresOf(character);
+  const klass = CLASSES.find((c) => c.name === character.class) ?? null;
+  const proficient = klass?.savingThrowProficiencies.includes(ability) ?? false;
+  const modifiers: RollModifierPart[] = [
+    { label: `${capitalize(ability)} modifier`, value: abilityModifier(scores[ability]) },
+    ...(proficient ? [{ label: "Proficiency", value: proficiencyBonus(character.level) }] : []),
+  ];
+  // The displayed parts must sum to exactly the rules-engine bonus.
+  if (
+    modifiers.reduce((sum, part) => sum + part.value, 0) !==
+    savingThrowBonus(ability, scores, character.level, proficient)
+  ) {
+    throw new Error("save bonus breakdown mismatch");
+  }
+  return modifiers;
 }
 
 async function insertRoll(
@@ -226,6 +250,71 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
   }
 
+  if (roll.kind === "concentration_save") {
+    if (typeof roll.characterId !== "string") return badRequest("A character is required.");
+    // The caller's own client — RLS means only the owner or the DM can
+    // read (and so roll for) this character.
+    const character = await getCharacter(supabase, roll.characterId);
+    if (!character || character.campaign_id !== campaignId) {
+      return NextResponse.json({ ok: false, message: "Character not found." }, { status: 404 });
+    }
+
+    // The DC comes from the character row, never the request — the damage
+    // RPCs stored it server-side, so whoever triggered the damage can't
+    // spoof it. Nothing pending means nothing to roll.
+    const dc = character.pending_concentration_dc;
+    if (dc === null) {
+      return badRequest("No concentration check is pending.");
+    }
+
+    // A plain d20 like a death save — no advantage/disadvantage (Prompt
+    // 59's territory), any client-sent mode ignored — but unlike a death
+    // save it carries the Constitution SAVE bonus, computed by exactly the
+    // "save" kind's logic.
+    const modifiers = savingThrowModifiers(character, "constitution");
+    const d20 = rollD20("normal");
+    const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
+    const passed = total >= dc;
+    const breakdown: D20RollBreakdown = {
+      type: "d20",
+      label: `Concentration save (DC ${dc})`,
+      mode: "normal",
+      d20Rolls: d20.rolls,
+      d20Result: d20.result,
+      modifiers,
+      concentrationSave: {
+        dc,
+        total,
+        passed,
+        // Captured before the RPC runs — a failure clears it on the row.
+        spellName: character.concentrating_on,
+      },
+    };
+    // resolve_concentration_save (0032) authorizes (owner or DM, via the
+    // characters UPDATE policy locking the row) and re-validates that a
+    // check is still pending — a stale double-submit fails there; the
+    // state persists BEFORE the log write, so a rejected roll logs
+    // nothing — the death-save/initiative-path ordering.
+    try {
+      const entry = await rollConcentrationSave(
+        supabase,
+        campaignId,
+        user.id,
+        character.id,
+        passed,
+        breakdown,
+        total
+      );
+      return NextResponse.json({ ok: true, roll: entry });
+    } catch (err) {
+      const message =
+        err && typeof err === "object" && "message" in err && typeof err.message === "string"
+          ? err.message
+          : "No concentration check is pending.";
+      return NextResponse.json({ ok: false, message }, { status: 400 });
+    }
+  }
+
   const mode = parseMode(roll.mode);
   if (mode === null) return badRequest("Unknown advantage mode.");
 
@@ -324,21 +413,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     ];
   } else if (roll.kind === "save") {
     if (!isAbility(roll.ability)) return badRequest("Unknown ability.");
-    const proficient = klass?.savingThrowProficiencies.includes(roll.ability) ?? false;
     label = `${capitalize(roll.ability)} save`;
-    modifiers = [
-      { label: `${capitalize(roll.ability)} modifier`, value: abilityModifier(scores[roll.ability]) },
-      ...(proficient
-        ? [{ label: "Proficiency", value: proficiencyBonus(character.level) }]
-        : []),
-    ];
-    // The displayed parts must sum to exactly the rules-engine bonus.
-    if (
-      modifiers.reduce((sum, part) => sum + part.value, 0) !==
-      savingThrowBonus(roll.ability, scores, character.level, proficient)
-    ) {
-      throw new Error("save bonus breakdown mismatch");
-    }
+    modifiers = savingThrowModifiers(character, roll.ability);
   } else if (roll.kind === "skill") {
     if (!isSkill(roll.skill)) return badRequest("Unknown skill.");
     const ability = SKILL_ABILITY[roll.skill];

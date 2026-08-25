@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-49 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, the avatar library/upload, D&D Beyond PDF character import, the Account page, the real-time campaign channel, reconnection/session resilience, the Lobby screen, the 3D table scene foundation, player seating/camera, rendering seated avatars, the session start/DM assignment flow, the map/asset data model, the built-in preset asset library, the custom asset upload pipeline, the map editor's terrain/elevation tool, object/POI placement, interactive POI behavior, live map rendering/switching on the tabletop, the grid overlay/token placement system, elevation/terrain-aware drag-to-move for tokens, the campaign narrative data model, the NPC roster, the world/lore page wiki, the session log/live handout reveal system, the private DM notes/house rules editors, AI-assisted NPC/lore drafting, AI-assisted procedural map area generation, map folders/thumbnails, map duplication/starter templates, map editor undo/redo, multi-floor map transitions, the measuring/ruler tool, the editor-only reference image underlay, the combat initiative tracker, in-combat HP/damage tracking, status condition tracking, the integrated server-side dice roller, and death saving throws with instant death) are complete and verified end to end against a running local Supabase stack.
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-50 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, the avatar library/upload, D&D Beyond PDF character import, the Account page, the real-time campaign channel, reconnection/session resilience, the Lobby screen, the 3D table scene foundation, player seating/camera, rendering seated avatars, the session start/DM assignment flow, the map/asset data model, the built-in preset asset library, the custom asset upload pipeline, the map editor's terrain/elevation tool, object/POI placement, interactive POI behavior, live map rendering/switching on the tabletop, the grid overlay/token placement system, elevation/terrain-aware drag-to-move for tokens, the campaign narrative data model, the NPC roster, the world/lore page wiki, the session log/live handout reveal system, the private DM notes/house rules editors, AI-assisted NPC/lore drafting, AI-assisted procedural map area generation, map folders/thumbnails, map duplication/starter templates, map editor undo/redo, multi-floor map transitions, the measuring/ruler tool, the editor-only reference image underlay, the combat initiative tracker, in-combat HP/damage tracking, status condition tracking, the integrated server-side dice roller, death saving throws with instant death, and concentration tracking) are complete and verified end to end against a running local Supabase stack.
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 
@@ -152,16 +152,18 @@ node scripts/db/verify-conditions.mjs # verify combat condition RLS/RPC boundari
 node scripts/db/verify-dice-rolls.mjs # verify the roll route, resolve_attack_damage, initiative (Prompt 48)
 node scripts/db/verify-dice-ui.mjs    # verify the dice log panel, sheet rolls, live sync in a real browser (Prompt 48)
 node scripts/db/verify-death-saves.mjs # verify death saves, instant death, the at-0-HP damage rules (Prompt 49)
+node scripts/db/verify-concentration.mjs # verify concentration: damage-triggered CON saves, drop-to-0/condition breaks (Prompt 50)
 ```
 
 The first two connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`)
 using the tenant-qualified username `postgres.$POOLER_TENANT_ID` — plain `postgres` fails with
 "no tenant identifier provided" against a pooled connection. `verify-conditions.mjs`,
-`verify-dice-rolls.mjs`, and `verify-death-saves.mjs` instead go through `@supabase/supabase-js`
-(service-role client for setup, real signed-in clients for the actual RLS/RPC checks) — equally
-valid for exercising policies end to end, and closer to how the app itself talks to Supabase;
-the latter two also drive the roll Route Handler over real HTTP with signed-in session cookies
-(needs `yarn dev` running).
+`verify-dice-rolls.mjs`, `verify-death-saves.mjs`, and `verify-concentration.mjs` instead go
+through `@supabase/supabase-js` (service-role client for setup, real signed-in clients for the
+actual RLS/RPC checks) — equally valid for exercising policies end to end, and closer to how
+the app itself talks to Supabase; the latter three also drive the roll Route Handler over real
+HTTP with signed-in session cookies (needs `yarn dev` running — `verify-concentration.mjs`
+starts one itself, polling `/api/health`, if `:3000` isn't already serving).
 `verify-dice-ui.mjs` goes one step further and drives real Playwright browsers against the dev
 server, for the parts only a live UI can exercise (the sheet's advantage toggle, the combat
 panel's Roll-initiative buttons, live sync landing in an actually-open Game Room).

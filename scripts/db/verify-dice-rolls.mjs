@@ -619,24 +619,35 @@ try {
   //    subscribe to, independent of any broadcast channel. --
   await bob.client.realtime.setAuth((await bob.client.auth.getSession()).data.session.access_token);
   const received = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("no realtime event within 10s")), 10000);
+    let rollTimer = null;
+    const timer = setTimeout(() => {
+      if (rollTimer) clearInterval(rollTimer);
+      reject(new Error("no realtime event within 20s"));
+    }, 20000);
+    // Retry-until-landed, not a single shot after "joined": even gating on
+    // the joined channel state, the postgres subscription can become active
+    // moments after the join, so one immediate insert can slip past it —
+    // the same class of race the fixed-timeout version of this check used
+    // to hit (see verify-death-saves.mjs). Each retry is a fresh insert.
+    const rollOnce = () => void postRoll(alice, campaignId, { kind: "freeform", notation: "1d8+2" });
     const channel = bob.client
       .channel(`verify-roll-log:${campaignId}`)
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "roll_log", filter: `campaign_id=eq.${campaignId}` },
         (payload) => {
+          if (payload.new.breakdown?.notation !== "1d8+2") return;
           clearTimeout(timer);
+          if (rollTimer) clearInterval(rollTimer);
           resolve(payload.new);
         }
       )
       .subscribe();
-    // Only roll once the subscription is actually live — a fixed timeout
-    // here has been a documented source of false failures.
     const waitSubscribed = setInterval(() => {
       if (channel.state === "joined") {
         clearInterval(waitSubscribed);
-        void postRoll(alice, campaignId, { kind: "freeform", notation: "1d8+2" });
+        rollOnce();
+        rollTimer = setInterval(rollOnce, 1500);
       }
     }, 100);
   });

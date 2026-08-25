@@ -270,6 +270,33 @@
   color: var(--red);
 }
 
+.concentrationState {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.concentrationSpell {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--purple);
+}
+
+/* The death-save prompt's shape in the concentration accent — the two can
+   never show for the same combatant at once (a 0-HP character isn't
+   concentrating), but they must still read as different asks. */
+.concentrationPrompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--purple);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--purple) 18%, transparent);
+}
+
 /* Louder than any other per-combatant control on purpose: the dying
    combatant's turn-start prompt must not get lost among the HP inputs. */
 .deathSavePrompt {

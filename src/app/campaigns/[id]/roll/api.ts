@@ -11,6 +11,11 @@ export type RollRequest =
    * advantage/disadvantage (that's out of scope until Prompt 59) — the
    * server forces "normal" regardless of what a client sends. */
   | { kind: "death_save"; characterId: string }
+  /** No mode, no DC: the server re-reads the character's stored
+   * pending_concentration_dc (nothing client-sent is trusted) and rolls a
+   * plain d20 + CON save bonus — advantage/disadvantage is Prompt 59's
+   * territory, the death-save reasoning. */
+  | { kind: "concentration_save"; characterId: string }
   | {
       kind: "attack";
       characterId: string;

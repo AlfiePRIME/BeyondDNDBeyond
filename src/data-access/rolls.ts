@@ -9,7 +9,8 @@ export type RollKind =
   | "skill"
   | "initiative"
   | "freeform"
-  | "death_save";
+  | "death_save"
+  | "concentration_save";
 
 export interface RollModifierPart {
   label: string;
@@ -61,6 +62,21 @@ export interface DeathSaveResolution {
   died: boolean;
 }
 
+/** Concentration-save resolution detail, nested in a d20 breakdown
+ * (Prompt 50). Unlike deathSave this is fully known before the RPC runs —
+ * the route reads the stored DC and the at-risk spell, rolls, and compares
+ * — so nothing is spliced in afterward. */
+export interface ConcentrationSaveResolution {
+  /** The stored pending_concentration_dc the roll was compared against. */
+  dc: number;
+  /** d20 + CON modifier (+ proficiency when the class has CON saves). */
+  total: number;
+  passed: boolean;
+  /** The spell that was at risk, captured before the roll (a failure
+   * clears concentrating_on, so it can't be read back afterwards). */
+  spellName: string | null;
+}
+
 export interface D20RollBreakdown {
   type: "d20";
   /** Display name for the roll, e.g. "Perception check" or "Melee attack". */
@@ -73,6 +89,7 @@ export interface D20RollBreakdown {
   modifiers: RollModifierPart[];
   attack?: AttackResolution;
   deathSave?: DeathSaveResolution;
+  concentrationSave?: ConcentrationSaveResolution;
 }
 
 export interface FreeformRollBreakdown {
@@ -297,6 +314,53 @@ export async function rollDeathSave(
       character_id: characterId,
       kind: "death_save",
       breakdown: breakdownWithOutcome,
+      total,
+    })
+    .select()
+    .single();
+
+  if (insertError) throw insertError;
+  return row as RollLogEntry;
+}
+
+/**
+ * Resolves one pending concentration check via the
+ * resolve_concentration_save RPC (0032), then logs the roll and returns
+ * the persisted RollLogEntry — rollDeathSave's write-then-log shape, NOT
+ * resolveAttackDamage's atomic merge, for the same structural reason: this
+ * RPC is SECURITY INVOKER and always self/DM-scoped on ONE character
+ * (apply_death_save_roll/apply_exhaustion_delta's case, never the
+ * cross-player one that justified folding the log into
+ * resolve_attack_damage), and a rejected roll (no check pending, or not
+ * yours) throws before anything is logged. The caller supplies the
+ * breakdown fully formed — the DC, total, verdict, and at-risk spell are
+ * all known before the RPC runs, so unlike rollDeathSave there is no
+ * after-state to splice in.
+ */
+export async function rollConcentrationSave(
+  supabase: SupabaseClient,
+  campaignId: string,
+  rollerUserId: string,
+  characterId: string,
+  passed: boolean,
+  breakdown: D20RollBreakdown,
+  total: number
+): Promise<RollLogEntry> {
+  const { error } = await supabase.rpc("resolve_concentration_save", {
+    p_character_id: characterId,
+    p_passed: passed,
+  });
+
+  if (error) throw error;
+
+  const { data: row, error: insertError } = await supabase
+    .from("roll_log")
+    .insert({
+      campaign_id: campaignId,
+      roller_user_id: rollerUserId,
+      character_id: characterId,
+      kind: "concentration_save",
+      breakdown,
       total,
     })
     .select()
