@@ -21,8 +21,10 @@ export interface SessionStartedPayload {
   campaignName: string;
 }
 
-/** More than two adventurers (3+) present unlocks Start. */
-export const START_SESSION_MIN_PRESENT = 3;
+/** More than one adventurer (2+) present unlocks Start — a DM plus a
+ * single player is a valid session (duet-style play), not just a
+ * degenerate/empty room. */
+export const START_SESSION_MIN_PRESENT = 2;
 
 const PRESENCE_PROBE_TIMEOUT_MS = 4000;
 
@@ -192,7 +194,7 @@ export function StartSessionControl({
       </Button>
       {!enoughPresent ? (
         <p className={styles.startHint}>
-          Start unlocks when more than two adventurers are in the lobby.
+          Start unlocks when more than one adventurer is in the lobby.
         </p>
       ) : null}
 
