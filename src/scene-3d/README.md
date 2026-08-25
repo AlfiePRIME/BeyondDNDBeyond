@@ -109,3 +109,14 @@ zero awareness of the reference-image concept. A DM's guide art being absent fro
 player-facing table is structural (there is nothing to wire up), not a prop that happens to
 be unset. Anything else meant for both surfaces still belongs in `MapSurface`; anything that
 must never reach the live table belongs beside `ReferenceImagePlane`.
+
+As of Prompt 46: `MapSurfaceToken` gained an optional `hp?: { current: number; max: number }`,
+rendered by `TokenMarker` as a small billboarded bar above the pawn's head (drei `Billboard`,
+so it reads from every seat around the table), its fill fraction and color (green → amber →
+red, reusing the beacon/hostile hues) tracking remaining HP. Deliberately on the SHARED
+surface, unlike Prompt 44's editor-only reference image: tokens only ever render in the Game
+Room's `GameTableScene` (`MapEditorScene` renders no tokens at all), so there is no editor
+leak to guard against. The field is simply omitted — no bar — for NPC tokens (no HP tracking
+exists for them yet) and for PC tokens whose character the viewer can't read under RLS; as
+always, the caller derives the values (`GameRoom`'s character rows) and the scene just draws
+what it's given.

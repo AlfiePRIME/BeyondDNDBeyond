@@ -93,6 +93,74 @@ export async function updateCharacter(
   return data as Character;
 }
 
+/**
+ * Damage (negative delta) or heal (positive delta) a character, clamped to
+ * [0, max_hp]. Goes through the apply_hp_delta RPC (0028) rather than a
+ * read-then-update here, because the clamp must be computed from the
+ * CURRENT stored value in one atomic UPDATE — two near-simultaneous deltas
+ * must both land. The RPC is SECURITY INVOKER: authorization is 0008's
+ * plain characters UPDATE policy (owner or campaign DM), same as
+ * updateCharacter. Returns the updated row so callers (and the later
+ * death-save/concentration prompts) can observe "HP just changed" from the
+ * one shared application path.
+ */
+export async function applyHpDelta(
+  supabase: SupabaseClient,
+  characterId: string,
+  delta: number
+): Promise<Character> {
+  const { data, error } = await supabase.rpc("apply_hp_delta", {
+    p_character_id: characterId,
+    p_delta: delta,
+  });
+
+  if (error) throw error;
+  return data as Character;
+}
+
+/**
+ * Fires `handler` with the new row whenever THIS character's row is
+ * updated, from any client/tab/device — the characters-table analogue of
+ * subscribeToProfileChanges (see that function for why this is a
+ * postgres_changes subscription, not the campaign presence/broadcast bus):
+ * the character sheet page isn't connected to the Game Room's realtime
+ * channel at all, yet must reflect mid-combat damage immediately.
+ * Visibility rides the characters SELECT policy (owner or DM), enabled for
+ * Realtime in migration 0028.
+ */
+export function subscribeToCharacterChanges(
+  supabase: SupabaseClient,
+  characterId: string,
+  handler: (character: Character) => void
+): () => void {
+  let removed = false;
+  let channel: ReturnType<SupabaseClient["channel"]> | null = null;
+
+  void (async () => {
+    // Same deterministic-claims dance as subscribeToProfileChanges: without
+    // the explicit setAuth, the socket can join as anon and RLS silently
+    // drops every event.
+    const { data } = await supabase.auth.getSession();
+    if (removed) return;
+    if (data.session) await supabase.realtime.setAuth(data.session.access_token);
+    if (removed) return;
+
+    channel = supabase
+      .channel(`character-changes:${characterId}:${crypto.randomUUID()}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "characters", filter: `id=eq.${characterId}` },
+        (payload) => handler(payload.new as Character)
+      )
+      .subscribe();
+  })();
+
+  return () => {
+    removed = true;
+    if (channel) void supabase.removeChannel(channel);
+  };
+}
+
 export interface OwnedCharacter extends Character {
   /** Null only if the owner is no longer a member of the character's
    * campaign (campaigns' SELECT policy hides it from non-members). */

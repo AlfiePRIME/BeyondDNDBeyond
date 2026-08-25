@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useMemo, useState } from "react";
+import { Billboard } from "@react-three/drei";
 import { BufferAttribute, BufferGeometry, Color } from "three";
 import type { ThreeEvent } from "@react-three/fiber";
 import type { TerrainType } from "@/rules-engine";
@@ -270,7 +271,45 @@ export interface MapSurfaceToken {
   /** Makes the token a grab target for onTokenPointerDown — the caller sets
    * it per viewer (DM, or the owner of the linked character). */
   draggable?: boolean;
+  /** Draws the HP bar above the pawn. Omitted when there's nothing to show:
+   * NPC tokens (no HP tracking exists for them yet), or a PC whose
+   * character the viewer can't read under RLS. */
+  hp?: { current: number; max: number };
 }
+
+const HP_BAR_WIDTH = 0.7;
+const HP_BAR_HEIGHT = 0.09;
+
+// Green/amber/red by remaining fraction — amber reuses the beacon's warm
+// hue, red the hostile-token hue, so no new palette entries.
+function hpBarColor(fraction: number): string {
+  return fraction > 0.5 ? "#3ddc68" : fraction > 0.25 ? BEACON_COLOR : "#ff3b3b";
+}
+
+// Billboarded so the bar reads from every seat around the table — a fixed
+// orientation would be edge-on for half the seats.
+const TokenHpBar = memo(function TokenHpBar({ current, max }: { current: number; max: number }) {
+  const fraction = max > 0 ? Math.min(Math.max(current / max, 0), 1) : 0;
+  return (
+    <Billboard position={[0, 0.82, 0]}>
+      <mesh>
+        <planeGeometry args={[HP_BAR_WIDTH, HP_BAR_HEIGHT]} />
+        <meshBasicMaterial color="#16102a" transparent opacity={0.85} />
+      </mesh>
+      {fraction > 0 ? (
+        // Unit plane scaled (not re-arged) per fraction; z-nudged and
+        // left-anchored so the fill drains toward the right.
+        <mesh
+          position={[(-HP_BAR_WIDTH + HP_BAR_WIDTH * fraction) / 2, 0, 0.001]}
+          scale={[HP_BAR_WIDTH * fraction, HP_BAR_HEIGHT * 0.72, 1]}
+        >
+          <planeGeometry args={[1, 1]} />
+          <meshBasicMaterial color={hpBarColor(fraction)} />
+        </mesh>
+      ) : null}
+    </Billboard>
+  );
+});
 
 // A pawn silhouette (disc + stem + head) rather than a flat disc: the seat
 // cameras view the table at a shallow angle, where a flat disc on a small
@@ -284,6 +323,10 @@ const TokenMarker = memo(function TokenMarker({
   allegiance,
   selected,
   draggable,
+  // Split into two primitives (not the MapSurfaceToken.hp object) so the
+  // memo's shallow compare keeps working.
+  hpCurrent,
+  hpMax,
   onPointerDown,
 }: {
   id: string;
@@ -294,6 +337,8 @@ const TokenMarker = memo(function TokenMarker({
   allegiance: MapTokenAllegiance;
   selected: boolean;
   draggable: boolean;
+  hpCurrent: number | null;
+  hpMax: number | null;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -312,6 +357,7 @@ const TokenMarker = memo(function TokenMarker({
         <sphereGeometry args={[0.17, 16, 16]} />
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} roughness={0.35} />
       </mesh>
+      {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
       {draggable ? (
         // Same uniform-hit-box reasoning as ObjectMarker: raycasting the
         // pawn's thin stem makes grabbing fiddly at table scale. Attached
@@ -478,6 +524,8 @@ export function MapSurface({
           allegiance={token.allegiance}
           selected={token.selected ?? false}
           draggable={Boolean(onTokenPointerDown) && (token.draggable ?? false)}
+          hpCurrent={token.hp?.current ?? null}
+          hpMax={token.hp?.max ?? null}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
         />
       ))}

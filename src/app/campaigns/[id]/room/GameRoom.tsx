@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import {
   advanceTurn,
+  applyHpDelta,
   createHandout,
   deleteHandout,
   deleteMapToken,
@@ -13,6 +14,7 @@ import {
   endSession,
   getActiveCombatEncounter,
   getMap,
+  listCharactersForCampaign,
   listCombatCombatants,
   listHandouts,
   listMapCells,
@@ -252,16 +254,33 @@ export function GameRoom({
   const [combat, setCombat] = useState<CombatState | null>(initialCombat);
   const [combatBusy, setCombatBusy] = useState(false);
   const [combatError, setCombatError] = useState<string | null>(null);
+  // Character rows go stateful as of Prompt 46: mid-combat damage/healing
+  // changes current_hp, and the combat panel's HP readout and the token HP
+  // bars both render from these rows. Same render-time prop reset as
+  // roster/members above.
+  const [characterRows, setCharacterRows] = useState<Character[]>(characters);
+  const [prevCharacters, setPrevCharacters] = useState(characters);
+  if (prevCharacters !== characters) {
+    setPrevCharacters(characters);
+    setCharacterRows(characters);
+  }
   // Same latest-wins sequencing as refreshLiveMap: two combat refreshes
   // racing must resolve to the most recently requested one.
   const combatSeqRef = useRef(0);
   const refreshCombat = useCallback(
     async (supabase: SupabaseClient) => {
       const seq = ++combatSeqRef.current;
-      const encounter = await getActiveCombatEncounter(supabase, campaignId);
+      // Characters re-read alongside the encounter: the combat-changed poke
+      // is also how an HP change reaches every open room, and the rows come
+      // back RLS-filtered per viewer exactly like the initial server load.
+      const [encounter, rows] = await Promise.all([
+        getActiveCombatEncounter(supabase, campaignId),
+        listCharactersForCampaign(supabase, campaignId),
+      ]);
       const combatants = encounter ? await listCombatCombatants(supabase, encounter.id) : [];
       if (seq !== combatSeqRef.current) return;
       setCombat(encounter ? { encounter, combatants } : null);
+      setCharacterRows(rows);
     },
     [campaignId]
   );
@@ -780,6 +799,17 @@ export function GameRoom({
     [runCombatAction]
   );
 
+  const handleApplyHp = useCallback(
+    (combatant: CombatCombatant, delta: number) => {
+      const characterId = combatant.character_id;
+      if (!characterId) return;
+      void runCombatAction(async (supabase) => {
+        await applyHpDelta(supabase, characterId, delta);
+      }, "Could not update that combatant's HP.");
+    },
+    [runCombatAction]
+  );
+
   const handleConfirmTransition = useCallback(
     async (wholeParty: boolean) => {
       const offer = transitionOffer;
@@ -925,11 +955,16 @@ export function GameRoom({
   const ownCharacterIds = useMemo(
     () =>
       new Set(
-        characters
+        characterRows
           .filter((character) => character.owner_id === currentUserId)
           .map((character) => character.id)
       ),
-    [characters, currentUserId]
+    [characterRows, currentUserId]
+  );
+
+  const characterById = useMemo(
+    () => new Map(characterRows.map((character) => [character.id, character])),
+    [characterRows]
   );
 
   // Identity only — depending on the whole drag would rebuild the table
@@ -961,24 +996,31 @@ export function GameRoom({
           },
         ];
       }),
-      tokens: liveMap.tokens.map((token) => ({
-        id: token.id,
-        x: token.x,
-        y: token.y,
-        // Rides the cell's CURRENT elevation, same as objects — the stored
-        // token elevation is a placement-time snapshot, not the render input.
-        elevation: (overlay.get(cellKey(token.x, token.y)) ?? DEFAULT_CELL).elevation,
-        allegiance: token.allegiance,
-        selected:
-          (armedToken?.kind === "move" && armedToken.tokenId === token.id) ||
-          token.id === draggingTokenId,
-        // Mirrors TokenPanel's canControl: the DM, or the owner of the
-        // token's linked character (the RLS write rule, applied client-side
-        // so uncontrollable tokens never become grab targets).
-        draggable: currentUserIsDM || (token.character_id !== null && ownCharacterIds.has(token.character_id)),
-      })),
+      tokens: liveMap.tokens.map((token) => {
+        // Readable only for the owner and the DM under characters RLS — an
+        // NPC token, or another player's PC, simply omits `hp` and renders
+        // no bar.
+        const character = token.character_id ? characterById.get(token.character_id) : undefined;
+        return {
+          id: token.id,
+          x: token.x,
+          y: token.y,
+          // Rides the cell's CURRENT elevation, same as objects — the stored
+          // token elevation is a placement-time snapshot, not the render input.
+          elevation: (overlay.get(cellKey(token.x, token.y)) ?? DEFAULT_CELL).elevation,
+          allegiance: token.allegiance,
+          selected:
+            (armedToken?.kind === "move" && armedToken.tokenId === token.id) ||
+            token.id === draggingTokenId,
+          // Mirrors TokenPanel's canControl: the DM, or the owner of the
+          // token's linked character (the RLS write rule, applied client-side
+          // so uncontrollable tokens never become grab targets).
+          draggable: currentUserIsDM || (token.character_id !== null && ownCharacterIds.has(token.character_id)),
+          hp: character ? { current: character.current_hp, max: character.max_hp } : undefined,
+        };
+      }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds]);
+  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById]);
 
   // Recomputed from the ORIGIN to the hovered cell on every update (the
   // straight path a deliberate walk would take), not accumulated from the
@@ -992,7 +1034,7 @@ export function GameRoom({
     // just the running cost. PC budgets come from the linked character,
     // which every viewer allowed to drag the token can read (owner or DM).
     const character = token.character_id
-      ? (characters.find((candidate) => candidate.id === token.character_id) ?? null)
+      ? (characterRows.find((candidate) => candidate.id === token.character_id) ?? null)
       : null;
     const speed = character?.speed ?? null;
     return {
@@ -1001,7 +1043,7 @@ export function GameRoom({
       speed,
       over: speed !== null && cost > speed,
     };
-  }, [tokenDrag, liveMap, cellOverlay, characters]);
+  }, [tokenDrag, liveMap, cellOverlay, characterRows]);
 
   // Same recompute-from-origin reasoning as dragReadout, same dragPathCost,
   // same overlay — just no token, no speed, and no budget to be over.
@@ -1013,7 +1055,7 @@ export function GameRoom({
   const transitionOfferView = useMemo(() => {
     if (!transitionOffer) return null;
     const character = transitionOffer.token.character_id
-      ? (characters.find((candidate) => candidate.id === transitionOffer.token.character_id) ?? null)
+      ? (characterRows.find((candidate) => candidate.id === transitionOffer.token.character_id) ?? null)
       : null;
     return {
       destinationName:
@@ -1022,7 +1064,7 @@ export function GameRoom({
       tokenLabel: character?.name ?? transitionOffer.token.npc_name ?? "this token",
       transition: transitionOffer.transition,
     };
-  }, [transitionOffer, availableMaps, characters]);
+  }, [transitionOffer, availableMaps, characterRows]);
 
   const interactiveEntries = useMemo<InteractiveEntry[]>(
     () =>
@@ -1143,7 +1185,7 @@ export function GameRoom({
         <TokenPanel
           isDM={currentUserIsDM}
           currentUserId={currentUserId}
-          characters={characters}
+          characters={characterRows}
           tokens={liveMap.tokens}
           armed={armedToken}
           busy={tokenBusy}
@@ -1157,7 +1199,7 @@ export function GameRoom({
       <CombatPanel
         isDM={currentUserIsDM}
         currentUserId={currentUserId}
-        characters={characters}
+        characters={characterRows}
         combat={combat}
         busy={combatBusy}
         error={combatError}
@@ -1165,6 +1207,7 @@ export function GameRoom({
         onAdvance={handleAdvanceTurn}
         onEnd={handleEndCombat}
         onSetInitiative={handleSetInitiative}
+        onApplyHp={handleApplyHp}
       />
       <HandoutPanel
         isDM={currentUserIsDM}

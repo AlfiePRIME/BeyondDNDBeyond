@@ -219,3 +219,28 @@ broadcast (consumed by `CombatPanel` in `src/app/campaigns/[id]/room/`) that is 
 not a snapshot — receivers re-read the active encounter + combatants from the DB (the
 `live-map-changed` shape, also used on reconnect and initial page load), since combat
 state spans multiple rows a stale broadcast copy could misrepresent.
+
+As of Prompt 46, `characters.ts` owns in-combat damage/healing. `applyHpDelta(supabase,
+characterId, delta)` — one signed-delta function (negative damages, positive heals; both
+directions share the clamp) calling the `apply_hp_delta` RPC from migration
+`0028_hp_tracking.sql`, which computes `current_hp = LEAST(max_hp, GREATEST(0, current_hp +
+delta))` in ONE atomic UPDATE from the CURRENT stored value — never from a client-computed
+absolute HP, so two near-simultaneous deltas (party healing landing beside DM damage) both
+apply instead of a read-then-write race losing one. Unlike 0027's combat RPCs, it is
+SECURITY INVOKER (the default): 0008's characters UPDATE policy ("owner or campaign DM,
+any field") is already exactly the right authorization, so the function runs as the caller
+and that policy applies naturally — the RPC exists purely for atomicity, not privilege.
+0028 also adds the previously-missing `CHECK (current_hp >= 0 and current_hp <= max_hp)`
+constraint (defense-in-depth; 0007 only had `max_hp >= 0`) and adds `characters` to the
+`supabase_realtime` publication. `subscribeToCharacterChanges(supabase, characterId,
+handler)` is the profiles-pattern (0012/`subscribeToProfileChanges`) postgres_changes
+subscription scoped to one character's row — the character sheet page uses it, since that
+page isn't connected to the Game Room's campaign channel at all; row visibility rides the
+characters SELECT policy. In-room sync stays on the EXISTING `combat-changed` campaign-
+channel poke: the room's `refreshCombat` now re-reads character rows (RLS-filtered per
+viewer) alongside the encounter, feeding both the combat panel's HP readout and the token
+HP bars. The RPC returns the updated row and every HP change funnels through this one path,
+so the later death-save (Prompt 49) and concentration (Prompt 50) prompts can observe "HP
+just changed" here rather than growing their own damage-application paths. Scope: PC
+combatants only — NPC tokens/combatants have no HP field anywhere yet (a proper monster
+stat block is a later prompt), so the UI offers no damage/heal control on them.

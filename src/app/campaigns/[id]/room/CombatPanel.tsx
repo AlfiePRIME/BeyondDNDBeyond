@@ -18,7 +18,10 @@ export interface CombatState {
  * nothing is active; once active, the sorted turn order with the current
  * combatant highlighted, initiative entry (DM, or the combatant's owning
  * player), the advance-turn control (DM or the current combatant's owner),
- * and DM-only End Combat.
+ * and DM-only End Combat. As of Prompt 46, clicking a combatant selects it,
+ * and a selected PC combatant reveals the damage/heal control (DM, or the
+ * combatant's owning player — the same rule as initiative entry). NPC
+ * combatants have no HP anywhere yet, so they get no such control.
  */
 export function CombatPanel({
   isDM,
@@ -31,6 +34,7 @@ export function CombatPanel({
   onAdvance,
   onEnd,
   onSetInitiative,
+  onApplyHp,
 }: {
   isDM: boolean;
   currentUserId: string;
@@ -43,8 +47,12 @@ export function CombatPanel({
   onAdvance: () => void;
   onEnd: () => void;
   onSetInitiative: (combatant: CombatCombatant, initiative: number) => void;
+  /** Negative = damage, positive = heal (see applyHpDelta). */
+  onApplyHp: (combatant: CombatCombatant, delta: number) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
+  const [hpAmounts, setHpAmounts] = useState<Record<string, string>>({});
 
   const characterById = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
@@ -67,6 +75,18 @@ export function CombatPanel({
   // never see an input the RLS would reject.
   function canEnterInitiative(combatant: CombatCombatant): boolean {
     return isDM || ownsCombatant(combatant);
+  }
+
+  // Same DM-or-owner rule as initiative (it's also exactly 0008's
+  // characters UPDATE policy, which authorizes apply_hp_delta), plus the
+  // PC-only restriction: an NPC combatant has no HP field to change.
+  function canApplyHp(combatant: CombatCombatant): boolean {
+    return combatant.character_id !== null && (isDM || ownsCombatant(combatant));
+  }
+
+  function combatantHp(combatant: CombatCombatant): { current: number; max: number } | null {
+    const character = combatant.character_id ? characterById.get(combatant.character_id) : null;
+    return character ? { current: character.current_hp, max: character.max_hp } : null;
   }
 
   if (!combat) {
@@ -105,6 +125,13 @@ export function CombatPanel({
     return Number.isInteger(value) ? value : null;
   }
 
+  // Always a positive amount — direction comes from the Damage/Heal button
+  // pressed, never from the player typing a sign.
+  function parsedHpAmount(combatant: CombatCombatant): number | null {
+    const value = Number((hpAmounts[combatant.id] ?? "").trim());
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
   return (
     <aside className={styles.combatPanel} data-testid="combat-panel">
       <div className={styles.objectHeader}>
@@ -119,22 +146,38 @@ export function CombatPanel({
       </span>
 
       <div className={styles.tokenSection}>
-        {combatants.map((combatant, index) => (
+        {combatants.map((combatant, index) => {
+          const hp = combatantHp(combatant);
+          const selected = combatant.id === selectedCombatantId;
+          return (
           <div
             key={combatant.id}
-            className={
-              index === currentIndex
-                ? `${styles.combatantRow} ${styles.combatantCurrent}`
-                : styles.combatantRow
-            }
+            className={[
+              styles.combatantRow,
+              index === currentIndex ? styles.combatantCurrent : "",
+              selected ? styles.combatantSelected : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
             data-testid={`combatant-row-${combatant.id}`}
           >
-            <div className={styles.objectHeader}>
+            <button
+              type="button"
+              className={styles.combatantSelect}
+              onClick={() => setSelectedCombatantId(selected ? null : combatant.id)}
+              aria-pressed={selected}
+              data-testid={`combatant-select-${combatant.id}`}
+            >
               <span className={styles.objectName}>{combatantLabel(combatant)}</span>
+              {hp ? (
+                <span className={styles.hpValue} data-testid={`combatant-hp-${combatant.id}`}>
+                  {hp.current}/{hp.max} HP
+                </span>
+              ) : null}
               <span className={styles.initiativeValue} data-testid={`combatant-initiative-${combatant.id}`}>
                 {combatant.initiative !== null ? combatant.initiative : "—"}
               </span>
-            </div>
+            </button>
             {canEnterInitiative(combatant) ? (
               <div className={styles.objectHeader}>
                 <input
@@ -172,8 +215,49 @@ export function CombatPanel({
                 </Button>
               </div>
             ) : null}
+            {selected && canApplyHp(combatant) ? (
+              <div className={styles.objectHeader} data-testid={`hp-controls-${combatant.id}`}>
+                <input
+                  type="number"
+                  min={1}
+                  className={styles.initiativeInput}
+                  aria-label={`Damage or healing amount for ${combatantLabel(combatant)}`}
+                  placeholder="Amount"
+                  value={hpAmounts[combatant.id] ?? ""}
+                  onChange={(event) =>
+                    setHpAmounts((prev) => ({ ...prev, [combatant.id]: event.target.value }))
+                  }
+                  data-testid={`hp-amount-input-${combatant.id}`}
+                />
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={busy || parsedHpAmount(combatant) === null}
+                  onClick={() => {
+                    const amount = parsedHpAmount(combatant);
+                    if (amount !== null) onApplyHp(combatant, -amount);
+                  }}
+                  data-testid={`apply-damage-${combatant.id}`}
+                >
+                  Damage
+                </Button>
+                <Button
+                  size="sm"
+                  variant="teal"
+                  disabled={busy || parsedHpAmount(combatant) === null}
+                  onClick={() => {
+                    const amount = parsedHpAmount(combatant);
+                    if (amount !== null) onApplyHp(combatant, amount);
+                  }}
+                  data-testid={`apply-heal-${combatant.id}`}
+                >
+                  Heal
+                </Button>
+              </div>
+            ) : null}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className={styles.objectHeader}>

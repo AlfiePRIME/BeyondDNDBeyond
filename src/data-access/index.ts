@@ -56,6 +56,8 @@ export {
   listCharactersForUser,
   getCharacter,
   updateCharacter,
+  applyHpDelta,
+  subscribeToCharacterChanges,
   type Character,
   type OwnedCharacter,
   type CreateCharacterParams,

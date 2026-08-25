@@ -150,11 +150,37 @@
   background: color-mix(in srgb, var(--red) 12%, transparent);
 }
 
+.combatantSelected {
+  border-color: color-mix(in srgb, var(--teal) 55%, transparent);
+}
+
+.combatantSelect {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
 .initiativeValue {
   font-family: var(--font-m);
   font-size: 13px;
   letter-spacing: 0.06em;
   color: var(--teal);
+}
+
+.hpValue {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--orange);
+  margin-left: auto;
 }
 
 .initiativeInput {

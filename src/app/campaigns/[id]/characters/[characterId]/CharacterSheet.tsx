@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   CLASSES,
@@ -19,6 +19,7 @@ import {
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
   updateCharacter,
+  subscribeToCharacterChanges,
   setCharacterResourceUses,
   shortRest,
   longRest,
@@ -99,6 +100,26 @@ export function CharacterSheet({
   const [newItemQty, setNewItemQty] = useState("1");
   const [spellToAdd, setSpellToAdd] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Mid-combat damage/healing applied from the Game Room (a different page,
+  // not connected to any shared realtime channel with this one) must land
+  // here live — a postgres_changes subscription on this character's row
+  // (see subscribeToCharacterChanges), the same mechanism the room uses for
+  // live avatar sync. The ref lets the handler see the latest saved
+  // current_hp without resubscribing per change, so the HP draft is only
+  // reset when the HP actually moved — not clobbered mid-edit by unrelated
+  // sheet saves echoing back.
+  const currentHpRef = useRef(character.current_hp);
+  useEffect(() => {
+    currentHpRef.current = character.current_hp;
+  }, [character.current_hp]);
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    return subscribeToCharacterChanges(supabase, initialCharacter.id, (row) => {
+      if (row.current_hp !== currentHpRef.current) setHpDraft(String(row.current_hp));
+      setCharacter(row);
+    });
+  }, [initialCharacter.id]);
 
   const klass = CLASSES.find((c) => c.name === character.class) ?? null;
   const isCaster = Boolean(klass?.spellcastingAbility);
