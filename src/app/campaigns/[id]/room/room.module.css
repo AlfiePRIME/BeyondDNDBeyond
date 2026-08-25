@@ -570,6 +570,12 @@
   border-radius: 8px;
 }
 
+.quickRollRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .diceSectionLabel {
   font-family: var(--font-m);
   font-size: 11px;

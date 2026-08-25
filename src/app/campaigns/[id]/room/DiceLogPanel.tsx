@@ -43,6 +43,13 @@ const MODES: AdvantageMode[] = ["normal", "advantage", "disadvantage"];
 
 const LOG_CAP = 50;
 
+/** The six standard polyhedral dice, as quick-roll shortcuts alongside (not
+ * instead of) the free-form notation box below — each one posts the exact
+ * same "1dN" notation a player could type by hand, through the identical
+ * postRoll({ kind: "freeform" }) call the box's submit handler uses, so
+ * there is exactly one roll mechanism, never a parallel one. */
+const QUICK_ROLL_DICE: readonly number[] = [4, 6, 8, 10, 12, 20];
+
 /** A shared three-state advantage/disadvantage picker — the manual toggle
  * required on every d20 roll surface. */
 export function AdvantageToggle({
@@ -99,6 +106,12 @@ export function AdvantageToggle({
  * lands. Deliberately NOT written into roll_log itself: that table is
  * dice-shaped (total, breakdown around die results) and a ruling isn't a
  * roll — it's a second feed rendered in the same visual space.
+ *
+ * Phase D adds the QUICK_ROLL_DICE row of D4/D6/D8/D10/D12/D20 buttons
+ * beside the free-form box — shortcuts alongside it, not a replacement —
+ * and every roll made anywhere through this panel's `run()` (free-form,
+ * quick-roll, or attack) now also drives the 3D dice-tumble animation via
+ * `onRollLanded`, same as it already drove the room's HP/combat refresh.
  */
 export function DiceLogPanel({
   campaignId,
@@ -338,6 +351,21 @@ export function DiceLogPanel({
           Roll
         </Button>
       </form>
+
+      <div className={styles.quickRollRow} role="group" aria-label="Quick roll" data-testid="quick-roll-row">
+        {QUICK_ROLL_DICE.map((sides) => (
+          <Button
+            key={sides}
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void run(() => postRoll(campaignId, { kind: "freeform", notation: `1d${sides}` }))}
+            data-testid={`quick-roll-d${sides}`}
+          >
+            D{sides}
+          </Button>
+        ))}
+      </div>
 
       {attackers.length > 0 || monsterAttackers.length > 0 ? (
         <div className={styles.attackForm} data-testid="attack-form">

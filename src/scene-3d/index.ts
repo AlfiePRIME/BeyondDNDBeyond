@@ -23,6 +23,7 @@ export {
 export { computeTableMapMetrics } from "./mapFit";
 export { buildGridOverlayPositions } from "./gridOverlay";
 export { PlacedObject } from "./PlacedObject";
+export { DiceTumble, type DiceTumbleHandle, type DiceTumbleProps, type DiceTumbleSpec } from "./DiceTumble";
 export {
   computeSeatLayout,
   type CameraMode,

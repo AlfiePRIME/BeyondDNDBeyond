@@ -93,7 +93,14 @@ import {
   type VisibilityTier,
 } from "@/rules-engine";
 import { Button, Modal } from "@/ui-components";
-import { GameTableScene, type CameraMode, type TableLiveMap } from "@/scene-3d";
+import {
+  DiceTumble,
+  GameTableScene,
+  type CameraMode,
+  type DiceTumbleHandle,
+  type DiceTumbleSpec,
+  type TableLiveMap,
+} from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
 import {
   buildDenseCells,
@@ -112,10 +119,9 @@ import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
+import { buildDiceTumbleSpec } from "../roll/tumble";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { DraggablePanel, PanelLayoutProvider } from "./DraggablePanel";
-import { DmToolPeel, dmToolRevealClassName } from "./DmToolPeel";
-import dmToolPeelStyles from "./DmToolPeel.module.css";
 import { DiceLogPanel } from "./DiceLogPanel";
 import { DmOverridesPanel } from "./DmOverridesPanel";
 import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
@@ -136,6 +142,12 @@ const TRIGGER_EVENT = "map-object-triggered";
 const TOKEN_EVENT = "token-changed";
 const HANDOUT_EVENT = "handout-revealed";
 const COMBAT_EVENT = "combat-changed";
+// Phase D: an ephemeral visual cue, not state — unlike every event above,
+// there is deliberately no paired onReconnect handler for it. A dropped
+// broadcast just means a missed animation, never a stale number anywhere:
+// the roll_log postgres_changes feed (subscribeToRollLog, in DiceLogPanel)
+// is already the reconnect-safe source of truth for the numbers themselves.
+const DICE_ROLLED_EVENT = "dice-rolled";
 
 // Seen-cells memory writes (Prompt 58) are debounced this long past the
 // last newly-perceived cell — movement recomputes visibility far too often
@@ -178,6 +190,15 @@ interface HandoutPayload {
  * stale. */
 interface CombatPayload {
   campaignId: string;
+}
+
+/** Carries the already-built tumble spec (not the raw roll row) so every
+ * receiver can animate immediately with zero extra reads — the roll itself
+ * is already persisted by the time this fires (handleRollLanded only ever
+ * runs after postRoll's promise resolves), so this is pure broadcast, no
+ * write. */
+interface DiceRolledPayload {
+  spec: DiceTumbleSpec;
 }
 
 /** The live map plus everything needed to render/interact with it. */
@@ -308,6 +329,11 @@ export function GameRoom({
   const [endError, setEndError] = useState<string | null>(null);
   const channelRef = useRef<PresenceChannel | null>(null);
   const campaignChannelRef = useRef<PresenceChannel | null>(null);
+  const diceTumbleRef = useRef<DiceTumbleHandle>(null);
+  // Mirrored into a hidden DOM node below (the visionDebug/tableSurfaceDebug
+  // precedent) purely so verify-dice-tumble.mjs's Playwright checks have
+  // something to read — see DiceTumbleProps.onQueueChange's doc comment.
+  const [diceQueueDebug, setDiceQueueDebug] = useState<readonly string[]>([]);
   // Render-time reset (not an effect) when the server hands down a fresh
   // member list — react.dev's "adjusting state when a prop changes" pattern.
   const [prevMembers, setPrevMembers] = useState(members);
@@ -678,6 +704,10 @@ export function GameRoom({
     const unsubscribeCombat = channel.subscribe<CombatPayload>(COMBAT_EVENT, () => {
       void refreshCombat(supabase).catch(() => undefined);
     });
+    // No onReconnect pair — see DICE_ROLLED_EVENT's own comment.
+    const unsubscribeDiceRolled = channel.subscribe<DiceRolledPayload>(DICE_ROLLED_EVENT, (payload) => {
+      diceTumbleRef.current?.play(payload.spec);
+    });
     // Same dropped-broadcast reasoning for combat — a start/advance/end sent
     // while disconnected is gone, so re-read the active encounter.
     const unsubscribeCombatReconnect = channel.onReconnect(async () => {
@@ -693,6 +723,7 @@ export function GameRoom({
       unsubscribeHandoutReconnect();
       unsubscribeCombat();
       unsubscribeCombatReconnect();
+      unsubscribeDiceRolled();
       campaignChannelRef.current = null;
       void channel.leave();
     };
@@ -1176,6 +1207,18 @@ export function GameRoom({
   // apply".
   const handleRollLanded = useCallback(
     (roll: RollLogEntry) => {
+      // Phase D: every roll that reaches this shared callback (the
+      // freeform box, the new quick-roll buttons, attack rolls, and the
+      // Quick Actions/Opportunity Attack panels — everything wired to
+      // onRollLanded) tumbles for this client immediately, then broadcasts
+      // so everyone else's tumble fires too. CombatPanel's own
+      // initiative/hide/death-save/concentration rolls don't call
+      // onRollLanded today and so don't tumble yet — wiring those in is an
+      // additive change to those specific handlers, not to this seam.
+      const spec = buildDiceTumbleSpec(roll);
+      diceTumbleRef.current?.play(spec);
+      void campaignChannelRef.current?.publish<DiceRolledPayload>(DICE_ROLLED_EVENT, { spec });
+
       const attack = roll.breakdown.type === "d20" ? (roll.breakdown.attack ?? null) : null;
       if (!attack) return;
       void (async () => {
@@ -2106,11 +2149,20 @@ export function GameRoom({
           onRulerDragOverCell={handleRulerDragOverCell}
           onRulerDragEnd={handleRulerDragEnd}
         />
+        {/* A modest, fixed corner of the table (its own doc comment) — never
+            full-screen, never over the map/tokens/camera controls. */}
+        <DiceTumble ref={diceTumbleRef} onQueueChange={setDiceQueueDebug} />
       </Canvas>
       {/* Hidden render-state mirror for verify-vision-rendering.mjs — see
           the visionDebug memo. */}
       <div data-testid="vision-state" hidden>
         {visionDebug}
+      </div>
+      {/* Hidden render-state mirror for verify-dice-tumble.mjs — see
+          DiceTumbleProps.onQueueChange's doc comment. Index 0 is always the
+          currently-animating roll id; the rest are queued behind it. */}
+      <div data-testid="dice-tumble-state" hidden>
+        {JSON.stringify({ queue: diceQueueDebug })}
       </div>
       {/* Hidden render-state mirror for verify-void-terrain.mjs — see the
           tableSurfaceDebug memo. */}
@@ -2213,27 +2265,19 @@ export function GameRoom({
       ) : null}
       {/* The DM's monster tooling (Prompt 61): stat block create/edit/
           list plus the quick-add flow. DM-only in the UI; 0038's RLS
-          rejects a non-DM hitting the table directly regardless. Phase C:
-          entirely DM-only content/controls get the peel-to-reveal
-          treatment instead of Phase B's drag/collapse (see
-          DraggablePanel.tsx's PanelId doc comment) — DmToolPeel owns the
-          open/closed state, so MonsterPanel itself only mounts (and only
-          then subscribes/renders) once revealed. */}
+          rejects a non-DM hitting the table directly regardless. */}
       {currentUserIsDM && liveMap ? (
-        <DmToolPeel label="Monsters" side="left" anchorClassName={dmToolPeelStyles.monsterAnchor} testId="monster-panel-tab">
-          <MonsterPanel
-            className={dmToolRevealClassName}
-            statBlocks={statBlocks}
-            rosterNpcs={rosterNpcs}
-            combatActive={combat !== null}
-            busy={monsterBusy || tokenBusy}
-            error={monsterError}
-            onCreate={handleCreateStatBlock}
-            onUpdate={handleUpdateStatBlock}
-            onDelete={handleDeleteStatBlock}
-            onQuickAdd={handleQuickAddMonster}
-          />
-        </DmToolPeel>
+        <MonsterPanel
+          statBlocks={statBlocks}
+          rosterNpcs={rosterNpcs}
+          combatActive={combat !== null}
+          busy={monsterBusy || tokenBusy}
+          error={monsterError}
+          onCreate={handleCreateStatBlock}
+          onUpdate={handleUpdateStatBlock}
+          onDelete={handleDeleteStatBlock}
+          onQuickAdd={handleQuickAddMonster}
+        />
       ) : null}
       <DraggablePanel panelId="combat">
         <CombatPanel
@@ -2296,28 +2340,17 @@ export function GameRoom({
       {/* The DM Controls area (Prompt 52): pending rule-override flags to
           approve/deny, plus (Prompt 53) the action-economy strictness
           toggle as its sibling section. DM-only panel — every player still
-          sees the current mode via the combat panel's badge. Phase C:
-          same peel-to-reveal treatment as MonsterPanel above, its own
-          independent tab at this panel's own corner (see DmToolPeel.tsx's
-          doc comment on why these two don't share one trigger). */}
+          sees the current mode via the combat panel's badge. */}
       {currentUserIsDM ? (
-        <DmToolPeel
-          label="DM Controls"
-          side="left"
-          anchorClassName={dmToolPeelStyles.dmOverridesAnchor}
-          testId="dm-controls-panel-tab"
-        >
-          <DmOverridesPanel
-            className={dmToolRevealClassName}
-            campaignId={campaignId}
-            characters={characterRows}
-            members={roster}
-            strict={economyStrict}
-            strictBusy={economyBusy}
-            strictError={economyError}
-            onSetStrict={handleSetEconomyStrict}
-          />
-        </DmToolPeel>
+        <DmOverridesPanel
+          campaignId={campaignId}
+          characters={characterRows}
+          members={roster}
+          strict={economyStrict}
+          strictBusy={economyBusy}
+          strictError={economyError}
+          onSetStrict={handleSetEconomyStrict}
+        />
       ) : null}
       <DraggablePanel panelId="diceLog">
         <DiceLogPanel

@@ -187,3 +187,30 @@ box at base-slab height (the ObjectMarker invisible-hit-box trick: opacity 0 rat
 live table between gestures — nothing renders at all, so the non-interactive rendering
 stays raycast-free. `cellColor` therefore never receives `"void"`; the thumbnail
 generator's mirrored palette handles it separately (backdrop color — absent there too).
+
+As of Phase D (UI overhaul): `DiceTumble`, mounted once as a sibling of `GameTableScene`
+inside the Game Room's `<Canvas>`, in a fixed corner nook of the table. It's the module's
+first per-frame procedural animation (`useFrame`, via the new `useDiceTumble` hook) — a
+scripted, keyframed tumble-and-settle, deliberately NOT physics. `useDiceTumble` is thin
+React glue only; all of the actual motion lives behind the `DiceAnimator` interface
+(diceAnimator.ts) it depends on — a pure `(spec, elapsedSeconds) → pose` function, the same
+injectable-seam shape as rules-engine/dice.ts's `RandomSource`, so a future
+`@react-three/rapier`-backed implementation can satisfy the exact same interface and swap in
+without changing `useDiceTumble`, `DiceTumble`, `DiceLogPanel`, or `GameRoom`. All six dice
+shapes are built procedurally (`diceGeometry.ts`) — three.js's own Platonic-solid geometry
+primitives for five of them, plus a from-scratch-derived pentagonal trapezohedron (the true
+d10 shape, computed as the dual of a uniform pentagonal antiprism) for the one three.js has
+no built-in for — deliberately not an imported 3D asset, so there is nothing to
+license-check. The settle pose targets the real modeled face for the server-given result
+(`diceGeometry.ts`'s `DIE_FACE_NORMALS`, computed once from each shape's actual generated
+triangle geometry — see that file's doc comment for why a plain solid-colored die still
+can't promise a recognizable pip, and why a billboarded 2D-canvas-texture result badge, the
+same technique `MapSurface`'s HP bar and condition chips already use, carries the number
+unambiguously instead). `DiceTumbleSpec` — the only shape this module exposes across the
+boundary — is deliberately data-access-free (the `MapSurfaceCell`/`CampaignMember`
+decoupling precedent): translating a `RollLogEntry` into it is the app layer's job
+(`src/app/campaigns/[id]/roll/tumble.ts`'s `buildDiceTumbleSpec`). `DiceTumble` exposes an
+imperative `play(spec)` handle rather than a props-driven list, and queues overlapping rolls
+FIFO (remounting a fresh `ActiveTumble` per `spec.id`) rather than trying to lay simultaneous
+tumbles out in its small footprint — one roll's dice always get an uninterrupted
+tumble-settle-linger cycle before the next queued roll's dice ever mount.
