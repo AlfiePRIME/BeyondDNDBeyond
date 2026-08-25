@@ -78,11 +78,15 @@ export function buildAreaRequest(
     "- cells is sparse: only list cells that differ from flat normal ground",
     "  (elevation 0, terrain \"normal\"). Never list a coordinate twice.",
     `- elevation is an integer from 0 to ${MAX_AREA_ELEVATION} (one step is 5 ft).`,
-    '- terrain is "normal" or "difficult" (rubble, swamp, undergrowth...).',
+    '- terrain is "normal", "difficult" (rubble, swamp, undergrowth...), or "void" —',
+    "  a cell with NO floor at all (a chasm, or solid rock outside a cave's walkable",
+    "  area). Use void to carve winding corridors and irregular room shapes; it renders",
+    "  as empty space and tokens can never stand there.",
     "- objects may ONLY use asset_id values from the palette below, echoed exactly.",
     "  Do not invent assets; if nothing in the palette fits, place fewer objects.",
-    "- at most one object per cell, and an object's elevation must exactly equal the",
-    "  elevation of the cell it stands on (0 if that cell isn't listed in cells).",
+    "- at most one object per cell, never on a void cell (there is no floor to stand",
+    "  on), and an object's elevation must exactly equal the elevation of the cell it",
+    "  stands on (0 if that cell isn't listed in cells).",
     "- rotation is 0, 90, 180, or 270 degrees.",
     "Make the layout evocative and playable: vary elevation and terrain where the brief",
     "suggests it, and place objects deliberately rather than uniformly.",
@@ -121,7 +125,7 @@ export function buildAreaRequest(
                   x: { type: "integer" },
                   y: { type: "integer" },
                   elevation: { type: "integer" },
-                  terrain: { type: "string", enum: ["normal", "difficult"] },
+                  terrain: { type: "string", enum: ["normal", "difficult", "void"] },
                 },
               },
             },
@@ -196,6 +200,7 @@ export function validateGeneratedArea(
 
   const assetIds = new Set(assets.map((asset) => asset.id));
   const elevationByCell = new Map<string, number>();
+  const voidCells = new Set<string>();
   const cells: GeneratedAreaCell[] = [];
   for (const raw of record.cells) {
     const cell = raw as { x?: unknown; y?: unknown; elevation?: unknown; terrain?: unknown };
@@ -212,8 +217,8 @@ export function validateGeneratedArea(
       problems.push(`${at} elevation must be an integer from 0 to ${MAX_AREA_ELEVATION}`);
       continue;
     }
-    if (cell.terrain !== "normal" && cell.terrain !== "difficult") {
-      problems.push(`${at} terrain must be "normal" or "difficult"`);
+    if (cell.terrain !== "normal" && cell.terrain !== "difficult" && cell.terrain !== "void") {
+      problems.push(`${at} terrain must be "normal", "difficult", or "void"`);
       continue;
     }
     const key = `${cell.x},${cell.y}`;
@@ -222,6 +227,7 @@ export function validateGeneratedArea(
       continue;
     }
     elevationByCell.set(key, cell.elevation);
+    if (cell.terrain === "void") voidCells.add(key);
     cells.push({ x: cell.x, y: cell.y, elevation: cell.elevation, terrain: cell.terrain });
   }
 
@@ -246,6 +252,12 @@ export function validateGeneratedArea(
     }
     if (typeof object.asset_id !== "string" || !assetIds.has(object.asset_id)) {
       problems.push(`${at} references an asset that is not in the campaign palette`);
+      continue;
+    }
+    // No floor, no object — the editor and Game Room enforce the same rule
+    // for manual placement, so an accepted draft can never smuggle one in.
+    if (voidCells.has(`${object.x},${object.y}`)) {
+      problems.push(`${at} stands on a void cell, which has no floor`);
       continue;
     }
     const groundElevation = elevationByCell.get(`${object.x},${object.y}`) ?? 0;

@@ -86,6 +86,15 @@ const MAX_AREA_CELLS = 400;
 const REFERENCE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 const REFERENCE_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
+// Nothing is placeable on a cell with no floor — the void-terrain rule the
+// Game Room applies to tokens, applied here to everything the editor anchors
+// to a cell. Specific messages, not a generic failure: the cell LOOKS absent,
+// but a stray click there still deserves a stated reason.
+const VOID_OBJECT_MESSAGE = "There's no floor there — objects can't sit on a void cell.";
+const VOID_TRANSITION_MESSAGE =
+  "A transition can't start on a void cell — no token can ever stand there.";
+const VOID_LIGHT_MESSAGE = "A light can't be anchored to a void cell — there's no floor there.";
+
 /** An AI-proposed object placement, client-side only until the DM accepts —
  * unlike normal placements it has no DB row yet, so it carries a temp id and
  * a bare asset reference instead of a full MapObject. */
@@ -566,6 +575,23 @@ export function MapEditor({
     setMoveArmed(false);
   }, []);
 
+  // The terrain the editor currently DISPLAYS at a cell — draft state inside
+  // an active preview region, sculpted overlay elsewhere (the sceneObjects
+  // surfaceElevation lookup's exact precedence). Ref-based like the paint
+  // handlers, so the stable scene callbacks read fresh state.
+  const displayedTerrainAt = useCallback(
+    (x: number, y: number): TerrainType => {
+      const key = cellKey(x, y);
+      const preview = previewRef.current;
+      const state =
+        (preview && inRegion(x, y) ? preview.cells.get(key) : undefined) ??
+        overlayRef.current.get(key) ??
+        DEFAULT_CELL;
+      return state.terrain;
+    },
+    [inRegion]
+  );
+
   const handleCellClick = useCallback(
     (x: number, y: number) => {
       if (toolRef.current !== "object") return;
@@ -586,6 +612,10 @@ export function MapEditor({
             handleSelectObject(blocker.id);
             return;
           }
+          if (displayedTerrainAt(x, y) === "void") {
+            setObjectError(VOID_OBJECT_MESSAGE);
+            return;
+          }
           setPreviewState({
             ...preview!,
             objects: preview!.objects.map((object) =>
@@ -598,6 +628,10 @@ export function MapEditor({
         const blocker = previewOccupant ?? occupant;
         if (blocker && blocker.id !== selectedId) {
           handleSelectObject(blocker.id);
+          return;
+        }
+        if (displayedTerrainAt(x, y) === "void") {
+          setObjectError(VOID_OBJECT_MESSAGE);
           return;
         }
         const elevation = (overlayRef.current.get(cellKey(x, y)) ?? DEFAULT_CELL).elevation;
@@ -629,6 +663,13 @@ export function MapEditor({
 
       const assetId = selectedAssetIdRef.current;
       if (!assetId) return;
+
+      // No floor, no placement — checked after occupant selection so a click
+      // can still select an object that predates its cell being painted void.
+      if (displayedTerrainAt(x, y) === "void") {
+        setObjectError(VOID_OBJECT_MESSAGE);
+        return;
+      }
 
       // Placing inside an active preview adds to the draft (no network) —
       // it becomes a real row only if the DM accepts.
@@ -663,6 +704,7 @@ export function MapEditor({
     [
       map.id,
       inRegion,
+      displayedTerrainAt,
       runObjectMutation,
       replaceObject,
       handleSelectObject,
@@ -851,10 +893,17 @@ export function MapEditor({
     };
   }, [referenceUrl, referenceX, referenceY, referenceScale]);
 
-  const handleTransitionCellClick = useCallback((x: number, y: number) => {
-    setTransitionCell({ x, y });
-    setTransitionError(null);
-  }, []);
+  const handleTransitionCellClick = useCallback(
+    (x: number, y: number) => {
+      if (displayedTerrainAt(x, y) === "void") {
+        setTransitionError(VOID_TRANSITION_MESSAGE);
+        return;
+      }
+      setTransitionCell({ x, y });
+      setTransitionError(null);
+    },
+    [displayedTerrainAt]
+  );
 
   // Transition authoring stays OUTSIDE undo/redo: unlike paint strokes it's
   // a deliberate, low-frequency act behind an explicit form submit with no
@@ -905,10 +954,17 @@ export function MapEditor({
     }
   }
 
-  const handleLightSourceCellClick = useCallback((x: number, y: number) => {
-    setLightCell({ x, y });
-    setLightError(null);
-  }, []);
+  const handleLightSourceCellClick = useCallback(
+    (x: number, y: number) => {
+      if (displayedTerrainAt(x, y) === "void") {
+        setLightError(VOID_LIGHT_MESSAGE);
+        return;
+      }
+      setLightCell({ x, y });
+      setLightError(null);
+    },
+    [displayedTerrainAt]
+  );
 
   function resetLightForm() {
     setLightCell(null);
@@ -1158,6 +1214,22 @@ export function MapEditor({
     [map.grid_width, map.grid_height, overlay, preview]
   );
 
+  // Hidden render-state mirror for verify-void-terrain.mjs (the Game Room's
+  // vision-state precedent): the WebGL scene has no DOM to locate, and this
+  // cells array IS the render decision MapSurface executes deterministically
+  // — a listed void cell is one the editor preview draws no floor block and
+  // no grid outline for.
+  const editorSurfaceDebug = useMemo(
+    () =>
+      JSON.stringify({
+        mapId: map.id,
+        voidCells: cells
+          .filter((cell) => cell.terrain === "void")
+          .map((cell) => cellKey(cell.x, cell.y)),
+      }),
+    [map.id, cells]
+  );
+
   const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
 
   const sceneObjects = useMemo<MapSurfaceObject[]>(() => {
@@ -1287,6 +1359,11 @@ export function MapEditor({
           referenceImage={referenceImage}
         />
       </Canvas>
+
+      {/* Hidden render-state mirror — see the editorSurfaceDebug memo. */}
+      <div data-testid="editor-surface-state" hidden>
+        {editorSurfaceDebug}
+      </div>
 
       <header className={styles.overlay}>
         <Link href={`/campaigns/${campaignId}/maps`} className={styles.backLink}>
@@ -1422,9 +1499,24 @@ export function MapEditor({
               >
                 Normal
               </Button>
+              <Button
+                size="sm"
+                variant={brush === "void" ? "accent" : "ghost"}
+                onClick={() => setBrush("void")}
+                data-testid="brush-void"
+              >
+                Void
+              </Button>
             </>
           ) : null}
         </div>
+        {tool === "terrain" && brush === "void" ? (
+          <p className={styles.hint}>
+            Void cells have no floor at all — they render as empty space for everyone, and tokens
+            and objects can never sit there. Paint them to carve caves and irregular room shapes
+            out of the grid.
+          </p>
+        ) : null}
         <span className={styles.toolbarLabel}>Lighting</span>
         <div className={styles.toolRow}>
           <Button

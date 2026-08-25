@@ -4,7 +4,12 @@
 // this exact decision — see Prompt 9's README for why it was fixed here.
 export const FEET_PER_CELL = 5;
 
-export type TerrainType = "normal" | "difficult";
+// "void" is a cell with no floor at all (the non-rectangular-room-shapes
+// feature): it renders as absent for every viewer and can never be entered,
+// which this module expresses as an infinite movement cost — any path that
+// includes a void cell sums to Infinity, so cost-based callers see
+// "impassable" without a special case.
+export type TerrainType = "normal" | "difficult" | "void";
 
 export interface CellMovementParams {
   terrain: TerrainType;
@@ -16,6 +21,10 @@ export interface CellMovementParams {
 // Difficult terrain and climbing are independent costs that stack: a cell
 // that is both difficult terrain and a climb pays both penalties.
 export function cellMovementCost({ terrain, elevationDeltaFeet }: CellMovementParams): number {
+  // A void cell cannot be entered at any price. Returning here (rather than
+  // folding Infinity into horizontalCost) is just clarity — Infinity plus
+  // any climb cost is still Infinity, so no elevation special-casing exists.
+  if (terrain === "void") return Infinity;
   const horizontalCost = terrain === "difficult" ? FEET_PER_CELL * 2 : FEET_PER_CELL;
   // SRD climbing rule: 1 extra foot of movement per foot climbed, i.e. the
   // vertical portion costs double.

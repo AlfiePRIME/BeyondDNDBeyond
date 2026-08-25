@@ -35,6 +35,15 @@ describe("cellMovementCost", () => {
   it("does not add climb cost when descending or staying level", () => {
     expect(cellMovementCost({ terrain: "normal", elevationDeltaFeet: -5 })).toBe(5);
   });
+
+  it("costs Infinity to enter a void cell — impassable, not merely expensive", () => {
+    expect(cellMovementCost({ terrain: "void", elevationDeltaFeet: 0 })).toBe(Infinity);
+  });
+
+  it("costs Infinity for a void cell regardless of the elevation delta", () => {
+    expect(cellMovementCost({ terrain: "void", elevationDeltaFeet: 25 })).toBe(Infinity);
+    expect(cellMovementCost({ terrain: "void", elevationDeltaFeet: -25 })).toBe(Infinity);
+  });
 });
 
 describe("gridDistanceFeet", () => {
@@ -83,6 +92,7 @@ describe("straightCellPath", () => {
 describe("pathMovementCost", () => {
   const normal = (elevationSteps: number) => ({ terrain: "normal" as const, elevationSteps });
   const difficult = (elevationSteps: number) => ({ terrain: "difficult" as const, elevationSteps });
+  const voidCell = (elevationSteps: number) => ({ terrain: "void" as const, elevationSteps });
 
   it("costs 5 ft per cell over normal level ground", () => {
     expect(pathMovementCost(0, [normal(0), normal(0), normal(0)])).toBe(15);
@@ -105,5 +115,16 @@ describe("pathMovementCost", () => {
 
   it("charges nothing for an empty path", () => {
     expect(pathMovementCost(3, [])).toBe(0);
+  });
+
+  it("sums to Infinity when any entered cell is void, wherever it falls in the path", () => {
+    expect(pathMovementCost(0, [voidCell(0)])).toBe(Infinity);
+    expect(pathMovementCost(0, [normal(0), voidCell(0), normal(0)])).toBe(Infinity);
+    expect(pathMovementCost(0, [normal(0), difficult(1), voidCell(2)])).toBe(Infinity);
+  });
+
+  it("stays Infinity even when the path descends after the void cell", () => {
+    // Descending past a void cell can never 'refund' the impassable cost.
+    expect(pathMovementCost(5, [voidCell(5), normal(0)])).toBe(Infinity);
   });
 });

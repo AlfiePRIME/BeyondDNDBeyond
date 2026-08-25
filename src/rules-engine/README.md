@@ -213,3 +213,17 @@ null for a name outside the catalog (e.g. an import's "Unknown"). Extracted from
 wizard's inline derivation and the import flow's local `darkvisionForRaceName` when the
 character sheet's race editor became a third consumer; all three surfaces now share this
 one resolver, so creation and later race edits derive identical speed/darkvision.
+
+As of the void-terrain addition (post-roadmap — "Void terrain (non-rectangular room
+shapes)", not a numbered prompt): `TerrainType` in `movement.ts` widens to
+`"normal" | "difficult" | "void"`. A void cell is a cell with no floor at all — it renders
+as absent for every viewer and can never be entered — which this module expresses in the
+one way a pure cost engine can: `cellMovementCost` returns `Infinity` for void terrain,
+before any elevation math (deliberately no special-casing beyond the terrain check —
+Infinity plus any climb cost is still Infinity), so `pathMovementCost` over any path
+containing a void cell sums to `Infinity` and every cost-based caller sees "impassable"
+without new API. Everything else about void (rendering it as a hole, rejecting placement
+and moves onto it, the widened DB CHECK) lives in the app layer/scene/schema, not here.
+Unit-tested in `movement.test.ts`: void costs Infinity regardless of elevation delta
+(ascending and descending both), and a path stays Infinity wherever the void cell falls in
+it, including when later cells descend.

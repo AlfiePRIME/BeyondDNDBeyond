@@ -170,3 +170,20 @@ unmasked model — full view, by design), and this masking is deliberately CLIEN
 presentation over data every member's browser already holds in full, the project owner's
 explicit trusted-friend-group trade-off rather than a security boundary — documented in
 `GameRoom`'s vision block and the main README, not something to "fix" server-side.
+
+As of the void-terrain addition (post-roadmap — "Void terrain (non-rectangular room
+shapes)", not a numbered prompt): `MapSurface` renders NOTHING for a cell whose `terrain`
+is `"void"` — no `CellBlock`, and no grid-overlay outline (`buildGridOverlayPositions`
+filters void cells before sizing its buffer, unit-locked in `gridOverlay.test.ts`) — so a
+DM can carve caves and winding corridors out of the rectangular grid. Unlike the Prompt 58
+vision omissions (per-viewer, cells dropped from the `cells` array upstream), void is
+UNCONDITIONAL map shape: the cell stays in the array, and this component draws it as
+absent for every viewer, editor preview and live table alike. The one nuance is pointer
+targeting: a mesh that doesn't exist can't be clicked, which would make a void cell
+unpaintable-back in the editor and un-rejectable (silently dead) in the room — so while
+per-cell pointer handlers are attached, a void cell renders `VoidCellPick`, an opacity-0
+box at base-slab height (the ObjectMarker invisible-hit-box trick: opacity 0 rather than
+`visible={false}`, which the raycaster would skip). With no handlers attached — the inert
+live table between gestures — nothing renders at all, so the non-interactive rendering
+stays raycast-free. `cellColor` therefore never receives `"void"`; the thumbnail
+generator's mirrored palette handles it separately (backdrop color — absent there too).

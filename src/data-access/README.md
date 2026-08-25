@@ -720,3 +720,16 @@ concentration branches and the atomic same-transaction roll_log INSERT mirrored 
 widens to `AttackKind | "stat_block"` for that path (stored bonus and damage used directly;
 nothing rules-engine-derived, by design — which is also why the rules engine itself is
 untouched by this prompt).
+
+As of the void-terrain addition (post-roadmap — "Void terrain (non-rectangular room
+shapes)", not a numbered prompt): no new tables, columns, or CRUD. Migration
+`0039_void_terrain.sql` widens `map_cells`' terrain CHECK to
+`('normal', 'difficult', 'void')` — the constraint name (`map_cells_terrain_type_check`)
+was read from the running database via `pg_constraint`, the 0031/0032/0037 never-guess
+habit. `MapCell.terrain_type` already types as `@/rules-engine`'s `TerrainType` (imported,
+not mirrored — data-access may depend on rules-engine, unlike the reverse), so the widened
+union flows through `maps.ts` and `mapSeenCells.ts` with no code change here;
+`map_seen_cells.terrain_type` deliberately carries no CHECK (it snapshots whatever
+`map_cells` held), so remembered void cells needed no migration either. Painting a cell
+void goes through the existing `upsertMapCells` under the existing `can_write_map` RLS —
+the same authorization as painting normal/difficult.

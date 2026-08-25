@@ -210,6 +210,18 @@ function cellElevation(cells: MapCell[], x: number, y: number): number {
   return cells.find((cell) => cell.x === x && cell.y === y)?.elevation ?? 0;
 }
 
+// Same sparse-rows lookup for terrain (absent means normal) — the
+// placement/move guards below read it straight from the live rows so they
+// can run in callbacks declared before the cellOverlay memo exists.
+function cellIsVoid(cells: MapCell[], x: number, y: number): boolean {
+  return cells.find((cell) => cell.x === x && cell.y === y)?.terrain_type === "void";
+}
+
+// One rejection message for every put-a-token-there gesture (placement
+// click, armed move, drag release): specific about WHY, not a budget/cost
+// error — a void cell is not expensive, it does not exist as a floor.
+const VOID_CELL_MESSAGE = "There's no floor there — that cell is void, outside the walkable map.";
+
 /** Cost of the straight walk from the drag's origin to the hovered cell,
  * charged against the same overlay the table renders from. */
 function dragPathCost(
@@ -751,6 +763,14 @@ export function GameRoom({
     async (x: number, y: number) => {
       const current = liveMapRef.current;
       if (!armedToken || !current || tokenBusy) return;
+      // No floor, no token — checked BEFORE any move/place call, for every
+      // armed kind (place-character/npc/monster and click-to-move alike).
+      // Client-side only, like the vision masking: a clear message for a
+      // trusted table, not a security boundary.
+      if (cellIsVoid(current.cells, x, y)) {
+        setTokenError(VOID_CELL_MESSAGE);
+        return;
+      }
       setTokenBusy(true);
       setTokenError(null);
       try {
@@ -876,6 +896,13 @@ export function GameRoom({
     // A press-and-release in place is a grab, not a move — no write, and no
     // 0 ft "move" broadcast to the table.
     if (drag.current.x === drag.origin.x && drag.current.y === drag.origin.y) return;
+    // Dropped onto a void cell: rejected BEFORE either move path (tracked
+    // moveCombatToken or plain moveMapToken) is attempted — the token snaps
+    // back where it was, with the reason stated rather than a cost error.
+    if (cellIsVoid(current.cells, drag.current.x, drag.current.y)) {
+      setTokenError(VOID_CELL_MESSAGE);
+      return;
+    }
     setTokenBusy(true);
     setTokenError(null);
     try {
@@ -901,14 +928,23 @@ export function GameRoom({
         : -1;
       const currentCombatant = currentIndex >= 0 ? (combatants[currentIndex] ?? null) : null;
       const tracked = currentCombatant !== null && currentCombatant.token_id === drag.tokenId;
-      const token = tracked
-        ? await moveCombatToken(
-            supabase,
-            drag.tokenId,
-            position,
-            dragPathCost(overlayFromRows(current.cells), drag.origin, drag.current)
-          )
-        : await moveMapToken(supabase, drag.tokenId, position);
+      // A tracked move whose straight path crosses a void cell costs
+      // Infinity — no budget can pay it, and JSON couldn't even carry it to
+      // the RPC — so it's rejected here with the real reason (the readout
+      // already showed ∞ ft). Untracked drags stay free-form and uncharged,
+      // exactly as before: outside a tracked turn nothing walks the path,
+      // so only the destination-void guard above applies.
+      const cost = tracked
+        ? dragPathCost(overlayFromRows(current.cells), drag.origin, drag.current)
+        : null;
+      if (cost !== null && !Number.isFinite(cost)) {
+        setTokenError("That walk would cross the void — there's no floor along the way.");
+        return;
+      }
+      const token =
+        tracked && cost !== null
+          ? await moveCombatToken(supabase, drag.tokenId, position, cost)
+          : await moveMapToken(supabase, drag.tokenId, position);
       applyTokenChange(token.id, token);
       await publishTokenChange(token.id, token);
       if (tracked && combat && currentCombatant) {
@@ -1959,6 +1995,20 @@ export function GameRoom({
     });
   }, [liveMap, visionMasking, seenCells, hiddenFromViewerTokenIds]);
 
+  // Hidden render-state mirror for verify-void-terrain.mjs (the visionDebug
+  // precedent below): a listed cell is one the table draws no floor block
+  // and no grid outline for, for EVERY viewer — void is unconditional map
+  // shape, unlike the per-viewer vision masking.
+  const tableSurfaceDebug = useMemo(() => {
+    if (!liveMap) return JSON.stringify({ mapId: null, voidCells: [] });
+    return JSON.stringify({
+      mapId: liveMap.map.id,
+      voidCells: liveMap.cells
+        .filter((cell) => cell.terrain_type === "void")
+        .map((cell) => cellKey(cell.x, cell.y)),
+    });
+  }, [liveMap]);
+
   // Recomputed from the ORIGIN to the hovered cell on every update (the
   // straight path a deliberate walk would take), not accumulated from the
   // pointer's literal trail — mouse wobble must not inflate the cost.
@@ -2051,11 +2101,18 @@ export function GameRoom({
       <div data-testid="vision-state" hidden>
         {visionDebug}
       </div>
+      {/* Hidden render-state mirror for verify-void-terrain.mjs — see the
+          tableSurfaceDebug memo. */}
+      <div data-testid="table-surface-state" hidden>
+        {tableSurfaceDebug}
+      </div>
       {rulerReadout !== null ? (
         <div className={`${styles.moveReadout} ${styles.rulerReadout}`} data-testid="ruler-readout">
           <span className={styles.moveReadoutLabel}>Measuring</span>
           <span className={styles.rulerDistance} data-testid="ruler-distance-feet">
-            {rulerReadout} ft
+            {/* A path through a void cell costs Infinity — shown as ∞, the
+                honest "impassable" readout rather than a giant number. */}
+            {Number.isFinite(rulerReadout) ? rulerReadout : "∞"} ft
           </span>
           <span className={styles.moveReadoutLabel}>ruler only — nothing moves</span>
         </div>
@@ -2067,7 +2124,8 @@ export function GameRoom({
         >
           <span className={styles.moveReadoutLabel}>Moving {dragReadout.label}</span>
           <span className={styles.moveReadoutCost} data-testid="move-cost-feet">
-            {dragReadout.cost} ft
+            {/* ∞ over a void cell — see the ruler readout's comment. */}
+            {Number.isFinite(dragReadout.cost) ? dragReadout.cost : "∞"} ft
             {dragReadout.speed !== null ? ` / ${dragReadout.speed} ft speed` : ""}
           </span>
           {dragReadout.over ? (

@@ -21,6 +21,15 @@ describe("thumbnailCellColor", () => {
     expect(thumbnailCellColor("normal", 10)).toBe("#b0a5dc");
   });
 
+  it("paints a void cell as the backdrop — absent, like the space around the map", () => {
+    // tokens.css --surface, the BACKDROP constant renderMapThumbnail clears
+    // the canvas with: a void cell is indistinguishable from no cell at all.
+    expect(thumbnailCellColor("void", 0)).toBe("#060012");
+    // Elevation never lightens a cell with no floor.
+    expect(thumbnailCellColor("void", 5)).toBe("#060012");
+    expect(thumbnailCellColor("void", 10)).toBe("#060012");
+  });
+
   it("matches MapSurface's cellColor exactly for difficult terrain at every elevation step", () => {
     expect(thumbnailCellColor("difficult", 0)).toBe("#a85a24");
     expect(thumbnailCellColor("difficult", 1)).toBe("#b47242");

@@ -121,6 +121,31 @@ describe("validateGeneratedArea", () => {
     });
   });
 
+  it("accepts void terrain — the model may carve irregular room shapes", () => {
+    const result = validateGeneratedArea(
+      { cells: [{ x: 2, y: 1, elevation: 0, terrain: "void" }], objects: [] },
+      REGION,
+      ASSETS
+    );
+    expect(result).toEqual({
+      ok: true,
+      area: { cells: [{ x: 2, y: 1, elevation: 0, terrain: "void" }], objects: [] },
+    });
+  });
+
+  it("rejects an object standing on a void cell — no floor, no object", () => {
+    const result = validateGeneratedArea(
+      {
+        cells: [{ x: 1, y: 1, elevation: 0, terrain: "void" }],
+        objects: [{ asset_id: "asset-tree", x: 1, y: 1, elevation: 0, rotation: 0 }],
+      },
+      REGION,
+      ASSETS
+    );
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.reason).toContain("void cell");
+  });
+
   it("rejects a draft that isn't the expected shape", () => {
     expect(validateGeneratedArea(null, REGION, ASSETS).ok).toBe(false);
     expect(validateGeneratedArea("nope", REGION, ASSETS).ok).toBe(false);

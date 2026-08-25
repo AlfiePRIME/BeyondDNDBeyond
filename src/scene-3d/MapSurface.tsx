@@ -73,6 +73,9 @@ const LIGHT_SCALE: Record<MapSurfaceLightLevel, number> = {
   dark: 0.24,
 };
 
+// "void" terrain never reaches this function: MapSurface renders no
+// CellBlock for a void cell at all (see the cells map below), so the only
+// terrains with a color are normal and difficult.
 function cellColor(
   terrain: TerrainType,
   elevation: number,
@@ -191,6 +194,48 @@ const CellBlock = memo(function CellBlock({
         emissiveIntensity={hoverLit ? 0.4 : preview ? 0.3 : 0}
         roughness={0.65}
       />
+    </mesh>
+  );
+});
+
+interface VoidCellPickProps {
+  x: number;
+  y: number;
+  worldX: number;
+  worldZ: number;
+  height: number;
+  span: number;
+  onDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
+  onOver?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
+}
+
+// A void cell draws NOTHING — no floor slab, no grid outline — but while
+// per-cell pointer handlers are attached (the editor always; the game table
+// only when armed/dragging/measuring) it still needs to be a pointer target:
+// the editor must be able to paint a void cell back to normal, and the room
+// must be able to say "you can't move there" instead of silently ignoring
+// the gesture. Hence this opacity-0 stand-in — the ObjectMarker hit-box
+// trick (opacity 0 rather than visible={false}, because an invisible mesh is
+// skipped by the raycaster). When no handlers are attached, MapSurface
+// renders nothing at all for the cell, keeping the inert table raycast-free.
+const VoidCellPick = memo(function VoidCellPick({
+  x,
+  y,
+  worldX,
+  worldZ,
+  height,
+  span,
+  onDown,
+  onOver,
+}: VoidCellPickProps) {
+  return (
+    <mesh
+      position={[worldX, height / 2, worldZ]}
+      onPointerDown={onDown ? (event) => onDown(x, y, event) : undefined}
+      onPointerOver={onOver ? (event) => onOver(x, y, event) : undefined}
+    >
+      <boxGeometry args={[span, height, span]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
     </mesh>
   );
 });
@@ -780,24 +825,46 @@ export function MapSurface({
 
   return (
     <>
-      {cells.map((cell) => (
-        <CellBlock
-          key={`${cell.x},${cell.y}`}
-          x={cell.x}
-          y={cell.y}
-          worldX={cell.x * cellSize - offsetX}
-          worldZ={cell.y * cellSize - offsetZ}
-          height={baseHeight + cell.elevation * elevationStepHeight}
-          span={span}
-          elevation={cell.elevation}
-          terrain={cell.terrain}
-          preview={cell.preview ?? false}
-          light={cell.light}
-          visibility={cell.visibility}
-          onDown={onCellPointerDown}
-          onOver={onCellPointerOver}
-        />
-      ))}
+      {cells.map((cell) =>
+        cell.terrain === "void" ? (
+          // No floor at all — genuinely absent for EVERY viewer (unlike the
+          // per-viewer vision omissions, which drop the cell from `cells`
+          // upstream). Only the invisible pick stand-in renders, and only
+          // while pointer handlers are attached — see VoidCellPick. It sits
+          // at base-slab height regardless of the stored elevation: a cell
+          // with no floor has no surface to terrace.
+          onCellPointerDown || onCellPointerOver ? (
+            <VoidCellPick
+              key={`${cell.x},${cell.y}`}
+              x={cell.x}
+              y={cell.y}
+              worldX={cell.x * cellSize - offsetX}
+              worldZ={cell.y * cellSize - offsetZ}
+              height={baseHeight}
+              span={span}
+              onDown={onCellPointerDown}
+              onOver={onCellPointerOver}
+            />
+          ) : null
+        ) : (
+          <CellBlock
+            key={`${cell.x},${cell.y}`}
+            x={cell.x}
+            y={cell.y}
+            worldX={cell.x * cellSize - offsetX}
+            worldZ={cell.y * cellSize - offsetZ}
+            height={baseHeight + cell.elevation * elevationStepHeight}
+            span={span}
+            elevation={cell.elevation}
+            terrain={cell.terrain}
+            preview={cell.preview ?? false}
+            light={cell.light}
+            visibility={cell.visibility}
+            onDown={onCellPointerDown}
+            onOver={onCellPointerOver}
+          />
+        )
+      )}
 
       {objects?.map((object) => (
         <ObjectMarker

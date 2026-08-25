@@ -27,4 +27,18 @@ describe("buildGridOverlayPositions", () => {
     const xs = [...positions].filter((_, index) => index % 3 === 0);
     expect(Math.min(...xs)).toBeCloseTo(-Math.max(...xs));
   });
+
+  it("emits no outline for a void cell — the overlay follows the floor exactly", () => {
+    const withVoid: MapSurfaceCell[] = [...cells, { x: 2, y: 0, elevation: 0, terrain: "void" }];
+    const positions = buildGridOverlayPositions(withVoid, EDITOR_MAP_METRICS, 3, 1);
+    // Same buffer as the two floored cells alone: the void cell contributes
+    // zero edges rather than an outline over nothing.
+    expect(positions.length).toBe(cells.length * 8 * 3);
+    // And no vertex lands in the void cell's x range (its center sits at
+    // +1 cell from the grid middle; the floored cells' outlines end before it).
+    const xs = [...positions].filter((_, index) => index % 3 === 0);
+    const voidCenterX = 2 * EDITOR_MAP_METRICS.cellSize - ((3 - 1) / 2) * EDITOR_MAP_METRICS.cellSize;
+    const half = (EDITOR_MAP_METRICS.cellSize * (1 - 0.08)) / 2;
+    expect(Math.max(...xs)).toBeLessThan(voidCenterX - half + 0.001);
+  });
 });

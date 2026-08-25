@@ -26,10 +26,15 @@ export function buildGridOverlayPositions(
   const offsetZ = ((gridHeight - 1) / 2) * cellSize;
   const half = (cellSize * (1 - GAP_RATIO)) / 2;
 
+  // Void cells get no outline: they render no floor block, and an outline
+  // over nothing would both look like a cell and invite a click where no
+  // cell exists — the overlay follows the floor exactly.
+  const outlined = cells.filter((cell) => cell.terrain !== "void");
+
   // 4 edges per cell, 2 points per edge, 3 floats per point.
-  const positions = new Float32Array(cells.length * 24);
+  const positions = new Float32Array(outlined.length * 24);
   let i = 0;
-  for (const cell of cells) {
+  for (const cell of outlined) {
     const cx = cell.x * cellSize - offsetX;
     const cz = cell.y * cellSize - offsetZ;
     const y = baseHeight + cell.elevation * elevationStepHeight + LINE_LIFT;

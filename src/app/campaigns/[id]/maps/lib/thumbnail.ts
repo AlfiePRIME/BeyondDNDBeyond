@@ -45,6 +45,11 @@ function hexToLinearRgb(hex: string): [number, number, number] {
 }
 
 export function thumbnailCellColor(terrain: TerrainType, elevation: number): string {
+  // A void cell has no floor: it paints as the backdrop itself, so in the
+  // snapshot it reads exactly like the space around the map — absent, the
+  // same way the 3D render draws nothing for it. Elevation is meaningless
+  // on a cell with no floor, so it never lightens.
+  if (terrain === "void") return BACKDROP;
   const [base, high] =
     terrain === "difficult" ? [DIFFICULT_BASE, DIFFICULT_HIGH] : [NORMAL_BASE, NORMAL_HIGH];
   const t = Math.min(elevation * 0.11, 0.66);

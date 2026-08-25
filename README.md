@@ -33,6 +33,27 @@ profile setup → Lobby flow works against a real, isolated, freshly-migrated Po
 production container) versus what is necessarily left as documented guidance (the real NPM + public
 domain reverse-proxy path — there's no live NPM instance or public domain to test against here).
 
+**Void terrain (non-rectangular room shapes)** — the first post-roadmap addition, an organic
+feature request rather than a numbered prompt. A third terrain type, `void`, joins
+`normal`/`difficult` (migration `0039_void_terrain.sql` widens the `map_cells` CHECK): the DM
+paints it with the same terrain brush as the other two, and a void cell has no floor at all —
+it renders as genuinely absent (no floor block, no grid outline) for EVERY viewer including the
+DM, always. This is deliberately NOT a vision/masking concept: void is unconditional map shape
+("there is no floor here"), carved out of the rectangular grid without touching the grid-based
+architecture — coordinates, movement, vision, and the renderer all still work on the same
+`grid_width x grid_height` cell space; void cells simply exist as holes in it. The rules engine
+prices entering a void cell at `Infinity` (so any path through one sums to `Infinity` — cleanly
+"impassable" to every cost-based caller, and the drag/ruler readouts show `∞ ft`), and every
+put-something-there gesture rejects with a clear no-floor message rather than a cost error:
+token placement and drag-to-move/armed-move in the Game Room, plus object placement, transition
+origins, and cell-anchored lights in the editor (nothing sits on a cell with no floor). The AI
+area generator may also propose void cells (carving cave corridors is its natural use) but never
+an object standing on one. Rejections are client-side guards in the same trusted-friend-group
+posture as the Prompt 58 vision masking — clear messages, not a security boundary. Verified end
+to end by `scripts/db/verify-void-terrain.mjs` (hybrid RLS + real-browser shape, reading the new
+hidden `editor-surface-state`/`table-surface-state` render mirrors — the `vision-state`
+precedent).
+
 ## Stack
 
 - **Frontend:** Next.js (App Router) + TypeScript, React Three Fiber for the 3D scene, CanvasUI for WebGL UI effects
@@ -221,6 +242,7 @@ node scripts/db/verify-vision-advantage.mjs # verify vision-driven advantage/dis
 node scripts/db/verify-hide-stealth.mjs # verify Hide/Stealth: per-observer passive-Perception resolution (NPC default 10), perception-eligibility skips, replace-not-accumulate, hidden-token rendering live in a real browser, reveal-on-attack with "attacking from hiding" advantage, manual reveal, hider-side RLS (Prompt 60)
 node scripts/db/verify-npc-stat-blocks.mjs # verify DM monster stat blocks: DM-only CRUD, quick-add before/mid-combat via add_combatant into the canonical turn order, stored-bonus/damage attacks through the roll route with the full death-save/instant-death/concentration bookkeeping, Strict economy gating, NPC HP clamps, stat-block AC auto-fill in a real browser, real passive Perception in Hide resolution (Prompt 61)
 node scripts/db/verify-character-edit.mjs # verify sheet-side race/class/level/speed editing: owner and DM edits persist through a real browser, a race change re-derives speed/darkvision in one call, imported characters are editable identically, class edits leave resources/spells untouched, non-owner RLS still holds
+node scripts/db/verify-void-terrain.mjs # verify void terrain: the editor's Void brush persisting through Save, paint authorization, the widened CHECK (0039), no-floor rendering in both the editor preview and the live table, clear placement/drag-to-move rejections, a normal move unaffected (post-roadmap: non-rectangular room shapes)
 ```
 
 The first two connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`)
@@ -240,8 +262,8 @@ HTTP with signed-in session cookies (needs `yarn dev` running — `verify-concen
 start one themselves, polling `/api/health`, if `:3000` isn't already serving).
 `verify-dice-ui.mjs`, `verify-quick-actions.mjs`, `verify-action-overrides.mjs`,
 `verify-action-economy.mjs`, `verify-opportunity-attacks.mjs`,
-`verify-vision-rendering.mjs`, `verify-hide-stealth.mjs`, and
-`verify-npc-stat-blocks.mjs` go one step further and
+`verify-vision-rendering.mjs`, `verify-hide-stealth.mjs`,
+`verify-npc-stat-blocks.mjs`, and `verify-void-terrain.mjs` go one step further and
 drive real Playwright browsers against the dev server, for the parts only a live UI can
 exercise (the sheet's advantage toggle, the combat panel's Roll-initiative buttons, live
 sync landing in an actually-open Game Room, the quick-actions panel's
