@@ -30,6 +30,7 @@ import {
   type RollKind,
   type RollLogEntry,
   type RollModifierPart,
+  type RollVisibility,
   type SupabaseClient,
 } from "@/data-access";
 import {
@@ -192,6 +193,7 @@ async function insertRoll(
     kind: RollKind;
     breakdown: RollBreakdown;
     total: number;
+    visibility: RollVisibility;
   }
 ): Promise<RollLogEntry> {
   const { data, error } = await supabase.from("roll_log").insert(row).select().single();
@@ -236,6 +238,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
   const roll = (body ?? {}) as Partial<RollRequest> & Record<string, unknown>;
 
+  // Phase 3: DM-only in practice, not just in the UI — roll_log's own RLS
+  // (0042) rejects a non-DM's insert attempt with visibility = 'private'
+  // outright, so there's no need to re-check isDM here. Anything other
+  // than the literal "private" (including every existing caller that never
+  // sends this field at all) resolves to "public" — today's only behavior.
+  const visibility: RollVisibility = roll.visibility === "private" ? "private" : "public";
+
   if (roll.kind === "freeform") {
     if (typeof roll.notation !== "string") return badRequest("A dice expression is required.");
     const expression = parseDiceNotation(roll.notation);
@@ -248,6 +257,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       roller_user_id: user.id,
       character_id: null,
       kind: "freeform",
+      visibility,
       breakdown: {
         type: "dice",
         label: roll.notation.trim(),
@@ -438,6 +448,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       roller_user_id: user.id,
       character_id: combatant.character_id,
       kind: "initiative",
+      visibility,
       breakdown: {
         type: "d20",
         label,
@@ -691,6 +702,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       roller_user_id: user.id,
       character_id: combatant.character_id,
       kind: "hide",
+      visibility,
       breakdown: {
         type: "d20",
         label,
@@ -1000,6 +1012,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       roller_user_id: user.id,
       character_id: null,
       kind: "attack",
+      visibility,
       breakdown: {
         type: "d20",
         label,
@@ -1406,6 +1419,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     roller_user_id: user.id,
     character_id: character.id,
     kind: roll.kind,
+    visibility,
     breakdown: {
       type: "d20",
       label,

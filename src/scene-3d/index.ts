@@ -35,3 +35,7 @@ export {
   type Seat,
   type SeatMember,
 } from "./seating";
+// Phase 3: GameRoom derives the DM's private dice tray position from the
+// DM's own seat, in table-surface-relative terms — the one table constant
+// the app layer needs, alongside the seat layout itself.
+export { TABLE_SURFACE_Y } from "./table";

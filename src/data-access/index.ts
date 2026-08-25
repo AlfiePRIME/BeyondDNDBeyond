@@ -242,6 +242,7 @@ export {
   type FreeformRollBreakdown,
   type RollBreakdown,
   type RollLogEntry,
+  type RollVisibility,
 } from "./rolls";
 export {
   requestOverride,

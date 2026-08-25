@@ -1,8 +1,19 @@
 import type { AbilityScore, AdvantageMode, AttackKind, SkillName } from "@/rules-engine";
-import type { RollLogEntry } from "@/data-access";
+import type { RollLogEntry, RollVisibility } from "@/data-access";
 
-/** The roll Route Handler's request body — one shape per roll kind. */
-export type RollRequest =
+/** The roll Route Handler's request body — one shape per roll kind, plus
+ * (Phase 3) the common optional `visibility` field every shape gets via
+ * this intersection. Omitted (or "public") behaves exactly as it did
+ * before this field existed — the roll route defaults to "public" itself.
+ * "private" is honored only for the plain insertRoll-backed kinds
+ * (freeform, initiative, hide, and a miss/untargeted attack); it's rejected
+ * outright by roll_log's own RLS (0042) unless the caller is the
+ * campaign's DM, so a non-DM client can't force it just by sending the
+ * field. DiceLogPanel's DM-only "Private roll" toggle is the one place
+ * this ever gets set to "private" today. */
+type RollVisibilityField = { visibility?: RollVisibility };
+
+export type RollRequest = (
   | { kind: "check"; characterId: string; ability: AbilityScore; mode?: AdvantageMode }
   | { kind: "save"; characterId: string; ability: AbilityScore; mode?: AdvantageMode }
   | { kind: "skill"; characterId: string; skill: SkillName; mode?: AdvantageMode }
@@ -64,7 +75,8 @@ export type RollRequest =
       targetName?: string | null;
       mode?: AdvantageMode;
     }
-  | { kind: "freeform"; notation: string };
+  | { kind: "freeform"; notation: string }
+) & RollVisibilityField;
 
 export interface RollResponse {
   ok: boolean;

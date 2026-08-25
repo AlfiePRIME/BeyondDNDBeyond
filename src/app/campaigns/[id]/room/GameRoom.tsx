@@ -96,11 +96,14 @@ import {
 } from "@/rules-engine";
 import { Button, Modal } from "@/ui-components";
 import {
+  computeSeatLayout,
   DiceTumble,
   GameTableScene,
+  TABLE_SURFACE_Y,
   type CameraMode,
   type DiceTumbleHandle,
   type DiceTumbleSpec,
+  type Seat,
   type TableLiveMap,
 } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
@@ -157,6 +160,10 @@ const DICE_ROLLED_EVENT = "dice-rolled";
 // (a perceived cell must land in map_seen_cells before the player relies
 // on remembering it, not instantly).
 const SEEN_CELLS_FLUSH_MS = 1500;
+
+// Phase 3: how far in front of the DM's own seat (toward table center) the
+// private dice tray sits — see dmPrivateTrayPosition's doc comment.
+const DM_PRIVATE_TRAY_OFFSET = 0.5;
 
 interface LiveMapPayload {
   mapId: string | null;
@@ -343,6 +350,13 @@ export function GameRoom({
   // precedent) purely so verify-dice-tumble.mjs's Playwright checks have
   // something to read — see DiceTumbleProps.onQueueChange's doc comment.
   const [diceQueueDebug, setDiceQueueDebug] = useState<readonly string[]>([]);
+  // Phase 3: the DM's own private dice tray — a second, independent
+  // DiceTumble instance (mounted only for the DM below), with its own ref
+  // and its own queue-debug mirror. A private roll plays ONLY here, never
+  // in the shared tray above, and is never broadcast — see
+  // handleRollLanded's visibility branch.
+  const privateDiceTumbleRef = useRef<DiceTumbleHandle>(null);
+  const [privateDiceQueueDebug, setPrivateDiceQueueDebug] = useState<readonly string[]>([]);
   // Render-time reset (not an effect) when the server hands down a fresh
   // member list — react.dev's "adjusting state when a prop changes" pattern.
   const [prevMembers, setPrevMembers] = useState(members);
@@ -350,6 +364,36 @@ export function GameRoom({
     setPrevMembers(members);
     setRoster(members);
   }
+
+  // The same seat layout GameTableScene computes internally from this exact
+  // roster (computeSeatLayout is a pure function of the ordered member
+  // list — see seating.ts), recomputed here too so this component can
+  // derive the DM's own seat position for the private dice tray below
+  // without reaching into the 3D scene's internals.
+  const seats = useMemo(() => computeSeatLayout(roster), [roster]);
+  const dmSeat = useMemo<Seat | null>(
+    () => seats.find((seat) => seat.member.role === "dm") ?? null,
+    [seats]
+  );
+  // A short distance in front of the DM's own seat, toward the table
+  // center, at table-surface height — Seat.rotationY is the yaw that
+  // points an object's local -Z forward at the table center (its own doc
+  // comment), so (-sin(rotationY), 0, -cos(rotationY)) is that same unit
+  // direction from the seat's position. 0.5 units puts the tray naturally
+  // inside the DM's own first-person view (CAMERA_SETBACK in seating.ts is
+  // 1.6, so this sits well short of the camera) regardless of party size or
+  // which physical seat the DM ends up placed at (the fixed-DM-seat work
+  // earlier this session made that position deterministic).
+  const dmPrivateTrayPosition = useMemo<[number, number, number]>(() => {
+    if (!dmSeat) return [0, TABLE_SURFACE_Y + 0.01, 0];
+    const forwardX = -Math.sin(dmSeat.rotationY);
+    const forwardZ = -Math.cos(dmSeat.rotationY);
+    return [
+      dmSeat.position[0] + forwardX * DM_PRIVATE_TRAY_OFFSET,
+      TABLE_SURFACE_Y + 0.01,
+      dmSeat.position[2] + forwardZ * DM_PRIVATE_TRAY_OFFSET,
+    ];
+  }, [dmSeat]);
 
   const [liveMap, setLiveMapState] = useState<LiveMapData | null>(initialLiveMap);
   const [switching, setSwitching] = useState(false);
@@ -1235,8 +1279,22 @@ export function GameRoom({
       // onRollLanded today and so don't tumble yet — wiring those in is an
       // additive change to those specific handlers, not to this seam.
       const spec = buildDiceTumbleSpec(roll);
-      diceTumbleRef.current?.play(spec);
-      void campaignChannelRef.current?.publish<DiceRolledPayload>(DICE_ROLLED_EVENT, { spec });
+      if (roll.visibility === "private") {
+        // Phase 3: a private roll plays ONLY in the DM's own tray, on THIS
+        // client alone — no DICE_ROLLED_EVENT broadcast at all, so no other
+        // connected client ever learns a roll happened (the "immediate
+        // local play, then broadcast" mechanic above simply skips its
+        // second half for a private roll). roll_log's own RLS (0042) is
+        // what keeps the persistent log hidden from players; this is the
+        // tumble's equivalent for the ephemeral animation. Only ever
+        // reachable for the DM in practice: a private roll only exists
+        // because the DM's own toggle (DiceLogPanel) set it, and RLS
+        // rejects anyone else's attempt to persist one at all.
+        privateDiceTumbleRef.current?.play(spec);
+      } else {
+        diceTumbleRef.current?.play(spec);
+        void campaignChannelRef.current?.publish<DiceRolledPayload>(DICE_ROLLED_EVENT, { spec });
+      }
 
       const attack = roll.breakdown.type === "d20" ? (roll.breakdown.attack ?? null) : null;
       if (!attack) return;
@@ -2193,6 +2251,18 @@ export function GameRoom({
         {/* A modest, fixed corner of the table (its own doc comment) — never
             full-screen, never over the map/tokens/camera controls. */}
         <DiceTumble ref={diceTumbleRef} onQueueChange={setDiceQueueDebug} />
+        {/* Phase 3: the DM's own private dice tray — mounted ONLY for the
+            DM, positioned just in front of their own seat (dmPrivateTrayPosition's
+            doc comment). A private roll (handleRollLanded's visibility
+            branch) plays here instead of the shared tray above, and never
+            reaches any other client at all. */}
+        {currentUserIsDM ? (
+          <DiceTumble
+            ref={privateDiceTumbleRef}
+            trayPosition={dmPrivateTrayPosition}
+            onQueueChange={setPrivateDiceQueueDebug}
+          />
+        ) : null}
       </Canvas>
       {/* Hidden render-state mirror for verify-vision-rendering.mjs — see
           the visionDebug memo. */}
@@ -2212,6 +2282,17 @@ export function GameRoom({
       <div data-testid="dice-tumble-state" hidden>
         {JSON.stringify({ queue: diceQueueDebug })}
       </div>
+      {/* Hidden render-state mirror for the DM's private tray (Phase 3) —
+          same reasoning as dice-tumble-state above, but for
+          privateDiceTumbleRef's own independent queue. Absent from the DOM
+          entirely for a non-DM client, since the tray itself isn't mounted —
+          verify-private-dice-rolls.mjs's player-side check is exactly "this
+          testid doesn't exist / never changes for me". */}
+      {currentUserIsDM ? (
+        <div data-testid="private-dice-tumble-state" hidden>
+          {JSON.stringify({ queue: privateDiceQueueDebug })}
+        </div>
+      ) : null}
       {/* Hidden render-state mirror for verify-void-terrain.mjs — see the
           tableSurfaceDebug memo. */}
       <div data-testid="table-surface-state" hidden>

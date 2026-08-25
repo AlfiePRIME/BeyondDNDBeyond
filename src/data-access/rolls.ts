@@ -163,6 +163,12 @@ export interface FreeformRollBreakdown {
  * schemaless jsonb, same arrangement as map_objects.behavior_config. */
 export type RollBreakdown = D20RollBreakdown | FreeformRollBreakdown;
 
+/** roll_log.visibility (0042): 'public' is member-readable exactly like
+ * every roll before this column existed; 'private' is DM-only, enforced by
+ * RLS itself (both the SELECT and INSERT policies), not just by the UI
+ * never offering the option to a non-DM. */
+export type RollVisibility = "public" | "private";
+
 export interface RollLogEntry {
   id: string;
   campaign_id: string;
@@ -171,6 +177,7 @@ export interface RollLogEntry {
   kind: RollKind;
   breakdown: RollBreakdown;
   total: number;
+  visibility: RollVisibility;
   created_at: string;
 }
 
@@ -314,6 +321,15 @@ export async function resolveAttackDamage(
     kind: "attack",
     breakdown: breakdownWithApplied,
     total,
+    // resolve_attack_damage's own roll_log insert (0030) never sets this
+    // column, so it always takes the 'public' default — an attack that
+    // actually applies damage to a tracked PC's HP is never fully private
+    // anyway (the target's own HP bar updates for every viewer), so
+    // threading visibility into this RPC would be a change with no real
+    // privacy payoff. A private roll's DM-only surface is the plain
+    // insertRoll path in the roll route (freeform/quick-roll/miss/untracked
+    // attacks) — see RollRequest's `visibility` field.
+    visibility: "public",
     created_at: row.out_roll_created_at,
   };
 }
@@ -383,6 +399,9 @@ export async function resolveNpcAttackDamage(
     kind: "attack",
     breakdown: breakdownWithApplied,
     total,
+    // Same reasoning as resolveAttackDamage's own visibility field above —
+    // resolve_npc_attack_damage's insert also never sets this column.
+    visibility: "public",
     created_at: row.out_roll_created_at,
   };
 }

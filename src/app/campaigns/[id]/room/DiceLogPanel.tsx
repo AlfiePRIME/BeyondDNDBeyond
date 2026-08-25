@@ -150,6 +150,19 @@ export function DiceLogPanel({
 
   const [notation, setNotation] = useState("");
 
+  // Phase 3: the DM's private-roll toggle — a persistent two-state flag
+  // (not a one-shot "next roll only"), so a DM working through several
+  // hidden checks in a row doesn't have to re-arm it each time. Only ever
+  // reachable when isDM (both the button below and, independently and
+  // authoritatively, roll_log's own RLS — see the roll route's `visibility`
+  // comment). Every call this panel makes through `run()` reads this at
+  // fire time via `rollVisibility()`, so flipping it mid-session only ever
+  // affects the NEXT roll, never one already in flight.
+  const [privateRoll, setPrivateRoll] = useState(false);
+  function rollVisibility(): "public" | "private" {
+    return isDM && privateRoll ? "private" : "public";
+  }
+
   const attackers = useMemo(
     () => characters.filter((character) => isDM || character.owner_id === currentUserId),
     [characters, isDM, currentUserId]
@@ -330,7 +343,13 @@ export function DiceLogPanel({
         onSubmit={(event) => {
           event.preventDefault();
           if (notation.trim() === "") return;
-          void run(() => postRoll(campaignId, { kind: "freeform", notation: notation.trim() }));
+          void run(() =>
+            postRoll(campaignId, {
+              kind: "freeform",
+              notation: notation.trim(),
+              visibility: rollVisibility(),
+            })
+          );
         }}
       >
         <input
@@ -352,6 +371,24 @@ export function DiceLogPanel({
         </Button>
       </form>
 
+      {isDM ? (
+        // Phase 3: DM-only — genuinely gated here (not just visually), the
+        // panel's own `isDM` prop. Every roll this panel fires through
+        // run() (freeform, quick-roll, attack) reads rollVisibility() at
+        // fire time, so toggling this only ever changes what the NEXT roll
+        // does; roll_log's own RLS (0042) is the real backstop regardless of
+        // what this button shows.
+        <Button
+          size="sm"
+          variant={privateRoll ? "teal" : "ghost"}
+          onClick={() => setPrivateRoll((current) => !current)}
+          aria-pressed={privateRoll}
+          data-testid="private-roll-toggle"
+        >
+          {privateRoll ? "Private roll: ON" : "Private roll: OFF"}
+        </Button>
+      ) : null}
+
       <div className={styles.quickRollRow} role="group" aria-label="Quick roll" data-testid="quick-roll-row">
         {QUICK_ROLL_DICE.map((sides) => (
           <Button
@@ -359,7 +396,15 @@ export function DiceLogPanel({
             size="sm"
             variant="ghost"
             disabled={busy}
-            onClick={() => void run(() => postRoll(campaignId, { kind: "freeform", notation: `1d${sides}` }))}
+            onClick={() =>
+              void run(() =>
+                postRoll(campaignId, {
+                  kind: "freeform",
+                  notation: `1d${sides}`,
+                  visibility: rollVisibility(),
+                })
+              )
+            }
             data-testid={`quick-roll-d${sides}`}
           >
             D{sides}
@@ -492,6 +537,7 @@ export function DiceLogPanel({
                       targetTokenId: targetToken?.id ?? null,
                       targetName: targetToken ? tokenLabel(targetToken) : null,
                       mode,
+                      visibility: rollVisibility(),
                     })
                   );
                   return;
@@ -511,6 +557,7 @@ export function DiceLogPanel({
                     targetTokenId: targetToken?.id ?? null,
                     targetName: targetToken ? tokenLabel(targetToken) : null,
                     mode,
+                    visibility: rollVisibility(),
                   })
                 );
               }}

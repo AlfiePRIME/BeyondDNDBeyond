@@ -48,6 +48,13 @@ export interface DiceTumbleProps {
    * "dropped vs. still queued". Index 0 is always the currently-animating
    * roll; the rest are waiting their turn. */
   onQueueChange?: (rollIds: readonly string[]) => void;
+  /** Where this tray sits in the scene — defaults to `DEFAULT_TRAY_POSITION`
+   * (the original fixed corner nook), so every existing caller's behavior
+   * is byte-for-byte unchanged. Phase 3 (the DM's private dice) mounts a
+   * SECOND `DiceTumble` with this overridden to a spot in front of the DM's
+   * own seat, so a private roll lands somewhere only the DM's own camera
+   * naturally sees — see GameRoom.tsx's `dmPrivateTrayPosition`. */
+  trayPosition?: readonly [number, number, number];
 }
 
 const DIE_SIZE = 0.13;
@@ -220,8 +227,9 @@ function DiceTray() {
 // never collides with one, and (per computeTableMapMetrics's own margin
 // reasoning) inside the border of bare tabletop every live map leaves
 // visible around itself, so a tumble never sits on top of the map, tokens,
-// or camera controls.
-const TRAY_POSITION: readonly [number, number, number] = [
+// or camera controls. The shared tray's default; overridable per-instance
+// via the `trayPosition` prop (Phase 3's DM-private second tray).
+const DEFAULT_TRAY_POSITION: readonly [number, number, number] = [
   TABLE_TOP.width / 2 - 0.85,
   TABLE_SURFACE_Y + 0.01,
   -(TABLE_TOP.depth / 2 - 0.85),
@@ -229,12 +237,16 @@ const TRAY_POSITION: readonly [number, number, number] = [
 
 /**
  * Mounted once as a sibling of GameTableScene inside the Game Room's
- * <Canvas> (GameRoom.tsx), in its own fixed corner of the table — see
- * TRAY_POSITION. Exposes an imperative `play(spec)` handle rather than a
- * `rolls` prop: GameRoom calls it once for its own roll (immediately, no
- * network round trip) and once from the DICE_ROLLED_EVENT broadcast handler
- * for every other roll, and this component owns turning that stream of
- * `play()` calls into a well-behaved single-file animation.
+ * <Canvas> (GameRoom.tsx), in its own fixed corner of the table by default —
+ * see DEFAULT_TRAY_POSITION/`trayPosition`. Exposes an imperative
+ * `play(spec)` handle rather than a `rolls` prop: GameRoom calls it once for
+ * its own roll (immediately, no network round trip) and once from the
+ * DICE_ROLLED_EVENT broadcast handler for every other roll, and this
+ * component owns turning that stream of `play()` calls into a well-behaved
+ * single-file animation. As of Phase 3, GameRoom also mounts a SECOND
+ * instance — DM-only, `trayPosition` overridden to a spot in front of the
+ * DM's own seat — for private rolls that must never broadcast; the two
+ * instances are otherwise identical and share none of their own state.
  *
  * Overlapping rolls are handled with a plain FIFO queue rather than trying
  * to lay multiple simultaneous tumbles out in the tray's small footprint:
@@ -248,7 +260,7 @@ const TRAY_POSITION: readonly [number, number, number] = [
  * state.
  */
 export const DiceTumble = forwardRef<DiceTumbleHandle, DiceTumbleProps>(function DiceTumble(
-  { onQueueChange },
+  { onQueueChange, trayPosition = DEFAULT_TRAY_POSITION },
   ref
 ) {
   const [queue, setQueue] = useState<DiceTumbleSpec[]>([]);
@@ -277,7 +289,7 @@ export const DiceTumble = forwardRef<DiceTumbleHandle, DiceTumbleProps>(function
   }, []);
 
   return (
-    <group position={TRAY_POSITION}>
+    <group position={trayPosition as [number, number, number]}>
       <DiceTray />
       {active ? <ActiveTumble key={active.id} spec={active} onDone={handleDone} /> : null}
     </group>
