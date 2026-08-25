@@ -10,6 +10,8 @@ import {
   applyExhaustionDelta,
   applyHpDelta,
   createHandout,
+  createOpportunityAttacks,
+  declareDisengage,
   deleteHandout,
   deleteMapToken,
   endCombat,
@@ -61,6 +63,8 @@ import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
   CONDITION_BY_KEY,
   EXHAUSTION_KEY,
+  computeOpportunityAttacks,
+  meleeReachFeet,
   pathMovementCost,
   straightCellPath,
   type AdvantageMode,
@@ -84,6 +88,7 @@ import { postRoll } from "../roll/api";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { DiceLogPanel } from "./DiceLogPanel";
 import { DmOverridesPanel } from "./DmOverridesPanel";
+import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
@@ -750,6 +755,74 @@ export function GameRoom({
         : await moveMapToken(supabase, drag.tokenId, position);
       applyTokenChange(token.id, token);
       await publishTokenChange(token.id, token);
+      if (tracked && combat && currentCombatant) {
+        // Opportunity-attack detection (Prompt 54), on the tracked path
+        // only — an untracked move (no combat, off-turn, not in the
+        // fight) is never "this turn's movement". Pure rules-engine math
+        // over what this client already holds: the drag's pre/post cells,
+        // the opposed-allegiance combatants' token positions, each one's
+        // melee reach (its readable character's tagged melee/finesse
+        // weapons, or the plain 5 ft default — NPCs have no stats
+        // anywhere), their live reaction state, and whatever clearly
+        // rules out reacting at all (an incapacitating condition, a
+        // readable character dead or at 0 HP; another player's
+        // unreadable PC just isn't second-guessed). One pending
+        // opportunity_attacks row lands per qualifying hostile —
+        // best-effort after the already-committed move, reaching every
+        // controller through the postgres_changes feed.
+        const moverToken = current.tokens.find((candidate) => candidate.id === drag.tokenId);
+        const opposed =
+          moverToken?.allegiance === "party"
+            ? "hostile"
+            : moverToken?.allegiance === "hostile"
+              ? "party"
+              : null;
+        if (opposed) {
+          const incapacitatedIds = new Set(
+            combat.conditions
+              .filter(
+                (condition) =>
+                  condition.condition_key !== EXHAUSTION_KEY &&
+                  CONDITION_BY_KEY.get(condition.condition_key as ConditionKey)?.effects
+                    .incapacitated
+              )
+              .map((condition) => condition.combatant_id)
+          );
+          const hostiles = combat.combatants.flatMap((combatant) => {
+            if (combatant.id === currentCombatant.id) return [];
+            const hostileToken = current.tokens.find(
+              (candidate) => candidate.id === combatant.token_id
+            );
+            if (!hostileToken || hostileToken.allegiance !== opposed) return [];
+            const character = combatant.character_id
+              ? (characterRows.find((row) => row.id === combatant.character_id) ?? null)
+              : null;
+            return [
+              {
+                combatantId: combatant.id,
+                position: { x: hostileToken.x, y: hostileToken.y },
+                reachFeet: meleeReachFeet(character?.inventory ?? []),
+                reactionUsed: combatant.reaction_used,
+                cannotReact:
+                  incapacitatedIds.has(combatant.id) ||
+                  (character !== null && (character.is_dead || character.current_hp === 0)),
+              },
+            ];
+          });
+          const reactorIds = computeOpportunityAttacks({
+            moverFrom: drag.origin,
+            moverTo: drag.current,
+            moverDisengaged: currentCombatant.disengaged,
+            hostiles,
+          });
+          await createOpportunityAttacks(supabase, {
+            campaignId,
+            encounterId: combat.encounter.id,
+            moverCombatantId: currentCombatant.id,
+            reactorCombatantIds: reactorIds,
+          }).catch(() => undefined);
+        }
+      }
       if (tracked) {
         // The combatant's movement_used_feet changed — refresh this
         // client's readout and poke everyone else's, the usual combat-
@@ -763,7 +836,7 @@ export function GameRoom({
     } finally {
       setTokenBusy(false);
     }
-  }, [tokenBusy, combat, campaignId, refreshCombat, applyTokenChange, publishTokenChange, maybeOfferTransition]);
+  }, [tokenBusy, combat, campaignId, characterRows, refreshCombat, applyTokenChange, publishTokenChange, maybeOfferTransition]);
 
   // The ruler trio never touches Supabase or any token — start records two
   // cells, drag-over updates one of them, end throws both away.
@@ -968,6 +1041,31 @@ export function GameRoom({
     },
     [runCombatAction]
   );
+
+  // Declare Disengage (Prompt 54): one declareDisengage update setting
+  // disengaged AND action_used together, through the usual refresh-and-
+  // poke flow. Strict's "unavailable once the action is spent" gate is
+  // CombatPanel's UI rule, the other economy controls' arrangement.
+  const handleDeclareDisengage = useCallback(
+    (combatant: CombatCombatant) => {
+      void runCombatAction(async (supabase) => {
+        await declareDisengage(supabase, combatant.id);
+      }, "Could not declare Disengage.");
+    },
+    [runCombatAction]
+  );
+
+  // A taken opportunity attack changed the reactor's reaction_used (and
+  // possibly the mover's HP) — the handleRollLanded refresh-and-poke,
+  // without its was-this-an-attack gate, for the roll-free NPC mark-taken
+  // path. The opportunity_attacks row itself travels by postgres_changes.
+  const handleReactionSpent = useCallback(() => {
+    void (async () => {
+      const supabase = createBrowserSupabaseClient();
+      await refreshCombat(supabase).catch(() => undefined);
+      await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+    })();
+  }, [campaignId, refreshCombat]);
 
   // Persist first (the DB is the source of truth), then reflect locally —
   // other clients (and this one's subscription echo) get the flip through
@@ -1463,6 +1561,20 @@ export function GameRoom({
         onRollDeathSave={handleRollDeathSave}
         onRollConcentrationSave={handleRollConcentrationSave}
         onToggleEconomyFlag={handleToggleEconomyFlag}
+        onDeclareDisengage={handleDeclareDisengage}
+      />
+      {/* Pending opportunity-attack prompts (Prompt 54): visible to the
+          whole table, actionable only by each reactor's controller — the
+          DM for NPC reactors, the owning player for PCs. Renders nothing
+          while no offer is pending. */}
+      <OpportunityAttackPanel
+        campaignId={campaignId}
+        currentUserId={currentUserId}
+        isDM={currentUserIsDM}
+        characters={characterRows}
+        combat={combat}
+        onRollLanded={handleRollLanded}
+        onReactionSpent={handleReactionSpent}
       />
       {/* A shortcut only — renders (for the current PC's owner or the DM)
           ALONGSIDE the combat panel, dice panel, and sheet, never instead

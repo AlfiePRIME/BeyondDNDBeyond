@@ -121,6 +121,30 @@ covers — only resource/rule restrictions qualify. Same extended-existing-shape
 Prompt 49's breakdown fields (one array with a discriminating field, not a second
 parallel array to keep ordered/deduplicated in step).
 
+As of Prompt 54: opportunity-attack detection (`opportunityAttacks.ts`), pure and DB-free
+in `computeQuickActions`'s exact mold (the caller supplies every input; the Game Room
+assembles them from what it already holds right after a tracked move commits). Given the
+mover's pre-move and post-move grid positions, whether the mover disengaged this turn, and
+the hostile combatants' state (position, reach in feet, reaction spent, an optional
+caller-derived `cannotReact` flag), `computeOpportunityAttacks` returns the combatant ids
+of every hostile who was within reach of the PRE-move position, is no longer within reach
+of the POST-move position, and still has their reaction — and nothing at all for a
+disengaged mover. "Within reach" is inclusive (`distance <= reach`, the meets-it
+convention every range query here uses, on `gridDistanceFeet`'s flat chessboard measure),
+so a move ending exactly AT reach provokes nothing. Reach is deliberately NOT a new
+per-creature stat (none exists in the SRD catalog): `meleeReachFeet(inventory)` is the
+longest tagged melee/finesse weapon's `weaponRangeFeet`, floored at the same 5 ft
+`DEFAULT_MELEE_RANGE_FEET` an unarmed/untagged creature uses everywhere else — ranged
+weapons and spells never contribute (RAW 5e: only melee attacks threaten reach). Its
+companion `meleeWeaponItems(inventory)` narrows an inventory to the melee/finesse
+weapon-tagged entries with damage dice — the items usable AS an opportunity attack, shared
+by reach above and the take-the-attack weapon picker. Crucially there is NO
+range-with-movement check anywhere in resolution: the attack resolves as if the target
+were still in reach at the instant they left it. Unit-tested the `computeQuickActions`
+way: the exactly-at-reach boundary on both sides of a move, one cell past it, diagonal
+escapes and slides along the reach ring under the chessboard rule, longer weapon reach,
+spent-reaction and cannot-react exclusion, and the disengaged mover.
+
 Still future work: the perception/vision engine (Prompt 56) and advantage/disadvantage
 enforcement from conditions/vision (Prompt 59) — Prompt 48 provides the manual toggle and
 the two-d20 mechanics it will drive.

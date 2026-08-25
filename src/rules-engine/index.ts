@@ -81,6 +81,15 @@ export {
 } from "./quickActions";
 
 export {
+  computeOpportunityAttacks,
+  meleeReachFeet,
+  meleeWeaponItems,
+  type OpportunityAttackHostile,
+  type ComputeOpportunityAttacksParams,
+  type MeleeWeaponItem,
+} from "./opportunityAttacks";
+
+export {
   cellMovementCost,
   gridCellDistance,
   gridDistanceFeet,

@@ -748,6 +748,40 @@
   color: var(--orange);
 }
 
+/* Prompt 54: the opportunity-attack prompt surface — a transient banner
+   stack, center-screen just below where the quick-actions panel can
+   reach (top 64px + its 30vh max), so it never hides behind the per-turn
+   panels while carrying the Prompt 49/50 prompt-banner visual weight: it
+   only exists while an offer is pending, and it must not get lost. */
+.opportunityPanel {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: calc(64px + 30vh + 12px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  width: 440px;
+  max-height: 30vh;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface2) 88%, transparent);
+  border: 1px solid var(--red);
+  border-radius: 8px;
+}
+
+/* One pending offer: the .deathSavePrompt shape (louder-than-controls red
+   accent) with the resolve controls wrapping beneath the ask. */
+.opportunityPrompt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+
 /* The DM Controls panel: top edge, between the centered quick-actions
    panel (400px) and the right-anchored handout panel (320px + 24px
    margin), so all three top-row surfaces stay visible at once. A plain

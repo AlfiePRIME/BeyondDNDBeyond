@@ -522,3 +522,43 @@ Prompt 54's scope): the combat panel's readout exposes manual DM-or-owner marks 
 The readout itself (current combatant's Action/Bonus/Reaction/Movement) and the
 Strict/Freeform badge are table-wide in `CombatPanel`; the DM's dial is a sibling section
 in the Prompt 52 DM Controls panel.
+
+As of Prompt 54, `opportunityAttacks.ts` owns opportunity attacks and `combat.ts` gains
+the Disengage action (migration `0035_opportunity_attacks.sql`). Disengage is a fifth
+`combat_combatants` economy column, `disengaged` (boolean, default false), reset by
+`advance_turn` in the SAME entering-combatant UPDATE as the Prompt 53 four (the reshape
+preserves everything from 0027/0034 verbatim) — a combatant who disengaged provokes no
+opportunity attacks for the rest of the turn, however many times they move.
+`declareDisengage(supabase, combatantId)` sets `disengaged` AND `action_used` in ONE
+update (so "disengaged but action still free" can never be observed — a dedicated
+function rather than a widened `setCombatantEconomyFlag`, which flips exactly one flag by
+design), a plain write through `can_write_combatant`; Strict's "unavailable once the
+action is spent" is a UI rule in `CombatPanel` like the other economy locks. The
+`opportunity_attacks` table records one row per offered attack —
+campaign/encounter/mover-combatant/reactor-combatant plus a
+`pending -> taken | declined` status and `resolved_at` — its own table, NOT a reuse of
+`action_overrides` (an override is a rule-bend permission grant with a DM-verdict step;
+this is a reactive attack OFFER resolved by the reactor's controller — the
+exhaustion-vs-conditions don't-force-fit precedent), though the RLS/postgres_changes
+plumbing mirrors 0033's shape. Members SELECT (transparency); INSERT is any campaign
+member, deliberately permissive because detection runs on the MOVER's client (GameRoom's
+drag-end runs `computeOpportunityAttacks` and calls `createOpportunityAttacks` right
+after a tracked `move_combat_token` commits) and a spurious row grants the inserter
+nothing but someone else's declinable prompt, with same-campaign/same-encounter subquery
+guards against cross-campaign stitching; UPDATE is the REACTOR's controller only
+(`can_write_combatant` joined through the reactor row — DM, or the owner of the reactor's
+linked character, so an NPC reactor falls to the DM) and only FROM `pending`, the 0033
+USING-sees-pre-update-values trick making `taken`/`declined` structurally terminal —
+`resolveOpportunityAttack` keeps the explicit `status='pending'` filter so a raced
+double-resolve or a non-controller's attempt surfaces as zero rows, not silence. Taking
+one is the caller's sequence: fire the same `kind:"attack"` `postRoll` request the manual
+form and quick actions send (a melee/finesse weapon only, target = the mover, the
+established typed-AC convention for an unreadable target), then `setCombatantEconomyFlag`
+`reaction_used = true` — hit or miss, the Prompt 53 miss-still-costs reasoning — then
+resolve the row; declining touches nothing but the row. A second pending prompt against
+an already-spent reactor keeps Decline but loses Take to a spelled-out "Reaction already
+spent this turn" reason in `OpportunityAttackPanel`. `subscribeToOpportunityAttacks` is
+`subscribeToActionOverrides`' exact postgres_changes shape (event `*` — resolutions must
+make the banner disappear as promptly as inserts make it land) because the mover and the
+reactor's controller may be on different pages entirely; the table joins the realtime
+publication in 0035. No DELETE policy: resolved offers are an audit trail.

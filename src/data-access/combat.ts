@@ -15,9 +15,9 @@ export interface CombatEncounter {
  * PC-xor-NPC pair (0019's shape, mirrored by 0027's CHECK), so the row
  * stays meaningful even if the token later leaves the live map. initiative
  * is null until entered — manual entry only until Prompt 48 wires the dice
- * roller in. The four action-economy fields (Prompt 53) track this
- * combatant's CURRENT turn's usage and are reset by advance_turn the
- * moment its turn begins.
+ * roller in. The five action-economy fields (Prompt 53, plus Prompt 54's
+ * disengaged) track this combatant's CURRENT turn's usage and are reset
+ * by advance_turn the moment its turn begins.
  */
 export interface CombatCombatant {
   id: string;
@@ -30,6 +30,10 @@ export interface CombatCombatant {
   bonus_action_used: boolean;
   reaction_used: boolean;
   movement_used_feet: number;
+  /** Declared Disengage this turn (Prompt 54): provokes no opportunity
+   * attacks for the rest of the turn. Set only by declareDisengage
+   * (which also spends the action), cleared by advance_turn's reset. */
+  disengaged: boolean;
   created_at: string;
 }
 
@@ -135,6 +139,7 @@ export async function getActiveCombatantForCharacter(
     bonus_action_used: row.bonus_action_used,
     reaction_used: row.reaction_used,
     movement_used_feet: row.movement_used_feet,
+    disengaged: row.disengaged,
     created_at: row.created_at,
   };
 }
@@ -186,6 +191,33 @@ export async function setCombatantEconomyFlag(
   const { data, error } = await supabase
     .from("combat_combatants")
     .update({ [flag]: used })
+    .eq("id", combatantId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Declares the Disengage action (Prompt 54): sets `disengaged` AND spends
+ * the Action in ONE update, so "disengaged but action still free" can
+ * never be observed — which is why this is a small dedicated function
+ * rather than a widened setCombatantEconomyFlag (that shape flips exactly
+ * one flag per call by design). Same authorization as every economy
+ * write: a plain update through can_write_combatant (0027), DM or the
+ * owning player, no RPC — a single-row two-column flip has no cross-row
+ * invariant. Strict mode's "unavailable once the action is spent" is a
+ * UI rule like the other economy locks; advance_turn resets both columns
+ * at this combatant's next turn.
+ */
+export async function declareDisengage(
+  supabase: SupabaseClient,
+  combatantId: string
+): Promise<CombatCombatant> {
+  const { data, error } = await supabase
+    .from("combat_combatants")
+    .update({ disengaged: true, action_used: true })
     .eq("id", combatantId)
     .select()
     .single();

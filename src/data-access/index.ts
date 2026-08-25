@@ -149,10 +149,19 @@ export {
   endCombat,
   setCombatantInitiative,
   setCombatantEconomyFlag,
+  declareDisengage,
   type CombatEncounter,
   type CombatCombatant,
   type CombatantEconomyFlag,
 } from "./combat";
+export {
+  createOpportunityAttacks,
+  listOpportunityAttacks,
+  resolveOpportunityAttack,
+  subscribeToOpportunityAttacks,
+  type OpportunityAttack,
+  type OpportunityAttackStatus,
+} from "./opportunityAttacks";
 export {
   listCombatantConditions,
   applyCondition,

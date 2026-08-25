@@ -63,11 +63,19 @@ export interface CombatState {
  * a live economy readout — Action/Bonus Action/Reaction used-or-
  * available plus movement used this turn against the character's speed
  * — visible to everyone, with manual "mark used" controls for the bonus
- * action and reaction (nothing consumes either automatically yet;
- * reactions proper are Prompt 54) actionable only by the DM or the
- * combatant's owner. In Strict mode a spent mark can't be un-marked
- * until advance_turn's reset at that combatant's next turn; in Freeform
- * it toggles freely — tracked state only, never a block.
+ * action and reaction (reactions gained their first automatic consumer in
+ * Prompt 54's opportunity attacks; the manual marks stay for everything
+ * else) actionable only by the DM or the combatant's owner. In Strict
+ * mode a spent mark can't be un-marked until advance_turn's reset at
+ * that combatant's next turn; in Freeform it toggles freely — tracked
+ * state only, never a block. As of Prompt 54 the readout also carries
+ * Disengage: a table-wide "Disengaged" badge when declared, and a
+ * "Declare Disengage" control for the DM or the combatant's owner that
+ * spends the Action alongside setting the flag (declareDisengage, one
+ * update) — in Strict mode unavailable once the action is already spent,
+ * the same gating as the other economy controls, and one-way until
+ * advance_turn's reset (un-declaring would have to un-spend the action
+ * it consumed).
  */
 export function CombatPanel({
   isDM,
@@ -88,6 +96,7 @@ export function CombatPanel({
   onRollDeathSave,
   onRollConcentrationSave,
   onToggleEconomyFlag,
+  onDeclareDisengage,
 }: {
   isDM: boolean;
   currentUserId: string;
@@ -125,6 +134,9 @@ export function CombatPanel({
     flag: CombatantEconomyFlag,
     used: boolean
   ) => void;
+  /** Declares Disengage for the current combatant — one declareDisengage
+   * update setting disengaged AND action_used together. */
+  onDeclareDisengage: (combatant: CombatCombatant) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
@@ -296,6 +308,13 @@ export function CombatPanel({
             <Badge tone={current.reaction_used ? "red" : "teal"} data-testid="economy-reaction">
               {current.reaction_used ? "Reaction used" : "Reaction available"}
             </Badge>
+            {current.disengaged ? (
+              // Table-wide like the other economy badges: everyone must
+              // see that this move provokes nothing.
+              <Badge tone="purple" data-testid="economy-disengaged">
+                Disengaged
+              </Badge>
+            ) : null}
           </div>
           <span className={styles.economyMovement} data-testid="economy-movement">
             {(() => {
@@ -335,6 +354,24 @@ export function CombatPanel({
                   </Button>
                 );
               })}
+              {/* Declare Disengage (Prompt 54): consumes the Action along
+                  with the flag, so Strict gates it on the action being
+                  free — the same lock the other economy controls apply —
+                  and it stays declared until advance_turn's reset (no
+                  un-declare: it would have to refund the spent action). */}
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy || current.disengaged || (strict && current.action_used)}
+                onClick={() => onDeclareDisengage(current)}
+                data-testid="economy-declare-disengage"
+              >
+                {current.disengaged
+                  ? "Disengaged"
+                  : strict && current.action_used
+                    ? "Disengage needs your action"
+                    : "Declare Disengage (uses action)"}
+              </Button>
             </div>
           ) : null}
         </div>
