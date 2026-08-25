@@ -14,25 +14,6 @@
   padding-top: 40px;
 }
 
-.headerActions {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.navLink {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--teal);
-  text-decoration: none;
-}
-
-.navLink:hover {
-  text-decoration: underline;
-}
-
 .lobbyHint {
   margin: 0 0 16px;
   color: var(--muted);

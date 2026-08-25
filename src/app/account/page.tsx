@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Badge, Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { getProfile, listCampaignsForUser, listCharactersForUser } from "@/data-access";
+import { AppNav } from "../AppNav";
 import { AvatarPicker } from "./AvatarPicker";
 import { DisplayNameForm } from "./DisplayNameForm";
 import { CharacterCreateLauncher } from "./CharacterCreateLauncher";
@@ -25,9 +26,7 @@ export default async function AccountPage() {
   return (
     <div className={styles.page}>
       <main className={styles.main}>
-        <Link href="/campaigns" className={styles.backLink}>
-          ← Back to your campaigns
-        </Link>
+        <AppNav currentPath="/account" userLabel={profile?.display_name || user.email} />
 
         <Panel title="Profile" tone="purple" glow>
           <SectionHeader eyebrow="Account" title="Display name" />

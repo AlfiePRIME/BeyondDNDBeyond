@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Badge, Panel } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { getProfile, isProfileComplete, listCampaignsForUser } from "@/data-access";
+import { AppNav } from "../AppNav";
 import { CreateCampaignForm } from "./CreateCampaignForm";
 import { JoinCampaignForm } from "./JoinCampaignForm";
 import styles from "./page.module.css";
@@ -27,9 +28,7 @@ export default async function CampaignsPage() {
   return (
     <div className={styles.page}>
       <main className={styles.dashboard}>
-        <Link href="/" className={styles.backLink}>
-          ← Back to the lobby
-        </Link>
+        <AppNav currentPath="/campaigns" userLabel={profile!.display_name} />
 
         <Panel title="Your campaigns" tone="purple">
           {memberships.length === 0 ? (

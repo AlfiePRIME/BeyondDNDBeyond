@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Badge, Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { listCampaignMembers, listCharactersForCampaign, isDM } from "@/data-access";
+import { AppNav } from "../../AppNav";
 import { TransferDMForm } from "./TransferDMForm";
 import { CampaignRoster } from "./CampaignRoster";
 import { HouseRules } from "./HouseRules";
@@ -39,9 +40,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   return (
     <div className={styles.page}>
       <main className={styles.main}>
-        <Link href="/campaigns" className={styles.backLink}>
-          ← Back to your campaigns
-        </Link>
+        <AppNav currentPath={`/campaigns/${campaignId}`} userLabel={currentUserDisplayName ?? user.email} />
 
         <Panel
           title={campaign.name}

@@ -14,17 +14,6 @@
   padding-top: 40px;
 }
 
-.backLink {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--dim);
-}
-
-.backLink:hover {
-  color: var(--teal);
-}
-
 .emptyState {
   color: var(--muted);
   line-height: 1.6;

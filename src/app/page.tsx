@@ -1,9 +1,8 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { Button, ForceField, Panel, SectionHeader } from "@/ui-components";
+import { ForceField, Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { getProfile, isProfileComplete } from "@/data-access";
-import { logout } from "./actions";
+import { AppNav } from "./AppNav";
 import { LobbyPresence } from "./LobbyPresence";
 import styles from "./page.module.css";
 
@@ -57,22 +56,9 @@ export default async function LobbyPage() {
     >
       <div className={styles.page}>
         <main className={styles.lobby}>
-          <Panel
-            title="BeyondDNDBeyond"
-            tone="purple"
-            headerActions={
-              <span className={styles.headerActions}>
-                <Link href="/campaigns" className={styles.navLink}>
-                  Your campaigns
-                </Link>
-                <form action={logout}>
-                  <Button type="submit" variant="ghost" size="sm">
-                    Log out
-                  </Button>
-                </form>
-              </span>
-            }
-          >
+          <AppNav currentPath="/" userLabel={profile!.display_name} />
+
+          <Panel title="BeyondDNDBeyond" tone="purple">
             <SectionHeader eyebrow="Signed in" title={`Welcome, ${profile!.display_name}`} glitch />
           </Panel>
 
