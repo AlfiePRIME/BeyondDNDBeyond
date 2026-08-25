@@ -9,6 +9,7 @@ import {
   applyCondition,
   applyExhaustionDelta,
   applyHpDelta,
+  clearHiddenAsHider,
   createHandout,
   createOpportunityAttacks,
   declareDisengage,
@@ -21,6 +22,7 @@ import {
   getMap,
   listCharactersForCampaign,
   listCombatCombatants,
+  listCombatantHiddenFrom,
   listHandouts,
   listLightSources,
   listMapCells,
@@ -45,6 +47,7 @@ import {
   startCombat,
   stopConcentrating,
   subscribeToCampaignChanges,
+  subscribeToCombatantHiddenFromChanges,
   subscribeToProfileChanges,
   transitionMapToken,
   triggerMapObject,
@@ -347,12 +350,15 @@ export function GameRoom({
         listCharactersForCampaign(supabase, campaignId),
       ]);
       const combatants = encounter ? await listCombatCombatants(supabase, encounter.id) : [];
-      const conditions = await listCombatantConditions(
-        supabase,
-        combatants.map((combatant) => combatant.id)
-      );
+      const combatantIds = combatants.map((combatant) => combatant.id);
+      // Hidden-from pairs (Prompt 60) ride the same refresh as conditions —
+      // both are member-readable per-combatant state the room renders from.
+      const [conditions, hiddenFrom] = await Promise.all([
+        listCombatantConditions(supabase, combatantIds),
+        listCombatantHiddenFrom(supabase, combatantIds),
+      ]);
       if (seq !== combatSeqRef.current) return;
-      setCombat(encounter ? { encounter, combatants, conditions } : null);
+      setCombat(encounter ? { encounter, combatants, conditions, hiddenFrom } : null);
       setCharacterRows(rows);
     },
     [campaignId]
@@ -477,6 +483,19 @@ export function GameRoom({
       setEconomyStrict(campaign.action_economy_strict);
     });
   }, [campaignId]);
+
+  // Live hidden-from sync (Prompt 60): a postgres_changes poke rather than
+  // relying solely on the combat-changed broadcast, because the reveal-on-
+  // attack write happens in the roll Route Handler — on no channel at all
+  // — and a hidden token reappearing must reach every open room the moment
+  // the row goes. The handler refetches (the subscription is payload-free;
+  // see subscribeToCombatantHiddenFromChanges' DELETE reasoning).
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    return subscribeToCombatantHiddenFromChanges(supabase, () => {
+      void refreshCombat(supabase).catch(() => undefined);
+    });
+  }, [refreshCombat]);
 
   // Live avatar sync: a postgres_changes feed on profiles (see data-access's
   // subscribeToProfileChanges), not campaign presence — presence only covers
@@ -1084,6 +1103,31 @@ export function GameRoom({
     [runCombatAction]
   );
 
+  // Hide (Prompt 60): the Stealth roll, the observer resolution, and the
+  // hidden-from writes all happen in the roll Route Handler (server-side
+  // randomness, the initiative arrangement); this client then does the
+  // usual refresh + combat-changed poke via runCombatAction.
+  const handleRollHide = useCallback(
+    (combatant: CombatCombatant, mode: AdvantageMode) => {
+      void runCombatAction(async () => {
+        await postRoll(campaignId, { kind: "hide", combatantId: combatant.id, mode });
+      }, "Could not roll that Hide.");
+    },
+    [campaignId, runCombatAction]
+  );
+
+  // Stop hiding (Prompt 60): a plain hider-side delete through the same
+  // RLS the Hide roll's resolution write uses (DM or owner), through the
+  // usual refresh-and-poke flow.
+  const handleStopHiding = useCallback(
+    (combatant: CombatCombatant) => {
+      void runCombatAction(async (supabase) => {
+        await clearHiddenAsHider(supabase, combatant.id);
+      }, "Could not stop hiding.");
+    },
+    [runCombatAction]
+  );
+
   // A taken opportunity attack changed the reactor's reaction_used (and
   // possibly the mover's HP) — the handleRollLanded refresh-and-poke,
   // without its was-this-an-attack gate, for the roll-free NPC mark-taken
@@ -1400,6 +1444,43 @@ export function GameRoom({
     };
   }, [currentUserIsDM, liveMap, cellOverlay, ownCharacterIds, characterById, combat]);
 
+  // Hide/Stealth suppression (Prompt 60): the token ids of every combatant
+  // currently hidden from THIS viewer's own active combatant. A per-token
+  // override ADDITIVE to the visionMasking tiers above — a hidden token is
+  // simply not present for this one viewer, even when its cell's tier is
+  // "full" or "dim", while the cell's terrain and any OTHER token on it
+  // render per their own tiers. The DM's view is never affected (the same
+  // total bypass Prompt 58 established), and the viewer's combatant
+  // resolves through their active token (the mostRecentOwnToken rule),
+  // falling back to any combatant of an owned character when the seeding
+  // token has left the live map. Same client-side presentation posture as
+  // the rest of the vision masking — the rows themselves are member-
+  // readable table state.
+  const hiddenFromViewerTokenIds = useMemo(() => {
+    const hidden = new Set<string>();
+    if (currentUserIsDM || !combat || !liveMap || combat.hiddenFrom.length === 0) return hidden;
+    const observerToken = mostRecentOwnToken(liveMap.tokens, ownCharacterIds);
+    const viewerCombatant =
+      (observerToken
+        ? (combat.combatants.find((candidate) => candidate.token_id === observerToken.id) ?? null)
+        : null) ??
+      combat.combatants.find(
+        (candidate) =>
+          candidate.character_id !== null && ownCharacterIds.has(candidate.character_id)
+      ) ??
+      null;
+    if (!viewerCombatant) return hidden;
+    const hiderIds = new Set(
+      combat.hiddenFrom
+        .filter((row) => row.observer_combatant_id === viewerCombatant.id)
+        .map((row) => row.hider_combatant_id)
+    );
+    for (const combatant of combat.combatants) {
+      if (hiderIds.has(combatant.id)) hidden.add(combatant.token_id);
+    }
+    return hidden;
+  }, [currentUserIsDM, combat, liveMap, ownCharacterIds]);
+
   // This viewer's seen-cells memory for the live map, keyed "x,y". Local
   // state is the render source; map_seen_cells is the durable copy, loaded
   // once per map and written back in debounced batches below (each batch
@@ -1596,6 +1677,10 @@ export function GameRoom({
         ];
       }),
       tokens: liveMap.tokens.flatMap((token) => {
+        // Hidden from THIS viewer (Prompt 60): suppressed outright,
+        // regardless of the cell's tier — everything else on the cell
+        // (terrain, other tokens) still renders per its own tier below.
+        if (hiddenFromViewerTokenIds.has(token.id)) return [];
         // A token's visibility is its cell's tier — except a token sharing
         // the viewer's own cell (including their own token), which is
         // trivially always seen: it's WITH them.
@@ -1643,7 +1728,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells]);
+  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright
@@ -1661,6 +1746,13 @@ export function GameRoom({
     }
     const tokens: Record<string, string> = {};
     for (const token of liveMap.tokens) {
+      // Hidden-from-this-viewer (Prompt 60) overrides the cell tier the
+      // exact way the tableMap suppression does — the mirror must state
+      // the same render decision the scene executes.
+      if (hiddenFromViewerTokenIds.has(token.id)) {
+        tokens[token.id] = "hidden";
+        continue;
+      }
       const withObserver =
         token.x === visionMasking.observerPosition.x &&
         token.y === visionMasking.observerPosition.y;
@@ -1677,7 +1769,7 @@ export function GameRoom({
       cells,
       tokens,
     });
-  }, [liveMap, visionMasking, seenCells]);
+  }, [liveMap, visionMasking, seenCells, hiddenFromViewerTokenIds]);
 
   // Recomputed from the ORIGIN to the hovered cell on every update (the
   // straight path a deliberate walk would take), not accumulated from the
@@ -1878,6 +1970,8 @@ export function GameRoom({
         onRollConcentrationSave={handleRollConcentrationSave}
         onToggleEconomyFlag={handleToggleEconomyFlag}
         onDeclareDisengage={handleDeclareDisengage}
+        onRollHide={handleRollHide}
+        onStopHiding={handleStopHiding}
       />
       {/* Pending opportunity-attack prompts (Prompt 54): visible to the
           whole table, actionable only by each reactor's controller — the

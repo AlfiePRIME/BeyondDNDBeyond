@@ -639,3 +639,44 @@ conditions, so no policy changed. The roll request's attack variant gains
 can locate ANY target's position — an NPC target was previously unresolvable, having no
 character row — advisory-only: absent or unresolvable means no visibility-based
 auto-mode, never an error.
+
+As of Prompt 60, Hide/Stealth (migration `0037_hide_stealth.sql`) — new `hiddenFrom.ts`
+(the `opportunityAttacks.ts` small-feature precedent): a `combatant_hidden_from` table,
+one row per (hider, observer) combatant pair the hider is currently hidden from, with
+absence-of-row = not-hidden (the conditions presence-IS-the-state shape) and
+`unique(hider, observer)`. SELECT is member-wide via `can_read_combatant` through the
+hider — deliberately public table state like conditions and rolls, NOT a
+`map_seen_cells`-style privacy exception (the Stealth total is already public in
+`roll_log`; who it hid from is no bigger a secret), the per-viewer token suppression
+being Prompt 58-style presentation in the Game Room. INSERT/DELETE are authorized by
+`can_write_combatant` on the HIDER's side only (DM, or the hider's owning player — NPC
+hiding falls to the DM by construction; the observer side is referenced, not modified,
+so it needs no say), with a same-encounter subquery guard against cross-encounter
+stitching (the 0035 precedent) and no UPDATE policy (pairs are created or removed,
+never edited). The one genuine RLS crossing is the new SECURITY DEFINER RPC
+`get_encounter_vision_stats(p_encounter_id)` (`getEncounterVisionStats`): one row per
+DISTINCT character linked to a combatant in the encounter — the six ability scores,
+level, proficiencies (jsonb flattened to `text[]`), and `darkvision_feet` — authorized
+by `is_campaign_member`, because resolving a Hide needs every OTHER combatant's passive
+Perception and darkvision and `characters`' 0008 SELECT policy is strictly owner-or-DM
+(a passive Perception is table-stated data, nothing like inventory/backstory). The RPC
+only READS; passive Perception (`passiveScore`) and perception eligibility
+(`computeVisibilityTier`) are computed in the roll Route Handler from the exact
+Prompt 56/59 pure functions, never reimplemented in SQL, and an NPC combatant simply
+has no row (Node applies the flat defaults: passive 10, normal vision). CRUD is
+`listCombatantHiddenFrom` (the `listCombatantConditions` ids-in shape — the table
+carries no encounter_id), `replaceHiddenAsHider` (delete-then-insert: a fresh Hide roll
+REPLACES the previous attempt's concealment state, never accumulates it) and
+`clearHiddenAsHider` (the manual "Stop hiding" control, and the route's
+reveal-on-attack side effect — per SRD an attack reveals the hider to EVERYONE, so the
+route deletes ALL of the attacker's rows as hider after computing "attacking from
+hiding" advantage from the PRE-attack state). `subscribeToCombatantHiddenFromChanges`
+is `subscribeToCombatantConditionChanges`' exact payload-free unfiltered poke (every
+reveal is a DELETE, which carries only the PK under default replica identity), and the
+table joins the realtime publication in 0037. `rolls.ts` gains the `"hide"` `RollKind`
+(the `roll_log_kind_check` constraint widened the 0031/0032 way, name confirmed against
+the live DB) and `HideResolution`/`HideObserverOutcome` in the d20 breakdown — each
+observer's outcome (hidden-from / noticed-by / could-not-perceive) with the passive
+Perception compared against and a best-effort name (npc_name, a readable character's
+name, or the combat panel's "Party member" fallback), so the shared log states the
+whole verdict, not a bare number.

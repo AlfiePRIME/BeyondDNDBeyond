@@ -67,14 +67,33 @@ export function resolveLightSourcePositions(
 }
 
 /**
+ * The combatant-keyed core of the vision-blocked derivation (split out in
+ * Prompt 60): true when any of THIS combatant's active conditions carries
+ * `blocksVision: true` in the rules-engine catalog (blinded, petrified,
+ * unconscious — or anything that ever gains the flag, for free). Keyed by
+ * combatant rather than character so an NPC observer — which has no
+ * character row at all — gets the same condition-driven blindness a PC
+ * does, which the Hide resolution's per-observer eligibility check needs.
+ */
+export function visionBlockedForCombatant(
+  conditions: readonly CombatantCondition[],
+  combatantId: string
+): boolean {
+  return conditions.some(
+    (condition) =>
+      condition.combatant_id === combatantId &&
+      CONDITION_BY_KEY.get(condition.condition_key as ConditionKey)?.effects.blocksVision === true
+  );
+}
+
+/**
  * The caller-derived `ObserverVision.visionBlocked` boolean: true when the
  * character is an active combatant in the ongoing encounter AND any of
  * that combatant's active conditions carries `blocksVision: true` in the
- * rules-engine catalog (blinded, petrified, unconscious — or anything
- * that ever gains the flag, for free). Outside combat there are no
- * combatant_conditions rows for anyone — conditions only exist for active
- * combatants — so a character not currently in the fight is simply never
- * vision-blocked.
+ * rules-engine catalog (see visionBlockedForCombatant, which this
+ * delegates to). Outside combat there are no combatant_conditions rows
+ * for anyone — conditions only exist for active combatants — so a
+ * character not currently in the fight is simply never vision-blocked.
  */
 export function visionBlockedForCharacter(
   combatants: readonly CombatCombatant[],
@@ -83,9 +102,5 @@ export function visionBlockedForCharacter(
 ): boolean {
   const combatant = combatants.find((candidate) => candidate.character_id === characterId);
   if (!combatant) return false;
-  return conditions.some(
-    (condition) =>
-      condition.combatant_id === combatant.id &&
-      CONDITION_BY_KEY.get(condition.condition_key as ConditionKey)?.effects.blocksVision === true
-  );
+  return visionBlockedForCombatant(conditions, combatant.id);
 }

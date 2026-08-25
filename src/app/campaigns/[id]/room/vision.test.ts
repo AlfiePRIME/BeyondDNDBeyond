@@ -10,6 +10,7 @@ import {
   mostRecentOwnToken,
   resolveLightSourcePositions,
   visionBlockedForCharacter,
+  visionBlockedForCombatant,
 } from "./vision";
 
 function token(overrides: Partial<MapToken>): MapToken {
@@ -170,5 +171,16 @@ describe("visionBlockedForCharacter", () => {
     expect(
       visionBlockedForCharacter(fighters, [condition({ combatant_id: "c1", condition_key: "exhaustion", level: 3 })], "char-a")
     ).toBe(false);
+  });
+});
+
+describe("visionBlockedForCombatant", () => {
+  it("is true for the combatant carrying a blocksVision condition — including an NPC with no character", () => {
+    expect(visionBlockedForCombatant([condition({ combatant_id: "npc-1", condition_key: "blinded" })], "npc-1")).toBe(true);
+  });
+
+  it("is false for a non-vision-blocking condition and for a different combatant's blindness", () => {
+    expect(visionBlockedForCombatant([condition({ combatant_id: "npc-1", condition_key: "poisoned" })], "npc-1")).toBe(false);
+    expect(visionBlockedForCombatant([condition({ combatant_id: "npc-1", condition_key: "blinded" })], "npc-2")).toBe(false);
   });
 });

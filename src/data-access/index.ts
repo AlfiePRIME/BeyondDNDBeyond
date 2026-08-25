@@ -189,6 +189,15 @@ export {
   type CombatantCondition,
 } from "./conditions";
 export {
+  getEncounterVisionStats,
+  listCombatantHiddenFrom,
+  replaceHiddenAsHider,
+  clearHiddenAsHider,
+  subscribeToCombatantHiddenFromChanges,
+  type CombatantHiddenFrom,
+  type EncounterVisionStats,
+} from "./hiddenFrom";
+export {
   listCharacterResources,
   createCharacterResource,
   setCharacterResourceUses,
@@ -209,6 +218,8 @@ export {
   type AttackResolution,
   type DeathSaveResolution,
   type ConcentrationSaveResolution,
+  type HideObserverOutcome,
+  type HideResolution,
   type D20RollBreakdown,
   type FreeformRollBreakdown,
   type RollBreakdown,

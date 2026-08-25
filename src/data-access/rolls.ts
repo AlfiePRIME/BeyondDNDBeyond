@@ -10,7 +10,8 @@ export type RollKind =
   | "initiative"
   | "freeform"
   | "death_save"
-  | "concentration_save";
+  | "concentration_save"
+  | "hide";
 
 export interface RollModifierPart {
   label: string;
@@ -88,6 +89,42 @@ export interface ConcentrationSaveResolution {
   spellName: string | null;
 }
 
+/** One observer's outcome of a Hide attempt, nested in HideResolution
+ * (Prompt 60). `name` is resolved best-effort with the ROLLER's own
+ * RLS-scoped reads — an NPC's npc_name, a readable character's name, or
+ * the "Party member" fallback the combat panel already uses for another
+ * player's unreadable PC. */
+export interface HideObserverOutcome {
+  combatantId: string;
+  name: string;
+  /** The passive Perception the Stealth total was compared against —
+   * rules-engine passiveScore for a PC observer, the flat default of 10
+   * for an NPC placeholder with no character row. Absent for observers
+   * who couldn't perceive the hider at all (no comparison happened). */
+  passivePerception?: number;
+}
+
+/** Hide-specific resolution detail, nested in a d20 breakdown (Prompt 60)
+ * — the per-observer outcome of comparing the Stealth total against each
+ * other combatant, fully known before anything persists (the
+ * concentration-save "nothing spliced in afterward" case). Table-public
+ * roll information like everything else in roll_log. */
+export interface HideResolution {
+  /** Observers the hider is now hidden from — their passive Perception
+   * strictly beat the Stealth total (a tie or better means they notice;
+   * only a strict loss hides — the build's meets-it-beats-it convention),
+   * so a combatant_hidden_from row was recorded for each. */
+  hiddenFrom: HideObserverOutcome[];
+  /** Observers who noticed: the Stealth total met or beat their passive
+   * Perception, so no row was recorded. */
+  noticedBy: HideObserverOutcome[];
+  /** Observers who couldn't perceive the hider AT ALL beforehand
+   * (visibility tier "none" on the hider's cell — out of light/range, or
+   * vision-blocked): hiding from someone who already can't see you is
+   * meaningless, so no comparison was made and no row recorded. */
+  couldNotPerceive: HideObserverOutcome[];
+}
+
 export interface D20RollBreakdown {
   type: "d20";
   /** Display name for the roll, e.g. "Perception check" or "Melee attack". */
@@ -101,6 +138,7 @@ export interface D20RollBreakdown {
   attack?: AttackResolution;
   deathSave?: DeathSaveResolution;
   concentrationSave?: ConcentrationSaveResolution;
+  hide?: HideResolution;
 }
 
 export interface FreeformRollBreakdown {

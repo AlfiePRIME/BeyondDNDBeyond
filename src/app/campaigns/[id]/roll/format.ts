@@ -3,6 +3,8 @@ import type {
   ConcentrationSaveResolution,
   D20RollBreakdown,
   DeathSaveResolution,
+  HideObserverOutcome,
+  HideResolution,
   RollBreakdown,
   RollLogEntry,
 } from "@/data-access";
@@ -106,6 +108,34 @@ export function concentrationSaveOutcomeText(save: ConcentrationSaveResolution):
     : `Failed, concentration broken (DC ${save.dc})`;
 }
 
+function hideObserverNames(outcomes: HideObserverOutcome[]): string {
+  return outcomes
+    .map((outcome) =>
+      outcome.passivePerception !== undefined
+        ? `${outcome.name} (passive ${outcome.passivePerception})`
+        : outcome.name
+    )
+    .join(", ");
+}
+
+/** "Hidden from Goblin (passive 10) · noticed by Bob (passive 17)" — the
+ * per-observer Hide verdict (Prompt 60), the attackOutcomeText analogue:
+ * every observer's outcome spelled out with the passive Perception the
+ * Stealth total was compared against, so the shared log makes the whole
+ * resolution legible, not just a bare number. */
+export function hideOutcomeText(hide: HideResolution): string {
+  const parts: string[] = [];
+  if (hide.hiddenFrom.length > 0) parts.push(`Hidden from ${hideObserverNames(hide.hiddenFrom)}`);
+  if (hide.noticedBy.length > 0) parts.push(`noticed by ${hideObserverNames(hide.noticedBy)}`);
+  if (hide.couldNotPerceive.length > 0) {
+    parts.push(`${hideObserverNames(hide.couldNotPerceive)} couldn't see them anyway`);
+  }
+  if (parts.length === 0) return "no other combatants to hide from";
+  const text = parts.join(" · ");
+  // "noticed by ..." can lead the line when nobody was hidden from.
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** One-line headline for a log entry, e.g. "Perception check — 17" or
  * "Melee attack vs AC 15 — 18 · Hit". */
 export function rollHeadline(entry: RollLogEntry): string {
@@ -123,6 +153,15 @@ export function rollHeadline(entry: RollLogEntry): string {
     // The bare kind name, not breakdown.label — the label already carries
     // the DC, which the outcome text repeats.
     return `Concentration save — ${entry.total} · ${concentrationSaveOutcomeText(breakdown.concentrationSave)}`;
+  }
+  if (breakdown.hide) {
+    // The headline stays a count — the full per-observer verdict is the
+    // hideOutcomeText detail line under it (the damage-line arrangement).
+    return `${breakdown.label} — ${entry.total} · hidden from ${breakdown.hide.hiddenFrom.length} of ${
+      breakdown.hide.hiddenFrom.length +
+      breakdown.hide.noticedBy.length +
+      breakdown.hide.couldNotPerceive.length
+    } observers`;
   }
   return `${breakdown.label} — ${entry.total}`;
 }

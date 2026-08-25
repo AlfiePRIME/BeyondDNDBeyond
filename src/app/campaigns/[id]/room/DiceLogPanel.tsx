@@ -14,7 +14,13 @@ import {
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { CLASSES, type AdvantageMode, type AttackKind } from "@/rules-engine";
 import { postRoll } from "../roll/api";
-import { advantageReasonText, damageText, rollDetail, rollHeadline } from "../roll/format";
+import {
+  advantageReasonText,
+  damageText,
+  hideOutcomeText,
+  rollDetail,
+  rollHeadline,
+} from "../roll/format";
 import type { RoomMember } from "./avatar-url";
 import styles from "./room.module.css";
 
@@ -414,6 +420,12 @@ export function DiceLogPanel({
               roll.breakdown.type === "d20" && roll.breakdown.attack
                 ? advantageReasonText(roll.breakdown.attack)
                 : null;
+            // The per-observer Hide verdict (Prompt 60) — shown like the
+            // damage line, so the whole table reads who it worked against.
+            const hideLine =
+              roll.breakdown.type === "d20" && roll.breakdown.hide
+                ? hideOutcomeText(roll.breakdown.hide)
+                : null;
             return (
               <div key={roll.id} className={styles.rollEntry} data-testid={`roll-entry-${roll.id}`}>
                 <span className={styles.rollMeta}>
@@ -434,6 +446,11 @@ export function DiceLogPanel({
                 {damageLine ? (
                   <span className={styles.rollDetail} data-testid={`roll-damage-${roll.id}`}>
                     {damageLine}
+                  </span>
+                ) : null}
+                {hideLine ? (
+                  <span className={styles.rollDetail} data-testid={`roll-hide-${roll.id}`}>
+                    {hideLine}
                   </span>
                 ) : null}
               </div>

@@ -1,14 +1,20 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
+  clearHiddenAsHider,
   getActiveCombatEncounter,
   getCharacter,
+  getEncounterVisionStats,
+  isDM,
+  listCharactersForCampaign,
   listCombatCombatants,
   listCombatantConditions,
+  listCombatantHiddenFrom,
   listLightSources,
   listMapCells,
   listMapObjects,
   listMapTokens,
+  replaceHiddenAsHider,
   resolveAttackDamage,
   rollConcentrationSave,
   rollDeathSave,
@@ -17,6 +23,7 @@ import {
   type AttackResolution,
   type Character,
   type D20RollBreakdown,
+  type HideObserverOutcome,
   type RollBreakdown,
   type RollKind,
   type RollLogEntry,
@@ -34,6 +41,7 @@ import {
   computeVisibilityTier,
   doubleDiceExpression,
   parseDiceNotation,
+  passiveScore,
   proficiencyBonus,
   resolveAttackOutcome,
   resolveDeathSave,
@@ -47,8 +55,13 @@ import {
   type AttackKind,
   type ConditionKey,
   type SkillName,
+  type VisibilityTier,
 } from "@/rules-engine";
-import { resolveLightSourcePositions, visionBlockedForCharacter } from "../room/vision";
+import {
+  resolveLightSourcePositions,
+  visionBlockedForCharacter,
+  visionBlockedForCombatant,
+} from "../room/vision";
 import type { RollRequest } from "./api";
 
 // Every die result in the app is generated HERE, in a Node server process —
@@ -436,6 +449,248 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ ok: true, roll: entry });
   }
 
+  if (roll.kind === "hide") {
+    if (typeof roll.combatantId !== "string") return badRequest("A combatant is required.");
+    // Combatant-scoped like initiative (an NPC can Hide too and has no
+    // character) — same fetch shape, plus encounter_id/token_id for the
+    // observer sweep below.
+    const { data: combatant, error: combatantError } = await supabase
+      .from("combat_combatants")
+      .select(
+        "id, encounter_id, token_id, character_id, npc_name, encounter:combat_encounters!inner(campaign_id, ended_at)"
+      )
+      .eq("id", roll.combatantId)
+      .maybeSingle();
+    if (combatantError) throw combatantError;
+    const encounter = (combatant?.encounter ?? null) as {
+      campaign_id: string;
+      ended_at: string | null;
+    } | null;
+    if (!combatant || encounter?.campaign_id !== campaignId) {
+      return NextResponse.json({ ok: false, message: "Combatant not found." }, { status: 404 });
+    }
+    if (encounter.ended_at !== null) {
+      return badRequest("That encounter has already ended.");
+    }
+
+    // A PC hider's linked character — readable exactly by the two parties
+    // can_write_combatant authorizes (owner or DM under characters RLS).
+    const character = combatant.character_id
+      ? await getCharacter(supabase, combatant.character_id)
+      : null;
+
+    // Explicit controllership check BEFORE any die is rolled — mirroring
+    // 0027's can_write_combatant (DM, or the hider's owning player; NPC
+    // hiding is DM-only by construction). Unlike initiative, RLS alone
+    // can't reject an outsider here: a Hide that ends up hiding from no
+    // one performs only a zero-row DELETE, which RLS lets silently match
+    // nothing — so the route must refuse up front rather than log a roll
+    // an uninvolved player was never entitled to make.
+    const callerIsDM = await isDM(supabase, campaignId, user.id);
+    if (!callerIsDM && !(character !== null && character.owner_id === user.id)) {
+      return NextResponse.json(
+        { ok: false, message: "You may not hide that combatant." },
+        { status: 403 }
+      );
+    }
+
+    // A Stealth check: DEX + proficiency for a PC hider (the "skill"
+    // kind's exact bonus math, asserted against the rules engine the same
+    // way); a plain unmodified d20 for an NPC — the initiative branch's
+    // "NPCs have no stats anywhere yet" precedent.
+    const modifiers: RollModifierPart[] = [];
+    if (character) {
+      const scores = abilityScoresOf(character);
+      const proficient = character.proficiencies.includes("Stealth");
+      modifiers.push({ label: "Dexterity modifier", value: abilityModifier(scores.dexterity) });
+      if (proficient) {
+        modifiers.push({ label: "Proficiency", value: proficiencyBonus(character.level) });
+      }
+      if (
+        modifiers.reduce((sum, part) => sum + part.value, 0) !==
+        skillCheckBonus("Stealth", scores, character.level, proficient)
+      ) {
+        throw new Error("stealth bonus breakdown mismatch");
+      }
+    }
+    const d20 = rollD20(mode);
+    const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
+
+    // Everything the observer sweep needs, in one round of reads. The
+    // vision stats come through get_encounter_vision_stats (0037) — the
+    // one narrow SECURITY DEFINER crossing of characters' owner-or-DM
+    // SELECT policy, because comparing against every OTHER combatant's
+    // passive Perception (and knowing their darkvision) needs stats the
+    // hider's own session cannot read. The RPC only READS; both actual
+    // computations below reuse the established pure functions
+    // (passiveScore, computeVisibilityTier) — nothing is reimplemented in
+    // SQL. Map data and conditions are already member-readable, so those
+    // reads are the caller's ordinary RLS-scoped ones.
+    const combatants = await listCombatCombatants(supabase, combatant.encounter_id);
+    const [conditions, visionStats, readableCharacters] = await Promise.all([
+      listCombatantConditions(
+        supabase,
+        combatants.map((candidate) => candidate.id)
+      ),
+      getEncounterVisionStats(supabase, combatant.encounter_id),
+      // Observer names for the log, best-effort: RLS trims this to the
+      // caller's own characters (or all, for the DM) — an unreadable PC
+      // observer falls back to the combat panel's "Party member" label.
+      listCharactersForCampaign(supabase, campaignId),
+    ]);
+    const statsByCharacterId = new Map(visionStats.map((row) => [row.character_id, row]));
+    const nameByCharacterId = new Map(readableCharacters.map((row) => [row.id, row.name]));
+
+    // The hider's position and the live map's lighting, for the "could
+    // this observer perceive the hider AT ALL" check — exactly the attack
+    // branch's Prompt 59 perception context. Missing pieces (no live map,
+    // the hider's token no longer on it) mean there is nothing to compute
+    // perception FROM: the graceful fallback treats every non-blinded
+    // observer as able to perceive, so the Hide still resolves on passive
+    // Perception alone rather than erroring or silently hiding from no one.
+    let hiderContext: {
+      position: { x: number; y: number };
+      ambientLight: "bright" | "dim" | "dark";
+      lightSources: ReturnType<typeof resolveLightSourcePositions>;
+      tokens: Awaited<ReturnType<typeof listMapTokens>>;
+    } | null = null;
+    if (campaign.live_map) {
+      const tokens = await listMapTokens(supabase, campaign.live_map);
+      const hiderToken = tokens.find((token) => token.id === combatant.token_id) ?? null;
+      if (hiderToken) {
+        const [cells, lightSources, objects] = await Promise.all([
+          listMapCells(supabase, campaign.live_map),
+          listLightSources(supabase, campaign.live_map),
+          listMapObjects(supabase, campaign.live_map),
+        ]);
+        const hiderCell = cells.find(
+          (cell) => cell.x === hiderToken.x && cell.y === hiderToken.y
+        );
+        hiderContext = {
+          position: { x: hiderToken.x, y: hiderToken.y },
+          // Sparse storage: a cell with no row is the bright default.
+          ambientLight: hiderCell?.light_level ?? "bright",
+          lightSources: resolveLightSourcePositions(lightSources, objects, tokens),
+          tokens,
+        };
+      }
+    }
+
+    // The sweep: every OTHER combatant is an observer. An observer with no
+    // character row in the RPC result (an NPC placeholder, or any combatant
+    // that simply has no matching row) gets the flat defaults — passive
+    // Perception 10, normal vision with no darkvision — the same default
+    // either way.
+    const hiddenFrom: HideObserverOutcome[] = [];
+    const noticedBy: HideObserverOutcome[] = [];
+    const couldNotPerceive: HideObserverOutcome[] = [];
+    for (const observer of combatants) {
+      if (observer.id === combatant.id) continue;
+      const observerStats = observer.character_id
+        ? (statsByCharacterId.get(observer.character_id) ?? null)
+        : null;
+      const name =
+        observer.npc_name ??
+        (observer.character_id ? nameByCharacterId.get(observer.character_id) : undefined) ??
+        "Party member";
+
+      // Could this observer perceive the hider at all? Vision-blocked
+      // (blinded/petrified/unconscious — combatant-keyed so an NPC
+      // observer's blindness counts too) short-circuits to "none"; else
+      // the observer's tier on the HIDER's cell, computed from their own
+      // position/darkvision against the live lighting.
+      let tier: VisibilityTier;
+      if (visionBlockedForCombatant(conditions, observer.id)) {
+        tier = "none";
+      } else if (hiderContext) {
+        const observerToken =
+          hiderContext.tokens.find((token) => token.id === observer.token_id) ?? null;
+        tier = observerToken
+          ? computeVisibilityTier({
+              observerPosition: { x: observerToken.x, y: observerToken.y },
+              vision: {
+                darkvisionFeet: observerStats?.darkvision_feet ?? null,
+                visionBlocked: false,
+              },
+              cellPosition: hiderContext.position,
+              cellAmbientLight: hiderContext.ambientLight,
+              lightSources: hiderContext.lightSources,
+            })
+          : // An observer with no token on the live map: nothing to compute
+            // their perception from — the graceful fallback above.
+            "full";
+      } else {
+        tier = "full";
+      }
+      if (tier === "none") {
+        // They already can't perceive the hider — hiding from them is
+        // meaningless, so no comparison and no row.
+        couldNotPerceive.push({ combatantId: observer.id, name });
+        continue;
+      }
+
+      const passivePerception = observerStats
+        ? passiveScore(
+            "Perception",
+            {
+              strength: observerStats.strength,
+              dexterity: observerStats.dexterity,
+              constitution: observerStats.constitution,
+              intelligence: observerStats.intelligence,
+              wisdom: observerStats.wisdom,
+              charisma: observerStats.charisma,
+            },
+            observerStats.level,
+            observerStats.proficiencies.includes("Perception")
+          )
+        : 10;
+      // Meets-it-beats-it: a tie or better means they notice — only a
+      // strict loss against their passive Perception hides.
+      if (total < passivePerception) {
+        hiddenFrom.push({ combatantId: observer.id, name, passivePerception });
+      } else {
+        noticedBy.push({ combatantId: observer.id, name, passivePerception });
+      }
+    }
+
+    // Persist BEFORE logging (the initiative-path ordering): the fresh
+    // hidden set REPLACES whatever a previous attempt left (delete-then-
+    // insert — current concealment state, never an accumulation), through
+    // plain hider-side RLS (0037's can_write_combatant policies) as a
+    // backstop behind the explicit controllership check above.
+    try {
+      await replaceHiddenAsHider(
+        supabase,
+        combatant.id,
+        hiddenFrom.map((outcome) => outcome.combatantId)
+      );
+    } catch {
+      return NextResponse.json(
+        { ok: false, message: "You may not hide that combatant." },
+        { status: 403 }
+      );
+    }
+
+    const label = `Hide (Stealth) — ${character?.name ?? combatant.npc_name ?? "combatant"}`;
+    const entry = await insertRoll(supabase, {
+      campaign_id: campaignId,
+      roller_user_id: user.id,
+      character_id: combatant.character_id,
+      kind: "hide",
+      breakdown: {
+        type: "d20",
+        label,
+        mode,
+        d20Rolls: d20.rolls,
+        d20Result: d20.result,
+        modifiers,
+        hide: { hiddenFrom, noticedBy, couldNotPerceive },
+      },
+      total,
+    });
+    return NextResponse.json({ ok: true, roll: entry });
+  }
+
   if (
     roll.kind !== "check" &&
     roll.kind !== "save" &&
@@ -541,6 +796,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   let rolledMode: AdvantageMode = mode;
   const advantageSources: string[] = [];
   const disadvantageSources: string[] = [];
+  // The attacker's combatant when they hold any hidden-from state as hider
+  // (Prompt 60) — set inside the attack block below and consumed by the
+  // reveal-on-attack deletes after the roll resolves. Order matters:
+  // advantage is computed from the PRE-attack hidden state; the reveal is
+  // a side effect of the attack COMPLETING, strictly after the roll.
+  let hiddenAttackerCombatantId: string | null = null;
   if (attackContext) {
     if (mode === "advantage") advantageSources.push("manually selected");
     if (mode === "disadvantage") disadvantageSources.push("manually selected");
@@ -587,6 +848,30 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         }
         if (definition.effects.attacksAgainstHaveDisadvantage) {
           disadvantageSources.push(`target has ${definition.name} (disadvantage against)`);
+        }
+      }
+    }
+
+    // Attacking from hiding (Prompt 60): the attacker's combatant resolved
+    // from the same encounter-wide load the target lookup above rides —
+    // NOT a third parallel query (currentCombatantForAttacker answers a
+    // different question: "is it their TURN"; a hidden attacker reveals
+    // regardless of whose turn it is). If they hold a hidden-from row
+    // against THIS target, the attack gains advantage; holding ANY rows as
+    // hider flags them for the reveal-on-attack deletes after the roll —
+    // per SRD, attacking gives their position away to everyone, not just
+    // the creature they swung at.
+    const attackerCombatant =
+      combatants.find((candidate) => candidate.character_id === character.id) ?? null;
+    if (attackerCombatant) {
+      const hiddenRows = await listCombatantHiddenFrom(supabase, [attackerCombatant.id]);
+      if (hiddenRows.length > 0) {
+        hiddenAttackerCombatantId = attackerCombatant.id;
+        if (
+          targetCombatant &&
+          hiddenRows.some((row) => row.observer_combatant_id === targetCombatant.id)
+        ) {
+          advantageSources.push("attacking from hiding");
         }
       }
     }
@@ -728,6 +1013,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           if (economyCombatantId) {
             await setCombatantEconomyFlag(supabase, economyCombatantId, "action_used", true);
           }
+          // Reveal on attack (Prompt 60): the hidden attacker's position
+          // is given away to EVERYONE — every hidden-from row they held as
+          // hider goes, not just the target's — alongside marking the
+          // action, strictly AFTER the advantage computation above read
+          // the pre-attack state.
+          if (hiddenAttackerCombatantId) {
+            await clearHiddenAsHider(supabase, hiddenAttackerCombatantId);
+          }
           return NextResponse.json({ ok: true, roll: entry });
         } catch (err) {
           const message =
@@ -761,6 +1054,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // checks/saves/skills never reach this write.
   if (economyCombatantId) {
     await setCombatantEconomyFlag(supabase, economyCombatantId, "action_used", true);
+  }
+  // Reveal on attack, the miss/untargeted counterpart of the resolved-
+  // damage path above: swinging from hiding gives the position away even
+  // on a miss (the miss-still-costs reasoning); hiddenAttackerCombatantId
+  // is only ever set for the attack kind, after the advantage sources were
+  // read from the pre-attack state.
+  if (hiddenAttackerCombatantId) {
+    await clearHiddenAsHider(supabase, hiddenAttackerCombatantId);
   }
 
   const entry = await insertRoll(supabase, {

@@ -9,6 +9,7 @@ import {
   listCharactersForCampaign,
   listCombatCombatants,
   listCombatantConditions,
+  listCombatantHiddenFrom,
   listHandouts,
   listLightSources,
   listMapCells,
@@ -88,11 +89,14 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   let initialCombat: CombatState | null = null;
   if (activeEncounter) {
     const combatants = await listCombatCombatants(supabase, activeEncounter.id);
-    const conditions = await listCombatantConditions(
-      supabase,
-      combatants.map((combatant) => combatant.id)
-    );
-    initialCombat = { encounter: activeEncounter, combatants, conditions };
+    const combatantIds = combatants.map((combatant) => combatant.id);
+    // Hidden-from pairs (Prompt 60) load alongside conditions — both are
+    // member-readable per-combatant state the room renders from.
+    const [conditions, hiddenFrom] = await Promise.all([
+      listCombatantConditions(supabase, combatantIds),
+      listCombatantHiddenFrom(supabase, combatantIds),
+    ]);
+    initialCombat = { encounter: activeEncounter, combatants, conditions, hiddenFrom };
   }
 
   let initialLiveMap: LiveMapData | null = null;

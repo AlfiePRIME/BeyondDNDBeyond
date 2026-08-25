@@ -8,6 +8,7 @@ import type {
   CombatEncounter,
   CombatantCondition,
   CombatantEconomyFlag,
+  CombatantHiddenFrom,
 } from "@/data-access";
 import {
   CONDITIONS,
@@ -22,11 +23,15 @@ import styles from "./room.module.css";
 
 /** The active encounter plus its combatants, already in turn order (see
  * listCombatCombatants) so current_turn_index indexes straight into the
- * array, and every combatant's applied conditions (as of Prompt 47). */
+ * array, every combatant's applied conditions (as of Prompt 47), and — as
+ * of Prompt 60 — every hidden-from pair in the encounter (member-readable
+ * public table state like conditions; the per-viewer token suppression
+ * derived from it lives in GameRoom's rendering). */
 export interface CombatState {
   encounter: CombatEncounter;
   combatants: CombatCombatant[];
   conditions: CombatantCondition[];
+  hiddenFrom: CombatantHiddenFrom[];
 }
 
 /**
@@ -75,7 +80,16 @@ export interface CombatState {
  * update) — in Strict mode unavailable once the action is already spent,
  * the same gating as the other economy controls, and one-way until
  * advance_turn's reset (un-declaring would have to un-spend the action
- * it consumed).
+ * it consumed). As of Prompt 60 a selected combatant the viewer controls
+ * (the conditions' DM-or-owner rule) gets a Hide button — a server-rolled
+ * Stealth check via the dice roller, honoring the panel's advantage
+ * toggle, resolved against every other combatant's passive Perception —
+ * and, while hidden from anyone, a "Stop hiding" control (a plain
+ * hider-side delete); every row hidden from at least one observer shows a
+ * table-wide "Hidden from N" badge (public state like conditions — only
+ * the RENDERING hides the token, and only from the specific observers it
+ * beat). Deliberately not turn-gated, like every other roll here: the
+ * table self-polices whose turn it is.
  */
 export function CombatPanel({
   isDM,
@@ -97,6 +111,8 @@ export function CombatPanel({
   onRollConcentrationSave,
   onToggleEconomyFlag,
   onDeclareDisengage,
+  onRollHide,
+  onStopHiding,
 }: {
   isDM: boolean;
   currentUserId: string;
@@ -137,6 +153,14 @@ export function CombatPanel({
   /** Declares Disengage for the current combatant — one declareDisengage
    * update setting disengaged AND action_used together. */
   onDeclareDisengage: (combatant: CombatCombatant) => void;
+  /** Posts kind: "hide" via the roll route — a server-rolled Stealth check
+   * (plain d20 for an NPC) resolved server-side against every other
+   * combatant's passive Perception; mode carries the panel's advantage
+   * toggle, the onRollInitiative arrangement. */
+  onRollHide: (combatant: CombatCombatant, mode: AdvantageMode) => void;
+  /** Deletes every hidden-from pair the combatant holds as hider — a
+   * plain hider-side clearHiddenAsHider delete. */
+  onStopHiding: (combatant: CombatCombatant) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
@@ -156,6 +180,16 @@ export function CombatPanel({
       grouped.set(condition.combatant_id, list);
     }
     return grouped;
+  }, [combat]);
+
+  // How many observers each combatant is currently hidden from (Prompt
+  // 60) — drives the table-wide badge and the Stop-hiding control.
+  const hiddenObserverCountByHider = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of combat?.hiddenFrom ?? []) {
+      counts.set(row.hider_combatant_id, (counts.get(row.hider_combatant_id) ?? 0) + 1);
+    }
+    return counts;
   }, [combat]);
 
   function combatantLabel(combatant: CombatCombatant): string {
@@ -458,6 +492,17 @@ export function CombatPanel({
                 <span className={styles.concentrationSpell}>{character.concentrating_on}</span>
               </div>
             ) : null}
+            {(hiddenObserverCountByHider.get(combatant.id) ?? 0) > 0 ? (
+              // Table-wide like the condition badges: WHO holds hidden
+              // state is public roll-log-adjacent information — only the
+              // table rendering suppresses the token, and only for the
+              // specific observers it is hidden from.
+              <div className={styles.concentrationState} data-testid={`hidden-state-${combatant.id}`}>
+                <Badge tone="purple" data-testid={`hidden-badge-${combatant.id}`}>
+                  Hidden from {hiddenObserverCountByHider.get(combatant.id)}
+                </Badge>
+              </div>
+            ) : null}
             {character &&
             character.pending_concentration_dc !== null &&
             (isDM || ownsCombatant(combatant)) ? (
@@ -669,6 +714,35 @@ export function CombatPanel({
                     +
                   </Button>
                 </div>
+              </div>
+            ) : null}
+            {selected && canEditConditions(combatant) ? (
+              // Hide/Stealth (Prompt 60): the same DM-or-owner gate as the
+              // condition controls (an NPC hider falls to the DM). The
+              // Stealth roll rides the panel's shared advantage toggle,
+              // like the initiative Roll buttons; Stop hiding only shows
+              // while there is hidden state to clear.
+              <div className={styles.objectHeader} data-testid={`hide-controls-${combatant.id}`}>
+                <Button
+                  size="sm"
+                  variant="accent"
+                  disabled={busy}
+                  onClick={() => onRollHide(combatant, d20Mode)}
+                  data-testid={`roll-hide-${combatant.id}`}
+                >
+                  Hide (roll Stealth)
+                </Button>
+                {(hiddenObserverCountByHider.get(combatant.id) ?? 0) > 0 ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => onStopHiding(combatant)}
+                    data-testid={`stop-hiding-${combatant.id}`}
+                  >
+                    Stop hiding
+                  </Button>
+                ) : null}
               </div>
             ) : null}
           </div>
