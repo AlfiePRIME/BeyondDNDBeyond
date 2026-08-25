@@ -15,7 +15,9 @@ export interface CombatEncounter {
  * PC-xor-NPC pair (0019's shape, mirrored by 0027's CHECK), so the row
  * stays meaningful even if the token later leaves the live map. initiative
  * is null until entered — manual entry only until Prompt 48 wires the dice
- * roller in.
+ * roller in. The four action-economy fields (Prompt 53) track this
+ * combatant's CURRENT turn's usage and are reset by advance_turn the
+ * moment its turn begins.
  */
 export interface CombatCombatant {
   id: string;
@@ -24,6 +26,10 @@ export interface CombatCombatant {
   character_id: string | null;
   npc_name: string | null;
   initiative: number | null;
+  action_used: boolean;
+  bonus_action_used: boolean;
+  reaction_used: boolean;
+  movement_used_feet: number;
   created_at: string;
 }
 
@@ -125,6 +131,10 @@ export async function getActiveCombatantForCharacter(
     character_id: row.character_id,
     npc_name: row.npc_name,
     initiative: row.initiative,
+    action_used: row.action_used,
+    bonus_action_used: row.bonus_action_used,
+    reaction_used: row.reaction_used,
+    movement_used_feet: row.movement_used_feet,
     created_at: row.created_at,
   };
 }
@@ -143,6 +153,39 @@ export async function setCombatantInitiative(
   const { data, error } = await supabase
     .from("combat_combatants")
     .update({ initiative })
+    .eq("id", combatantId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/** The three on/off action-economy flags (Prompt 53). Movement is NOT
+ * here: it accumulates through the move_combat_token RPC, never a direct
+ * flag flip. */
+export type CombatantEconomyFlag = "action_used" | "bonus_action_used" | "reaction_used";
+
+/**
+ * Marks (or, in Freeform mode, un-marks) one action-economy flag — the
+ * setCombatantInitiative shape exactly: a plain update through
+ * can_write_combatant (0027), DM or the owning player, no RPC since a
+ * single boolean flip has no cross-row invariant. The roll route uses it
+ * to mark action_used after an attack resolves; the combat panel's manual
+ * bonus-action/reaction controls use it directly (nothing consumes those
+ * automatically yet — reactions proper are Prompt 54's scope). Strict
+ * mode's "can't un-mark until your next turn" is a UI rule, not RLS —
+ * matching how the strictness toggle itself is UI-gated.
+ */
+export async function setCombatantEconomyFlag(
+  supabase: SupabaseClient,
+  combatantId: string,
+  flag: CombatantEconomyFlag,
+  used: boolean
+): Promise<CombatCombatant> {
+  const { data, error } = await supabase
+    .from("combat_combatants")
+    .update({ [flag]: used })
     .eq("id", combatantId)
     .select()
     .single();

@@ -8,6 +8,9 @@ export interface Campaign {
   session_active: boolean;
   live_map: string | null;
   house_rules: string | null;
+  /** Strict (default) hard-blocks over-budget actions/movement in combat;
+   * Freeform only tracks and displays usage (Prompt 53). */
+  action_economy_strict: boolean;
   created_at: string;
 }
 
@@ -239,6 +242,75 @@ export async function setHouseRules(supabase: SupabaseClient, campaignId: string
 
   if (error) throw error;
   if (count === 0) throw new Error("Only the campaign's DM can update house rules.");
+}
+
+/**
+ * Flips the campaign between Strict and Freeform action-economy
+ * enforcement (Prompt 53) — the setHouseRules shape exactly: a plain
+ * column write through campaigns' existing UPDATE RLS with the same
+ * zero-rows-affected detection, DM-only at the UI layer per the
+ * house_rules/live_map precedent. Live sync rides
+ * subscribeToCampaignChanges below, not the room's broadcast channel.
+ */
+export async function setActionEconomyStrict(
+  supabase: SupabaseClient,
+  campaignId: string,
+  strict: boolean
+): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaigns")
+    .update({ action_economy_strict: strict }, { count: "exact" })
+    .eq("id", campaignId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can change action-economy enforcement.");
+}
+
+/**
+ * Fires `handler` with the campaign's row after each UPDATE — the
+ * subscribeToProfileChanges postgres_changes shape (campaigns joined the
+ * supabase_realtime publication in 0034), row-filtered to this campaign,
+ * visibility riding the members-only SELECT policy. Added for the
+ * action-economy strictness toggle: every connected player must see a
+ * mid-combat mode flip live, and no postgres_changes feed on campaigns
+ * existed before (live_map changes travel by broadcast instead).
+ */
+export function subscribeToCampaignChanges(
+  supabase: SupabaseClient,
+  campaignId: string,
+  handler: (campaign: Campaign) => void
+): () => void {
+  let removed = false;
+  let channel: ReturnType<SupabaseClient["channel"]> | null = null;
+
+  void (async () => {
+    // Same deterministic-claims dance as subscribeToRollLog: without the
+    // explicit setAuth, the socket can join as anon and RLS silently
+    // drops every event.
+    const { data } = await supabase.auth.getSession();
+    if (removed) return;
+    if (data.session) await supabase.realtime.setAuth(data.session.access_token);
+    if (removed) return;
+
+    channel = supabase
+      .channel(`campaign-changes:${campaignId}:${crypto.randomUUID()}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "campaigns",
+          filter: `id=eq.${campaignId}`,
+        },
+        (payload) => handler(payload.new as Campaign)
+      )
+      .subscribe();
+  })();
+
+  return () => {
+    removed = true;
+    if (channel) void supabase.removeChannel(channel);
+  };
 }
 
 /**

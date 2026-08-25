@@ -154,7 +154,14 @@ async function attackRollIds(campaignId) {
 
 try {
   const campaignId = crypto.randomUUID();
-  await admin.from("campaigns").insert({ id: campaignId, name: "Quick actions test", creator: dm.id });
+  // Freeform action economy (Prompt 53): this script fires several attacks
+  // from the current combatant in one turn on purpose — Strict mode (the
+  // default) would now reject the second and later ones. The Prompt 53
+  // gating itself is covered by verify-action-economy.mjs; this script
+  // verifies the Prompt 51 panel behavior, which is mode-independent.
+  await admin
+    .from("campaigns")
+    .insert({ id: campaignId, name: "Quick actions test", creator: dm.id, action_economy_strict: false });
   await admin.from("campaign_members").insert([
     { campaign_id: campaignId, user_id: dm.id, role: "dm" },
     { campaign_id: campaignId, user_id: alice.id, role: "player" },

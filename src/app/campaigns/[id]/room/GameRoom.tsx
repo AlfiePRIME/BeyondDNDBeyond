@@ -24,18 +24,22 @@ import {
   listMapObjects,
   listMapTokens,
   listMapTransitions,
+  moveCombatToken,
   moveMapToken,
   parseMapObjectBehavior,
   listCombatantConditions,
   placeCharacterToken,
   placeNpcToken,
   removeCondition,
+  setActionEconomyStrict,
+  setCombatantEconomyFlag,
   setCombatantInitiative,
   setHandoutRevealed,
   setLiveMap,
   setTokenAllegiance,
   startCombat,
   stopConcentrating,
+  subscribeToCampaignChanges,
   subscribeToProfileChanges,
   transitionMapToken,
   triggerMapObject,
@@ -43,6 +47,7 @@ import {
   type CampaignMap,
   type Character,
   type CombatCombatant,
+  type CombatantEconomyFlag,
   type Handout,
   type MapCell,
   type MapObject,
@@ -198,6 +203,7 @@ export function GameRoom({
   initialHandouts,
   initialCombat,
   initialRolls,
+  initialActionEconomyStrict,
 }: {
   campaignId: string;
   campaignName: string;
@@ -214,6 +220,9 @@ export function GameRoom({
   initialHandouts: RoomHandout[];
   initialCombat: CombatState | null;
   initialRolls: RollLogEntry[];
+  /** campaigns.action_economy_strict at load time — kept live below via
+   * the campaigns postgres_changes feed. */
+  initialActionEconomyStrict: boolean;
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
@@ -275,6 +284,12 @@ export function GameRoom({
   const [combat, setCombat] = useState<CombatState | null>(initialCombat);
   const [combatBusy, setCombatBusy] = useState(false);
   const [combatError, setCombatError] = useState<string | null>(null);
+  // The DM's action-economy dial (Prompt 53), live-synced below via the
+  // campaigns postgres_changes feed — NOT the room's broadcast channel,
+  // so a flip made from any surface reaches every member.
+  const [economyStrict, setEconomyStrict] = useState(initialActionEconomyStrict);
+  const [economyBusy, setEconomyBusy] = useState(false);
+  const [economyError, setEconomyError] = useState<string | null>(null);
   // Character rows go stateful as of Prompt 46: mid-combat damage/healing
   // changes current_hp, and the combat panel's HP readout and the token HP
   // bars both render from these rows. Same render-time prop reset as
@@ -418,6 +433,16 @@ export function GameRoom({
     setRulerDrag(null);
     setTransitionOffer(null);
   }, []);
+
+  // Live strictness sync: the campaigns postgres_changes feed (0034 added
+  // campaigns to the publication) — a mid-combat mode flip must reach
+  // every connected player, including the flipping DM's other windows.
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    return subscribeToCampaignChanges(supabase, campaignId, (campaign) => {
+      setEconomyStrict(campaign.action_economy_strict);
+    });
+  }, [campaignId]);
 
   // Live avatar sync: a postgres_changes feed on profiles (see data-access's
   // subscribeToProfileChanges), not campaign presence — presence only covers
@@ -694,20 +719,51 @@ export function GameRoom({
     setTokenError(null);
     try {
       const supabase = createBrowserSupabaseClient();
-      const token = await moveMapToken(supabase, drag.tokenId, {
+      const position = {
         x: drag.current.x,
         y: drag.current.y,
         elevation: cellElevation(current.cells, drag.current.x, drag.current.y),
-      });
+      };
+      // The action-economy fork (Prompt 53): ONLY the current combatant's
+      // own tracked turn goes through move_combat_token, which charges the
+      // move's cost against movement_used_feet and, in Strict mode, hard-
+      // blocks a move past the character's speed (the RPC rejects, nothing
+      // moves, and the message lands in tokenError like any other failed
+      // move). Every other drag — no combat, a token not in the fight,
+      // someone else's turn — keeps the existing untracked moveMapToken
+      // path unchanged. The cost is the same origin-to-destination
+      // dragPathCost the readout displayed, charged against the same
+      // overlay the table renders from.
+      const combatants = combat?.combatants ?? [];
+      const currentIndex = combat
+        ? Math.min(combat.encounter.current_turn_index, Math.max(combatants.length - 1, 0))
+        : -1;
+      const currentCombatant = currentIndex >= 0 ? (combatants[currentIndex] ?? null) : null;
+      const tracked = currentCombatant !== null && currentCombatant.token_id === drag.tokenId;
+      const token = tracked
+        ? await moveCombatToken(
+            supabase,
+            drag.tokenId,
+            position,
+            dragPathCost(overlayFromRows(current.cells), drag.origin, drag.current)
+          )
+        : await moveMapToken(supabase, drag.tokenId, position);
       applyTokenChange(token.id, token);
       await publishTokenChange(token.id, token);
+      if (tracked) {
+        // The combatant's movement_used_feet changed — refresh this
+        // client's readout and poke everyone else's, the usual combat-
+        // mutation flow.
+        await refreshCombat(supabase).catch(() => undefined);
+        await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+      }
       maybeOfferTransition(token);
     } catch (err) {
       setTokenError(errorMessage(err) ?? "Could not move that token.");
     } finally {
       setTokenBusy(false);
     }
-  }, [tokenBusy, applyTokenChange, publishTokenChange, maybeOfferTransition]);
+  }, [tokenBusy, combat, campaignId, refreshCombat, applyTokenChange, publishTokenChange, maybeOfferTransition]);
 
   // The ruler trio never touches Supabase or any token — start records two
   // cells, drag-over updates one of them, end throws both away.
@@ -836,13 +892,17 @@ export function GameRoom({
     [campaignId, runCombatAction]
   );
 
-  // Attack damage lands on characters.current_hp server-side; refresh the
-  // room's character rows (HP bars, combat panel) and poke everyone else,
-  // same as any other combat mutation.
+  // Attack damage lands on characters.current_hp server-side, and (as of
+  // Prompt 53) ANY attack roll may have marked the current combatant's
+  // action_used; refresh the room's character rows and combat state (HP
+  // bars, combat panel, economy readout) and poke everyone else, same as
+  // any other combat mutation. A miss matters now too — it still spends
+  // the action — so the gate is "was this an attack", not "did damage
+  // apply".
   const handleRollLanded = useCallback(
     (roll: RollLogEntry) => {
-      const applied = roll.breakdown.type === "d20" ? (roll.breakdown.attack?.applied ?? null) : null;
-      if (!applied) return;
+      const attack = roll.breakdown.type === "d20" ? (roll.breakdown.attack ?? null) : null;
+      if (!attack) return;
       void (async () => {
         const supabase = createBrowserSupabaseClient();
         await refreshCombat(supabase).catch(() => undefined);
@@ -894,6 +954,39 @@ export function GameRoom({
       }, "Could not change that combatant's exhaustion.");
     },
     [runCombatAction]
+  );
+
+  // The manual bonus-action/reaction marks (Prompt 53) — nothing consumes
+  // either automatically yet (reactions proper are Prompt 54), so the
+  // combatant's owner or the DM flips them by hand; a plain
+  // can_write_combatant update through the usual refresh-and-poke flow.
+  const handleToggleEconomyFlag = useCallback(
+    (combatant: CombatCombatant, flag: CombatantEconomyFlag, used: boolean) => {
+      void runCombatAction(async (supabase) => {
+        await setCombatantEconomyFlag(supabase, combatant.id, flag, used);
+      }, "Could not update that combatant's action economy.");
+    },
+    [runCombatAction]
+  );
+
+  // Persist first (the DB is the source of truth), then reflect locally —
+  // other clients (and this one's subscription echo) get the flip through
+  // the campaigns postgres_changes feed, so no broadcast is sent.
+  const handleSetEconomyStrict = useCallback(
+    async (strict: boolean) => {
+      if (economyBusy) return;
+      setEconomyBusy(true);
+      setEconomyError(null);
+      try {
+        await setActionEconomyStrict(createBrowserSupabaseClient(), campaignId, strict);
+        setEconomyStrict(strict);
+      } catch (err) {
+        setEconomyError(errorMessage(err) ?? "Could not change the enforcement mode.");
+      } finally {
+        setEconomyBusy(false);
+      }
+    },
+    [campaignId, economyBusy]
   );
 
   // The d20 is rolled by the roll Route Handler (server-side randomness,
@@ -1358,6 +1451,7 @@ export function GameRoom({
         combat={combat}
         busy={combatBusy}
         error={combatError}
+        strict={economyStrict}
         onStart={handleStartCombat}
         onAdvance={handleAdvanceTurn}
         onEnd={handleEndCombat}
@@ -1368,6 +1462,7 @@ export function GameRoom({
         onExhaustionDelta={handleExhaustionDelta}
         onRollDeathSave={handleRollDeathSave}
         onRollConcentrationSave={handleRollConcentrationSave}
+        onToggleEconomyFlag={handleToggleEconomyFlag}
       />
       {/* A shortcut only — renders (for the current PC's owner or the DM)
           ALONGSIDE the combat panel, dice panel, and sheet, never instead
@@ -1382,10 +1477,19 @@ export function GameRoom({
         onRollLanded={handleRollLanded}
       />
       {/* The DM Controls area (Prompt 52): pending rule-override flags to
-          approve/deny — the panel Prompt 53's action-economy strictness
-          toggle is specified to join as a sibling section. */}
+          approve/deny, plus (Prompt 53) the action-economy strictness
+          toggle as its sibling section. DM-only panel — every player still
+          sees the current mode via the combat panel's badge. */}
       {currentUserIsDM ? (
-        <DmOverridesPanel campaignId={campaignId} characters={characterRows} members={roster} />
+        <DmOverridesPanel
+          campaignId={campaignId}
+          characters={characterRows}
+          members={roster}
+          strict={economyStrict}
+          strictBusy={economyBusy}
+          strictError={economyError}
+          onSetStrict={handleSetEconomyStrict}
+        />
       ) : null}
       <DiceLogPanel
         campaignId={campaignId}

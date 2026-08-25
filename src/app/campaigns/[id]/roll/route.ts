@@ -5,6 +5,7 @@ import {
   resolveAttackDamage,
   rollConcentrationSave,
   rollDeathSave,
+  setCombatantEconomyFlag,
   setCombatantInitiative,
   type AttackResolution,
   type Character,
@@ -116,6 +117,45 @@ function savingThrowModifiers(character: Character, ability: AbilityScore): Roll
   return modifiers;
 }
 
+/**
+ * The attacking character's combatant row IF it is the campaign's CURRENT
+ * combatant in an active encounter — the action-economy context (Prompt
+ * 53). Null covers "no combat", "not in the fight", and "someone else's
+ * turn", all of which leave the attack ungated: only the current
+ * combatant's own turn is tracked. The current-combatant derivation is
+ * the canonical turn-order query with advance_turn's clamp, same as the
+ * combat panel's.
+ */
+async function currentCombatantForAttacker(
+  supabase: SupabaseClient,
+  campaignId: string,
+  characterId: string
+): Promise<{ combatantId: string; actionUsed: boolean } | null> {
+  const { data: encounter, error: encounterError } = await supabase
+    .from("combat_encounters")
+    .select("id, current_turn_index")
+    .eq("campaign_id", campaignId)
+    .is("ended_at", null)
+    .maybeSingle();
+  if (encounterError) throw encounterError;
+  if (!encounter) return null;
+
+  const { data: combatants, error: combatantsError } = await supabase
+    .from("combat_combatants")
+    .select("id, character_id, action_used")
+    .eq("encounter_id", encounter.id)
+    .order("initiative", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+  if (combatantsError) throw combatantsError;
+  if (!combatants || combatants.length === 0) return null;
+
+  const index = Math.min(encounter.current_turn_index, combatants.length - 1);
+  const current = combatants[index];
+  if (!current || current.character_id !== characterId) return null;
+  return { combatantId: current.id, actionUsed: current.action_used };
+}
+
 async function insertRoll(
   supabase: SupabaseClient,
   row: {
@@ -148,9 +188,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   // RLS hides campaigns you're not a member of — same 404 reasoning as the
   // generate-draft route.
+  // action_economy_strict rides along for the attack branch's economy
+  // gate below — one read either way.
   const { data: campaign, error: campaignError } = await supabase
     .from("campaigns")
-    .select("id")
+    .select("id, action_economy_strict")
     .eq("id", campaignId)
     .maybeSingle();
   if (campaignError) throw campaignError;
@@ -456,6 +498,25 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     attackContext = { bonus, attackKind: roll.attackKind };
   }
 
+  // Action economy (Prompt 53), attacks ONLY — checks/saves/skills are
+  // deliberately never gated (they aren't unambiguously action-consuming
+  // the way an attack roll is, and blocking them would wrongly catch
+  // legitimate non-combat/reactive rolls). Applies only when the attacker
+  // IS the current combatant of an active encounter: in Strict mode a
+  // spent action rejects here BEFORE any die is rolled — logging nothing,
+  // like every other rejected-roll path — while Freeform never rejects
+  // but still marks usage below for the live readout.
+  let economyCombatantId: string | null = null;
+  if (attackContext) {
+    const economy = await currentCombatantForAttacker(supabase, campaignId, character.id);
+    if (economy) {
+      if (campaign.action_economy_strict && economy.actionUsed) {
+        return badRequest("You've already used your action this turn.");
+      }
+      economyCombatantId = economy.combatantId;
+    }
+  }
+
   let attack: AttackResolution | undefined;
   const d20 = rollD20(mode);
   const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
@@ -540,6 +601,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
             breakdown,
             total
           );
+          // The attack resolved (and logged), so the action is spent —
+          // a plain can_write_combatant update in both modes (Freeform
+          // still tracks for the readout), the accepted write-then-
+          // continue shape for self/DM-scoped side effects, not folded
+          // into the RPC's transaction.
+          if (economyCombatantId) {
+            await setCombatantEconomyFlag(supabase, economyCombatantId, "action_used", true);
+          }
           return NextResponse.json({ ok: true, roll: entry });
         } catch (err) {
           const message =
@@ -563,6 +632,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       instantDeath: false,
       deathSaveFailureAdded: 0,
     };
+  }
+
+  // The miss/untargeted attack path: the roll proceeded, so the action is
+  // spent — a miss still costs it. Persist-then-log, the initiative-path
+  // ordering; economyCombatantId is only ever set for the attack kind, so
+  // checks/saves/skills never reach this write.
+  if (economyCombatantId) {
+    await setCombatantEconomyFlag(supabase, economyCombatantId, "action_used", true);
   }
 
   const entry = await insertRoll(supabase, {

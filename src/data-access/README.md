@@ -478,3 +478,47 @@ character sheet page live, which isn't on the room's campaign channel. Overrides
 NOT written into `roll_log` — that table is dice-shaped (`total`, `breakdown` around die
 results); the DiceLogPanel interleaves this second feed into the same chronological
 list by timestamp instead.
+
+As of Prompt 53, action economy tracking (migration `0034_action_economy.sql`). Four new
+`combat_combatants` columns — `action_used`/`bonus_action_used`/`reaction_used` (booleans)
+and `movement_used_feet` (integer) — on `CombatCombatant`, living on the combatant row
+because the tracking is inherently combat-scoped (it resets every turn and dies with the
+encounter), unlike HP/concentration which persist on `characters` across fights.
+`advance_turn` is reshaped (`create or replace`, everything from 0027 preserved: the FOR
+UPDATE serialization, the DM-or-current-owner authorization, the deleted-mid-round clamp,
+the wrap-and-increment) to re-run the canonical turn-order query at the NEW index for the
+entering combatant's ROW id and reset all four columns in the same transaction as the
+pointer write — a turn can never be observed started with stale economy. Alongside it,
+`campaigns.action_economy_strict` (boolean, defaulting true = Strict, normal 5e rules) on
+`Campaign`, with `setActionEconomyStrict` as the `setHouseRules` shape exactly — a plain
+column under the EXISTING permissive members-update policy (0004), DM-only at the UI layer
+per the house_rules/live_map precedent, no new RLS — and `subscribeToCampaignChanges`, the
+profiles-pattern postgres_changes feed (campaigns joins the publication here) carrying a
+mid-combat mode flip to every member live; no campaigns feed existed before, since
+live_map changes travel by broadcast.
+
+What consumes what: an "attack" roll (the ONE roll-route branch both the manual
+DiceLogPanel form and the quick-actions panel funnel through) is gated when the attacker
+is the active encounter's CURRENT combatant — Strict rejects a second attack with a 400
+before any die is rolled (logging nothing, like every rejected-roll path), and any attack
+that proceeds (hit or miss) marks `action_used` via `setCombatantEconomyFlag`, a
+`setCombatantInitiative`-shaped plain update through `can_write_combatant` — the accepted
+write-then-continue shape, deliberately not folded into `resolve_attack_damage`'s
+transaction. Freeform never rejects but still marks, so usage stays displayed.
+Checks/saves/skills/initiative/death saves/concentration saves are explicitly NOT gated —
+none is unambiguously action-consuming the way an attack roll is. Movement goes through
+`mapTokens.ts`'s `moveCombatToken`, calling the new `move_combat_token(p_token_id, p_x,
+p_y, p_elevation, p_feet_cost) returns map_tokens` RPC — SECURITY DEFINER out of
+necessity: one call authorizes the token write (`can_write_map_token` re-checked
+explicitly), reads/writes the combatant's locked `movement_used_feet`, and reads
+`characters.speed` + `campaigns.action_economy_strict`, tables no single policy spans. A
+token that ISN'T the current combatant falls through to a plain move inside the RPC (no
+bookkeeping); the tracked path accumulates the client-computed `pathMovementCost` and, in
+Strict, rejects the whole move past speed — no partial/clamped move. GameRoom's drag-end
+picks the RPC only for the current combatant's token, a UX split rather than a security
+boundary. Bonus action/reaction have NO automatic consumer yet (reactions proper are
+Prompt 54's scope): the combat panel's readout exposes manual DM-or-owner marks through
+`setCombatantEconomyFlag`, with Strict's "locked until your next turn" a UI rule only.
+The readout itself (current combatant's Action/Bonus/Reaction/Movement) and the
+Strict/Freeform badge are table-wide in `CombatPanel`; the DM's dial is a sibling section
+in the Prompt 52 DM Controls panel.

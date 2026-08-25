@@ -7,6 +7,7 @@ import type {
   CombatCombatant,
   CombatEncounter,
   CombatantCondition,
+  CombatantEconomyFlag,
 } from "@/data-access";
 import {
   CONDITIONS,
@@ -54,7 +55,19 @@ export interface CombatState {
  * concentrating on (table-wide, the death-save-state visibility
  * reasoning), and a pending concentration check gets the same prominent
  * roll prompt — NOT gated to the current turn, unlike the death-save
- * prompt: the check is triggered by damage on ANY turn.
+ * prompt: the check is triggered by damage on ANY turn. As of Prompt 53
+ * the header carries the campaign's action-economy mode badge (Strict/
+ * Freeform — table-wide visibility, the death-save-state reasoning:
+ * every player must see the current enforcement mode, not just the DM
+ * who sets it in the DM Controls panel), and the CURRENT combatant gets
+ * a live economy readout — Action/Bonus Action/Reaction used-or-
+ * available plus movement used this turn against the character's speed
+ * — visible to everyone, with manual "mark used" controls for the bonus
+ * action and reaction (nothing consumes either automatically yet;
+ * reactions proper are Prompt 54) actionable only by the DM or the
+ * combatant's owner. In Strict mode a spent mark can't be un-marked
+ * until advance_turn's reset at that combatant's next turn; in Freeform
+ * it toggles freely — tracked state only, never a block.
  */
 export function CombatPanel({
   isDM,
@@ -63,6 +76,7 @@ export function CombatPanel({
   combat,
   busy,
   error,
+  strict,
   onStart,
   onAdvance,
   onEnd,
@@ -73,6 +87,7 @@ export function CombatPanel({
   onExhaustionDelta,
   onRollDeathSave,
   onRollConcentrationSave,
+  onToggleEconomyFlag,
 }: {
   isDM: boolean;
   currentUserId: string;
@@ -81,6 +96,8 @@ export function CombatPanel({
   combat: CombatState | null;
   busy: boolean;
   error: string | null;
+  /** The campaign's live action-economy mode (Prompt 53). */
+  strict: boolean;
   onStart: () => void;
   onAdvance: () => void;
   onEnd: () => void;
@@ -100,6 +117,14 @@ export function CombatPanel({
   /** Posts kind: "concentration_save" via the roll route — a plain
    * server-rolled d20 + CON save bonus against the stored pending DC. */
   onRollConcentrationSave: (combatant: CombatCombatant) => void;
+  /** The manual bonus-action/reaction marks — a plain can_write_combatant
+   * update; action_used/movement move only through the roll route and
+   * move_combat_token. */
+  onToggleEconomyFlag: (
+    combatant: CombatCombatant,
+    flag: CombatantEconomyFlag,
+    used: boolean
+  ) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
@@ -189,7 +214,12 @@ export function CombatPanel({
     if (!isDM) return null;
     return (
       <aside className={styles.combatPanel} data-testid="combat-panel">
-        <span className={styles.panelLabel}>Combat</span>
+        <div className={styles.objectHeader}>
+          <span className={styles.panelLabel}>Combat</span>
+          <Badge tone={strict ? "orange" : "teal"} data-testid="economy-mode-badge">
+            {strict ? "Strict" : "Freeform"}
+          </Badge>
+        </div>
         <Button size="sm" variant="accent" disabled={busy} onClick={onStart} data-testid="start-combat-button">
           Start combat
         </Button>
@@ -232,6 +262,11 @@ export function CombatPanel({
     <aside className={styles.combatPanel} data-testid="combat-panel">
       <div className={styles.objectHeader}>
         <span className={styles.panelLabel}>Combat</span>
+        {/* Table-wide mode visibility: every player sees the current
+            enforcement mode here, not just the DM in DM Controls. */}
+        <Badge tone={strict ? "orange" : "teal"} data-testid="economy-mode-badge">
+          {strict ? "Strict" : "Freeform"}
+        </Badge>
         <span className={styles.combatRound} data-testid="combat-round">
           Round {encounter.round_number}
         </span>
@@ -240,6 +275,70 @@ export function CombatPanel({
       <span className={styles.currentTurn} data-testid="current-turn-indicator">
         {current ? `${combatantLabel(current)}'s turn` : "No combatants"}
       </span>
+
+      {current ? (
+        // The live action-economy readout (Prompt 53) for the CURRENT
+        // combatant, visible to everyone at the table like the death-save
+        // state. Movement shows against the character's speed when the
+        // viewer can read it (owner or DM under RLS); an NPC or an
+        // unreadable PC just shows feet used.
+        <div className={styles.economyReadout} data-testid="action-economy-readout">
+          <div className={styles.economyRow}>
+            <Badge tone={current.action_used ? "red" : "teal"} data-testid="economy-action">
+              {current.action_used ? "Action used" : "Action available"}
+            </Badge>
+            <Badge
+              tone={current.bonus_action_used ? "red" : "teal"}
+              data-testid="economy-bonus-action"
+            >
+              {current.bonus_action_used ? "Bonus action used" : "Bonus action available"}
+            </Badge>
+            <Badge tone={current.reaction_used ? "red" : "teal"} data-testid="economy-reaction">
+              {current.reaction_used ? "Reaction used" : "Reaction available"}
+            </Badge>
+          </div>
+          <span className={styles.economyMovement} data-testid="economy-movement">
+            {(() => {
+              const speed = combatantCharacter(current)?.speed;
+              return `Movement: ${current.movement_used_feet}${
+                speed !== undefined ? ` / ${speed}` : ""
+              } ft used this turn`;
+            })()}
+          </span>
+          {isDM || ownsCombatant(current) ? (
+            <div className={styles.economyRow}>
+              {(
+                [
+                  ["bonus_action_used", "bonus action", "economy-mark-bonus-action"],
+                  ["reaction_used", "reaction", "economy-mark-reaction"],
+                ] as const
+              ).map(([flag, label, testId]) => {
+                const used = current[flag];
+                // Strict: once spent, the mark locks until advance_turn's
+                // reset at this combatant's next turn. Freeform: a free
+                // toggle — tracked state only, nothing is ever blocked.
+                const locked = strict && used;
+                return (
+                  <Button
+                    key={flag}
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy || locked}
+                    onClick={() => onToggleEconomyFlag(current, flag, !used)}
+                    data-testid={testId}
+                  >
+                    {used
+                      ? locked
+                        ? `${label.charAt(0).toUpperCase()}${label.slice(1)} spent`
+                        : `Clear ${label}`
+                      : `Mark ${label} used`}
+                  </Button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {combatants.some((combatant) => canEnterInitiative(combatant)) ? (
         <AdvantageToggle

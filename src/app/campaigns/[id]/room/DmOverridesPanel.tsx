@@ -15,28 +15,44 @@ import styles from "./room.module.css";
 
 /**
  * The DM Controls panel (Prompt 52) — mounted by the Game Room for the DM
- * only. Its first (and so far only) section lists pending action_overrides
- * flags for the campaign — character, action, reason, requester — with
- * Approve/Deny resolving each via resolveOverride; the verdict reaches the
- * requesting player's blocked control and the shared log live through the
+ * only. Its first section lists pending action_overrides flags for the
+ * campaign — character, action, reason, requester — with Approve/Deny
+ * resolving each via resolveOverride; the verdict reaches the requesting
+ * player's blocked control and the shared log live through the
  * action_overrides postgres_changes feed. Resolving here never touches
  * resource counts: approval only unlocks the one flagged action, and
  * whether a use is still consumed stays the DM's separate, explicit call
  * through the existing resource controls.
  *
- * Deliberately a plain labeled panel with room for a sibling section:
- * Prompt 53's action-economy strictness toggle is specified to live right
- * next to this control, as another section of this same panel.
+ * As of Prompt 53 the sibling section this panel was built to receive:
+ * the action-economy enforcement toggle. Strict (normal 5e rules)
+ * hard-blocks a second action and over-speed movement in combat; Freeform
+ * still tracks and displays usage but never blocks. The state itself
+ * lives in the Game Room (campaigns.action_economy_strict, live via the
+ * campaigns postgres_changes feed) — this section only renders the dial,
+ * so the rule-override list and the toggle stay one coherent panel. It
+ * complements the per-action override above rather than replacing it:
+ * overrides are one-off resource exceptions, this is the campaign-level
+ * dial for the whole action-economy structure. Every player sees the
+ * current mode via the combat panel's badge; only the DM sees this dial.
  */
 export function DmOverridesPanel({
   campaignId,
   characters,
   members,
+  strict,
+  strictBusy,
+  strictError,
+  onSetStrict,
 }: {
   campaignId: string;
   /** The DM reads every character row under RLS, so names resolve here. */
   characters: Character[];
   members: RoomMember[];
+  strict: boolean;
+  strictBusy: boolean;
+  strictError: string | null;
+  onSetStrict: (strict: boolean) => void;
 }) {
   const [overrides, setOverrides] = useState<ActionOverride[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -90,6 +106,49 @@ export function DmOverridesPanel({
   return (
     <aside className={styles.dmControlsPanel} data-testid="dm-controls-panel">
       <span className={styles.panelLabel}>DM Controls</span>
+      <div className={styles.dmControlsSection} data-testid="dm-economy-section">
+        <span className={styles.diceSectionLabel}>Action economy</span>
+        <div className={styles.modeToggle} role="group" aria-label="Action economy enforcement">
+          <button
+            type="button"
+            className={[styles.modeButton, strict ? styles.modeButtonActive : ""]
+              .filter(Boolean)
+              .join(" ")}
+            aria-pressed={strict}
+            disabled={strictBusy}
+            onClick={() => {
+              if (!strict) onSetStrict(true);
+            }}
+            data-testid="economy-strict-button"
+          >
+            Strict
+          </button>
+          <button
+            type="button"
+            className={[styles.modeButton, !strict ? styles.modeButtonActive : ""]
+              .filter(Boolean)
+              .join(" ")}
+            aria-pressed={!strict}
+            disabled={strictBusy}
+            onClick={() => {
+              if (strict) onSetStrict(false);
+            }}
+            data-testid="economy-freeform-button"
+          >
+            Freeform
+          </button>
+        </div>
+        <p className={styles.hint}>
+          {strict
+            ? "Strict: one action per turn and movement capped at speed — blocked with a clear reason."
+            : "Freeform: usage is tracked and shown for reference, but nothing is ever blocked."}
+        </p>
+        {strictError ? (
+          <p role="alert" className={styles.errorText} data-testid="dm-economy-error">
+            {strictError}
+          </p>
+        ) : null}
+      </div>
       <div className={styles.dmControlsSection} data-testid="dm-overrides-section">
         <span className={styles.diceSectionLabel}>Rule overrides</span>
         {pending.length === 0 ? (

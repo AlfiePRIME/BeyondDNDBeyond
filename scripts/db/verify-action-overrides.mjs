@@ -218,7 +218,14 @@ const browser = await chromium.launch();
 
 try {
   const campaignId = crypto.randomUUID();
-  await admin.from("campaigns").insert({ id: campaignId, name: "Action overrides test", creator: dm.id });
+  // Freeform (Prompt 53): this script fires several quick-action attacks
+  // from the same current combatant across its scenarios, which Strict
+  // (the default since Prompt 53) would correctly reject as a spent
+  // action — that gating is this app's job, not something this script
+  // about overrides needs to also exercise.
+  await admin
+    .from("campaigns")
+    .insert({ id: campaignId, name: "Action overrides test", creator: dm.id, action_economy_strict: false });
   await admin.from("campaign_members").insert([
     { campaign_id: campaignId, user_id: dm.id, role: "dm" },
     { campaign_id: campaignId, user_id: alice.id, role: "player" },

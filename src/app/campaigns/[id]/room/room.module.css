@@ -136,6 +136,32 @@
   color: var(--text);
 }
 
+/* The current combatant's per-turn economy readout (Prompt 53) — a boxed
+   sibling of the prompt banners, quieter than either: informational state
+   every viewer sees, not a call to action. */
+.economyReadout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--red) 25%, transparent);
+  border-radius: 8px;
+}
+
+.economyRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.economyMovement {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
 .combatantRow {
   display: flex;
   flex-direction: column;

@@ -95,6 +95,36 @@ export async function moveMapToken(
 }
 
 /**
+ * The tracked variant of moveMapToken (Prompt 53): same-map move via the
+ * move_combat_token RPC, which — when the token is the active encounter's
+ * CURRENT combatant — accumulates `feetCost` into the combatant's
+ * movement_used_feet, and in Strict mode rejects the whole move (token
+ * unmoved, clear message) once the turn's total would exceed
+ * characters.speed. Any other token falls through to a plain move inside
+ * the RPC, so callers needn't pre-check combat state; GameRoom still
+ * routes non-current-combatant drags through plain moveMapToken, since
+ * those moves need no bookkeeping at all. Returns the updated row exactly
+ * like moveMapToken.
+ */
+export async function moveCombatToken(
+  supabase: SupabaseClient,
+  tokenId: string,
+  position: { x: number; y: number; elevation: number },
+  feetCost: number
+): Promise<MapToken> {
+  const { data, error } = await supabase.rpc("move_combat_token", {
+    p_token_id: tokenId,
+    p_x: position.x,
+    p_y: position.y,
+    p_elevation: position.elevation,
+    p_feet_cost: feetCost,
+  });
+
+  if (error) throw error;
+  return data as MapToken;
+}
+
+/**
  * Moves a token to a DIFFERENT map (a map-transition crossing) — the only
  * write that changes map_id; moveMapToken is same-map by construction.
  *

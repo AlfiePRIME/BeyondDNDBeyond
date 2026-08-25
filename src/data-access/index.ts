@@ -45,6 +45,8 @@ export {
   startSession,
   endSession,
   setHouseRules,
+  setActionEconomyStrict,
+  subscribeToCampaignChanges,
   type Campaign,
   type CampaignRole,
   type CampaignMembership,
@@ -124,6 +126,7 @@ export {
   placeCharacterToken,
   placeNpcToken,
   moveMapToken,
+  moveCombatToken,
   transitionMapToken,
   setTokenAllegiance,
   deleteMapToken,
@@ -145,8 +148,10 @@ export {
   advanceTurn,
   endCombat,
   setCombatantInitiative,
+  setCombatantEconomyFlag,
   type CombatEncounter,
   type CombatCombatant,
+  type CombatantEconomyFlag,
 } from "./combat";
 export {
   listCombatantConditions,

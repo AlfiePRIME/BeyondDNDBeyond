@@ -122,6 +122,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialHandouts={initialHandouts}
       initialCombat={initialCombat}
       initialRolls={initialRolls}
+      initialActionEconomyStrict={campaign.action_economy_strict}
     />
   );
 }
