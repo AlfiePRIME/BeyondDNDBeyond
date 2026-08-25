@@ -308,3 +308,16 @@
   text-transform: uppercase;
   color: var(--red);
 }
+
+/* Same floating-panel family as .moveReadout, shifted to the purple accent
+   so a measurement never reads as a move about to be committed. */
+.rulerReadout {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.rulerDistance {
+  font-family: var(--font-m);
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}

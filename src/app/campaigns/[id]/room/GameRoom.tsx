@@ -109,6 +109,13 @@ interface TokenDrag {
   current: GridPoint;
 }
 
+/** An in-flight ruler measurement: purely local, never persisted at all —
+ * release simply discards it. */
+interface RulerDrag {
+  origin: GridPoint;
+  current: GridPoint;
+}
+
 // Sparse rows: an absent cell is the default (elevation 0).
 function cellElevation(cells: MapCell[], x: number, y: number): number {
   return cells.find((cell) => cell.x === x && cell.y === y)?.elevation ?? 0;
@@ -278,6 +285,12 @@ export function GameRoom({
   const [tokenDrag, setTokenDrag] = useState<TokenDrag | null>(null);
   const tokenDragRef = useRef<TokenDrag | null>(null);
 
+  const [rulerActive, setRulerActive] = useState(false);
+  // Same ahead-of-React ref pattern as tokenDragRef — the drag-over stream
+  // arrives from raw pointer events.
+  const [rulerDrag, setRulerDrag] = useState<RulerDrag | null>(null);
+  const rulerDragRef = useRef<RulerDrag | null>(null);
+
   const applyTokenChange = useCallback((tokenId: string, token: MapToken | null) => {
     const current = liveMapRef.current;
     if (!current) return;
@@ -316,10 +329,13 @@ export function GameRoom({
     liveMapRef.current = next;
     setLiveMapState(next);
     // Whatever was armed or mid-drag referred to the previous map's
-    // cells/tokens — and so did any pending transition offer.
+    // cells/tokens — and so did any pending transition offer or in-flight
+    // measurement.
     setArmedToken(null);
     tokenDragRef.current = null;
     setTokenDrag(null);
+    rulerDragRef.current = null;
+    setRulerDrag(null);
     setTransitionOffer(null);
   }, []);
 
@@ -603,6 +619,32 @@ export function GameRoom({
     }
   }, [tokenBusy, applyTokenChange, publishTokenChange, maybeOfferTransition]);
 
+  // The ruler trio never touches Supabase or any token — start records two
+  // cells, drag-over updates one of them, end throws both away.
+  const handleRulerDragStart = useCallback((x: number, y: number) => {
+    const origin = { x, y };
+    rulerDragRef.current = { origin, current: origin };
+    setRulerDrag(rulerDragRef.current);
+  }, []);
+
+  const handleRulerDragOverCell = useCallback((x: number, y: number) => {
+    const drag = rulerDragRef.current;
+    if (!drag || (drag.current.x === x && drag.current.y === y)) return;
+    rulerDragRef.current = { ...drag, current: { x, y } };
+    setRulerDrag(rulerDragRef.current);
+  }, []);
+
+  const handleRulerDragEnd = useCallback(() => {
+    rulerDragRef.current = null;
+    setRulerDrag(null);
+  }, []);
+
+  const handleToggleRuler = useCallback(() => {
+    rulerDragRef.current = null;
+    setRulerDrag(null);
+    setRulerActive((active) => !active);
+  }, []);
+
   const handleRemoveToken = useCallback(
     async (token: MapToken) => {
       if (tokenBusy) return;
@@ -862,6 +904,13 @@ export function GameRoom({
     };
   }, [tokenDrag, liveMap, cellOverlay, characters]);
 
+  // Same recompute-from-origin reasoning as dragReadout, same dragPathCost,
+  // same overlay — just no token, no speed, and no budget to be over.
+  const rulerReadout = useMemo(
+    () => (rulerDrag && cellOverlay ? dragPathCost(cellOverlay, rulerDrag.origin, rulerDrag.current) : null),
+    [rulerDrag, cellOverlay]
+  );
+
   const transitionOfferView = useMemo(() => {
     if (!transitionOffer) return null;
     const character = transitionOffer.token.character_id
@@ -913,8 +962,21 @@ export function GameRoom({
           onTokenDragStart={handleTokenDragStart}
           onTokenDragOverCell={handleTokenDragOverCell}
           onTokenDragEnd={handleTokenDragEnd}
+          rulerActive={rulerActive}
+          onRulerDragStart={handleRulerDragStart}
+          onRulerDragOverCell={handleRulerDragOverCell}
+          onRulerDragEnd={handleRulerDragEnd}
         />
       </Canvas>
+      {rulerReadout !== null ? (
+        <div className={`${styles.moveReadout} ${styles.rulerReadout}`} data-testid="ruler-readout">
+          <span className={styles.moveReadoutLabel}>Measuring</span>
+          <span className={styles.rulerDistance} data-testid="ruler-distance-feet">
+            {rulerReadout} ft
+          </span>
+          <span className={styles.moveReadoutLabel}>ruler only — nothing moves</span>
+        </div>
+      ) : null}
       {dragReadout ? (
         <div
           className={`${styles.moveReadout}${dragReadout.over ? ` ${styles.moveReadoutOver}` : ""}`}
@@ -948,6 +1010,14 @@ export function GameRoom({
               {ending ? "Ending…" : "End session"}
             </Button>
           ) : null}
+          <Button
+            size="sm"
+            variant={rulerActive ? "teal" : "ghost"}
+            onClick={handleToggleRuler}
+            data-testid="ruler-toggle"
+          >
+            {rulerActive ? "Put ruler away" : "Measure distance"}
+          </Button>
           <Button
             size="sm"
             variant={cameraMode === "orbit" ? "teal" : "ghost"}

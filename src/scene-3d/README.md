@@ -85,3 +85,13 @@ cells, tall enough to stay visible around max-elevation terrain. Region-selectio
 (bounding-box accumulation, what the rectangle means) live in the editor, not here — the
 scene only reports per-cell pointer events and draws the marker it's given, the same split
 as every other gesture.
+
+As of Prompt 43: `GameTableScene` gained a ruler mode — `rulerActive: boolean` plus an
+`onRulerDragStart(x, y)`/`onRulerDragOverCell(x, y)`/`onRulerDragEnd()` trio mirroring the
+token-drag props. While `rulerActive`, a bare cell press starts a measurement gesture routed
+through the same per-cell pointer machinery (press, then per-cell `onPointerOver` while live,
+then a `window` `pointerup` to end), and the scene withholds `onCellPointerDown`-for-click,
+`onSelectObject`, and `onTokenPointerDown` from `MapSurface` entirely — so a press anywhere
+on the map measures from the cell beneath it and can never place, trigger, or grab anything.
+`OrbitControls` is disabled mid-measure, same as mid-token-drag. As always, the scene only
+reports cell coordinates; distance/cost semantics (and the readout) live in the `app` layer.

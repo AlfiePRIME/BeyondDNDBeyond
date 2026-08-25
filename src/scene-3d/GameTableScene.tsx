@@ -94,6 +94,18 @@ export interface GameTableSceneProps {
   onTokenDragOverCell?: (x: number, y: number) => void;
   /** Pointer released — the app commits at the last drag-over cell. */
   onTokenDragEnd?: () => void;
+  /** Ruler mode: a bare cell press starts a measurement drag instead of
+   * whatever onCellClick/token-grab would otherwise do — the two gestures
+   * are mutually exclusive by construction, not by callback etiquette. */
+  rulerActive?: boolean;
+  /** Press on a cell started a measurement. Same gesture/semantics split as
+   * the token-drag trio: the scene owns the press-drag-release mechanics,
+   * the app layer owns what the two cells mean. */
+  onRulerDragStart?: (x: number, y: number) => void;
+  /** The cell the pointer is currently over during an active measurement. */
+  onRulerDragOverCell?: (x: number, y: number) => void;
+  /** Pointer released — the measurement is discarded, never committed. */
+  onRulerDragEnd?: () => void;
 }
 
 export function GameTableScene({
@@ -106,6 +118,10 @@ export function GameTableScene({
   onTokenDragStart,
   onTokenDragOverCell,
   onTokenDragEnd,
+  rulerActive = false,
+  onRulerDragStart,
+  onRulerDragOverCell,
+  onRulerDragEnd,
 }: GameTableSceneProps) {
   const legX = TABLE_TOP.width / 2 - 0.45;
   const legZ = TABLE_TOP.depth / 2 - 0.45;
@@ -127,16 +143,22 @@ export function GameTableScene({
     [onCellClick]
   );
 
-  // Same ref pattern as MapEditorScene: the window pointerup listener below
+  // Same ref pattern as MapEditorScene: the window pointerup listeners below
   // must see the latest callbacks without re-subscribing per render.
   const onTokenDragStartRef = useRef(onTokenDragStart);
   const onTokenDragOverCellRef = useRef(onTokenDragOverCell);
   const onTokenDragEndRef = useRef(onTokenDragEnd);
+  const onRulerDragStartRef = useRef(onRulerDragStart);
+  const onRulerDragOverCellRef = useRef(onRulerDragOverCell);
+  const onRulerDragEndRef = useRef(onRulerDragEnd);
   useEffect(() => {
     onTokenDragStartRef.current = onTokenDragStart;
     onTokenDragOverCellRef.current = onTokenDragOverCell;
     onTokenDragEndRef.current = onTokenDragEnd;
-  }, [onTokenDragStart, onTokenDragOverCell, onTokenDragEnd]);
+    onRulerDragStartRef.current = onRulerDragStart;
+    onRulerDragOverCellRef.current = onRulerDragOverCell;
+    onRulerDragEndRef.current = onRulerDragEnd;
+  }, [onTokenDragStart, onTokenDragOverCell, onTokenDragEnd, onRulerDragStart, onRulerDragOverCell, onRulerDragEnd]);
 
   // State rather than a ref: cells only get pointer-over handlers (and the
   // orbit camera only releases the left button) while a drag is live, which
@@ -153,6 +175,25 @@ export function GameTableScene({
     onTokenDragOverCellRef.current?.(x, y);
   }, []);
 
+  // The ruler's press-drag-release mirrors the token drag exactly, tracked
+  // as its own boolean so each gesture's drag-over reaches its own callback.
+  const [measuring, setMeasuring] = useState(false);
+
+  const handleRulerPointerDown = useCallback(
+    (x: number, y: number, event: ThreeEvent<PointerEvent>) => {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      setMeasuring(true);
+      onRulerDragStartRef.current?.(x, y);
+    },
+    []
+  );
+
+  const handleRulerDragOver = useCallback((x: number, y: number, event: ThreeEvent<PointerEvent>) => {
+    event.stopPropagation();
+    onRulerDragOverCellRef.current?.(x, y);
+  }, []);
+
   // The release can land anywhere — off the map, off the canvas — so the
   // pointerup listener lives on window, same as the editor's stroke end.
   useEffect(() => {
@@ -164,6 +205,16 @@ export function GameTableScene({
     window.addEventListener("pointerup", endDrag);
     return () => window.removeEventListener("pointerup", endDrag);
   }, [dragging]);
+
+  useEffect(() => {
+    if (!measuring) return;
+    const endMeasure = () => {
+      setMeasuring(false);
+      onRulerDragEndRef.current?.();
+    };
+    window.addEventListener("pointerup", endMeasure);
+    return () => window.removeEventListener("pointerup", endMeasure);
+  }, [measuring]);
 
   return (
     <>
@@ -177,11 +228,12 @@ export function GameTableScene({
         onUpdate={(camera) => camera.lookAt(...LOOK_TARGET)}
       />
       {cameraMode === "orbit" && (
-        // Disabled mid-drag so grabbing a token doesn't also orbit the
-        // camera — OrbitControls checks enabled per pointermove, so flipping
-        // it mid-gesture halts the rotation immediately.
+        // Disabled mid-drag so grabbing a token (or sweeping the ruler)
+        // doesn't also orbit the camera — OrbitControls checks enabled per
+        // pointermove, so flipping it mid-gesture halts the rotation
+        // immediately.
         <OrbitControls
-          enabled={!dragging}
+          enabled={!dragging && !measuring}
           target={[...LOOK_TARGET]}
           minDistance={1.5}
           maxDistance={22}
@@ -234,10 +286,25 @@ export function GameTableScene({
             objects={liveMap.objects}
             tokens={liveMap.tokens}
             gridOverlay
-            onSelectObject={onSelectMapObject}
-            onCellPointerDown={onCellClick ? handleCellPointerDown : undefined}
-            onCellPointerOver={dragging ? handleCellDragOver : undefined}
-            onTokenPointerDown={onTokenDragStart ? handleTokenPointerDown : undefined}
+            // Ruler mode owns the pointer outright: a cell press measures
+            // instead of placing/moving, POI objects go inert (their hit
+            // boxes would otherwise swallow the press), and tokens lose
+            // their grab hit boxes — so a press anywhere on the map falls
+            // through to the cell beneath it.
+            onSelectObject={rulerActive ? undefined : onSelectMapObject}
+            onCellPointerDown={
+              rulerActive
+                ? handleRulerPointerDown
+                : onCellClick
+                  ? handleCellPointerDown
+                  : undefined
+            }
+            onCellPointerOver={
+              dragging ? handleCellDragOver : measuring ? handleRulerDragOver : undefined
+            }
+            onTokenPointerDown={
+              !rulerActive && onTokenDragStart ? handleTokenPointerDown : undefined
+            }
           />
         </group>
       ) : null}
