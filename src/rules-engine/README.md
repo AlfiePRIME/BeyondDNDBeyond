@@ -227,3 +227,35 @@ and moves onto it, the widened DB CHECK) lives in the app layer/scene/schema, no
 Unit-tested in `movement.test.ts`: void costs Infinity regardless of elevation delta
 (ascending and descending both), and a path stays Infinity wherever the void cell falls in
 it, including when later cells descend.
+
+As of the reachable-cells addition (post-roadmap — "highlight valid destinations before a
+move is chosen", not a numbered prompt): `movement.ts` gains `computeReachableCells`, which
+answers "where COULD this token go" rather than `pathMovementCost`'s "what does going HERE
+cost" — a cost-limited graph search (Dijkstra; `cellMovementCost` edge weights are never
+negative) over the whole grid instead of one priced path. It takes `origin`, a flat
+`cells: readonly MovementCellInput[]` sweep (`{position, terrain, elevationSteps}` — the
+same whole-map-sweep shape `computeVisibilityTiers`'s `VisibilityCellInput` already uses,
+built the same way: densify the sparse `cellOverlay`/`overlayFromRows` map with
+`DEFAULT_CELL` where absent), a `budgetFeet`, and an optional `occupiedCells` list. A point
+missing from `cells` is treated exactly like an explicit void cell (`cellMovementCost`
+already returns `Infinity` for void terrain; GameRoom's own wording for void is "outside the
+walkable map", which is exactly what an undescribed point is), so a caller only has to
+describe real cells, never hand-paint a void border. Verified, not just assumed: void is
+never reachable and never a cheaper route through to somewhere else, at any budget including
+an unbounded one — the tentative cost through a void edge is rejected by an explicit
+`Number.isFinite` check rather than only `<= budgetFeet`, because `Infinity <= Infinity` is
+true in JS and an unbounded budget would otherwise let a void cell slip in as "reachable at
+infinite cost". Occupied-cell judgment call, documented on `ComputeReachableCellsParams`:
+passing THROUGH an occupied cell was already unrestricted before this addition (no existing
+move/placement path — `dragPathCost`, `moveMapToken`, `moveCombatToken` — ever inspects
+other tokens' positions, and the map-transition handler already states tokens may share a
+cell "as anywhere else"), so this search matches that and prices it like any other cell;
+there was no existing answer for whether an occupied cell should be OFFERED as a
+destination, so this function excludes it from the returned set (a UI-highlight policy, not
+a change to move legality — `moveMapToken`/`moveCombatToken` still allow a manual drag onto
+one exactly as before). Unit-tested in `movement.test.ts`: the exact Chebyshev square an
+open grid implies for a budget, cross-checked cell-by-cell against `pathMovementCost` for
+both the reachable set and the ring just beyond it; difficult terrain shrinking that square;
+a void wall blocking passage to cells behind it, not just the wall cells; an elevation climb
+consuming the same extra cost `pathMovementCost` already charges for it; the origin always
+included at zero cost; and the occupied-cell pass-through-but-not-landing behavior.
