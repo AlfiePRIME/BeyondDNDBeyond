@@ -44,5 +44,22 @@ Applied-condition STATE lives in the database (`combatant_conditions`, see
 `data-access/conditions.ts`) keyed by these catalog keys — the catalog is the single
 source of truth for what keys are valid.
 
+As of Prompt 48: dice (`dice.ts`) — the primitives Prompts 49 (death saves), 50
+(concentration), and 59 (advantage/disadvantage) build on. Everything takes an injectable
+`RandomSource` (`() => number` in [0,1), defaulting to `Math.random`) — the same
+testable-seam pattern as `src/ai`'s LLM calls — because actual rolling must happen
+server-side only (the roll Route Handler at `src/app/campaigns/[id]/roll/route.ts` is the
+single production caller; a client claiming "I rolled a 20" is never trusted), while unit
+tests inject a fixed sequence and assert exact outcomes. `parseDiceNotation` handles
+"NdS"/"NdS±M" and multi-term sums ("2d6+1d4+3", subtracted terms, folded flat modifiers)
+into a `DiceExpression`; `rollDie`/`rollDice`/`rollExpression` produce per-die results;
+`doubleDiceExpression` doubles dice counts but not flat modifiers (the crit rule);
+`rollD20(mode, random)` is THE d20 primitive — `AdvantageMode` ("normal" | "advantage" |
+"disadvantage") rolls two dice and returns both plus which counted, implemented exactly
+once so later d20 consumers reuse it rather than reimplementing; `resolveAttackOutcome
+(naturalRoll, attackBonus, targetAc)` encodes natural-20-always-hits-and-crits,
+natural-1-always-misses, meets-it-beats-it otherwise.
+
 Still future work: the perception/vision engine (Prompt 56) and advantage/disadvantage
-(Prompt 59).
+enforcement from conditions/vision (Prompt 59) — Prompt 48 provides the manual toggle and
+the two-d20 mechanics it will drive.

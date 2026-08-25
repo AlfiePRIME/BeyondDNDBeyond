@@ -284,3 +284,50 @@ removals — the handler refetches instead (re-resolving the combatant via
 `combat.ts`'s new `getActiveCombatantForCharacter(supabase, campaignId, characterId)`,
 since the combatant row may not have existed when the page loaded), and RLS filters the
 refetch. A character not in the active encounter simply has no conditions to show.
+
+As of Prompt 48, `rolls.ts` owns the shared roll log: a `roll_log` table (migration
+`0030_dice_rolls.sql`) — campaign-scoped, `roller_user_id`, nullable `character_id`
+(`on delete set null`: history outlives a retired PC), a CHECK-constrained `kind`
+(`attack`/`save`/`check`/`skill`/`initiative`/`freeform`), `total`, and one `breakdown`
+jsonb column (typed here as `RollBreakdown`, the `behavior_config` precedent) carrying die
+results, each contributing modifier, advantage/disadvantage state (both d20s plus which
+counted), and for attacks the target AC / natural-20/1 / hit / crit / damage groups /
+applied-HP outcome — NOT a wide sparse table of per-kind nullable columns. RLS: members
+read; a member INSERTs only their own rolls (`roller_user_id = auth.uid()`); no
+UPDATE/DELETE at all (append-only). Rolls are inserted ONLY by the roll Route Handler
+(`src/app/campaigns/[id]/roll/route.ts`) because every die result is generated server-side
+— clients never write here directly. `subscribeToRollLog` is a postgres_changes INSERT
+subscription scoped to the campaign — deliberately NOT the Game Room's campaign-channel
+broadcast, because rolls can originate from the character sheet page, which isn't on that
+channel; the DB feed reaches every subscriber regardless of originating page (same
+publication as 0028/0029).
+
+`resolveAttackDamage(supabase, campaignId, rollerUserId, attackerCharacterId,
+targetCharacterId, damage, breakdown, total)` calls the `resolve_attack_damage` RPC (0030),
+a NEW authorization model beside `apply_hp_delta`: that RPC authorizes by TARGET owner (or
+DM) — right for the manual damage control, wrong for combat, where a player's legitimate
+hit on ANOTHER player's PC (charmed ally, friendly fire) would be wrongly rejected. The new
+RPC is SECURITY DEFINER, gates on the ATTACKER ("caller is the DM, or owns the attacking
+character"), guards target-in-same-campaign, and reuses `apply_hp_delta`'s exact clamp
+expression (`least(max_hp, greatest(0, ...))`) — the trigger_map_object/advance_turn
+pattern of a purpose-built RPC rather than a loosened table policy.
+
+This RPC is `grant execute to authenticated` like every other RPC here, so it's directly
+callable by any campaign member, not just through the roll route — and unlike
+`apply_hp_delta` (where a player can only ever touch their OWN character), it's the first
+RPC that lets one player unilaterally move HP on a DIFFERENT player's character. To keep
+`roll_log`'s append-only audit trail meaningful regardless of how the RPC is invoked, the
+roll_log INSERT happens INSIDE `resolve_attack_damage` itself — same transaction as the HP
+UPDATE — rather than as a separate `insertRoll` call the route makes afterward; a call that
+successfully applies damage cannot fail to also leave a matching log row. The RPC takes the
+roll's `breakdown`/`total` alongside the damage, returns `(out_target_id,
+out_target_current_hp, out_roll_id, out_roll_created_at)`, and `resolveAttackDamage` splices
+the real `applied` value into the given breakdown before handing back the exact
+`RollLogEntry` that was persisted — the roll route returns that directly instead of calling
+`insertRoll` for this path. NPC targets have no HP (or AC) anywhere in the schema yet, so an
+attack on one just logs its numbers through the normal `insertRoll` path; target AC is
+always entered manually at roll time (auto-filled client-side only when the target is a PC
+row the roller can already read under RLS). Initiative rolling reuses
+`setCombatantInitiative`'s existing `can_write_combatant` RLS — the Route Handler rolls
+(d20 + DEX for PCs, plain d20 for NPCs), stores the initiative, then logs via `insertRoll`,
+so a rejected write logs nothing.

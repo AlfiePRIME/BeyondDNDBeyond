@@ -165,6 +165,18 @@ export {
   type ResourceRecharge,
 } from "./characterResources";
 export {
+  listRollLog,
+  subscribeToRollLog,
+  resolveAttackDamage,
+  type RollKind,
+  type RollModifierPart,
+  type AttackResolution,
+  type D20RollBreakdown,
+  type FreeformRollBreakdown,
+  type RollBreakdown,
+  type RollLogEntry,
+} from "./rolls";
+export {
   listNpcs,
   createNpc,
   updateNpc,

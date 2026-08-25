@@ -79,3 +79,21 @@ export {
 } from "./movement";
 
 export { usableAtRange, isUsableAtRange, type RangedAction } from "./range";
+
+export {
+  parseDiceNotation,
+  rollDie,
+  rollDice,
+  rollExpression,
+  doubleDiceExpression,
+  rollD20,
+  resolveAttackOutcome,
+  type RandomSource,
+  type DiceTerm,
+  type DiceExpression,
+  type RolledDiceGroup,
+  type DiceRollResult,
+  type AdvantageMode,
+  type D20Roll,
+  type AttackOutcome,
+} from "./dice";

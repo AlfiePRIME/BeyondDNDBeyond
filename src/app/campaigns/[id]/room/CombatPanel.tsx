@@ -13,8 +13,10 @@ import {
   CONDITION_BY_KEY,
   EXHAUSTION_KEY,
   MAX_EXHAUSTION_LEVEL,
+  type AdvantageMode,
   type ConditionKey,
 } from "@/rules-engine";
+import { AdvantageToggle } from "./DiceLogPanel";
 import styles from "./room.module.css";
 
 /** The active encounter plus its combatants, already in turn order (see
@@ -38,7 +40,10 @@ export interface CombatState {
  * Prompt 47, every combatant's active conditions show as badges on its
  * row, and selecting a combatant the viewer may write (same DM-or-owner
  * rule; NPCs fall to the DM) reveals on/off toggles for the 14 SRD
- * conditions plus the exhaustion level stepper.
+ * conditions plus the exhaustion level stepper. As of Prompt 48 each
+ * combatant also gets a Roll button — server-side d20 + DEX via the dice
+ * roller, honoring the panel's advantage toggle — with manual entry kept
+ * alongside for flexibility.
  */
 export function CombatPanel({
   isDM,
@@ -51,6 +56,7 @@ export function CombatPanel({
   onAdvance,
   onEnd,
   onSetInitiative,
+  onRollInitiative,
   onApplyHp,
   onToggleCondition,
   onExhaustionDelta,
@@ -66,6 +72,9 @@ export function CombatPanel({
   onAdvance: () => void;
   onEnd: () => void;
   onSetInitiative: (combatant: CombatCombatant, initiative: number) => void;
+  /** Server-side d20 + DEX via the Prompt 48 dice roller; mode carries the
+   * panel's advantage toggle. */
+  onRollInitiative: (combatant: CombatCombatant, mode: AdvantageMode) => void;
   /** Negative = damage, positive = heal (see applyHpDelta). */
   onApplyHp: (combatant: CombatCombatant, delta: number) => void;
   /** active true applies the condition, false removes it. */
@@ -76,6 +85,7 @@ export function CombatPanel({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
   const [hpAmounts, setHpAmounts] = useState<Record<string, string>>({});
+  const [d20Mode, setD20Mode] = useState<AdvantageMode>("normal");
 
   const characterById = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
@@ -199,6 +209,15 @@ export function CombatPanel({
         {current ? `${combatantLabel(current)}'s turn` : "No combatants"}
       </span>
 
+      {combatants.some((combatant) => canEnterInitiative(combatant)) ? (
+        <AdvantageToggle
+          mode={d20Mode}
+          onChange={setD20Mode}
+          disabled={busy}
+          testIdPrefix="initiative"
+        />
+      ) : null}
+
       <div className={styles.tokenSection}>
         {combatants.map((combatant, index) => {
           const hp = combatantHp(combatant);
@@ -285,6 +304,15 @@ export function CombatPanel({
                   data-testid={`combatant-initiative-save-${combatant.id}`}
                 >
                   Set
+                </Button>
+                <Button
+                  size="sm"
+                  variant="accent"
+                  disabled={busy}
+                  onClick={() => onRollInitiative(combatant, d20Mode)}
+                  data-testid={`combatant-roll-initiative-${combatant.id}`}
+                >
+                  Roll
                 </Button>
               </div>
             ) : null}

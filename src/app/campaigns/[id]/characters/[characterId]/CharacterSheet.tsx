@@ -16,6 +16,7 @@ import {
   passiveScore,
   type AbilityScore,
   type AbilityScores,
+  type AdvantageMode,
   type ConditionKey,
   type SkillName,
   type SpellRange,
@@ -35,9 +36,13 @@ import {
   type CombatantCondition,
   type InventoryItem,
   type KnownSpell,
+  type RollLogEntry,
   type UpdateCharacterPatch,
 } from "@/data-access";
 import { Badge, Button, Panel, SectionHeader, Select, TextInput } from "@/ui-components";
+import { postRoll, type RollRequest } from "../../roll/api";
+import { rollDetail, rollHeadline } from "../../roll/format";
+import { AdvantageToggle } from "../../room/DiceLogPanel";
 import styles from "./sheet.module.css";
 
 const ABILITIES: AbilityScore[] = [
@@ -113,6 +118,10 @@ export function CharacterSheet({
   const [newItemQty, setNewItemQty] = useState("1");
   const [spellToAdd, setSpellToAdd] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [rollMode, setRollMode] = useState<AdvantageMode>("normal");
+  const [lastRoll, setLastRoll] = useState<RollLogEntry | null>(null);
+  const [rolling, setRolling] = useState(false);
+  const [rollError, setRollError] = useState<string | null>(null);
 
   // Mid-combat damage/healing applied from the Game Room (a different page,
   // not connected to any shared realtime channel with this one) must land
@@ -316,6 +325,27 @@ export function CharacterSheet({
     }
   }
 
+  // The die itself is rolled server-side by the roll Route Handler; the
+  // sheet only sends which roll to make (and the advantage mode) and shows
+  // the persisted result. The shared table log picks the insert up via its
+  // own postgres_changes subscription.
+  async function doRoll(request: RollRequest) {
+    if (rolling) return;
+    setRolling(true);
+    setRollError(null);
+    try {
+      setLastRoll(await postRoll(campaignId, request));
+    } catch (err) {
+      setRollError(err instanceof Error ? err.message : "The roll failed — try again.");
+    } finally {
+      setRolling(false);
+    }
+  }
+
+  function skillTestId(skill: SkillName): string {
+    return skill.toLowerCase().replace(/\s+/g, "-");
+  }
+
   const spellLevels = [...new Set(character.spells.map((s) => s.level))].sort((a, b) => a - b);
   const addableSpells = SPELLS.filter(
     (spell) => !character.spells.some((s) => s.name === spell.name)
@@ -457,6 +487,39 @@ export function CharacterSheet({
           )}
         </Panel>
 
+        <Panel
+          title="Dice"
+          tone="teal"
+          headerActions={
+            <AdvantageToggle
+              mode={rollMode}
+              onChange={setRollMode}
+              disabled={rolling}
+              testIdPrefix="sheet"
+            />
+          }
+        >
+          {rollError ? (
+            <p className={styles.saveError} role="alert" data-testid="sheet-roll-error">
+              {rollError}
+            </p>
+          ) : null}
+          {lastRoll ? (
+            <div className={styles.rollResult} data-testid="sheet-roll-result">
+              <span className={styles.rollHeadline} data-testid="sheet-roll-headline">
+                {rollHeadline(lastRoll)}
+              </span>
+              <span className={styles.rollDetail} data-testid="sheet-roll-detail">
+                {rollDetail(lastRoll)}
+              </span>
+            </div>
+          ) : (
+            <p className={styles.emptyHint}>
+              Roll a check, save, or skill below — every roll lands in the table&apos;s shared log.
+            </p>
+          )}
+        </Panel>
+
         <Panel title="Abilities & Saves" tone="teal">
           <div className={styles.abilityGrid}>
             {ABILITIES.map((ability) => (
@@ -492,6 +555,30 @@ export function CharacterSheet({
                     )
                   )}
                   {saveProficient(ability) ? <Badge tone="orange">Prof</Badge> : null}
+                </span>
+                <span className={styles.rollRow}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={rolling}
+                    onClick={() =>
+                      doRoll({ kind: "check", characterId: character.id, ability, mode: rollMode })
+                    }
+                    data-testid={`roll-check-${ability}`}
+                  >
+                    Check
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={rolling}
+                    onClick={() =>
+                      doRoll({ kind: "save", characterId: character.id, ability, mode: rollMode })
+                    }
+                    data-testid={`roll-save-${ability}`}
+                  >
+                    Save
+                  </Button>
                 </span>
               </div>
             ))}
@@ -534,6 +621,22 @@ export function CharacterSheet({
                     )
                   )}
                 </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={rolling}
+                  onClick={() =>
+                    doRoll({
+                      kind: "skill",
+                      characterId: character.id,
+                      skill: skill.name,
+                      mode: rollMode,
+                    })
+                  }
+                  data-testid={`roll-skill-${skillTestId(skill.name)}`}
+                >
+                  Roll
+                </Button>
               </li>
             ))}
           </ul>

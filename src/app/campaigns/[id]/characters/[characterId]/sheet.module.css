@@ -278,3 +278,30 @@
   line-height: 1.6;
   margin: 0;
 }
+
+.rollRow {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.rollResult {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rollHeadline {
+  font-family: var(--font-m);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.rollDetail {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  color: var(--dim);
+}

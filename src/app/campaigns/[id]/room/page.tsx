@@ -14,6 +14,7 @@ import {
   listMapObjects,
   listMapsForCampaign,
   listMapTokens,
+  listRollLog,
 } from "@/data-access";
 import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
@@ -60,7 +61,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   // The DB read here (not any broadcast) is what makes fresh joins and
   // reloads land on the currently-live map — a client that wasn't connected
   // when the DM switched never saw the live-map-changed event.
-  const [assets, availableMaps, characters, handoutRows] = await Promise.all([
+  const [assets, availableMaps, characters, handoutRows, initialRolls] = await Promise.all([
     listAssetsForCampaign(supabase, campaignId),
     // Non-DM RLS only exposes the live map anyway, and only the DM gets the
     // picker — no point fetching a list for players.
@@ -71,6 +72,9 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // Handouts RLS trims per viewer too: every row for the DM, revealed
     // rows only for a player.
     listHandouts(supabase, campaignId),
+    // Same DB-read reasoning as the live map: fresh joins see recent rolls
+    // without having been subscribed when they landed.
+    listRollLog(supabase, campaignId),
   ]);
   const initialHandouts = await Promise.all(
     handoutRows.map((handout) => resolveHandout(supabase, handout))
@@ -117,6 +121,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       characters={characters}
       initialHandouts={initialHandouts}
       initialCombat={initialCombat}
+      initialRolls={initialRolls}
     />
   );
 }

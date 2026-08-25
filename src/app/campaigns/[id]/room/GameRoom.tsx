@@ -46,6 +46,7 @@ import {
   type MapObject,
   type MapToken,
   type MapTransition,
+  type RollLogEntry,
   type SupabaseClient,
   type TokenAllegiance,
 } from "@/data-access";
@@ -55,6 +56,7 @@ import {
   EXHAUSTION_KEY,
   pathMovementCost,
   straightCellPath,
+  type AdvantageMode,
   type ConditionKey,
   type GridPoint,
 } from "@/rules-engine";
@@ -71,7 +73,9 @@ import {
 import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { resolveHandout, type RoomHandout } from "./handout-url";
+import { postRoll } from "../roll/api";
 import { CombatPanel, type CombatState } from "./CombatPanel";
+import { DiceLogPanel } from "./DiceLogPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
 import { TokenPanel, type TokenArm } from "./TokenPanel";
@@ -189,6 +193,7 @@ export function GameRoom({
   characters,
   initialHandouts,
   initialCombat,
+  initialRolls,
 }: {
   campaignId: string;
   campaignName: string;
@@ -204,6 +209,7 @@ export function GameRoom({
   /** RLS-filtered per viewer: every handout for the DM, revealed only for players. */
   initialHandouts: RoomHandout[];
   initialCombat: CombatState | null;
+  initialRolls: RollLogEntry[];
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
@@ -814,6 +820,34 @@ export function GameRoom({
     [runCombatAction]
   );
 
+  // The die is rolled by the roll Route Handler (server-side randomness),
+  // which also stores the resulting initiative; this client then does the
+  // usual refresh + combat-changed poke via runCombatAction.
+  const handleRollInitiative = useCallback(
+    (combatant: CombatCombatant, mode: AdvantageMode) => {
+      void runCombatAction(async () => {
+        await postRoll(campaignId, { kind: "initiative", combatantId: combatant.id, mode });
+      }, "Could not roll initiative.");
+    },
+    [campaignId, runCombatAction]
+  );
+
+  // Attack damage lands on characters.current_hp server-side; refresh the
+  // room's character rows (HP bars, combat panel) and poke everyone else,
+  // same as any other combat mutation.
+  const handleRollLanded = useCallback(
+    (roll: RollLogEntry) => {
+      const applied = roll.breakdown.type === "d20" ? (roll.breakdown.attack?.applied ?? null) : null;
+      if (!applied) return;
+      void (async () => {
+        const supabase = createBrowserSupabaseClient();
+        await refreshCombat(supabase).catch(() => undefined);
+        await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+      })();
+    },
+    [campaignId, refreshCombat]
+  );
+
   const handleApplyHp = useCallback(
     (combatant: CombatCombatant, delta: number) => {
       const characterId = combatant.character_id;
@@ -1267,9 +1301,20 @@ export function GameRoom({
         onAdvance={handleAdvanceTurn}
         onEnd={handleEndCombat}
         onSetInitiative={handleSetInitiative}
+        onRollInitiative={handleRollInitiative}
         onApplyHp={handleApplyHp}
         onToggleCondition={handleToggleCondition}
         onExhaustionDelta={handleExhaustionDelta}
+      />
+      <DiceLogPanel
+        campaignId={campaignId}
+        currentUserId={currentUserId}
+        isDM={currentUserIsDM}
+        characters={characterRows}
+        tokens={liveMap?.tokens ?? []}
+        members={roster}
+        initialRolls={initialRolls}
+        onRollLanded={handleRollLanded}
       />
       <HandoutPanel
         isDM={currentUserIsDM}
