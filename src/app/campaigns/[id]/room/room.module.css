@@ -503,16 +503,13 @@
   align-items: baseline;
   gap: 12px;
   padding: 10px 16px;
-  /* Never intercepts the pointer — a drag release over the readout must
-     still land on the table. */
+  /* Never intercepts the pointer by default — a click meant for the table
+     underneath (a cell, a token) must still land there. The click-select
+     hint's Cancel button is the one exception; see .moveReadoutAction. */
   pointer-events: none;
   background: color-mix(in srgb, var(--surface2) 85%, transparent);
   border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
   border-radius: 8px;
-}
-
-.moveReadoutOver {
-  border-color: var(--red);
 }
 
 .moveReadoutLabel {
@@ -529,16 +526,13 @@
   color: var(--teal);
 }
 
-.moveReadoutOver .moveReadoutCost {
-  color: var(--red);
-}
-
-.moveReadoutFlag {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--red);
+/* The click-select hint's Cancel button is the one interactive control
+   ever placed inside a .moveReadout panel — pointer-events is inherited,
+   so this explicit override is required to make it clickable again
+   without giving the rest of the (still purely informational) panel back
+   its own click-through-blocking footprint. */
+.moveReadoutAction {
+  pointer-events: auto;
 }
 
 /* Same floating-panel family as .moveReadout, shifted to the purple accent
