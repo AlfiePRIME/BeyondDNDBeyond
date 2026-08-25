@@ -60,6 +60,21 @@ once so later d20 consumers reuse it rather than reimplementing; `resolveAttackO
 (naturalRoll, attackBonus, targetAc)` encodes natural-20-always-hits-and-crits,
 natural-1-always-misses, meets-it-beats-it otherwise.
 
+As of Prompt 49: `resolveDeathSave(naturalRoll)` — the SRD death saving throw, the first of
+the promised d20 consumers built on Prompt 48's primitives. A death save is a plain d20
+with no modifiers and (deliberately) no advantage/disadvantage — the Route Handler forces
+`rollD20("normal")` for this kind, since adv/dis enforcement generally is Prompt 59's
+territory. The resolution bands: natural 20 → `recovers` (regain 1 HP, the whole sequence
+ends), natural 1 → TWO failures, 10 or higher → one success, 2-9 → one failure. The
+returned `DeathSaveOutcome` carries *deltas* (`successesDelta`/`failuresDelta`), not
+absolute counts, on purpose: accumulating the tally — capping at three, stabilizing at
+three successes, dying at three failures — happens in the `apply_death_save_roll` RPC
+under a row lock, which trusts these pre-computed numbers the same way
+`resolve_attack_damage` trusts a pre-computed damage total rather than re-deriving
+hit/crit in SQL. Unit-tested at every band boundary (1, 2, 9, 10, 19, 20, plus an
+exactly-one-outcome sweep of all twenty rolls), the resolveAttackOutcome pattern.
+
 Still future work: the perception/vision engine (Prompt 56) and advantage/disadvantage
 enforcement from conditions/vision (Prompt 59) — Prompt 48 provides the manual toggle and
-the two-d20 mechanics it will drive.
+the two-d20 mechanics it will drive, and Prompt 50 (concentration) is the next d20
+consumer in line.

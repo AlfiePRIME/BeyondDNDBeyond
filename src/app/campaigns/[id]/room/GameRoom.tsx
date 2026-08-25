@@ -878,6 +878,21 @@ export function GameRoom({
     [runCombatAction]
   );
 
+  // The d20 is rolled by the roll Route Handler (server-side randomness,
+  // same as initiative), which applies the outcome via apply_death_save_roll
+  // and logs it; this client then does the usual refresh + combat-changed
+  // poke via runCombatAction so every open room sees the new tally.
+  const handleRollDeathSave = useCallback(
+    (combatant: CombatCombatant) => {
+      const characterId = combatant.character_id;
+      if (!characterId) return;
+      void runCombatAction(async () => {
+        await postRoll(campaignId, { kind: "death_save", characterId });
+      }, "Could not roll that death save.");
+    },
+    [campaignId, runCombatAction]
+  );
+
   const handleConfirmTransition = useCallback(
     async (wholeParty: boolean) => {
       const offer = transitionOffer;
@@ -1111,6 +1126,16 @@ export function GameRoom({
           draggable: currentUserIsDM || (token.character_id !== null && ownCharacterIds.has(token.character_id)),
           hp: character ? { current: character.current_hp, max: character.max_hp } : undefined,
           conditions: conditionLabelsByTokenId.get(token.id),
+          // Pre-derived flat label (the conditionLabels reasoning): a 0-HP
+          // PC token shows its dying tally, or STABLE, or the skull.
+          deathSaveLabel:
+            character && character.current_hp === 0
+              ? character.is_dead
+                ? "☠ DEAD"
+                : character.is_stable
+                  ? "STABLE"
+                  : `${character.death_save_successes}✓ ${character.death_save_failures}✗`
+              : null,
         };
       }),
     };
@@ -1305,6 +1330,7 @@ export function GameRoom({
         onApplyHp={handleApplyHp}
         onToggleCondition={handleToggleCondition}
         onExhaustionDelta={handleExhaustionDelta}
+        onRollDeathSave={handleRollDeathSave}
       />
       <DiceLogPanel
         campaignId={campaignId}

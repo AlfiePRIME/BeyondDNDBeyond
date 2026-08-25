@@ -152,6 +152,38 @@ export interface AttackOutcome {
   critical: boolean;
 }
 
+export interface DeathSaveOutcome {
+  natural20: boolean;
+  natural1: boolean;
+  /** Natural 20: regain 1 HP immediately, the whole sequence ends. */
+  recovers: boolean;
+  /** How many successes this roll adds (0 or 1). */
+  successesDelta: number;
+  /** How many failures this roll adds (0, 1, or 2 — a natural 1 is two). */
+  failuresDelta: number;
+}
+
+/**
+ * SRD death saving throw: a plain d20, no modifiers. Natural 20 regains
+ * 1 HP and ends the sequence; natural 1 counts as TWO failures; 10 or
+ * higher is one success; anything else is one failure. Pure resolution
+ * only — accumulating the counts (and the stabilized/dead outcomes at
+ * three) happens in the apply_death_save_roll RPC, which trusts these
+ * deltas the same way resolve_attack_damage trusts a pre-computed damage
+ * number.
+ */
+export function resolveDeathSave(naturalRoll: number): DeathSaveOutcome {
+  const natural20 = naturalRoll === 20;
+  const natural1 = naturalRoll === 1;
+  return {
+    natural20,
+    natural1,
+    recovers: natural20,
+    successesDelta: !natural20 && !natural1 && naturalRoll >= 10 ? 1 : 0,
+    failuresDelta: natural1 ? 2 : !natural20 && naturalRoll < 10 ? 1 : 0,
+  };
+}
+
 /** Natural 20 always hits and crits regardless of AC; natural 1 always
  * misses regardless of bonus; otherwise meets-it-beats-it. */
 export function resolveAttackOutcome(

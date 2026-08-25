@@ -454,7 +454,10 @@ try {
   //    character, the roll_log insert now happens INSIDE the function
   //    itself (same transaction as the HP write) rather than as a
   //    separate call the route makes afterward — so even a direct call
-  //    must leave a matching, auditable trace. --
+  //    must leave a matching, auditable trace. (As of Prompt 49 / 0031 the
+  //    RPC also takes p_critical for the death-save rules — always false
+  //    here, since every target in this script starts above 0 HP; the
+  //    at-0-HP branches are verify-death-saves.mjs's territory.) --
   const fakeBreakdown = (label) => ({
     type: "d20",
     label,
@@ -480,6 +483,7 @@ try {
     p_attacker_character_id: aliceCharacterId,
     p_target_character_id: bobCharacterId,
     p_damage: 3,
+    p_critical: false,
     p_breakdown: fakeBreakdown("Bob impersonating Alice's attack"),
     p_total: 15,
   });
@@ -500,6 +504,7 @@ try {
       p_attacker_character_id: aliceCharacterId,
       p_target_character_id: bobCharacterId,
       p_damage: 7,
+      p_critical: false,
       p_breakdown: fakeBreakdown("DM-resolved direct call"),
       p_total: 15,
     })
@@ -528,6 +533,7 @@ try {
     p_attacker_character_id: aliceCharacterId,
     p_target_character_id: bobCharacterId,
     p_damage: -5,
+    p_critical: false,
     p_breakdown: fakeBreakdown("negative damage attempt"),
     p_total: 15,
   });
@@ -539,6 +545,7 @@ try {
       p_attacker_character_id: aliceCharacterId,
       p_target_character_id: bobCharacterId,
       p_damage: 9999,
+      p_critical: false,
       p_breakdown: fakeBreakdown("overkill"),
       p_total: 15,
     })

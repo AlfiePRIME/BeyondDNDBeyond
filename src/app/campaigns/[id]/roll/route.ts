@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
   getCharacter,
   resolveAttackDamage,
+  rollDeathSave,
   setCombatantInitiative,
   type AttackResolution,
   type Character,
@@ -23,6 +24,7 @@ import {
   parseDiceNotation,
   proficiencyBonus,
   resolveAttackOutcome,
+  resolveDeathSave,
   rollD20,
   rollExpression,
   savingThrowBonus,
@@ -162,6 +164,66 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       total: result.total,
     });
     return NextResponse.json({ ok: true, roll: entry });
+  }
+
+  if (roll.kind === "death_save") {
+    if (typeof roll.characterId !== "string") return badRequest("A character is required.");
+    // The caller's own client — RLS means only the owner or the DM can
+    // read (and so roll for) this character.
+    const character = await getCharacter(supabase, roll.characterId);
+    if (!character || character.campaign_id !== campaignId) {
+      return NextResponse.json({ ok: false, message: "Character not found." }, { status: 404 });
+    }
+
+    // A death save is always a plain d20 — no modifiers, and no
+    // advantage/disadvantage (Prompt 59's territory), so any client-sent
+    // mode is ignored rather than honored. Handled above the parseMode
+    // gate on purpose.
+    const d20 = rollD20("normal");
+    const outcome = resolveDeathSave(d20.result);
+    const breakdown: D20RollBreakdown = {
+      type: "d20",
+      label: `Death save — ${character.name}`,
+      mode: "normal",
+      d20Rolls: d20.rolls,
+      d20Result: d20.result,
+      modifiers: [],
+      deathSave: {
+        natural20: outcome.natural20,
+        natural1: outcome.natural1,
+        recovers: outcome.recovers,
+        // Placeholders — rollDeathSave splices in the RPC's settled
+        // after-state before anything is persisted.
+        successesAfter: 0,
+        failuresAfter: 0,
+        stabilized: false,
+        died: false,
+      },
+    };
+    // apply_death_save_roll (0031) authorizes (owner or DM, via the
+    // characters UPDATE policy) and rejects a character who isn't
+    // actually dying; the state persists BEFORE the log write, so a
+    // rejected roll logs nothing — the initiative-path ordering.
+    try {
+      const entry = await rollDeathSave(
+        supabase,
+        campaignId,
+        user.id,
+        character.id,
+        outcome.successesDelta,
+        outcome.failuresDelta,
+        outcome.recovers,
+        breakdown,
+        d20.result
+      );
+      return NextResponse.json({ ok: true, roll: entry });
+    } catch (err) {
+      const message =
+        err && typeof err === "object" && "message" in err && typeof err.message === "string"
+          ? err.message
+          : "No death save is needed right now.";
+      return NextResponse.json({ ok: false, message }, { status: 400 });
+    }
   }
 
   const mode = parseMode(roll.mode);
@@ -367,6 +429,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           ...outcome,
           damage,
           applied: null,
+          // Placeholders — resolveAttackDamage splices in the RPC's real
+          // outcome, exactly like `applied`.
+          instantDeath: false,
+          deathSaveFailureAdded: 0,
         };
         const breakdown: D20RollBreakdown = {
           type: "d20",
@@ -392,6 +458,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
             character.id,
             targetCharacterId,
             damage.total,
+            // A crit on an already-0-HP target adds TWO death-save
+            // failures instead of one — the RPC needs to know.
+            outcome.critical,
             breakdown,
             total
           );
@@ -414,6 +483,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       ...outcome,
       damage,
       applied,
+      // Nothing landed on a tracked 0-HP target on this path.
+      instantDeath: false,
+      deathSaveFailureAdded: 0,
     };
   }
 

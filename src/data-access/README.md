@@ -331,3 +331,55 @@ row the roller can already read under RLS). Initiative rolling reuses
 `setCombatantInitiative`'s existing `can_write_combatant` RLS — the Route Handler rolls
 (d20 + DEX for PCs, plain d20 for NPCs), stores the initiative, then logs via `insertRoll`,
 so a rejected write logs nothing.
+
+As of Prompt 49, death saving throws (migration `0031_death_saves.sql`). Four new
+`characters` columns carry the whole state machine — `death_save_successes`/
+`death_save_failures` (0-3, CHECKed), `is_stable`, `is_dead` — surfaced on the `Character`
+type and excluded from `CreateCharacterParams`/`UpdateCharacterPatch`: they start at their
+DB defaults and only ever move through the RPCs below, never a direct patch. `is_dead` is
+permanent within this prompt's scope (nothing clears it, and nothing else is gated on it —
+no sheet lock, no denying further HP changes).
+
+`rollDeathSave(supabase, campaignId, rollerUserId, characterId, successesDelta,
+failuresDelta, recovers, breakdown, total)` calls the new `apply_death_save_roll` RPC —
+SECURITY INVOKER like `apply_hp_delta`/`apply_exhaustion_delta`, because "owner or campaign
+DM" is exactly the characters UPDATE policy, and the `SELECT ... FOR UPDATE` both
+serializes concurrent rolls (the new counts come from the CURRENT stored counts) and
+authorizes, since row locking filters through that UPDATE policy. The RPC rejects a
+character who isn't actually dying (`current_hp <> 0`, stable, or dead → a distinct "no
+death save is needed" error after the opaque not-found/not-allowed one), guards negative
+deltas with `greatest(0, ...)`, caps at `least(3, ...)`, and derives `is_stable`/`is_dead`
+from the new counts; `p_recovers` (a natural 20) instead sets `current_hp = 1` and clears
+the slate. The d20 itself is rolled ONLY in the roll Route Handler
+(`rollD20("normal")` — mode forced, no modifiers) and resolved to deltas by the rules
+engine's `resolveDeathSave`; the RPC trusts those numbers the way `resolve_attack_damage`
+trusts a pre-computed damage. The wrapper splices the settled after-state into the
+breakdown's new `deathSave` (`DeathSaveResolution`) and logs `kind: "death_save"` (the
+widened `roll_log` CHECK) as a separate insert AFTER the RPC succeeds — the
+initiative-path "write succeeds, then log" ordering, deliberately NOT folded into the
+RPC's transaction like `resolve_attack_damage`: this write is always self/DM-scoped on ONE
+character (the `apply_exhaustion_delta` shape, not the cross-player case), and a rejected
+roll must log nothing. Neither the RPC nor the route is turn-gated — like
+checks/saves/attacks, the mechanism is provided and the table self-polices; the
+turn-start prompt in the combat panel is a UI nicety.
+
+`apply_hp_delta` (0028) and `resolve_attack_damage` (0030) are both reshaped from
+single-statement UPDATEs into `apply_exhaustion_delta`'s
+SELECT-FOR-UPDATE-then-branch-then-UPDATE so they can see the PRE-delta `current_hp`:
+damage landing while a character is ALREADY at 0 HP is instant death when it's
+`>= max_hp` (is_dead set directly, tally untouched — death saves skipped entirely), and
+otherwise adds one failure — TWO through `resolve_attack_damage`'s new `p_critical`
+parameter (the route passes `outcome.critical` straight through; `apply_hp_delta` is the
+manual control with no crit concept, so it never doubles). Damage that breaks a STABLE
+character's stability restarts the tally from zero before that failure lands (the SRD's
+counts-reset-on-stabilize corollary — without it the stored successes, kept at 3 for
+display, would re-stabilize them on the very next roll). Dropping from >0 to exactly 0
+adds nothing: it only starts eligibility. Healing a 0-HP character above 0 (through
+`apply_hp_delta`) clears successes/failures/is_stable so a later 0-HP event starts a
+fresh sequence — is_dead stays. Everything else about both functions — clamp expression,
+authorization models, exception messages, `resolve_attack_damage`'s atomic same-
+transaction roll_log INSERT, publication membership — is unchanged;
+`resolve_attack_damage`'s RETURNS TABLE grows `out_instant_death`/`out_failure_added`
+(0, 1, or 2), which `resolveAttackDamage` splices into `breakdown.attack`
+(`instantDeath`/`deathSaveFailureAdded`, defaulting false/0) alongside `applied` so the
+room's roll log can say "instant death" / "+1 failed death save".

@@ -31,11 +31,31 @@ export interface Character {
   proficiencies: string[];
   inventory: InventoryItem[];
   spells: KnownSpell[];
+  /** Death-save state (Prompt 49, migration 0031). The counts tick 0-3;
+   * three successes sets is_stable, three failures — or instant death —
+   * sets is_dead. Written only by the apply_death_save_roll /
+   * apply_hp_delta / resolve_attack_damage RPCs, never patched directly. */
+  death_save_successes: number;
+  death_save_failures: number;
+  is_stable: boolean;
+  is_dead: boolean;
   created_at: string;
   updated_at: string;
 }
 
-export type CreateCharacterParams = Omit<Character, "id" | "created_at" | "updated_at">;
+/** The death-save columns are excluded along with the timestamps: they
+ * start at their DB defaults (0/false) and only ever move through the
+ * RPCs, so no creation or sheet-edit path supplies them. */
+type ServerManagedCharacterField =
+  | "id"
+  | "created_at"
+  | "updated_at"
+  | "death_save_successes"
+  | "death_save_failures"
+  | "is_stable"
+  | "is_dead";
+
+export type CreateCharacterParams = Omit<Character, ServerManagedCharacterField>;
 
 /**
  * Unlike createCampaign, .insert().select() is safe here: the characters
@@ -74,7 +94,7 @@ export async function getCharacter(
 }
 
 export type UpdateCharacterPatch = Partial<
-  Omit<Character, "id" | "campaign_id" | "owner_id" | "created_at" | "updated_at">
+  Omit<Character, ServerManagedCharacterField | "campaign_id" | "owner_id">
 >;
 
 export async function updateCharacter(
@@ -103,6 +123,12 @@ export async function updateCharacter(
  * updateCharacter. Returns the updated row so callers (and the later
  * death-save/concentration prompts) can observe "HP just changed" from the
  * one shared application path.
+ *
+ * As of Prompt 49 (migration 0031) the RPC also keeps the death-save state
+ * machine honest: damage while already at 0 HP adds a failure (instant
+ * death instead when it's >= max_hp), and healing a 0-HP character above 0
+ * clears the successes/failures/is_stable slate — is_dead is never cleared.
+ * The four new fields flow back through the same returned Character row.
  */
 export async function applyHpDelta(
   supabase: SupabaseClient,

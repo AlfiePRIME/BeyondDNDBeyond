@@ -305,3 +305,38 @@
   line-height: 1.5;
   color: var(--dim);
 }
+
+.deathSaveStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.deathSaveTally {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--red);
+}
+
+/* The dying character's call-to-action — deliberately louder than the
+   surrounding roll buttons (the combat panel's prompt styling). */
+.deathSaveRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+
+.deathSavePromptText {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}

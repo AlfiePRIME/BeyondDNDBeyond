@@ -257,6 +257,39 @@
   color: var(--orange);
 }
 
+.deathSaveState {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deathSaveTally {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--red);
+}
+
+/* Louder than any other per-combatant control on purpose: the dying
+   combatant's turn-start prompt must not get lost among the HP inputs. */
+.deathSavePrompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+
+.deathSavePromptText {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
 .handoutForm {
   display: flex;
   flex-direction: column;

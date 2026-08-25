@@ -419,6 +419,26 @@ export function CharacterSheet({
                   {character.current_hp} / {character.max_hp}
                 </span>
               )}
+              {character.current_hp === 0 ? (
+                <span className={styles.deathSaveStatus} data-testid="sheet-death-save-status">
+                  {character.is_dead ? (
+                    <Badge tone="red" data-testid="sheet-death-save-dead">
+                      Dead
+                    </Badge>
+                  ) : character.is_stable ? (
+                    <Badge tone="teal" data-testid="sheet-death-save-stable">
+                      Stable
+                    </Badge>
+                  ) : (
+                    <>
+                      <Badge tone="red">Dying</Badge>
+                      <span className={styles.deathSaveTally} data-testid="sheet-death-save-tally">
+                        ✓ {character.death_save_successes}/3 · ✗ {character.death_save_failures}/3
+                      </span>
+                    </>
+                  )}
+                </span>
+              ) : null}
             </div>
             <div className={styles.vital}>
               <span className={styles.vitalLabel}>Armor class</span>
@@ -503,6 +523,29 @@ export function CharacterSheet({
             <p className={styles.saveError} role="alert" data-testid="sheet-roll-error">
               {rollError}
             </p>
+          ) : null}
+          {canEdit &&
+          character.current_hp === 0 &&
+          !character.is_stable &&
+          !character.is_dead ? (
+            // Surfaced regardless of whose combat turn it is — a dying
+            // player may have only the sheet open. The server rolls a
+            // plain d20 (no modifiers, no advantage) and applies the
+            // outcome via apply_death_save_roll.
+            <div className={styles.deathSaveRow} data-testid="sheet-death-save-prompt">
+              <span className={styles.deathSavePromptText}>
+                {character.name} is dying — a plain d20, no modifiers.
+              </span>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={rolling}
+                onClick={() => doRoll({ kind: "death_save", characterId: character.id })}
+                data-testid="sheet-roll-death-save"
+              >
+                Roll death save
+              </Button>
+            </div>
           ) : null}
           {lastRoll ? (
             <div className={styles.rollResult} data-testid="sheet-roll-result">

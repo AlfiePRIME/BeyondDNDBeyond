@@ -88,6 +88,7 @@ export {
   doubleDiceExpression,
   rollD20,
   resolveAttackOutcome,
+  resolveDeathSave,
   type RandomSource,
   type DiceTerm,
   type DiceExpression,
@@ -96,4 +97,5 @@ export {
   type AdvantageMode,
   type D20Roll,
   type AttackOutcome,
+  type DeathSaveOutcome,
 } from "./dice";

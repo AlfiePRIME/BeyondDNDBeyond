@@ -1,7 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AdvantageMode, AttackKind, RolledDiceGroup } from "@/rules-engine";
+import type { Character } from "./characters";
 
-export type RollKind = "attack" | "save" | "check" | "skill" | "initiative" | "freeform";
+export type RollKind =
+  | "attack"
+  | "save"
+  | "check"
+  | "skill"
+  | "initiative"
+  | "freeform"
+  | "death_save";
 
 export interface RollModifierPart {
   label: string;
@@ -28,6 +36,29 @@ export interface AttackResolution {
   } | null;
   /** Set when the damage actually landed on a tracked PC's HP. */
   applied: { characterId: string; newHp: number } | null;
+  /** Death-save fallout of damage landing on an already-0-HP target
+   * (Prompt 49): true when it equalled or exceeded the target's max HP and
+   * killed outright. false when nothing of the sort happened (including
+   * every pre-49 logged roll, where the field is simply absent). */
+  instantDeath: boolean;
+  /** Failures added to the already-0-HP target's tally by this hit: 0
+   * (nothing happened), 1 (ordinary damage), or 2 (a critical hit). */
+  deathSaveFailureAdded: number;
+}
+
+/** Death-save resolution detail, nested in a d20 breakdown (Prompt 49) —
+ * the after-the-roll state the apply_death_save_roll RPC settled on. */
+export interface DeathSaveResolution {
+  natural20: boolean;
+  natural1: boolean;
+  /** Natural 20: the character regained 1 HP and the sequence ended. */
+  recovers: boolean;
+  successesAfter: number;
+  failuresAfter: number;
+  /** Three successes: unconscious at 0 HP but safe. */
+  stabilized: boolean;
+  /** Three failures: dead. */
+  died: boolean;
 }
 
 export interface D20RollBreakdown {
@@ -41,6 +72,7 @@ export interface D20RollBreakdown {
   d20Result: number;
   modifiers: RollModifierPart[];
   attack?: AttackResolution;
+  deathSave?: DeathSaveResolution;
 }
 
 export interface FreeformRollBreakdown {
@@ -150,6 +182,11 @@ export function subscribeToRollLog(
  * in — this function splices in the real value from the RPC's result and
  * returns the roll_log row exactly as persisted, so the caller doesn't
  * separately call `insertRoll` for this path.
+ *
+ * As of Prompt 49 `critical` rides through as p_critical so a crit landing
+ * on an already-0-HP target adds two death-save failures instead of one;
+ * the RPC's new out_instant_death/out_failure_added columns are spliced
+ * into `breakdown.attack` alongside `applied` the same way.
  */
 export async function resolveAttackDamage(
   supabase: SupabaseClient,
@@ -158,6 +195,7 @@ export async function resolveAttackDamage(
   attackerCharacterId: string,
   targetCharacterId: string,
   damage: number,
+  critical: boolean,
   breakdown: D20RollBreakdown,
   total: number
 ): Promise<RollLogEntry> {
@@ -166,6 +204,7 @@ export async function resolveAttackDamage(
       p_attacker_character_id: attackerCharacterId,
       p_target_character_id: targetCharacterId,
       p_damage: damage,
+      p_critical: critical,
       p_breakdown: breakdown,
       p_total: total,
     })
@@ -177,6 +216,8 @@ export async function resolveAttackDamage(
     out_target_current_hp: number;
     out_roll_id: string;
     out_roll_created_at: string;
+    out_instant_death: boolean;
+    out_failure_added: number;
   };
 
   const breakdownWithApplied: D20RollBreakdown = {
@@ -184,6 +225,8 @@ export async function resolveAttackDamage(
     attack: breakdown.attack && {
       ...breakdown.attack,
       applied: { characterId: row.out_target_id, newHp: row.out_target_current_hp },
+      instantDeath: row.out_instant_death,
+      deathSaveFailureAdded: row.out_failure_added,
     },
   };
 
@@ -197,4 +240,68 @@ export async function resolveAttackDamage(
     total,
     created_at: row.out_roll_created_at,
   };
+}
+
+/**
+ * Applies one death-save roll's already-resolved deltas via the
+ * apply_death_save_roll RPC (0031), splices the settled after-state into
+ * the caller-supplied breakdown's `deathSave`, logs the roll, and returns
+ * the persisted RollLogEntry — resolveAttackDamage's splice-and-return
+ * shape. Unlike that RPC, the log insert here is a separate write AFTER
+ * the RPC succeeds (the initiative-path "write succeeds, then log"
+ * ordering), NOT folded into the same transaction: this RPC is SECURITY
+ * INVOKER and always self/DM-scoped on ONE character — structurally
+ * apply_exhaustion_delta, not resolve_attack_damage's cross-player case —
+ * and a rejected roll (not at 0 HP, already stable, already dead, or not
+ * yours) throws before anything is logged.
+ */
+export async function rollDeathSave(
+  supabase: SupabaseClient,
+  campaignId: string,
+  rollerUserId: string,
+  characterId: string,
+  successesDelta: number,
+  failuresDelta: number,
+  recovers: boolean,
+  breakdown: D20RollBreakdown,
+  total: number
+): Promise<RollLogEntry> {
+  const { data, error } = await supabase.rpc("apply_death_save_roll", {
+    p_character_id: characterId,
+    p_successes_delta: successesDelta,
+    p_failures_delta: failuresDelta,
+    p_recovers: recovers,
+  });
+
+  if (error) throw error;
+  const character = data as Character;
+
+  const breakdownWithOutcome: D20RollBreakdown = {
+    ...breakdown,
+    deathSave: {
+      natural20: breakdown.deathSave?.natural20 ?? false,
+      natural1: breakdown.deathSave?.natural1 ?? false,
+      recovers,
+      successesAfter: character.death_save_successes,
+      failuresAfter: character.death_save_failures,
+      stabilized: character.is_stable,
+      died: character.is_dead,
+    },
+  };
+
+  const { data: row, error: insertError } = await supabase
+    .from("roll_log")
+    .insert({
+      campaign_id: campaignId,
+      roller_user_id: rollerUserId,
+      character_id: characterId,
+      kind: "death_save",
+      breakdown: breakdownWithOutcome,
+      total,
+    })
+    .select()
+    .single();
+
+  if (insertError) throw insertError;
+  return row as RollLogEntry;
 }

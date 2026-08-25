@@ -7,6 +7,10 @@ export type RollRequest =
   | { kind: "save"; characterId: string; ability: AbilityScore; mode?: AdvantageMode }
   | { kind: "skill"; characterId: string; skill: SkillName; mode?: AdvantageMode }
   | { kind: "initiative"; combatantId: string; mode?: AdvantageMode }
+  /** No mode: a death save is always a plain d20, no modifiers, and no
+   * advantage/disadvantage (that's out of scope until Prompt 59) — the
+   * server forces "normal" regardless of what a client sends. */
+  | { kind: "death_save"; characterId: string }
   | {
       kind: "attack";
       characterId: string;

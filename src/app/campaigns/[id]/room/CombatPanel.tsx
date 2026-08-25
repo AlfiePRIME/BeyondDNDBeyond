@@ -43,7 +43,13 @@ export interface CombatState {
  * conditions plus the exhaustion level stepper. As of Prompt 48 each
  * combatant also gets a Roll button — server-side d20 + DEX via the dice
  * roller, honoring the panel's advantage toggle — with manual entry kept
- * alongside for flexibility.
+ * alongside for flexibility. As of Prompt 49 every 0-HP PC combatant's row
+ * shows its death-save state (successes/failures tally, or Stable/Dead) so
+ * the DM has whole-party visibility, and the CURRENT combatant — when
+ * dying and actionable by this viewer (DM or owner) — gets a prominent
+ * roll-death-save call-to-action. The turn-based prompt is a UI nicety
+ * only: the RPC/route is deliberately not turn-gated, matching how
+ * checks/saves/attacks aren't either (the table self-polices).
  */
 export function CombatPanel({
   isDM,
@@ -60,6 +66,7 @@ export function CombatPanel({
   onApplyHp,
   onToggleCondition,
   onExhaustionDelta,
+  onRollDeathSave,
 }: {
   isDM: boolean;
   currentUserId: string;
@@ -81,6 +88,9 @@ export function CombatPanel({
   onToggleCondition: (combatant: CombatCombatant, key: ConditionKey, active: boolean) => void;
   /** +1/-1 steps through apply_exhaustion_delta; clamped 0-6 server-side. */
   onExhaustionDelta: (combatant: CombatCombatant, delta: number) => void;
+  /** Posts kind: "death_save" via the roll route — a plain server-rolled
+   * d20, no modifiers, no advantage toggle. */
+  onRollDeathSave: (combatant: CombatCombatant) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
@@ -130,6 +140,19 @@ export function CombatPanel({
   function combatantHp(combatant: CombatCombatant): { current: number; max: number } | null {
     const character = combatant.character_id ? characterById.get(combatant.character_id) : null;
     return character ? { current: character.current_hp, max: character.max_hp } : null;
+  }
+
+  // The linked character row, when the viewer can read it under RLS —
+  // same lookup combatantHp rides on; null for NPCs and for other
+  // players' PCs, whose death-save state the viewer can't see anyway.
+  function combatantCharacter(combatant: CombatCombatant): Character | null {
+    return combatant.character_id ? (characterById.get(combatant.character_id) ?? null) : null;
+  }
+
+  // Eligible to roll a death save right now: dying at exactly 0 HP,
+  // neither stable nor dead.
+  function isDying(character: Character): boolean {
+    return character.current_hp === 0 && !character.is_stable && !character.is_dead;
   }
 
   // The same DM-or-owner rule as initiative, WITHOUT canApplyHp's PC-only
@@ -222,6 +245,7 @@ export function CombatPanel({
         {combatants.map((combatant, index) => {
           const hp = combatantHp(combatant);
           const selected = combatant.id === selectedCombatantId;
+          const character = combatantCharacter(combatant);
           return (
           <div
             key={combatant.id}
@@ -251,6 +275,56 @@ export function CombatPanel({
                 {combatant.initiative !== null ? combatant.initiative : "—"}
               </span>
             </button>
+            {character && character.current_hp === 0 ? (
+              // Shown on EVERY 0-HP row, not just the current turn's — the
+              // DM needs death-save visibility across the whole party.
+              <div className={styles.deathSaveState} data-testid={`death-save-state-${combatant.id}`}>
+                {character.is_dead ? (
+                  <Badge tone="red" data-testid={`death-save-dead-${combatant.id}`}>
+                    Dead
+                  </Badge>
+                ) : character.is_stable ? (
+                  <Badge tone="teal" data-testid={`death-save-stable-${combatant.id}`}>
+                    Stable
+                  </Badge>
+                ) : (
+                  <>
+                    <Badge tone="red">Dying</Badge>
+                    <span
+                      className={styles.deathSaveTally}
+                      data-testid={`death-save-tally-${combatant.id}`}
+                    >
+                      ✓ {character.death_save_successes}/3 · ✗ {character.death_save_failures}/3
+                    </span>
+                  </>
+                )}
+              </div>
+            ) : null}
+            {character &&
+            isDying(character) &&
+            index === currentIndex &&
+            (isDM || ownsCombatant(combatant)) ? (
+              // The turn-start call-to-action — deliberately louder than
+              // the HP/condition controls. UI nicety only; the route/RPC
+              // never checks whose turn it is.
+              <div
+                className={styles.deathSavePrompt}
+                data-testid={`death-save-prompt-${combatant.id}`}
+              >
+                <span className={styles.deathSavePromptText}>
+                  {combatantLabel(combatant)} is dying — roll a death save
+                </span>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={busy}
+                  onClick={() => onRollDeathSave(combatant)}
+                  data-testid={`roll-death-save-${combatant.id}`}
+                >
+                  Roll death save
+                </Button>
+              </div>
+            ) : null}
             {(conditionsByCombatant.get(combatant.id) ?? []).length > 0 ? (
               <div
                 className={styles.conditionBadges}

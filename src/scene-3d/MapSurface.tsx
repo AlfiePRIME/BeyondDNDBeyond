@@ -280,6 +280,11 @@ export interface MapSurfaceToken {
    * catalog, same values-not-lookups split as `hp`. Absent/empty renders
    * no badges. */
   conditions?: readonly string[];
+  /** Death-save badge for a 0-HP PC token: the dying tally (e.g. "1✓ 2✗"),
+   * "STABLE", or "☠ DEAD" — already a flat primitive derived by the caller
+   * (the conditions reasoning: TokenMarker's memo shallow-compares its
+   * props). Absent/null renders no badge. */
+  deathSaveLabel?: string | null;
 }
 
 const HP_BAR_WIDTH = 0.7;
@@ -383,6 +388,60 @@ const TokenConditionBadges = memo(function TokenConditionBadges({ labels }: { la
   );
 });
 
+const DEATH_BADGE_WIDTH = 0.52;
+const DEATH_BADGE_HEIGHT = 0.15;
+
+// Same cached 2D-canvas mechanism as conditionBadgeTexture — three distinct
+// label states, so at most three textures ever exist. Wider than a
+// condition badge because it carries a word or a tally, and colored by
+// state so dying/stable/dead read apart at a glance: dead is a filled red
+// chip, stable borrows the party teal, the dying tally stays red-on-dark
+// so it can never be mistaken for a normal HP bar.
+const deathBadgeTextureCache = new Map<string, CanvasTexture>();
+
+function deathSaveBadgeTexture(label: string): CanvasTexture {
+  let texture = deathBadgeTextureCache.get(label);
+  if (!texture) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 208;
+    canvas.height = 60;
+    const context = canvas.getContext("2d");
+    if (context) {
+      const dead = label.includes("☠");
+      const stable = label === "STABLE";
+      const accent = stable ? TEAL : "#ff3b3b";
+      context.fillStyle = dead ? accent : "#16102a";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.strokeStyle = accent;
+      context.lineWidth = 4;
+      context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+      context.fillStyle = dead ? "#16102a" : accent;
+      context.font = "bold 32px monospace";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(label, canvas.width / 2, canvas.height / 2 + 2);
+    }
+    texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    deathBadgeTextureCache.set(label, texture);
+  }
+  return texture;
+}
+
+// Billboarded like the HP bar and slotted just below it, above the pawn's
+// head — the bar itself stays (empty, at 0 HP) so the layout doesn't jump
+// when a token starts dying.
+const TokenDeathSaveBadge = memo(function TokenDeathSaveBadge({ label }: { label: string }) {
+  return (
+    <Billboard position={[0, 0.68, 0]}>
+      <mesh>
+        <planeGeometry args={[DEATH_BADGE_WIDTH, DEATH_BADGE_HEIGHT]} />
+        <meshBasicMaterial map={deathSaveBadgeTexture(label)} />
+      </mesh>
+    </Billboard>
+  );
+});
+
 // A pawn silhouette (disc + stem + head) rather than a flat disc: the seat
 // cameras view the table at a shallow angle, where a flat disc on a small
 // cell all but disappears.
@@ -402,6 +461,8 @@ const TokenMarker = memo(function TokenMarker({
   // Comma-joined into one primitive for the same shallow-compare reason —
   // a fresh array prop every render would defeat the memo.
   conditionLabels,
+  // One flat label string, "" for none — same shallow-compare reasoning.
+  deathSaveLabel,
   onPointerDown,
 }: {
   id: string;
@@ -415,6 +476,7 @@ const TokenMarker = memo(function TokenMarker({
   hpCurrent: number | null;
   hpMax: number | null;
   conditionLabels: string;
+  deathSaveLabel: string;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -435,6 +497,7 @@ const TokenMarker = memo(function TokenMarker({
       </mesh>
       {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
       {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
+      {deathSaveLabel !== "" ? <TokenDeathSaveBadge label={deathSaveLabel} /> : null}
       {draggable ? (
         // Same uniform-hit-box reasoning as ObjectMarker: raycasting the
         // pawn's thin stem makes grabbing fiddly at table scale. Attached
@@ -604,6 +667,7 @@ export function MapSurface({
           hpCurrent={token.hp?.current ?? null}
           hpMax={token.hp?.max ?? null}
           conditionLabels={token.conditions?.join(",") ?? ""}
+          deathSaveLabel={token.deathSaveLabel ?? ""}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
         />
       ))}

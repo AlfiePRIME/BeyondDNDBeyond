@@ -3,6 +3,7 @@ import {
   doubleDiceExpression,
   parseDiceNotation,
   resolveAttackOutcome,
+  resolveDeathSave,
   rollD20,
   rollDice,
   rollDie,
@@ -184,5 +185,63 @@ describe("resolveAttackOutcome", () => {
       hit: true,
       critical: false,
     });
+  });
+});
+
+describe("resolveDeathSave", () => {
+  it("a natural 20 recovers (1 HP, sequence over) and adds no counts", () => {
+    expect(resolveDeathSave(20)).toEqual({
+      natural20: true,
+      natural1: false,
+      recovers: true,
+      successesDelta: 0,
+      failuresDelta: 0,
+    });
+  });
+
+  it("a natural 1 counts as TWO failures", () => {
+    expect(resolveDeathSave(1)).toEqual({
+      natural20: false,
+      natural1: true,
+      recovers: false,
+      successesDelta: 0,
+      failuresDelta: 2,
+    });
+  });
+
+  it("the 2 and 9 boundary rolls are each one failure", () => {
+    for (const roll of [2, 9]) {
+      expect(resolveDeathSave(roll)).toEqual({
+        natural20: false,
+        natural1: false,
+        recovers: false,
+        successesDelta: 0,
+        failuresDelta: 1,
+      });
+    }
+  });
+
+  it("the 10 and 19 boundary rolls are each one success", () => {
+    for (const roll of [10, 19]) {
+      expect(resolveDeathSave(roll)).toEqual({
+        natural20: false,
+        natural1: false,
+        recovers: false,
+        successesDelta: 1,
+        failuresDelta: 0,
+      });
+    }
+  });
+
+  it("every roll is exactly one of recover / success / failure(s)", () => {
+    for (let roll = 1; roll <= 20; roll++) {
+      const outcome = resolveDeathSave(roll);
+      const kinds = [
+        outcome.recovers,
+        outcome.successesDelta > 0,
+        outcome.failuresDelta > 0,
+      ].filter(Boolean).length;
+      expect(kinds).toBe(1);
+    }
   });
 });
