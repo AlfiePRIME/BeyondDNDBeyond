@@ -148,6 +148,9 @@ const eslintConfig = defineConfig([
     // Not application source — the self-hosted Supabase Docker Compose
     // project (contains container-owned runtime data once it's been run).
     "supabase/**",
+    // Not application source — isolated agent worktrees (full nested repo
+    // checkouts, including their own node_modules/supabase copies).
+    ".claude/worktrees/**",
   ]),
 ]);
 
