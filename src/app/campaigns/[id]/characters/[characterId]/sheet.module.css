@@ -255,6 +255,16 @@
   color: var(--muted);
 }
 
+.conditionDescription {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  text-align: right;
+}
+
 .resourceUses {
   font-family: var(--font-m);
   font-size: 14px;

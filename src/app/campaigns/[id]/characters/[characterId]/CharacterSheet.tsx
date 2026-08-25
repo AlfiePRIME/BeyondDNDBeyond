@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   CLASSES,
+  CONDITION_BY_KEY,
+  EXHAUSTION_KEY,
+  EXHAUSTION_LEVEL_DESCRIPTIONS,
   SKILLS,
   SPELLS,
   abilityModifier,
@@ -13,18 +16,23 @@ import {
   passiveScore,
   type AbilityScore,
   type AbilityScores,
+  type ConditionKey,
   type SkillName,
   type SpellRange,
 } from "@/rules-engine";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
+  getActiveCombatantForCharacter,
+  listCombatantConditions,
   updateCharacter,
   subscribeToCharacterChanges,
+  subscribeToCombatantConditionChanges,
   setCharacterResourceUses,
   shortRest,
   longRest,
   type Character,
   type CharacterResource,
+  type CombatantCondition,
   type InventoryItem,
   type KnownSpell,
   type UpdateCharacterPatch,
@@ -79,15 +87,20 @@ export function CharacterSheet({
   campaignId,
   initialCharacter,
   initialResources,
+  initialConditions,
   canEdit,
 }: {
   campaignId: string;
   initialCharacter: Character;
   initialResources: CharacterResource[];
+  /** Conditions on this character's combatant in the currently active
+   * encounter — empty when the character isn't in a fight. */
+  initialConditions: CombatantCondition[];
   canEdit: boolean;
 }) {
   const [character, setCharacter] = useState(initialCharacter);
   const [resources, setResources] = useState(initialResources);
+  const [conditions, setConditions] = useState(initialConditions);
   const [scoreDrafts, setScoreDrafts] = useState<Record<AbilityScore, string>>(() =>
     Object.fromEntries(ABILITIES.map((a) => [a, String(initialCharacter[a])])) as Record<
       AbilityScore,
@@ -120,6 +133,34 @@ export function CharacterSheet({
       setCharacter(row);
     });
   }, [initialCharacter.id]);
+
+  // Conditions applied from the Game Room land here live via a
+  // postgres_changes poke on combatant_conditions (same page-not-on-the-
+  // campaign-channel reasoning as the HP subscription above). Each poke
+  // re-resolves the combatant rather than caching it: the row didn't exist
+  // yet if combat started after this page loaded. Latest-wins sequencing,
+  // same as the room's refreshCombat.
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    let seq = 0;
+    return subscribeToCombatantConditionChanges(supabase, () => {
+      const current = ++seq;
+      void (async () => {
+        try {
+          const combatant = await getActiveCombatantForCharacter(
+            supabase,
+            campaignId,
+            initialCharacter.id
+          );
+          const rows = combatant ? await listCombatantConditions(supabase, [combatant.id]) : [];
+          if (current === seq) setConditions(rows);
+        } catch {
+          // A dropped refetch leaves the previous badges in place; the next
+          // poke retries.
+        }
+      })();
+    });
+  }, [campaignId, initialCharacter.id]);
 
   const klass = CLASSES.find((c) => c.name === character.class) ?? null;
   const isCaster = Boolean(klass?.spellcastingAbility);
@@ -377,6 +418,43 @@ export function CharacterSheet({
               </span>
             </div>
           </div>
+        </Panel>
+
+        <Panel title="Conditions" tone="pink">
+          {conditions.length === 0 ? (
+            <p className={styles.emptyHint} data-testid="sheet-conditions-empty">
+              No active conditions.
+            </p>
+          ) : (
+            <ul className={styles.rowList} data-testid="sheet-conditions">
+              {conditions.map((condition) => {
+                const exhaustion = condition.condition_key === EXHAUSTION_KEY;
+                const definition = exhaustion
+                  ? null
+                  : CONDITION_BY_KEY.get(condition.condition_key as ConditionKey);
+                return (
+                  <li
+                    key={condition.condition_key}
+                    className={styles.itemRow}
+                    data-testid={`sheet-condition-${condition.condition_key}`}
+                  >
+                    <span className={styles.itemName}>
+                      <Badge tone="orange">
+                        {exhaustion
+                          ? `Exhaustion ${condition.level}`
+                          : (definition?.name ?? condition.condition_key)}
+                      </Badge>
+                    </span>
+                    <span className={styles.conditionDescription}>
+                      {exhaustion
+                        ? (EXHAUSTION_LEVEL_DESCRIPTIONS[condition.level ?? 0] ?? "")
+                        : (definition?.description ?? "")}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </Panel>
 
         <Panel title="Abilities & Saves" tone="teal">

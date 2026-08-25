@@ -8,6 +8,7 @@ import {
   listCampaignMembers,
   listCharactersForCampaign,
   listCombatCombatants,
+  listCombatantConditions,
   listHandouts,
   listMapCells,
   listMapObjects,
@@ -79,9 +80,15 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   // Same DB-read reasoning as the live map above: a fresh join or reload
   // lands on the current combat state without having seen any broadcast.
   const activeEncounter = await getActiveCombatEncounter(supabase, campaignId);
-  const initialCombat: CombatState | null = activeEncounter
-    ? { encounter: activeEncounter, combatants: await listCombatCombatants(supabase, activeEncounter.id) }
-    : null;
+  let initialCombat: CombatState | null = null;
+  if (activeEncounter) {
+    const combatants = await listCombatCombatants(supabase, activeEncounter.id);
+    const conditions = await listCombatantConditions(
+      supabase,
+      combatants.map((combatant) => combatant.id)
+    );
+    initialCombat = { encounter: activeEncounter, combatants, conditions };
+  }
 
   let initialLiveMap: LiveMapData | null = null;
   if (campaign.live_map) {

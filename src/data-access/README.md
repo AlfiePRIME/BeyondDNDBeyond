@@ -244,3 +244,43 @@ so the later death-save (Prompt 49) and concentration (Prompt 50) prompts can ob
 just changed" here rather than growing their own damage-application paths. Scope: PC
 combatants only — NPC tokens/combatants have no HP field anywhere yet (a proper monster
 stat block is a later prompt), so the UI offers no damage/heal control on them.
+
+As of Prompt 47, `conditions.ts` owns applied status conditions: one `combatant_conditions`
+row per applied condition per combatant (migration `0029_conditions.sql`; `on delete
+cascade` off `combat_combatants`, `unique(combatant_id, condition_key)`), NOT fourteen
+boolean columns — a future condition is a rules-engine catalog entry, not a schema change.
+The catalog (names/descriptions/effect flags) is static code in
+`src/rules-engine/srd/conditions.ts`; `condition_key` deliberately has NO DB-side CHECK
+enumerating valid keys, because that enum copy could drift from the catalog (the asset-name
+precedent: categorical values validated app-side) — the app layer only writes
+catalog-typed `ConditionKey`s (or `EXHAUSTION_KEY`). What DOES get a CHECK is the SHAPE:
+`level` is non-null and 1-6 exactly when `condition_key = 'exhaustion'`, since
+leveled-vs-boolean is structural, not catalog data. Reads (`listCombatantConditions`, over
+a set of combatant ids) are member-visible like initiative; writes reuse 0027's
+`can_write_combatant` VERBATIM (joined through the combatant row) as plain
+INSERT/UPDATE/DELETE policies — DM or the owner of the linked character, NPC rows DM-only
+by construction, no new helper, no RPC for the 14 on/off conditions since one row has no
+cross-row atomicity concern. `applyCondition` is an ignore-duplicates upsert (re-applying
+is a no-op) and `removeCondition` a plain delete.
+
+Exhaustion is the exception with an `apply_hp_delta`-shaped RPC:
+`applyExhaustionDelta(supabase, combatantId, delta)` calls `apply_exhaustion_delta`
+(SECURITY INVOKER), which locks the combatant row `FOR UPDATE` — the lock both serializes
+two near-simultaneous clicks (the new level is computed from the CURRENT stored level, so
+a client-side read-then-write would lose one) AND enforces authorization, since row
+locking filters through `can_write_combatant`'s UPDATE policy. Clamped 0-6; reaching 0
+deletes the row, keeping "no exhaustion = no row" consistent with the on/off conditions'
+absence-means-not-applied shape. Returns the new level.
+
+Live sync is Prompt 46's two paths again: the Game Room re-reads conditions inside
+`refreshCombat` on the existing `combat-changed` campaign-channel poke (feeding the combat
+panel badges AND the token badge chips), and the character sheet — not on that channel —
+uses `subscribeToCombatantConditionChanges`, a postgres_changes subscription on
+`combatant_conditions` (added to the `supabase_realtime` publication in 0029).
+Deliberately table-wide and payload-free, unlike `subscribeToCharacterChanges`'
+per-row-filtered shape: DELETE events carry only the old row's primary key under the
+default replica identity, so a combatant-scoped server-side filter would silently drop
+removals — the handler refetches instead (re-resolving the combatant via
+`combat.ts`'s new `getActiveCombatantForCharacter(supabase, campaignId, characterId)`,
+since the combatant row may not have existed when the page loaded), and RLS filters the
+refetch. A character not in the active encounter simply has no conditions to show.

@@ -94,6 +94,42 @@ export async function endCombat(supabase: SupabaseClient, campaignId: string): P
 }
 
 /**
+ * The character's combatant row in the campaign's currently-active
+ * encounter, or null — null covers both "no combat running" and "this
+ * character has no token in the fight", which callers treat the same way
+ * (nothing combat-scoped to show). The character sheet uses this to
+ * resolve which combatant's conditions belong on the sheet, since
+ * conditions hang off combat_combatants, not characters.
+ */
+export async function getActiveCombatantForCharacter(
+  supabase: SupabaseClient,
+  campaignId: string,
+  characterId: string
+): Promise<CombatCombatant | null> {
+  const { data, error } = await supabase
+    .from("combat_combatants")
+    .select("*, encounter:combat_encounters!inner(campaign_id, ended_at)")
+    .eq("character_id", characterId)
+    .eq("encounter.campaign_id", campaignId)
+    .is("encounter.ended_at", null)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+  // Strip the embedded encounter — it only existed to filter the query.
+  const row = data as CombatCombatant;
+  return {
+    id: row.id,
+    encounter_id: row.encounter_id,
+    token_id: row.token_id,
+    character_id: row.character_id,
+    npc_name: row.npc_name,
+    initiative: row.initiative,
+    created_at: row.created_at,
+  };
+}
+
+/**
  * Allowed for the DM or the combatant's owning player via plain RLS (0027)
  * — no RPC, since a single combatant's initiative has no cross-row
  * atomicity concern the way the shared turn pointer does. An NPC combatant

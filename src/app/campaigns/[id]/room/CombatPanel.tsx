@@ -1,16 +1,29 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Button } from "@/ui-components";
-import type { Character, CombatCombatant, CombatEncounter } from "@/data-access";
+import { Badge, Button } from "@/ui-components";
+import type {
+  Character,
+  CombatCombatant,
+  CombatEncounter,
+  CombatantCondition,
+} from "@/data-access";
+import {
+  CONDITIONS,
+  CONDITION_BY_KEY,
+  EXHAUSTION_KEY,
+  MAX_EXHAUSTION_LEVEL,
+  type ConditionKey,
+} from "@/rules-engine";
 import styles from "./room.module.css";
 
 /** The active encounter plus its combatants, already in turn order (see
  * listCombatCombatants) so current_turn_index indexes straight into the
- * array. */
+ * array, and every combatant's applied conditions (as of Prompt 47). */
 export interface CombatState {
   encounter: CombatEncounter;
   combatants: CombatCombatant[];
+  conditions: CombatantCondition[];
 }
 
 /**
@@ -21,7 +34,11 @@ export interface CombatState {
  * and DM-only End Combat. As of Prompt 46, clicking a combatant selects it,
  * and a selected PC combatant reveals the damage/heal control (DM, or the
  * combatant's owning player — the same rule as initiative entry). NPC
- * combatants have no HP anywhere yet, so they get no such control.
+ * combatants have no HP anywhere yet, so they get no such control. As of
+ * Prompt 47, every combatant's active conditions show as badges on its
+ * row, and selecting a combatant the viewer may write (same DM-or-owner
+ * rule; NPCs fall to the DM) reveals on/off toggles for the 14 SRD
+ * conditions plus the exhaustion level stepper.
  */
 export function CombatPanel({
   isDM,
@@ -35,6 +52,8 @@ export function CombatPanel({
   onEnd,
   onSetInitiative,
   onApplyHp,
+  onToggleCondition,
+  onExhaustionDelta,
 }: {
   isDM: boolean;
   currentUserId: string;
@@ -49,6 +68,10 @@ export function CombatPanel({
   onSetInitiative: (combatant: CombatCombatant, initiative: number) => void;
   /** Negative = damage, positive = heal (see applyHpDelta). */
   onApplyHp: (combatant: CombatCombatant, delta: number) => void;
+  /** active true applies the condition, false removes it. */
+  onToggleCondition: (combatant: CombatCombatant, key: ConditionKey, active: boolean) => void;
+  /** +1/-1 steps through apply_exhaustion_delta; clamped 0-6 server-side. */
+  onExhaustionDelta: (combatant: CombatCombatant, delta: number) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
@@ -58,6 +81,16 @@ export function CombatPanel({
     () => new Map(characters.map((character) => [character.id, character])),
     [characters]
   );
+
+  const conditionsByCombatant = useMemo(() => {
+    const grouped = new Map<string, CombatantCondition[]>();
+    for (const condition of combat?.conditions ?? []) {
+      const list = grouped.get(condition.combatant_id) ?? [];
+      list.push(condition);
+      grouped.set(condition.combatant_id, list);
+    }
+    return grouped;
+  }, [combat]);
 
   function combatantLabel(combatant: CombatCombatant): string {
     if (combatant.npc_name) return combatant.npc_name;
@@ -87,6 +120,27 @@ export function CombatPanel({
   function combatantHp(combatant: CombatCombatant): { current: number; max: number } | null {
     const character = combatant.character_id ? characterById.get(combatant.character_id) : null;
     return character ? { current: character.current_hp, max: character.max_hp } : null;
+  }
+
+  // The same DM-or-owner rule as initiative, WITHOUT canApplyHp's PC-only
+  // restriction: an NPC can be poisoned or prone just fine — its rows just
+  // fall to the DM, since ownsCombatant is false by construction.
+  function canEditConditions(combatant: CombatCombatant): boolean {
+    return isDM || ownsCombatant(combatant);
+  }
+
+  function hasCondition(combatant: CombatCombatant, key: ConditionKey): boolean {
+    return (conditionsByCombatant.get(combatant.id) ?? []).some(
+      (condition) => condition.condition_key === key
+    );
+  }
+
+  function exhaustionLevel(combatant: CombatCombatant): number {
+    return (
+      (conditionsByCombatant.get(combatant.id) ?? []).find(
+        (condition) => condition.condition_key === EXHAUSTION_KEY
+      )?.level ?? 0
+    );
   }
 
   if (!combat) {
@@ -178,6 +232,25 @@ export function CombatPanel({
                 {combatant.initiative !== null ? combatant.initiative : "—"}
               </span>
             </button>
+            {(conditionsByCombatant.get(combatant.id) ?? []).length > 0 ? (
+              <div
+                className={styles.conditionBadges}
+                data-testid={`combatant-conditions-${combatant.id}`}
+              >
+                {(conditionsByCombatant.get(combatant.id) ?? []).map((condition) => (
+                  <Badge
+                    key={condition.condition_key}
+                    tone="orange"
+                    data-testid={`condition-badge-${condition.condition_key}-${combatant.id}`}
+                  >
+                    {condition.condition_key === EXHAUSTION_KEY
+                      ? `Exhaustion ${condition.level}`
+                      : (CONDITION_BY_KEY.get(condition.condition_key as ConditionKey)?.name ??
+                        condition.condition_key)}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
             {canEnterInitiative(combatant) ? (
               <div className={styles.objectHeader}>
                 <input
@@ -253,6 +326,63 @@ export function CombatPanel({
                 >
                   Heal
                 </Button>
+              </div>
+            ) : null}
+            {selected && canEditConditions(combatant) ? (
+              <div className={styles.conditionControls} data-testid={`condition-controls-${combatant.id}`}>
+                <div className={styles.conditionToggles}>
+                  {CONDITIONS.map((definition) => {
+                    const active = hasCondition(combatant, definition.key);
+                    return (
+                      <button
+                        key={definition.key}
+                        type="button"
+                        className={[
+                          styles.conditionToggle,
+                          active ? styles.conditionToggleActive : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        aria-pressed={active}
+                        title={definition.description}
+                        disabled={busy}
+                        onClick={() => onToggleCondition(combatant, definition.key, !active)}
+                        data-testid={`condition-toggle-${definition.key}-${combatant.id}`}
+                      >
+                        {definition.name}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className={styles.exhaustionRow}>
+                  <span className={styles.exhaustionLabel}>Exhaustion</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy || exhaustionLevel(combatant) <= 0}
+                    onClick={() => onExhaustionDelta(combatant, -1)}
+                    aria-label={`Lower ${combatantLabel(combatant)}'s exhaustion`}
+                    data-testid={`exhaustion-decrease-${combatant.id}`}
+                  >
+                    −
+                  </Button>
+                  <span
+                    className={styles.exhaustionValue}
+                    data-testid={`exhaustion-level-${combatant.id}`}
+                  >
+                    {exhaustionLevel(combatant)}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy || exhaustionLevel(combatant) >= MAX_EXHAUSTION_LEVEL}
+                    onClick={() => onExhaustionDelta(combatant, 1)}
+                    aria-label={`Raise ${combatantLabel(combatant)}'s exhaustion`}
+                    data-testid={`exhaustion-increase-${combatant.id}`}
+                  >
+                    +
+                  </Button>
+                </div>
               </div>
             ) : null}
           </div>

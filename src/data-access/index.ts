@@ -137,6 +137,7 @@ export {
 } from "./mapTransitions";
 export {
   getActiveCombatEncounter,
+  getActiveCombatantForCharacter,
   listCombatCombatants,
   startCombat,
   advanceTurn,
@@ -145,6 +146,14 @@ export {
   type CombatEncounter,
   type CombatCombatant,
 } from "./combat";
+export {
+  listCombatantConditions,
+  applyCondition,
+  removeCondition,
+  applyExhaustionDelta,
+  subscribeToCombatantConditionChanges,
+  type CombatantCondition,
+} from "./conditions";
 export {
   listCharacterResources,
   createCharacterResource,

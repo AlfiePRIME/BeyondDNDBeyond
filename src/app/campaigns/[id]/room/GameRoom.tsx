@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import {
   advanceTurn,
+  applyCondition,
+  applyExhaustionDelta,
   applyHpDelta,
   createHandout,
   deleteHandout,
@@ -23,8 +25,10 @@ import {
   listMapTransitions,
   moveMapToken,
   parseMapObjectBehavior,
+  listCombatantConditions,
   placeCharacterToken,
   placeNpcToken,
+  removeCondition,
   setCombatantInitiative,
   setHandoutRevealed,
   setLiveMap,
@@ -46,7 +50,14 @@ import {
   type TokenAllegiance,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
-import { pathMovementCost, straightCellPath, type GridPoint } from "@/rules-engine";
+import {
+  CONDITION_BY_KEY,
+  EXHAUSTION_KEY,
+  pathMovementCost,
+  straightCellPath,
+  type ConditionKey,
+  type GridPoint,
+} from "@/rules-engine";
 import { Button, Modal } from "@/ui-components";
 import { GameTableScene, type CameraMode, type TableLiveMap } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
@@ -278,8 +289,12 @@ export function GameRoom({
         listCharactersForCampaign(supabase, campaignId),
       ]);
       const combatants = encounter ? await listCombatCombatants(supabase, encounter.id) : [];
+      const conditions = await listCombatantConditions(
+        supabase,
+        combatants.map((combatant) => combatant.id)
+      );
       if (seq !== combatSeqRef.current) return;
-      setCombat(encounter ? { encounter, combatants } : null);
+      setCombat(encounter ? { encounter, combatants, conditions } : null);
       setCharacterRows(rows);
     },
     [campaignId]
@@ -810,6 +825,25 @@ export function GameRoom({
     [runCombatAction]
   );
 
+  const handleToggleCondition = useCallback(
+    (combatant: CombatCombatant, key: ConditionKey, active: boolean) => {
+      void runCombatAction(async (supabase) => {
+        if (active) await applyCondition(supabase, combatant.id, key);
+        else await removeCondition(supabase, combatant.id, key);
+      }, "Could not change that combatant's conditions.");
+    },
+    [runCombatAction]
+  );
+
+  const handleExhaustionDelta = useCallback(
+    (combatant: CombatCombatant, delta: number) => {
+      void runCombatAction(async (supabase) => {
+        await applyExhaustionDelta(supabase, combatant.id, delta);
+      }, "Could not change that combatant's exhaustion.");
+    },
+    [runCombatAction]
+  );
+
   const handleConfirmTransition = useCallback(
     async (wholeParty: boolean) => {
       const offer = transitionOffer;
@@ -967,6 +1001,31 @@ export function GameRoom({
     [characterRows]
   );
 
+  // Badge labels per TOKEN (combatants carry their seeding token_id), so
+  // the table model below can attach them without re-deriving per render.
+  // Abbreviations come from the rules-engine catalog; exhaustion shows its
+  // level ("EX3") since on/off can't express it.
+  const conditionLabelsByTokenId = useMemo(() => {
+    const labels = new Map<string, string[]>();
+    if (!combat) return labels;
+    const tokenIdByCombatant = new Map(
+      combat.combatants.map((combatant) => [combatant.id, combatant.token_id])
+    );
+    for (const condition of combat.conditions) {
+      const tokenId = tokenIdByCombatant.get(condition.combatant_id);
+      if (!tokenId) continue;
+      const label =
+        condition.condition_key === EXHAUSTION_KEY
+          ? `EX${condition.level}`
+          : CONDITION_BY_KEY.get(condition.condition_key as ConditionKey)?.abbreviation;
+      if (!label) continue;
+      const list = labels.get(tokenId) ?? [];
+      list.push(label);
+      labels.set(tokenId, list);
+    }
+    return labels;
+  }, [combat]);
+
   // Identity only — depending on the whole drag would rebuild the table
   // model on every hovered cell.
   const draggingTokenId = tokenDrag?.tokenId ?? null;
@@ -1017,10 +1076,11 @@ export function GameRoom({
           // so uncontrollable tokens never become grab targets).
           draggable: currentUserIsDM || (token.character_id !== null && ownCharacterIds.has(token.character_id)),
           hp: character ? { current: character.current_hp, max: character.max_hp } : undefined,
+          conditions: conditionLabelsByTokenId.get(token.id),
         };
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById]);
+  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById, conditionLabelsByTokenId]);
 
   // Recomputed from the ORIGIN to the hovered cell on every update (the
   // straight path a deliberate walk would take), not accumulated from the
@@ -1208,6 +1268,8 @@ export function GameRoom({
         onEnd={handleEndCombat}
         onSetInitiative={handleSetInitiative}
         onApplyHp={handleApplyHp}
+        onToggleCondition={handleToggleCondition}
+        onExhaustionDelta={handleExhaustionDelta}
       />
       <HandoutPanel
         isDM={currentUserIsDM}

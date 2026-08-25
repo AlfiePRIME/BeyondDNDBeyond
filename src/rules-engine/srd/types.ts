@@ -144,6 +144,62 @@ export interface Spell {
   concentration: boolean;
 }
 
+export type ConditionKey =
+  | "blinded"
+  | "charmed"
+  | "deafened"
+  | "frightened"
+  | "grappled"
+  | "incapacitated"
+  | "invisible"
+  | "paralyzed"
+  | "petrified"
+  | "poisoned"
+  | "prone"
+  | "restrained"
+  | "stunned"
+  | "unconscious";
+
+export type ExhaustionLevel = 1 | 2 | 3 | 4 | 5 | 6;
+
+/**
+ * Mechanical-effect flags as structured data, NOT enforcement — Prompt 47
+ * only stores and displays them; Prompt 53 (action economy) reads
+ * incapacitated/speed flags, Prompt 56 (vision) reads blocksVision/
+ * hiddenFromSight, Prompt 59 (advantage/disadvantage) reads the roll
+ * flags. A flag records that the condition imposes the effect at all;
+ * situational qualifiers in the SRD text (frightened's line-of-sight
+ * clause, prone's melee-vs-ranged split) stay in the description and are
+ * the enforcing prompt's problem, so a new condition never needs a new
+ * storage shape.
+ */
+export interface ConditionEffects {
+  blocksVision: boolean;
+  blocksHearing: boolean;
+  /** Invisible — can't be seen without a special sense (Prompt 56). */
+  hiddenFromSight: boolean;
+  speedZero: boolean;
+  speedHalved: boolean;
+  /** Can't take actions or reactions. */
+  incapacitated: boolean;
+  autoFailStrDexSaves: boolean;
+  attacksAgainstHaveAdvantage: boolean;
+  attacksAgainstHaveDisadvantage: boolean;
+  ownAttacksHaveAdvantage: boolean;
+  ownAttacksHaveDisadvantage: boolean;
+  abilityChecksHaveDisadvantage: boolean;
+  savingThrowsHaveDisadvantage: boolean;
+}
+
+export interface ConditionDefinition {
+  key: ConditionKey;
+  name: string;
+  /** Two-letter badge label for token chips, unique across the catalog. */
+  abbreviation: string;
+  description: string;
+  effects: ConditionEffects;
+}
+
 export interface EquipmentChoice {
   // Each inner string[] is one selectable bundle of items; the character
   // picks exactly one bundle from `options`.

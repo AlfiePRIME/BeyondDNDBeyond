@@ -2,7 +2,7 @@
 
 import { memo, useEffect, useMemo, useState } from "react";
 import { Billboard } from "@react-three/drei";
-import { BufferAttribute, BufferGeometry, Color } from "three";
+import { BufferAttribute, BufferGeometry, CanvasTexture, Color, SRGBColorSpace } from "three";
 import type { ThreeEvent } from "@react-three/fiber";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
@@ -275,6 +275,11 @@ export interface MapSurfaceToken {
    * NPC tokens (no HP tracking exists for them yet), or a PC whose
    * character the viewer can't read under RLS. */
   hp?: { current: number; max: number };
+  /** Short badge labels (e.g. "BL", "EX3") for the combatant's active
+   * conditions — already derived by the caller from the rules-engine
+   * catalog, same values-not-lookups split as `hp`. Absent/empty renders
+   * no badges. */
+  conditions?: readonly string[];
 }
 
 const HP_BAR_WIDTH = 0.7;
@@ -311,6 +316,73 @@ const TokenHpBar = memo(function TokenHpBar({ current, max }: { current: number;
   );
 });
 
+const CONDITION_BADGE_WIDTH = 0.24;
+const CONDITION_BADGE_HEIGHT = 0.13;
+const CONDITION_BADGE_GAP = 0.03;
+// Wrap so a heavily-afflicted token grows upward in tidy rows instead of
+// one ever-wider strip drifting over its neighbors.
+const CONDITION_BADGES_PER_ROW = 4;
+
+// 2D-canvas textures rather than a 3D text renderer: the labels are static
+// two/three-character strings, so one cached texture per distinct label
+// costs nothing per frame and needs no font asset to load.
+const badgeTextureCache = new Map<string, CanvasTexture>();
+
+function conditionBadgeTexture(label: string): CanvasTexture {
+  let texture = badgeTextureCache.get(label);
+  if (!texture) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 96;
+    canvas.height = 52;
+    const context = canvas.getContext("2d");
+    if (context) {
+      context.fillStyle = "#16102a";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.strokeStyle = BEACON_COLOR;
+      context.lineWidth = 4;
+      context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+      context.fillStyle = BEACON_COLOR;
+      context.font = "bold 30px monospace";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(label, canvas.width / 2, canvas.height / 2 + 2);
+    }
+    texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    badgeTextureCache.set(label, texture);
+  }
+  return texture;
+}
+
+// Billboarded like the HP bar, and positioned above it so the two never
+// overlap; extra rows stack upward, away from the bar.
+const TokenConditionBadges = memo(function TokenConditionBadges({ labels }: { labels: string }) {
+  const items = labels.split(",");
+  return (
+    <Billboard position={[0, 1.02, 0]}>
+      {items.map((label, index) => {
+        const row = Math.floor(index / CONDITION_BADGES_PER_ROW);
+        const rowStart = row * CONDITION_BADGES_PER_ROW;
+        const rowCount = Math.min(CONDITION_BADGES_PER_ROW, items.length - rowStart);
+        const column = index - rowStart;
+        return (
+          <mesh
+            key={`${label}-${index}`}
+            position={[
+              (column - (rowCount - 1) / 2) * (CONDITION_BADGE_WIDTH + CONDITION_BADGE_GAP),
+              row * (CONDITION_BADGE_HEIGHT + CONDITION_BADGE_GAP),
+              0,
+            ]}
+          >
+            <planeGeometry args={[CONDITION_BADGE_WIDTH, CONDITION_BADGE_HEIGHT]} />
+            <meshBasicMaterial map={conditionBadgeTexture(label)} />
+          </mesh>
+        );
+      })}
+    </Billboard>
+  );
+});
+
 // A pawn silhouette (disc + stem + head) rather than a flat disc: the seat
 // cameras view the table at a shallow angle, where a flat disc on a small
 // cell all but disappears.
@@ -327,6 +399,9 @@ const TokenMarker = memo(function TokenMarker({
   // memo's shallow compare keeps working.
   hpCurrent,
   hpMax,
+  // Comma-joined into one primitive for the same shallow-compare reason —
+  // a fresh array prop every render would defeat the memo.
+  conditionLabels,
   onPointerDown,
 }: {
   id: string;
@@ -339,6 +414,7 @@ const TokenMarker = memo(function TokenMarker({
   draggable: boolean;
   hpCurrent: number | null;
   hpMax: number | null;
+  conditionLabels: string;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -358,6 +434,7 @@ const TokenMarker = memo(function TokenMarker({
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} roughness={0.35} />
       </mesh>
       {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
+      {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
       {draggable ? (
         // Same uniform-hit-box reasoning as ObjectMarker: raycasting the
         // pawn's thin stem makes grabbing fiddly at table scale. Attached
@@ -526,6 +603,7 @@ export function MapSurface({
           draggable={Boolean(onTokenPointerDown) && (token.draggable ?? false)}
           hpCurrent={token.hp?.current ?? null}
           hpMax={token.hp?.max ?? null}
+          conditionLabels={token.conditions?.join(",") ?? ""}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
         />
       ))}

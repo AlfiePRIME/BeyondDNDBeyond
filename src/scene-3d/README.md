@@ -120,3 +120,16 @@ leak to guard against. The field is simply omitted — no bar — for NPC tokens
 exists for them yet) and for PC tokens whose character the viewer can't read under RLS; as
 always, the caller derives the values (`GameRoom`'s character rows) and the scene just draws
 what it's given.
+
+As of Prompt 47: `MapSurfaceToken` gained `conditions?: readonly string[]` — short
+already-derived badge labels ("BL", "PS", "EX3"; the caller maps condition keys through the
+rules-engine catalog's abbreviations, same values-not-lookups split as `hp`) rendered as a
+billboarded row of chips above the HP bar. Chips wrap into rows of four that stack UPWARD,
+away from the bar, so many simultaneous conditions never overlap each other, the bar, or a
+neighboring token's row. Each chip is a small plane textured by a cached 2D-canvas draw
+(dark fill, amber border/text) rather than a 3D text renderer — the labels are a handful of
+static short strings, so one texture per distinct label costs nothing per frame and needs
+no font asset. Inside `TokenMarker` the array rides as one comma-joined string prop,
+keeping the memo's shallow compare effective (the `hpCurrent`/`hpMax` primitive-splitting
+reasoning). Like the HP bar, this lives on the shared surface on purpose: only the Game
+Room ever renders tokens, so there is no editor leak to guard.

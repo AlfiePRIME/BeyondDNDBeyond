@@ -32,6 +32,10 @@ export type {
   Spell,
   EquipmentChoice,
   ClassStartingEquipment,
+  ConditionKey,
+  ConditionEffects,
+  ConditionDefinition,
+  ExhaustionLevel,
 } from "./srd/types";
 
 export { RACES } from "./srd/races";
@@ -39,6 +43,14 @@ export { CLASSES } from "./srd/classes";
 export { SKILLS, SKILL_ABILITY } from "./srd/skills";
 export { SPELLS } from "./srd/spells";
 export { STARTING_EQUIPMENT } from "./srd/equipment";
+export {
+  CONDITIONS,
+  CONDITION_BY_KEY,
+  EXHAUSTION_KEY,
+  EXHAUSTION_LEVEL_DESCRIPTIONS,
+  MAX_EXHAUSTION_LEVEL,
+  exhaustionEffects,
+} from "./srd/conditions";
 
 export { abilityModifier, proficiencyBonus } from "./abilityScores";
 export { levelOneHitPoints } from "./hitPoints";

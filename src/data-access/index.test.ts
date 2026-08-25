@@ -51,11 +51,17 @@ import {
   setHandoutRevealed,
   deleteHandout,
   getActiveCombatEncounter,
+  getActiveCombatantForCharacter,
   listCombatCombatants,
   startCombat,
   advanceTurn,
   endCombat,
   setCombatantInitiative,
+  listCombatantConditions,
+  applyCondition,
+  removeCondition,
+  applyExhaustionDelta,
+  subscribeToCombatantConditionChanges,
   listDmNotes,
   createDmNote,
   updateDmNote,
@@ -112,6 +118,15 @@ describe("data-access module", () => {
     expect(advanceTurn).toBeTypeOf("function");
     expect(endCombat).toBeTypeOf("function");
     expect(setCombatantInitiative).toBeTypeOf("function");
+  });
+
+  it("exports the combatant condition functions from the main barrel", () => {
+    expect(getActiveCombatantForCharacter).toBeTypeOf("function");
+    expect(listCombatantConditions).toBeTypeOf("function");
+    expect(applyCondition).toBeTypeOf("function");
+    expect(removeCondition).toBeTypeOf("function");
+    expect(applyExhaustionDelta).toBeTypeOf("function");
+    expect(subscribeToCombatantConditionChanges).toBeTypeOf("function");
   });
 
   it("treats a profile with no display name as incomplete", () => {

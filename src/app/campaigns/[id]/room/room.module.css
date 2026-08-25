@@ -194,6 +194,69 @@
   border-radius: 6px;
 }
 
+.conditionBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.conditionControls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conditionToggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.conditionToggle {
+  padding: 2px 8px;
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  background: var(--surface2);
+  border: 1px solid color-mix(in srgb, var(--orange) 30%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.conditionToggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.conditionToggleActive {
+  color: var(--orange);
+  border-color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 16%, transparent);
+}
+
+.exhaustionRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.exhaustionLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.exhaustionValue {
+  min-width: 18px;
+  text-align: center;
+  font-family: var(--font-m);
+  font-size: 13px;
+  color: var(--orange);
+}
+
 .handoutForm {
   display: flex;
   flex-direction: column;

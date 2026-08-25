@@ -2,9 +2,11 @@ import { notFound, redirect } from "next/navigation";
 import { CLASSES, spellSlotsForClass, type ClassName, type SpellSlotLevel } from "@/rules-engine";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
+  getActiveCombatantForCharacter,
   getCharacter,
   isDM,
   listCharacterResources,
+  listCombatantConditions,
   createCharacterResource,
   type CharacterResource,
 } from "@/data-access";
@@ -79,11 +81,17 @@ export default async function CharacterSheetPage({
     }
   }
 
+  // Conditions hang off the character's combatant row in the currently
+  // active encounter, if any — a character not in combat simply has none.
+  const combatant = await getActiveCombatantForCharacter(supabase, campaignId, characterId);
+  const initialConditions = combatant ? await listCombatantConditions(supabase, [combatant.id]) : [];
+
   return (
     <CharacterSheet
       campaignId={campaignId}
       initialCharacter={character}
       initialResources={resources}
+      initialConditions={initialConditions}
       canEdit={canEdit}
     />
   );
