@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { Panel } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { isDM, listMapsForCampaign } from "@/data-access";
+import { isDM, listMapFolders, listMapsForCampaign } from "@/data-access";
 import { MapsManager } from "./MapsManager";
 import styles from "./maps.module.css";
 
@@ -26,7 +26,10 @@ export default async function CampaignMapsPage({ params }: { params: Promise<{ i
   // member can browse) — non-DM members get the same 404 as non-members.
   if (!(await isDM(supabase, campaignId, user.id))) notFound();
 
-  const maps = await listMapsForCampaign(supabase, campaignId);
+  const [maps, folders] = await Promise.all([
+    listMapsForCampaign(supabase, campaignId),
+    listMapFolders(supabase, campaignId),
+  ]);
 
   return (
     <div className={styles.page}>
@@ -40,7 +43,7 @@ export default async function CampaignMapsPage({ params }: { params: Promise<{ i
             Battle maps for {campaign.name} — sculpt elevation and paint terrain, then pick one to
             go live during a session.
           </p>
-          <MapsManager campaignId={campaignId} initialMaps={maps} />
+          <MapsManager campaignId={campaignId} initialMaps={maps} initialFolders={folders} />
         </Panel>
       </main>
     </div>

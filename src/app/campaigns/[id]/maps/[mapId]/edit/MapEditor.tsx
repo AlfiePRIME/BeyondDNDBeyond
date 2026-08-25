@@ -31,6 +31,7 @@ import {
   type EditorTool,
 } from "./lib/cellGrid";
 import type { PaletteAsset } from "./lib/assetUrl";
+import { captureMapThumbnail } from "../../lib/thumbnail";
 import { BehaviorEditor } from "./BehaviorEditor";
 import styles from "./editor.module.css";
 
@@ -133,6 +134,30 @@ export function MapEditor({
     moveArmedRef.current = moveArmed;
     regionRef.current = region;
   }, [tool, brush, selectedAssetId, selectedObjectId, moveArmed, region]);
+
+  // Tracks the latest persisted snapshot across successive captures so each
+  // replaces its predecessor's object. Best-effort by design: a thumbnail is
+  // cosmetic, so a failed capture must never surface as a failed save.
+  const thumbnailRefRef = useRef(map.thumbnail_ref);
+  const refreshThumbnail = useCallback(
+    async (supabase: SupabaseClient) => {
+      try {
+        thumbnailRefRef.current = await captureMapThumbnail(
+          supabase,
+          {
+            id: map.id,
+            grid_width: map.grid_width,
+            grid_height: map.grid_height,
+            thumbnail_ref: thumbnailRefRef.current,
+          },
+          overlayRef.current
+        );
+      } catch {
+        // Next successful save will retry; the picker keeps the old image.
+      }
+    },
+    [map.id, map.grid_width, map.grid_height]
+  );
 
   // The generate tool's in-progress drag — the bounding box of every cell
   // the stroke has touched so far; null between strokes.
@@ -498,6 +523,9 @@ export function MapEditor({
       }
       overlayRef.current = mergedOverlay;
       setOverlay(mergedOverlay);
+      // Accepting persists cells just like Save does, so it refreshes the
+      // snapshot too.
+      await refreshThumbnail(supabase);
       // Accepting IS the commit for these cells — any manual edits the DM
       // had pending on the same cells were just overwritten and persisted.
       setDirty((prev) => {
@@ -569,6 +597,7 @@ export function MapEditor({
     try {
       const supabase = createBrowserSupabaseClient();
       await upsertMapCells(supabase, rowsForSave(map.id, overlayRef.current, dirty));
+      await refreshThumbnail(supabase);
       setDirty(new Set());
       setSaved(true);
     } catch (err) {

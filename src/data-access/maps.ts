@@ -7,6 +7,15 @@ export interface CampaignMap {
   name: string;
   grid_width: number;
   grid_height: number;
+  folder_id: string | null;
+  thumbnail_ref: string | null;
+  created_at: string;
+}
+
+export interface MapFolder {
+  id: string;
+  campaign_id: string;
+  name: string;
   created_at: string;
 }
 
@@ -92,6 +101,139 @@ export async function setLiveMap(
 
   if (error) throw error;
   if (count === 0) throw new Error("Only the campaign's DM can change the live map.");
+}
+
+/** DM-only in both directions — map_folders' RLS (0023) hides every row
+ * from non-DMs, matching the DM-only map list this organizes. */
+export async function listMapFolders(
+  supabase: SupabaseClient,
+  campaignId: string
+): Promise<MapFolder[]> {
+  const { data, error } = await supabase
+    .from("map_folders")
+    .select()
+    .eq("campaign_id", campaignId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function createMapFolder(
+  supabase: SupabaseClient,
+  params: { campaignId: string; name: string }
+): Promise<MapFolder> {
+  const { data, error } = await supabase
+    .from("map_folders")
+    .insert({ campaign_id: params.campaignId, name: params.name.trim() })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function renameMapFolder(
+  supabase: SupabaseClient,
+  folderId: string,
+  name: string
+): Promise<MapFolder> {
+  const { data, error } = await supabase
+    .from("map_folders")
+    .update({ name: name.trim() })
+    .eq("id", folderId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/** Maps in the folder survive — folder_id's on delete set null unfiles
+ * them, so they reappear under the picker's "Unfiled" group. */
+export async function deleteMapFolder(supabase: SupabaseClient, folderId: string): Promise<void> {
+  const { error } = await supabase.from("map_folders").delete().eq("id", folderId);
+  if (error) throw error;
+}
+
+/** Files the map into a folder, or unfiles it with null. */
+export async function setMapFolder(
+  supabase: SupabaseClient,
+  mapId: string,
+  folderId: string | null
+): Promise<CampaignMap> {
+  const { data, error } = await supabase
+    .from("campaign_maps")
+    .update({ folder_id: folderId })
+    .eq("id", mapId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function setMapThumbnail(
+  supabase: SupabaseClient,
+  mapId: string,
+  thumbnailRef: string | null
+): Promise<CampaignMap> {
+  const { data, error } = await supabase
+    .from("campaign_maps")
+    .update({ thumbnail_ref: thumbnailRef })
+    .eq("id", mapId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Uploads a canvas-exported PNG snapshot to the map-thumbnails bucket
+ * (0024) and returns the object path to store as thumbnail_ref. Same
+ * fresh-unique-path-per-upload scheme as the other buckets, but map-scoped
+ * ({map_id}/{uuid}.png) so the bucket's RLS can reuse can_write_map
+ * directly. Takes a Blob, not a File — the source is canvas.toBlob(), not
+ * a file input.
+ */
+export async function uploadMapThumbnailFile(
+  supabase: SupabaseClient,
+  mapId: string,
+  blob: Blob
+): Promise<string> {
+  const path = `${mapId}/${crypto.randomUUID()}.png`;
+  const { error } = await supabase.storage
+    .from("map-thumbnails")
+    .upload(path, blob, { contentType: "image/png" });
+
+  if (error) throw error;
+  return path;
+}
+
+/** Best-effort cleanup when a fresh snapshot replaces an old one — each
+ * upload takes a new path, so stale objects otherwise accumulate forever. */
+export async function deleteMapThumbnailFile(supabase: SupabaseClient, path: string): Promise<void> {
+  const { error } = await supabase.storage.from("map-thumbnails").remove([path]);
+  if (error) throw error;
+}
+
+/**
+ * Signed download URL for a map thumbnail — same private-bucket signed-URL
+ * model (and no-auto-refresh expiry caveat) as getMapAssetSignedUrl; the
+ * bucket's RLS limits reads via can_read_map.
+ */
+export async function getMapThumbnailSignedUrl(
+  supabase: SupabaseClient,
+  path: string,
+  expiresInSeconds: number
+): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from("map-thumbnails")
+    .createSignedUrl(path, expiresInSeconds);
+
+  if (error) throw error;
+  return data.signedUrl;
 }
 
 /**

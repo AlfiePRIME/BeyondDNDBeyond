@@ -68,6 +68,26 @@ file URL so Storage RLS stays the authority). The session log UI (same-prompt si
 is a plain page at `src/app/campaigns/[id]/session-log/` over the existing
 `session_log` CRUD — no realtime, chronological oldest-first.
 
+As of Prompt 39, `maps.ts` also owns map organization and thumbnails: a `map_folders` table
+(migration `0023_map_folders.sql`) with DM-only RLS in BOTH directions — stricter than
+`campaign_maps`' member-sees-live-map SELECT carve-out, because the map list itself is
+DM-only end to end — plus `campaign_maps.folder_id` (`on delete set null`, so deleting a
+folder unfiles its maps rather than deleting them) and `campaign_maps.thumbnail_ref` (a
+Storage object path). Folder CRUD is `listMapFolders`/`createMapFolder`/`renameMapFolder`/
+`deleteMapFolder`, with `setMapFolder(mapId, folderId | null)` as the file/unfile action.
+Thumbnails live in a private `map-thumbnails` bucket (migration
+`0024_map_thumbnails_storage.sql`, PNG only, 2MB cap) whose paths are `{map_id}/{uuid}.png`
+— map-scoped, unlike the campaign-scoped buckets — so its policies reuse the existing
+`can_read_map`/`can_write_map` helpers (0015) directly instead of a bespoke join function
+like handouts needed. `uploadMapThumbnailFile` (takes a `Blob`: the source is
+`canvas.toBlob()`, not a file input) / `getMapThumbnailSignedUrl` /
+`deleteMapThumbnailFile` mirror the established upload/signed-url pairs, and
+`setMapThumbnail` moves the ref. Generation is a plain 2D-canvas top-down render (
+`src/app/campaigns/[id]/maps/lib/thumbnail.ts`) replicating `MapSurface`'s `cellColor`
+palette and linear-space lerp exactly; the editor recaptures on every cell save and
+AI-draft accept, and map creation captures an initial all-flat snapshot. The folder-grouped
+picker UI replaces the flat list at `src/app/campaigns/[id]/maps/`.
+
 This is a schema/RLS/data-access-only prompt (UI for these tables is deferred: NPC roster
 in 33, lore pages in 34, and further prompts for quests/session log/handouts/notes/house
 rules). Every write function is DM-gated purely by the table's own RLS (0020) — no RPC

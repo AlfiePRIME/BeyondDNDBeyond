@@ -78,8 +78,18 @@ export {
   listMapCells,
   upsertMapCells,
   setLiveMap,
+  listMapFolders,
+  createMapFolder,
+  renameMapFolder,
+  deleteMapFolder,
+  setMapFolder,
+  setMapThumbnail,
+  uploadMapThumbnailFile,
+  deleteMapThumbnailFile,
+  getMapThumbnailSignedUrl,
   type CampaignMap,
   type MapCell,
+  type MapFolder,
 } from "./maps";
 export {
   listMapObjects,
