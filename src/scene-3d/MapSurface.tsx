@@ -51,6 +51,19 @@ const colorCache = new Map<string, string>();
  * CampaignMember precedent — scene-3d stays decoupled from data-access). */
 export type MapSurfaceLightLevel = "bright" | "dim" | "dark";
 
+/**
+ * Per-viewer visibility treatment for a cell (Prompt 58) — a flat string
+ * primitive (the hpCurrent/hpMax memo reasoning), where absent means fully
+ * visible, normal rendering. `"dim"` is a currently-but-dimly-perceived
+ * LIVE cell: darkened and partially desaturated, hue retained. `"remembered"`
+ * is a cell rendered from the viewer's seen-cells memory rather than live
+ * state: fully grayscale and darker still, so "I remember this" can never
+ * be mistaken for "I can dimly see this now". A not-perceived,
+ * never-seen cell carries neither value — the caller simply omits it from
+ * the cells array, so nothing renders at all.
+ */
+export type MapSurfaceVisibility = "dim" | "remembered";
+
 // Authored-light darkening for the map EDITOR's authoring tint (see
 // MapSurfaceCell.light) — bright is untouched, dim/dark scale the terrain
 // color down so the DM can see what they've painted.
@@ -63,9 +76,10 @@ const LIGHT_SCALE: Record<MapSurfaceLightLevel, number> = {
 function cellColor(
   terrain: TerrainType,
   elevation: number,
-  light: MapSurfaceLightLevel | undefined
+  light: MapSurfaceLightLevel | undefined,
+  visibility: MapSurfaceVisibility | undefined
 ): string {
-  const key = `${terrain}:${elevation}:${light ?? "none"}`;
+  const key = `${terrain}:${elevation}:${light ?? "none"}:${visibility ?? "full"}`;
   let hex = colorCache.get(key);
   if (!hex) {
     const [base, high] =
@@ -75,6 +89,14 @@ function cellColor(
     // alone is invisible.
     const color = new Color(base).lerp(new Color(high), Math.min(elevation * 0.11, 0.66));
     if (light) color.multiplyScalar(LIGHT_SCALE[light]);
+    // Applied AFTER the light tint: a remembered cell renders its
+    // remembered light level, then the whole result goes to memory-gray.
+    if (visibility) {
+      const hsl = { h: 0, s: 0, l: 0 };
+      color.getHSL(hsl);
+      if (visibility === "dim") color.setHSL(hsl.h, hsl.s * 0.45, hsl.l * 0.42);
+      else color.setHSL(hsl.h, 0, hsl.l * 0.3); // remembered — see MapSurfaceVisibility
+    }
     hex = `#${color.getHexString()}`;
     colorCache.set(key, hex);
   }
@@ -89,11 +111,20 @@ export interface MapSurfaceCell {
   /** Renders the not-yet-committed tint — the editor's AI-generated preview
    * cells, distinct from both committed terrain and the hover glow. */
   preview?: boolean;
-  /** Authored ambient light (Prompt 55) as an EDITOR-ONLY authoring tint:
-   * only the map editor's buildDenseCells call passes it, so the DM can see
-   * the light levels they paint. The game table never sets it — rendering
-   * actual illumination/visibility on the live table is Prompt 56's job. */
+  /** Authored ambient light (Prompt 55) rendered as a darkening tint. Two
+   * callers set it: the map editor's buildDenseCells call (an authoring
+   * tint, so the DM can see the light levels they paint), and — as of
+   * Prompt 58, which owns live-table illumination/visibility rendering —
+   * the game table's REMEMBERED cells, which carry the light level from
+   * the viewer's seen-cells snapshot rather than live state. Live table
+   * cells the viewer currently perceives still never set it: their
+   * appearance is the terrain color plus the `visibility` treatment. */
   light?: MapSurfaceLightLevel;
+  /** Per-viewer perception treatment (Prompt 58) — see
+   * `MapSurfaceVisibility`. Absent renders normally; the game table sets
+   * it per cell from the viewer's computed visibility tier, and the editor
+   * never sets it. */
+  visibility?: MapSurfaceVisibility;
 }
 
 interface CellBlockProps {
@@ -107,6 +138,7 @@ interface CellBlockProps {
   terrain: TerrainType;
   preview: boolean;
   light: MapSurfaceLightLevel | undefined;
+  visibility: MapSurfaceVisibility | undefined;
   onDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
   onOver?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
 }
@@ -126,6 +158,7 @@ const CellBlock = memo(function CellBlock({
   terrain,
   preview,
   light,
+  visibility,
   onDown,
   onOver,
 }: CellBlockProps) {
@@ -153,7 +186,7 @@ const CellBlock = memo(function CellBlock({
           Preview cells glow purple (hover's teal wins while hovered) — the
           "not committed yet" tint matches the ghost objects' wireframe hue. */}
       <meshStandardMaterial
-        color={cellColor(terrain, elevation, light)}
+        color={cellColor(terrain, elevation, light, visibility)}
         emissive={hoverLit ? TEAL : PURPLE}
         emissiveIntensity={hoverLit ? 0.4 : preview ? 0.3 : 0}
         roughness={0.65}
@@ -181,6 +214,13 @@ export interface MapSurfaceObject {
   ghost?: boolean;
   /** Shows an activation beacon above the model (a switched-on object). */
   active?: boolean;
+  /** Dimly-perceived treatment (Prompt 58): the object sits on a cell the
+   * viewer only dimly sees, so a translucent shadow shroud darkens the
+   * model — a glTF's own materials can't be recolored the way cells are,
+   * so the darkening composites over it (the beacon/ghost extra-mesh
+   * pattern). An object on an imperceptible cell is omitted by the caller
+   * entirely, never dimmed. */
+  dimmed?: boolean;
 }
 
 interface ObjectMarkerProps {
@@ -195,6 +235,7 @@ interface ObjectMarkerProps {
   selectable: boolean;
   ghost: boolean;
   active: boolean;
+  dimmed: boolean;
   onSelect: (id: string, event: ThreeEvent<PointerEvent>) => void;
 }
 
@@ -206,6 +247,10 @@ const HIT_BOX_HEIGHT = 0.9;
 // Beacon color mirrors DIFFICULT_HIGH's warm family on purpose: "switched
 // on" needs to read against both the cool cell palette and any model color.
 const BEACON_COLOR = "#ffbf47";
+
+// The shroud reuses GameTableScene's room-background hue (--surface2) so a
+// dimmed prop reads as "swallowed by the room's darkness", not tinted.
+const DIM_SHROUD_COLOR = "#0d0520";
 
 // The whole marker group scales uniformly with cell size, so a normalized
 // prop keeps the same fit-inside-its-cell proportions at any footprint.
@@ -221,6 +266,7 @@ const ObjectMarker = memo(function ObjectMarker({
   selectable,
   ghost,
   active,
+  dimmed,
   onSelect,
 }: ObjectMarkerProps) {
   const [hovered, setHovered] = useState(false);
@@ -238,6 +284,12 @@ const ObjectMarker = memo(function ObjectMarker({
       ) : (
         <PlacedObject url={url} />
       )}
+      {dimmed ? (
+        <mesh position={[0, HIT_BOX_HEIGHT / 2, 0]}>
+          <boxGeometry args={[PLACED_OBJECT_SIZE, HIT_BOX_HEIGHT, PLACED_OBJECT_SIZE]} />
+          <meshBasicMaterial color={DIM_SHROUD_COLOR} transparent opacity={0.6} depthWrite={false} />
+        </mesh>
+      ) : null}
       {active ? (
         <mesh position={[0, HIT_BOX_HEIGHT + 0.22, 0]}>
           <sphereGeometry args={[0.11, 16, 16]} />
@@ -285,6 +337,24 @@ const ALLEGIANCE_COLOR: Record<MapTokenAllegiance, string> = {
   neutral: "#ff9a3c",
 };
 
+// The dim-cell treatment for a pawn (Prompt 58): the same darken-and-
+// desaturate transform cellColor applies to a "dim" cell, precomputed per
+// allegiance so TokenMarker stays a pure primitive-prop render. Emissive
+// intensity is also cut (see TokenMarker) so a dim pawn stops glowing.
+function dimmedHex(hex: string): string {
+  const color = new Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  color.getHSL(hsl);
+  color.setHSL(hsl.h, hsl.s * 0.45, hsl.l * 0.42);
+  return `#${color.getHexString()}`;
+}
+
+const DIMMED_ALLEGIANCE_COLOR: Record<MapTokenAllegiance, string> = {
+  party: dimmedHex(ALLEGIANCE_COLOR.party),
+  hostile: dimmedHex(ALLEGIANCE_COLOR.hostile),
+  neutral: dimmedHex(ALLEGIANCE_COLOR.neutral),
+};
+
 export interface MapSurfaceToken {
   id: string;
   x: number;
@@ -315,6 +385,12 @@ export interface MapSurfaceToken {
    * derived by the caller from the linked character's concentrating_on,
    * same visibility caveats as `hp`. Absent renders no chip. */
   concentrating?: boolean;
+  /** Dimly-perceived treatment (Prompt 58): the token stands on a cell the
+   * viewer only dimly sees, so the pawn renders in the desaturated
+   * allegiance color with its glow cut. A token on an imperceptible cell
+   * is omitted by the caller entirely — remembered cells deliberately
+   * carry no token memory (the Prompt 55 schema captures terrain only). */
+  dimmed?: boolean;
 }
 
 const HP_BAR_WIDTH = 0.7;
@@ -542,6 +618,7 @@ const TokenMarker = memo(function TokenMarker({
   // One flat label string, "" for none — same shallow-compare reasoning.
   deathSaveLabel,
   concentrating,
+  dimmed,
   onPointerDown,
 }: {
   id: string;
@@ -557,23 +634,27 @@ const TokenMarker = memo(function TokenMarker({
   conditionLabels: string;
   deathSaveLabel: string;
   concentrating: boolean;
+  dimmed: boolean;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
 }) {
   const [hovered, setHovered] = useState(false);
-  const color = ALLEGIANCE_COLOR[allegiance];
+  const color = dimmed ? DIMMED_ALLEGIANCE_COLOR[allegiance] : ALLEGIANCE_COLOR[allegiance];
+  // A dim pawn keeps a sliver of glow — fully zero reads as a different
+  // material, not a darker one.
+  const emissiveScale = dimmed ? 0.2 : 1;
   return (
     <group position={[worldX, topY, worldZ]} scale={scale}>
       <mesh position={[0, 0.05, 0]}>
         <cylinderGeometry args={[0.3, 0.36, 0.1, 20]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} roughness={0.45} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
       </mesh>
       <mesh position={[0, 0.26, 0]}>
         <cylinderGeometry args={[0.12, 0.16, 0.32, 12]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} roughness={0.45} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
       </mesh>
       <mesh position={[0, 0.5, 0]}>
         <sphereGeometry args={[0.17, 16, 16]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} roughness={0.35} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5 * emissiveScale} roughness={0.35} />
       </mesh>
       {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
       {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
@@ -712,6 +793,7 @@ export function MapSurface({
           terrain={cell.terrain}
           preview={cell.preview ?? false}
           light={cell.light}
+          visibility={cell.visibility}
           onDown={onCellPointerDown}
           onOver={onCellPointerOver}
         />
@@ -731,6 +813,7 @@ export function MapSurface({
           selectable={Boolean(onSelectObject) && object.selectable !== false}
           ghost={object.ghost ?? false}
           active={object.active ?? false}
+          dimmed={object.dimmed ?? false}
           onSelect={onSelectObject ?? NOOP_SELECT}
         />
       ))}
@@ -751,6 +834,7 @@ export function MapSurface({
           conditionLabels={token.conditions?.join(",") ?? ""}
           deathSaveLabel={token.deathSaveLabel ?? ""}
           concentrating={token.concentrating ?? false}
+          dimmed={token.dimmed ?? false}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
         />
       ))}

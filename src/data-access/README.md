@@ -608,3 +608,14 @@ the caller's own rows (RLS-guaranteed); `recordSeenCells` upserts on the unique
 constraint, writing `seen_at` explicitly since column defaults only apply on the INSERT
 path of an upsert. Nothing calls either yet — they exist, typed and verified, for the
 prompt that renders from them.
+
+As of Prompt 58: no new tables or CRUD — the Prompt 55 vision surfaces gained their first
+real callers. The Game Room now loads `listLightSources` alongside the live map's
+cells/objects/tokens (page load and every `refreshLiveMap`), and `mapSeenCells.ts` is no
+longer call-less: `listSeenCells` loads the viewing player's memory of the live map on
+entry, and `recordSeenCells` upserts newly-perceived cells in debounced batches (movement
+recomputes perception far too often to write per-recompute; eventual consistency is the
+design bar). Both files' "nothing calls this yet" notes are updated accordingly. The
+masking rendered from this data is client-side presentation by explicit owner preference —
+the RLS posture here (every member reads the full live map; seen-cells rows private to
+their owner) is deliberately unchanged.

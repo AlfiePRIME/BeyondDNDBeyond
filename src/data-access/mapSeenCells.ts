@@ -4,10 +4,11 @@ import type { TerrainType } from "@/rules-engine";
 
 /**
  * One player's memory of one map cell (Prompt 55, migration 0036): the
- * terrain/elevation/light snapshot from the last time they perceived it, so
- * a future fog-of-war prompt can redraw explored-but-not-currently-visible
- * cells from memory. Currently UNREAD by any rendering — this file is the
- * thin CRUD that prompt will need, nothing calls it yet.
+ * terrain/elevation/light snapshot from the last time they perceived it.
+ * As of Prompt 58 the Game Room is the caller: it redraws
+ * explored-but-not-currently-visible cells from these rows (the
+ * "remembered" render state) and records newly-perceived cells in
+ * debounced batches.
  *
  * RLS is deliberately NOT the usual everyone-sees-everything posture:
  * SELECT/INSERT/UPDATE are gated to the caller's OWN rows (user_id =

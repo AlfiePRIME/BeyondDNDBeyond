@@ -5,8 +5,8 @@ import { gridDistanceFeet, type GridPoint } from "./movement";
 // condition currently blocks their vision outright), and a cell's ambient
 // light plus whatever resolved light sources reach it, what visibility
 // tier does the observer get on that cell? DB-free like quickActions.ts/
-// opportunityAttacks.ts — the caller (a future Game Room/map-rendering
-// layer, Prompt 58) resolves every object/token-anchored light source to a
+// opportunityAttacks.ts — the caller (the Game Room's vision layer, wired
+// up in Prompt 58) resolves every object/token-anchored light source to a
 // concrete position first (this module has no idea what a map_objects row
 // or a token is), exactly like computeQuickActions/computeOpportunityAttacks
 // take pre-resolved hostile/target positions rather than looking them up.

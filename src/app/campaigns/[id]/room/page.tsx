@@ -10,6 +10,7 @@ import {
   listCombatCombatants,
   listCombatantConditions,
   listHandouts,
+  listLightSources,
   listMapCells,
   listMapObjects,
   listMapsForCampaign,
@@ -98,12 +99,15 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   if (campaign.live_map) {
     const map = await getMap(supabase, campaign.live_map);
     if (map) {
-      const [cells, objects, tokens] = await Promise.all([
+      const [cells, objects, tokens, lightSources] = await Promise.all([
         listMapCells(supabase, map.id),
         listMapObjects(supabase, map.id),
         listMapTokens(supabase, map.id),
+        // Loaded for the client's per-player vision computation (Prompt 58)
+        // — members read the live map's lights under the 0036 RLS.
+        listLightSources(supabase, map.id),
       ]);
-      initialLiveMap = { map, cells, objects, tokens };
+      initialLiveMap = { map, cells, objects, tokens, lightSources };
     }
   }
 

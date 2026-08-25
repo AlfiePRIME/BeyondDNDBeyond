@@ -145,3 +145,28 @@ appearance is untouched by this prompt, because rendering actual illumination/vi
 from the lighting data model is Prompt 56's job. Unlike the reference image this rides
 the shared `MapSurface` (a per-cell color input, not a whole new concept), with the
 editor-only guarantee held at the call site the way `preview` already is.
+
+As of Prompt 58: the live table renders per-player vision. `MapSurfaceCell` gained an
+optional `visibility` field (`MapSurfaceVisibility`, `"dim" | "remembered"`, a flat string
+primitive per the memo convention): `"dim"` darkens and partially desaturates the cell's
+terrain color (hue retained — "I can dimly see this now"), `"remembered"` renders it fully
+grayscale and darker still ("I remember this, it isn't live"), so the two states can never
+be mistaken for each other or for normal rendering; a cell the viewer can't currently
+perceive and has never seen is simply OMITTED from the cells array by the caller, so nothing
+renders at all (the grid overlay follows automatically, since it builds from the same
+array). Remembered cells arrive from the caller carrying their seen-cells SNAPSHOT
+terrain/elevation/light — the `light` field is therefore no longer editor-exclusive: the
+game table sets it on remembered cells only (its doc comment, which previously deferred
+live-table illumination to "Prompt 56", now says so). `MapSurfaceToken` and
+`MapSurfaceObject` gained a `dimmed` flag: a dim pawn renders in a precomputed desaturated
+allegiance color with its emissive glow cut to a sliver, and a dim object composites a
+translucent room-dark shroud box over its model (a glTF's own materials can't be recolored
+the way cells are — the beacon/ghost extra-mesh pattern); tokens and objects on
+imperceptible cells are omitted entirely, and remembered cells deliberately never carry
+either (the Prompt 55 seen-cells schema captures terrain only). WHO sees what is entirely
+the app layer's call, as always: `GameRoom` computes tiers per viewer through
+`@/rules-engine` perception (the DM's own client and a player with no placed token pass an
+unmasked model — full view, by design), and this masking is deliberately CLIENT-SIDE
+presentation over data every member's browser already holds in full, the project owner's
+explicit trusted-friend-group trade-off rather than a security boundary — documented in
+`GameRoom`'s vision block and the main README, not something to "fix" server-side.

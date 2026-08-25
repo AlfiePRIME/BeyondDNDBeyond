@@ -11,8 +11,9 @@ export type LightSourceBrightness = (typeof LIGHT_SOURCE_BRIGHTNESSES)[number];
  * — a carried torch moves with its carrier). The three-way XOR is a CHECK
  * constraint, the map_tokens character_id/npc_name pattern. RLS mirrors
  * map_cells/map_objects exactly: members read the live map's lights,
- * DM-only writes. Nothing renders illumination from these yet — the
- * perception/vision engine is Prompt 56.
+ * DM-only writes. As of Prompt 58 the Game Room reads these for per-player
+ * vision rendering, resolving each anchor to its carrier's CURRENT
+ * position app-side before feeding rules-engine perception.
  */
 export interface LightSource {
   id: string;

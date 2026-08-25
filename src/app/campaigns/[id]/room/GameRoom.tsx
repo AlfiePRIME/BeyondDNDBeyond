@@ -22,16 +22,19 @@ import {
   listCharactersForCampaign,
   listCombatCombatants,
   listHandouts,
+  listLightSources,
   listMapCells,
   listMapObjects,
   listMapTokens,
   listMapTransitions,
+  listSeenCells,
   moveCombatToken,
   moveMapToken,
   parseMapObjectBehavior,
   listCombatantConditions,
   placeCharacterToken,
   placeNpcToken,
+  recordSeenCells,
   removeCondition,
   setActionEconomyStrict,
   setCombatantEconomyFlag,
@@ -51,11 +54,13 @@ import {
   type CombatCombatant,
   type CombatantEconomyFlag,
   type Handout,
+  type LightSource,
   type MapCell,
   type MapObject,
   type MapToken,
   type MapTransition,
   type RollLogEntry,
+  type SeenCellSnapshot,
   type SupabaseClient,
   type TokenAllegiance,
 } from "@/data-access";
@@ -64,12 +69,15 @@ import {
   CONDITION_BY_KEY,
   EXHAUSTION_KEY,
   computeOpportunityAttacks,
+  computeVisibilityTiers,
   meleeReachFeet,
   pathMovementCost,
   straightCellPath,
   type AdvantageMode,
   type ConditionKey,
   type GridPoint,
+  type VisibilityCellInput,
+  type VisibilityTier,
 } from "@/rules-engine";
 import { Button, Modal } from "@/ui-components";
 import { GameTableScene, type CameraMode, type TableLiveMap } from "@/scene-3d";
@@ -79,8 +87,14 @@ import {
   cellKey,
   DEFAULT_CELL,
   overlayFromRows,
+  parseCellKey,
   type CellState,
 } from "../maps/[mapId]/edit/lib/cellGrid";
+import {
+  mostRecentOwnToken,
+  resolveLightSourcePositions,
+  visionBlockedForCharacter,
+} from "./vision";
 import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { resolveHandout, type RoomHandout } from "./handout-url";
@@ -105,6 +119,13 @@ const TRIGGER_EVENT = "map-object-triggered";
 const TOKEN_EVENT = "token-changed";
 const HANDOUT_EVENT = "handout-revealed";
 const COMBAT_EVENT = "combat-changed";
+
+// Seen-cells memory writes (Prompt 58) are debounced this long past the
+// last newly-perceived cell — movement recomputes visibility far too often
+// to write per-recompute, and the memory only needs eventual consistency
+// (a perceived cell must land in map_seen_cells before the player relies
+// on remembering it, not instantly).
+const SEEN_CELLS_FLUSH_MS = 1500;
 
 interface LiveMapPayload {
   mapId: string | null;
@@ -148,6 +169,13 @@ export interface LiveMapData {
   cells: MapCell[];
   objects: MapObject[];
   tokens: MapToken[];
+  /** The map's authored light sources (Prompt 58) — inputs to the
+   * per-player vision computation. Anchor positions are resolved at
+   * compute time from the CURRENT objects/tokens above, so a carried
+   * torch's light moves with every token broadcast without this list
+   * changing; the rows themselves refresh with the rest of the map
+   * (initial load, live-map switches, reconnects). */
+  lightSources: LightSource[];
 }
 
 /** An in-flight drag-to-move gesture: nothing is persisted until release. */
@@ -418,12 +446,13 @@ export function GameRoom({
     if (mapId) {
       const map = await getMap(supabase, mapId);
       if (!map) return;
-      const [cells, objects, tokens] = await Promise.all([
+      const [cells, objects, tokens, lightSources] = await Promise.all([
         listMapCells(supabase, mapId),
         listMapObjects(supabase, mapId),
         listMapTokens(supabase, mapId),
+        listLightSources(supabase, mapId),
       ]);
-      next = { map, cells, objects, tokens };
+      next = { map, cells, objects, tokens, lightSources };
     }
     if (seq !== refreshSeqRef.current) return;
     liveMapRef.current = next;
@@ -1299,6 +1328,208 @@ export function GameRoom({
     return labels;
   }, [combat]);
 
+  // ---------------------------------------------------------------------
+  // Per-player vision (Prompt 58).
+  //
+  // DELIBERATE TRADE-OFF, documented on purpose: everything below is
+  // client-side PRESENTATION masking over data the server already sent
+  // this browser in full — map_cells/map_tokens/light_sources RLS
+  // (Prompt 55) lets any campaign member read the whole live map, and
+  // this prompt changes none of that. A technically-savvy player could
+  // inspect network traffic or app state and see everything regardless of
+  // what's rendered. That is the project owner's explicit, stated
+  // preference for a trusted friend group — a deliberate choice, NOT an
+  // oversight to be "fixed" with server-side filtering.
+  // ---------------------------------------------------------------------
+
+  // The whole perception sweep for this viewer, or null for the two
+  // unmasked views: the DM's own client (never masked, by design — their
+  // job requires the full board) and a player with no placed token
+  // (nothing to mask against until they place one). Recomputes exactly
+  // when a real input changes, and every input already flows through
+  // existing live state — no new subscription plumbing: liveMap covers
+  // the viewer's and every other token's position (token-move broadcasts
+  // land in applyTokenChange, and token/object-anchored lights are
+  // re-resolved from CURRENT positions each run — a carried torch moves
+  // with its carrier), the light-source rows, cell light levels, and
+  // object positions (all refreshed by refreshLiveMap on switches and
+  // reconnects); combat covers the viewer's active-combatant conditions
+  // (the combat-changed poke refreshes it, so a blinding lands live);
+  // characterById covers darkvision edits (character rows ride the same
+  // refresh).
+  const visionMasking = useMemo(() => {
+    if (currentUserIsDM || !liveMap || !cellOverlay) return null;
+    const observerToken = mostRecentOwnToken(liveMap.tokens, ownCharacterIds);
+    const observer = observerToken?.character_id
+      ? (characterById.get(observerToken.character_id) ?? null)
+      : null;
+    if (!observerToken || !observer) return null;
+    const cells: VisibilityCellInput[] = [];
+    for (let y = 0; y < liveMap.map.grid_height; y++) {
+      for (let x = 0; x < liveMap.map.grid_width; x++) {
+        const key = cellKey(x, y);
+        cells.push({
+          id: key,
+          position: { x, y },
+          ambientLight: (cellOverlay.get(key) ?? DEFAULT_CELL).light,
+        });
+      }
+    }
+    const tiers = computeVisibilityTiers({
+      observerPosition: { x: observerToken.x, y: observerToken.y },
+      vision: {
+        darkvisionFeet: observer.darkvision_feet,
+        // Conditions exist only for active combatants — outside combat
+        // (or for a character not in the fight) this is simply false.
+        visionBlocked: combat
+          ? visionBlockedForCharacter(combat.combatants, combat.conditions, observer.id)
+          : false,
+      },
+      lightSources: resolveLightSourcePositions(
+        liveMap.lightSources,
+        liveMap.objects,
+        liveMap.tokens
+      ),
+      cells,
+    });
+    return {
+      observerTokenId: observerToken.id,
+      observerCharacterId: observer.id,
+      observerPosition: { x: observerToken.x, y: observerToken.y },
+      tierByCell: new Map<string, VisibilityTier>(tiers.map((result) => [result.id, result.tier])),
+    };
+  }, [currentUserIsDM, liveMap, cellOverlay, ownCharacterIds, characterById, combat]);
+
+  // This viewer's seen-cells memory for the live map, keyed "x,y". Local
+  // state is the render source; map_seen_cells is the durable copy, loaded
+  // once per map and written back in debounced batches below (each batch
+  // also folding into this state as it lands — a freshly-perceived cell
+  // becomes remember-able one flush later, comfortably before the player
+  // has moved on far enough to need it).
+  const [seenCells, setSeenCells] = useState<ReadonlyMap<string, SeenCellSnapshot>>(new Map());
+  // Render-time reset when the live map switches (the roster/prevMembers
+  // "adjusting state when a prop changes" pattern) — memory rows belong to
+  // exactly one map.
+  const [prevSeenMapId, setPrevSeenMapId] = useState(liveMapId);
+  if (prevSeenMapId !== liveMapId) {
+    setPrevSeenMapId(liveMapId);
+    setSeenCells(new Map());
+  }
+  // Change detection (serialized snapshot per recorded key) and the
+  // not-yet-flushed batch — refs, since only the effects below consult
+  // them and a new pending cell must not itself re-render anything.
+  const recordedSeenRef = useRef(new Map<string, string>());
+  const pendingSeenRef = useRef<{ mapId: string; cells: Map<string, SeenCellSnapshot> } | null>(
+    null
+  );
+  const seenFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushSeenCells = useCallback(() => {
+    if (seenFlushTimerRef.current !== null) {
+      clearTimeout(seenFlushTimerRef.current);
+      seenFlushTimerRef.current = null;
+    }
+    const pending = pendingSeenRef.current;
+    pendingSeenRef.current = null;
+    if (!pending || pending.cells.size === 0) return;
+    // Best-effort: a lost batch only delays the memory row until the cell
+    // is next perceived — eventual consistency is the stated bar.
+    const cells = [...pending.cells.values()];
+    recordSeenCells(createBrowserSupabaseClient(), {
+      mapId: pending.mapId,
+      userId: currentUserId,
+      cells,
+    })
+      .then(() => {
+        // Fold the batch into local memory once it's durable — guarded
+        // against a flush for a PREVIOUS map resolving after a switch.
+        if (liveMapRef.current?.map.id !== pending.mapId) return;
+        setSeenCells((current) => {
+          const next = new Map(current);
+          for (const snapshot of cells) next.set(cellKey(snapshot.x, snapshot.y), snapshot);
+          return next;
+        });
+      })
+      .catch(() => undefined);
+  }, [currentUserId]);
+
+  // Flush whatever is still pending when the room unmounts.
+  useEffect(() => flushSeenCells, [flushSeenCells]);
+
+  useEffect(() => {
+    // Entering a (different) live map: push out any batch still pending
+    // for the previous one, then reload this map's stored memory (the
+    // seenCells STATE reset for the switch happens render-time above).
+    flushSeenCells();
+    recordedSeenRef.current = new Map();
+    if (currentUserIsDM || !liveMapId) return;
+    let cancelled = false;
+    listSeenCells(createBrowserSupabaseClient(), liveMapId)
+      .then((rows) => {
+        if (cancelled) return;
+        const loaded = new Map<string, SeenCellSnapshot>();
+        for (const row of rows) {
+          const key = cellKey(row.x, row.y);
+          loaded.set(key, {
+            x: row.x,
+            y: row.y,
+            terrain_type: row.terrain_type,
+            elevation: row.elevation,
+            light_level: row.light_level,
+          });
+          recordedSeenRef.current.set(
+            key,
+            `${row.terrain_type}:${row.elevation}:${row.light_level}`
+          );
+        }
+        setSeenCells((current) => {
+          // The recording effect may have landed fresh perceptions while
+          // this fetch was in flight — those win over the stored rows.
+          const next = new Map(loaded);
+          for (const [key, snapshot] of current) next.set(key, snapshot);
+          return next;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserIsDM, liveMapId, flushSeenCells]);
+
+  // Record newly-perceived cells: anything currently "full" or "dim" gets
+  // its CURRENT terrain/elevation/light snapshotted (ground-truth state,
+  // not the tier — the Prompt 55 column shapes) and queued for the
+  // debounced batch upsert; flushSeenCells folds each batch into the
+  // seenCells state as it lands.
+  useEffect(() => {
+    if (!visionMasking || !cellOverlay || !liveMapId) return;
+    const additions: Array<[string, SeenCellSnapshot]> = [];
+    for (const [key, tier] of visionMasking.tierByCell) {
+      if (tier === "none") continue;
+      const state = cellOverlay.get(key) ?? DEFAULT_CELL;
+      const serialized = `${state.terrain}:${state.elevation}:${state.light}`;
+      if (recordedSeenRef.current.get(key) === serialized) continue;
+      recordedSeenRef.current.set(key, serialized);
+      const { x, y } = parseCellKey(key);
+      additions.push([
+        key,
+        { x, y, terrain_type: state.terrain, elevation: state.elevation, light_level: state.light },
+      ]);
+    }
+    if (additions.length === 0) return;
+    let pending = pendingSeenRef.current;
+    if (!pending || pending.mapId !== liveMapId) {
+      pending = { mapId: liveMapId, cells: new Map() };
+      pendingSeenRef.current = pending;
+    }
+    for (const [key, snapshot] of additions) pending.cells.set(key, snapshot);
+    if (seenFlushTimerRef.current !== null) clearTimeout(seenFlushTimerRef.current);
+    seenFlushTimerRef.current = setTimeout(() => {
+      seenFlushTimerRef.current = null;
+      flushSeenCells();
+    }, SEEN_CELLS_FLUSH_MS);
+  }, [visionMasking, cellOverlay, liveMapId, flushSeenCells]);
+
   // Identity only — depending on the whole drag would rebuild the table
   // model on every hovered cell.
   const draggingTokenId = tokenDrag?.tokenId ?? null;
@@ -1306,14 +1537,49 @@ export function GameRoom({
   const tableMap = useMemo<TableLiveMap | null>(() => {
     if (!liveMap || !cellOverlay) return null;
     const overlay = cellOverlay;
+    // Per-viewer masking (see visionMasking above): null means unmasked —
+    // the DM's own view, or a player yet to place a token — and renders
+    // everything exactly as before. A cell absent from the tier map only
+    // happens transiently (a token broadcast racing a map switch); treat
+    // it as unperceived rather than leaking it.
+    const tierByCell = visionMasking?.tierByCell ?? null;
+    const tierAt = (x: number, y: number): VisibilityTier =>
+      tierByCell ? (tierByCell.get(cellKey(x, y)) ?? "none") : "full";
     return {
       gridWidth: liveMap.map.grid_width,
       gridHeight: liveMap.map.grid_height,
-      cells: buildDenseCells(liveMap.map.grid_width, liveMap.map.grid_height, overlay),
+      cells: buildDenseCells(liveMap.map.grid_width, liveMap.map.grid_height, overlay).flatMap(
+        (cell) => {
+          if (!tierByCell) return [cell];
+          const tier = tierAt(cell.x, cell.y);
+          if (tier === "full") return [cell];
+          if (tier === "dim") return [{ ...cell, visibility: "dim" as const }];
+          // Not currently perceived: the remembered snapshot, or nothing
+          // at all (fog-of-war "unknown"). A remembered cell renders the
+          // SNAPSHOT's terrain/elevation/light, not live state — and per
+          // the Prompt 55 schema it deliberately carries no object/token
+          // memory, which is why objects and tokens below require a
+          // currently-perceived cell.
+          const seen = seenCells.get(cellKey(cell.x, cell.y));
+          if (!seen) return [];
+          return [
+            {
+              x: cell.x,
+              y: cell.y,
+              elevation: seen.elevation,
+              terrain: seen.terrain_type,
+              light: seen.light_level,
+              visibility: "remembered" as const,
+            },
+          ];
+        }
+      ),
       objects: liveMap.objects.flatMap((object) => {
         const behavior = parseMapObjectBehavior(object.behavior_config);
         const hiddenNow = behavior?.action === "toggle_visibility" && !behavior.triggered;
         if (hiddenNow && !currentUserIsDM) return [];
+        const tier = tierAt(object.x, object.y);
+        if (tier === "none") return [];
         return [
           {
             id: object.id,
@@ -1325,15 +1591,25 @@ export function GameRoom({
             selectable: behavior !== null && (currentUserIsDM || behavior.playerTriggerable),
             ghost: hiddenNow,
             active: behavior?.action === "toggle_state" && behavior.triggered,
+            dimmed: tier === "dim",
           },
         ];
       }),
-      tokens: liveMap.tokens.map((token) => {
+      tokens: liveMap.tokens.flatMap((token) => {
+        // A token's visibility is its cell's tier — except a token sharing
+        // the viewer's own cell (including their own token), which is
+        // trivially always seen: it's WITH them.
+        const withObserver =
+          visionMasking !== null &&
+          token.x === visionMasking.observerPosition.x &&
+          token.y === visionMasking.observerPosition.y;
+        const tier = withObserver ? "full" : tierAt(token.x, token.y);
+        if (tier === "none") return [];
         // Readable only for the owner and the DM under characters RLS — an
         // NPC token, or another player's PC, simply omits `hp` and renders
         // no bar.
         const character = token.character_id ? characterById.get(token.character_id) : undefined;
-        return {
+        return [{
           id: token.id,
           x: token.x,
           y: token.y,
@@ -1363,10 +1639,45 @@ export function GameRoom({
           // Same flat-primitive derivation as deathSaveLabel: true for a
           // PC token whose (viewer-readable) character is concentrating.
           concentrating: character ? character.concentrating_on !== null : false,
-        };
+          dimmed: tier === "dim",
+        }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById, conditionLabelsByTokenId]);
+  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells]);
+
+  // A hidden, serialized snapshot of the per-viewer render states above —
+  // exactly what the scene is told to draw — for the Playwright
+  // verification (verify-vision-rendering.mjs): WebGL output has no DOM to
+  // locate, and this model IS the rendering decision `MapSurface` executes
+  // deterministically. "full" cells/tokens are elided (absent = rendered
+  // normally); a hidden cell/token is one the scene draws nothing for.
+  const visionDebug = useMemo(() => {
+    if (!liveMap) return JSON.stringify({ mapId: null, masked: false });
+    if (!visionMasking) return JSON.stringify({ mapId: liveMap.map.id, masked: false });
+    const cells: Record<string, string> = {};
+    for (const [key, tier] of visionMasking.tierByCell) {
+      if (tier === "full") continue;
+      cells[key] = tier === "dim" ? "dim" : seenCells.has(key) ? "remembered" : "hidden";
+    }
+    const tokens: Record<string, string> = {};
+    for (const token of liveMap.tokens) {
+      const withObserver =
+        token.x === visionMasking.observerPosition.x &&
+        token.y === visionMasking.observerPosition.y;
+      const tier = withObserver
+        ? "full"
+        : (visionMasking.tierByCell.get(cellKey(token.x, token.y)) ?? "none");
+      tokens[token.id] = tier === "none" ? "hidden" : tier;
+    }
+    return JSON.stringify({
+      mapId: liveMap.map.id,
+      masked: true,
+      observerTokenId: visionMasking.observerTokenId,
+      observerCharacterId: visionMasking.observerCharacterId,
+      cells,
+      tokens,
+    });
+  }, [liveMap, visionMasking, seenCells]);
 
   // Recomputed from the ORIGIN to the hovered cell on every update (the
   // straight path a deliberate walk would take), not accumulated from the
@@ -1455,6 +1766,11 @@ export function GameRoom({
           onRulerDragEnd={handleRulerDragEnd}
         />
       </Canvas>
+      {/* Hidden render-state mirror for verify-vision-rendering.mjs — see
+          the visionDebug memo. */}
+      <div data-testid="vision-state" hidden>
+        {visionDebug}
+      </div>
       {rulerReadout !== null ? (
         <div className={`${styles.moveReadout} ${styles.rulerReadout}`} data-testid="ruler-readout">
           <span className={styles.moveReadoutLabel}>Measuring</span>
