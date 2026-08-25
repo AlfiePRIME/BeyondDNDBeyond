@@ -1,6 +1,15 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Dev-server-only cross-origin guard (Next.js 15+): by default `next dev`
+  // rejects requests whose Host/Origin isn't localhost or an explicit
+  // 127.0.0.1 address, to stop a malicious site from reaching your local
+  // dev server. Accessing the app through a reverse proxy on a real
+  // domain (Nginx Proxy Manager, in this project's case) trips that guard
+  // — static chunk requests 403 and the HMR websocket fails to connect.
+  // This does not affect a production build (`next start`), only `next dev`.
+  allowedDevOrigins: ["beyond.alfieprime.com"],
+
   // Both do Node-specific filesystem/worker things (pdfjs-dist spawns a
   // "fake worker" via a dynamic import of its own worker script;
   // tesseract.js reads its core/wasm files off disk) that Turbopack's
