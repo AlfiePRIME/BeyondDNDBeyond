@@ -1,0 +1,36 @@
+# Keep the production image build context small and, more importantly,
+# keep the Docker CLI from ever trying to read supabase/volumes — its
+# volumes/db/data directory is bind-mounted Postgres data owned by the
+# container's postgres uid, unreadable by the host user, and large. The
+# app image doesn't need anything under supabase/ to build or run (it only
+# talks to Supabase over the network at request time), so exclude the
+# whole directory rather than relying on a build-time workaround.
+supabase/
+
+# Dependencies / build output — reinstalled and rebuilt inside the image.
+node_modules
+.next
+.git
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+coverage
+
+# Env files — every credential is supplied at `docker build --build-arg`
+# (the two NEXT_PUBLIC_* values, inlined at build time) or `docker run -e`/
+# Compose `environment:` (everything else) time. Never bake a real .env
+# into the image.
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Misc
+.DS_Store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.md
+!README.md

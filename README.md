@@ -22,6 +22,17 @@ Prompt 57 (map editor lighting authoring) needed no new implementation: its acce
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 
+**Prompt 62 (self-hosted deployment packaging) is complete — the full 62-prompt roadmap is done.**
+This last prompt is deployment/infra packaging rather than a new feature: a production `Dockerfile`
+(multi-stage, `output: "standalone"`, non-root, `poppler-utils` installed in the runtime stage for
+the PDF import feature), a `docker-compose.production.yml` that adds the app alongside the existing
+self-hosted Supabase stack, and the "Production deployment" section below covering every environment
+variable and Nginx Proxy Manager's WebSocket configuration for Realtime. See that section for exactly
+what was verified end to end in a sandboxed environment (the image builds, and a full signup →
+profile setup → Lobby flow works against a real, isolated, freshly-migrated Postgres through the
+production container) versus what is necessarily left as documented guidance (the real NPM + public
+domain reverse-proxy path — there's no live NPM instance or public domain to test against here).
+
 ## Stack
 
 - **Frontend:** Next.js (App Router) + TypeScript, React Three Fiber for the 3D scene, CanvasUI for WebGL UI effects
@@ -126,20 +137,63 @@ work without extra setup.
 
 ## Performance budgets
 
-Four checks, with generous starting budgets recorded in `perf-budgets.json` (tightened as the
-app grows past this early-scaffolding baseline):
+Six checks, with budgets recorded in `perf-budgets.json` (tightened in Prompt 62 now that the app
+is feature-complete, rather than left at Prompt 2's original near-empty-scaffold numbers):
 
 ```sh
 yarn perf:bundle      # client JS bundle size vs. budget
-yarn perf:render      # headless 3D frame-time benchmark (Playwright + Three.js)
+yarn perf:render      # headless 3D frame-time benchmark (Playwright + Three.js) — Game Room scene
+yarn perf:assets      # headless 3D frame-time benchmark — map with placed preset/custom assets
+yarn perf:map-editor  # headless 3D frame-time benchmark — the map editor, fully populated
 yarn perf:lighthouse  # Lighthouse performance/accessibility scores
 yarn perf:realtime    # concurrent-client Supabase Realtime latency test
-yarn perf:all         # run all four in sequence
+yarn perf:all         # run all six in sequence
 ```
 
 `perf:bundle` and `perf:lighthouse` need a production build first (`yarn build`).
-`perf:realtime` needs the Supabase stack running (see above). `perf:render` and
-`perf:lighthouse` share Playwright's Chromium install rather than downloading Chrome twice.
+`perf:realtime` needs the Supabase stack running (see above). `perf:render`, `perf:assets`,
+`perf:map-editor`, and `perf:lighthouse` share Playwright's Chromium install rather than
+downloading Chrome twice.
+
+**Prompt 62 results — production build, run on this machine (GPU-backed, confirmed via
+`nvidia-smi`), compared against the original Prompt 2/17/19 near-empty-app baselines:**
+
+| Check | Original baseline | Measured now (feature-complete app) | Budget | Verdict |
+|---|---|---|---|---|
+| Bundle size (shared chunks) | ~550 KB | **539.9 KB** | 1000 KB | Pass, not stale — see note below |
+| 3D render — Game Room | 16.7ms (60fps, GPU) | **16.67ms (60fps)** | 33.3ms | Pass |
+| 3D render — map assets | *(check added later)* | **16.66ms (60fps)** | 33.3ms | Pass |
+| 3D render — map editor | *(check added later)* | **16.66ms (60fps)** | 33.3ms | Pass |
+| Lighthouse performance | *(no baseline recorded)* | **94** | ≥80 (was ≥70) | Pass, budget tightened |
+| Lighthouse accessibility | *(no baseline recorded)* | **94** | ≥85 (was ≥80) | Pass, budget tightened |
+| Realtime load (10 clients) | ≤500ms avg latency | **not measured** | 500ms | Could not run — see note below |
+
+Honest read of these numbers:
+
+- **Bundle size is genuinely not stale**, and this isn't a case of quietly accepting a bad
+  number — `perf:bundle` only sums the shared root/polyfill JS chunks every page loads (the
+  React + Next.js runtime), not the app's actual page-specific code. Next.js code-splits the 3D
+  scene, character sheet, map editor, etc. per route, so none of that shows up in this
+  particular number regardless of how much of it exists. The 1000KB budget was left unchanged —
+  today's number has ~2x headroom and there's nothing here to correct.
+- **3D rendering is still a flat 60fps (16.6-16.7ms) across three different scenes** (the Game
+  Room, a map with 24 placed objects, and the fully-populated map editor), all GPU-rendered on
+  an RTX 4060 Ti in this environment — confirming the perf harness gets real hardware-backed
+  numbers here rather than the ~60ms software-rendering fallback the original baseline note
+  warned about on a GPU-less machine.
+- **Lighthouse scores were re-baselined upward** (70→80 performance, 80→85 accessibility) —
+  the original budget had no real baseline behind it (recorded when there was barely an app to
+  score); today's 94/94 comfortably clears even the tightened numbers with 9-14 points of
+  margin kept deliberately, not set to today's exact score.
+- **`perf:realtime` could not be run in this sandbox** — it fails with
+  `ERR_MODULE_NOT_FOUND` because Node v26.4.0's native TypeScript-stripping ESM loader in this
+  environment requires an explicit file extension on `src/realtime/campaignChannel.ts`'s
+  relative `./channel` import, which it evidently didn't in whatever Node version this script
+  was last validated against. This is confirmed pre-existing and unrelated to Prompt 62 — no
+  file this script touches was changed here, and it fails identically before and after this
+  prompt's changes. The `realtimeLoad` budget in `perf-budgets.json` was deliberately left
+  untouched rather than guessed at; re-run this check on a Node version where the script loads
+  (or after adding the `.ts` extension to that one import) to get a real number.
 
 ## Database migrations
 
@@ -220,3 +274,196 @@ table with a `campaign_id` column (e.g. inserting into `campaign_members`), Post
 `column reference "campaign_id" is ambiguous`. Give `RETURNS TABLE` columns names that can't
 collide with real column names (see `join_campaign_by_invite_code`'s `result_campaign_id` in
 `supabase/migrations/0005_campaign_invite_codes.sql`).
+
+## Production deployment
+
+Everything above is local development (`yarn dev` against the Compose Supabase stack). This
+section is for running the app itself as a container, alongside that same self-hosted Supabase
+stack, behind an existing Nginx Proxy Manager (NPM) instance — the deployment shape this project
+has targeted from the start (see "Stack" above).
+
+**What's verified end to end in this repo's own sandboxed build environment, and what
+necessarily isn't:** the `Dockerfile` builds successfully; a container from that image starts,
+passes its healthcheck, and correctly serves `/api/health`, `/login`, `/signup`, and the
+authenticated Lobby; a full signup → profile setup → Lobby flow was driven through the
+production container against a real, freshly-migrated, isolated Postgres/Supabase stack (separate
+ports and container names from this sandbox's own local-dev stack, so neither was disturbed),
+confirming the container genuinely talks to Postgres, Auth, and Realtime correctly (the Lobby's
+live "N adventurers online" presence came back correctly). What is **not** verified — because
+there is no live Nginx Proxy Manager instance or public domain in this environment to test
+against — is the actual reverse-proxied path: NPM routing a real domain to this container and to
+Supabase, TLS termination, and the WebSocket upgrade for Realtime working through that proxy in
+practice. The guidance below for that part is exactly that: guidance, written from how NPM and
+Supabase Realtime are documented to behave, for you to apply and confirm against your own
+infrastructure.
+
+### Building the image
+
+```sh
+docker build \
+  --build-arg NEXT_PUBLIC_SUPABASE_URL=https://supabase.example.com \
+  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=<your production ANON_KEY> \
+  -t beyonddndbeyond-app:latest .
+```
+
+The `Dockerfile` is a three-stage build (`deps` → `builder` → `runner`) on `node:22-bookworm-slim`,
+producing Next.js's `output: "standalone"` server (see `next.config.ts`) rather than shipping the
+full repo + `node_modules` into the runtime image. The runtime stage installs `poppler-utils` —
+**not** just the builder stage — because the D&D Beyond PDF import route shells out to `pdftoppm`
+at request time, on every upload, in whatever container is actually serving traffic (see the
+existing "Also requires poppler-utils" note above; this is the containerized version of that same
+requirement). The image runs as a non-root user and copies `public/`, `.next/static/`, and (for
+the OCR step's vendored `tessdata` language file, resolved at request time relative to
+`process.cwd()`, not a static import Next's build tracer would pick up) the whole `src/` tree
+alongside the standalone server, matching what `output: "standalone"` does *not* include by
+itself.
+
+**The two `NEXT_PUBLIC_*` build args above are build-time, not run-time, and this matters a lot in
+practice.** Next.js inlines every `NEXT_PUBLIC_`-prefixed environment variable into the compiled
+JavaScript at `next build` time — not just in the code the browser downloads, but *everywhere* in
+this app, because `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` are also read by
+this app's own server-side code (`src/data-access/supabase-server.ts`,
+`src/data-access/supabase-middleware.ts`, the `/api/health` route). Setting
+`NEXT_PUBLIC_SUPABASE_URL` via `docker run -e` or a Compose `environment:` block **has no effect**
+on an already-built image — the browser already has the old value baked into a static `.js` file,
+and so does every server-side reference in that same image. Rotating the anon key or moving to a
+new domain means rebuilding the image with new `--build-arg` values, not restarting the container.
+Every other credential (`SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`) is read from
+`process.env` at request time as normal and *can* be changed with just a container restart — see
+the table below for which is which.
+
+**What value should `NEXT_PUBLIC_SUPABASE_URL` actually be?** The **public** URL the browser
+reaches Supabase through — e.g. `https://supabase.example.com`, proxied by NPM — not an internal
+Docker Compose service name like `http://api-gw:8000`. That's the address a browser on the
+internet can resolve; `api-gw` only resolves inside the Compose network. The direct consequence,
+worth knowing rather than being surprised by: because this app currently uses that *same* single
+env var for its own server-side Supabase calls too (there's no separate internal-only URL for
+server-to-server traffic), this container's outbound requests to Supabase will also go out
+through the public domain and back in through your reverse proxy, rather than staying inside the
+Compose network — a real round trip over the internet for what's otherwise local traffic. That's
+a known characteristic of this app's current design, not something this prompt's Docker
+packaging papers over or fixes (the source change here is deliberately scoped to
+`next.config.ts` only) — if the extra latency/reliability cost ever matters, the fix would be
+adding a second, server-only URL env var and a second code path, which is a real but separate
+follow-up, not part of this deployment packaging.
+
+### Running it — `docker-compose.production.yml`
+
+This adds an `app` service to the *existing* Supabase stack rather than replacing or
+restructuring it — see the usage comment block at the top of `docker-compose.production.yml`
+for the exact command, reproduced here:
+
+```sh
+docker compose \
+  --env-file supabase/.env --env-file .env \
+  -f supabase/docker-compose.yml -f docker-compose.production.yml \
+  --project-directory supabase \
+  up -d
+```
+
+`--project-directory supabase` matters: `supabase/docker-compose.yml` has many `./volumes/...`
+relative paths that need to resolve against the `supabase/` directory exactly as they already do
+today, and pinning the project directory there (rather than the repo root, which is where this
+second compose file lives) keeps that true when the two files are layered together. Build the
+image first (above) — `docker-compose.production.yml` references it by tag rather than building
+in place, specifically to avoid `build.context` paths becoming confusing once the project
+directory is pinned to `supabase/` for the other file's sake.
+
+The `app` service depends on `api-gw` being healthy (mirroring the existing `functions` service's
+own dependency), has its own healthcheck (`/api/health`, via Node's built-in `fetch` — the same
+pattern `supabase-studio`'s healthcheck already uses, since this slim runtime image has no
+curl/wget installed), and by default publishes port 3000 bound to `127.0.0.1` only — it's meant to
+sit behind NPM, not be reachable directly from the internet. If NPM runs on a different host,
+either bind a specific private/VPN interface instead of `127.0.0.1` (`APP_HOST_PORT_BINDING` env
+var), or put both on a shared external Docker network instead of publishing a host port at all.
+
+**Postgres data persistence** is already handled by the existing `supabase/docker-compose.yml` —
+its `db` service bind-mounts `./volumes/db/data` to `/var/lib/postgresql/data`, so data survives
+`docker compose down` (without `-v`) and container recreation exactly as it does for local
+development today. This production Compose file doesn't add, change, or duplicate any of that —
+see `supabase/docker-compose.yml`'s own volumes for the authoritative list (`db-config`,
+`deno-cache`, plus the bind-mounted `./volumes/...` paths).
+
+### Environment variables
+
+Copy `.env.example` to `.env` as for local development, but **generate real production secrets —
+never reuse the values from local development.** The same applies to everything in
+`supabase/.env`: run `sh supabase/utils/generate-keys.sh --update-env` against a fresh
+`supabase/.env.example` copy for a production deployment rather than copying across the
+dev secrets this repo's own local setup uses.
+
+| Variable | Where it's read | When it takes effect | Required? |
+|---|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Browser bundle **and** this app's server-side code | **Build time only** — `docker build --build-arg` | Yes — the public URL Supabase is reachable at through NPM |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser bundle **and** this app's server-side code | **Build time only** — `docker build --build-arg` | Yes — from `supabase/.env`'s `ANON_KEY` (or `SUPABASE_PUBLISHABLE_KEY` if you've migrated to the newer opaque keys) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Reserved for server-side use; not currently called by any app code path, but documented since the app's own `.env.example` asks for it | Run time — container restart is enough | From `supabase/.env`'s `SERVICE_ROLE_KEY` |
+| `ANTHROPIC_API_KEY` | `src/ai` (server-only, never sent to the browser) | Run time — container restart is enough | **No** — the app's one deliberate non-self-hosted dependency. Leave unset and the "Generate a draft" AI-assisted actions hide themselves with an explanation instead of erroring |
+| `APP_IMAGE` / `APP_IMAGE_TAG` | `docker-compose.production.yml` only | Compose `up` time | No — defaults to `beyonddndbeyond-app:latest` |
+| `APP_HOST_PORT_BINDING` | `docker-compose.production.yml` only | Compose `up` time | No — defaults to `127.0.0.1:3000`, see above |
+
+Everything Supabase-side (`POSTGRES_PASSWORD`, `JWT_SECRET`, `DASHBOARD_PASSWORD`, etc.) is exactly
+what's already documented for local development — see "Local development" above and
+`supabase/.env.example` — just with freshly generated production values instead of the checked-in
+development ones.
+
+### Nginx Proxy Manager configuration
+
+This is configuration guidance for your own existing NPM instance — as noted above, there's no
+live NPM instance or public domain in this sandboxed environment to verify the reverse-proxied
+path against end to end. What follows is accurate to how NPM and self-hosted Supabase Realtime
+are documented to behave; treat it as a checklist to apply and confirm against your own setup,
+not as something already proven to work here.
+
+**Two separate proxy hosts, two separate internal ports** — this app and Supabase's gateway are
+different services on different ports, and (per the two-URL point above) the browser needs to
+reach both directly:
+
+1. **The app itself** — proxy host `beyonddndbeyond.example.com` (or whatever domain you choose)
+   → `<docker-host>:3000` (the port `docker-compose.production.yml` publishes, or the app
+   container's address directly if NPM shares its Docker network). Plain HTTP forwarding, no
+   WebSocket traffic originates from this app's own routes.
+2. **Supabase's API gateway** — proxy host `supabase.example.com` → `<docker-host>:8000` (or
+   whatever `API_GW_HTTP_PORT` you've set in `supabase/.env`). This is the domain
+   `NEXT_PUBLIC_SUPABASE_URL` must be built with (see above) — the browser talks to Auth, REST,
+   Storage, **and Realtime** all through this one gateway, matching exactly how the app already
+   reaches Supabase locally via `NEXT_PUBLIC_SUPABASE_URL=http://localhost:8000` today, just with
+   a real domain instead of `localhost`.
+
+**The Realtime WebSocket upgrade — the specific gotcha the acceptance criteria for this prompt
+calls out.** Supabase Realtime (used by the campaign channel, presence, live map/token sync — see
+the "Module boundaries" table's `realtime` entry) is a long-lived WebSocket connection proxied
+through the same gateway as the REST API. If NPM doesn't forward the WebSocket upgrade correctly,
+Realtime connections will fail or silently fall back to a broken/reconnect-looping state even
+though plain HTTP requests to the same domain work fine — this is a well-known self-hosted
+Supabase failure mode, not something specific to this app. Concretely, on the `supabase.example.com`
+proxy host in NPM:
+
+- Under the **Details** tab, enable the **"Websockets Support"** toggle. This is NPM's UI switch
+  for adding the `Upgrade`/`Connection` header forwarding a WebSocket handshake needs — without
+  it, NPM's underlying nginx config won't proxy the `Connection: Upgrade` handshake through at
+  all.
+- If you ever hand-edit NPM's generated nginx config (its "Custom Nginx Configuration" box) rather
+  than relying on the toggle, the underlying directives it needs are:
+  ```nginx
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  ```
+  (NPM sets `proxy_set_header Upgrade $http_upgrade;` and a conditional `Connection` header
+  itself when the toggle is on — hand-adding these on top of an already-toggled-on host is
+  redundant, not harmful, but don't add them *instead of* the toggle on a host managed through
+  NPM's UI, since NPM will regenerate its config from the UI state and may not merge custom
+  additions the way you expect.)
+- Make sure whatever sits in front of NPM itself (a router port-forward, another proxy, a CDN) also
+  passes the `Upgrade`/`Connection` headers through unmodified — any hop in the chain that strips
+  them breaks the same way NPM without the toggle does.
+- Confirm it worked by opening the Lobby (or any campaign room) through the real domain and
+  checking your browser's Network tab for a `101 Switching Protocols` response on the
+  `realtime/v1/websocket` request, rather than it hanging, erroring, or falling back to
+  repeated failed reconnect attempts.
+
+TLS termination, redirecting `http://` to `https://`, and certificate management are standard NPM
+proxy-host configuration unrelated to anything specific to this app — the one thing worth calling
+out is that `NEXT_PUBLIC_SUPABASE_URL` and `SITE_URL`/`API_EXTERNAL_URL` (in `supabase/.env`)
+should all use `https://` once TLS is in place, matching whatever your NPM proxy hosts actually
+serve.

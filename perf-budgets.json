@@ -1,21 +1,23 @@
 {
-  "_comment": "Generous starting budgets per Prompt 2 — the point right now is having the harness in place with a recorded baseline, not hitting a final target on a near-empty app. Tighten these as the app grows and re-baseline in later prompts as directed.",
+  "_comment": "Generous starting budgets per Prompt 2, re-baselined in Prompt 62 against the actual feature-complete app (61 prompts of real UI/3D/rules-engine/realtime code) rather than the near-empty scaffold these were first recorded against — see each section's _note for the real number measured and whether/why the budget moved.",
   "bundleSize": {
     "mainPageFirstLoadKb": 1000,
-    "_note": "Near-empty app currently baselines around ~550KB (React + Next.js runtime chunks only). Budget set generously above that per Prompt 2's notes; tighten as real app code is added."
+    "_note": "Prompt 62 re-measurement against the feature-complete app: 539.9KB — essentially unchanged from the original ~550KB near-empty-app baseline, and NOT stale despite the app having grown hugely. This check only sums the shared root/polyfill chunks every page loads (React + Next.js runtime, per build-manifest.json's rootMainFiles/polyfillFiles) — it deliberately excludes the route-specific code (3D scene, character sheet, map editor, etc.), which Next.js code-splits per page and loads on demand instead of on every first load. Budget left at 1000KB unchanged — today's real number already has ~2x headroom and there's no evidence of shared-chunk bloat to correct."
   },
   "render3d": {
     "maxAvgFrameTimeMs": 33.3,
-    "_note": "33.3ms = 30fps floor. Re-pointed at the real Game Room scene in Prompt 19; baseline there is 16.7ms (vsync-capped 60fps) with GPU rendering. Headless software rendering (SwiftShader, the fallback on GPU-less machines) measures ~60ms for the same scene — run on a GPU machine for meaningful numbers."
+    "_note": "33.3ms = 30fps floor. Re-pointed at the real Game Room scene in Prompt 19; baseline there is 16.7ms (vsync-capped 60fps) with GPU rendering. Headless software rendering (SwiftShader, the fallback on GPU-less machines) measures ~60ms for the same scene — run on a GPU machine for meaningful numbers. Prompt 62 re-measurement on a GPU-backed sandbox (RTX 4060 Ti, confirmed via nvidia-smi) against the production build: perf:render (Game Room) 16.67ms, perf:assets (24 placed objects) 16.66ms, perf:map-editor (fully populated 20x20 editor) 16.66ms — all still exactly vsync-capped 60fps despite the much larger scene/UI surface than Prompt 19's baseline. Budget left unchanged; still a generous, meaningful floor."
   },
   "lighthouse": {
-    "minPerformanceScore": 70,
-    "minAccessibilityScore": 80
+    "minPerformanceScore": 80,
+    "minAccessibilityScore": 85,
+    "_note": "Prompt 62 re-baseline: production build measured performance 94, accessibility 94 (up from the Prompt 2 starting budget's 70/80, recorded when there was barely any app to score). Raised both minimums to reflect real, verified quality while keeping meaningful margin below today's actual scores (14 and 9 points respectively) for run-to-run Lighthouse variance — not set to today's exact number."
   },
   "realtimeLoad": {
     "concurrentClients": 10,
     "maxAvgLatencyMs": 500,
     "maxReconnectRecoveryMs": 8000,
-    "_reconnectNote": "Prompt 17. Dominated by realtime-js's own first reconnect backoff step (~1s by default) plus socket reopen, channel rejoin, presence re-track, and a confirmatory broadcast round trip in both directions — generous starting budget per the same rationale as the rest of this file."
+    "_reconnectNote": "Prompt 17. Dominated by realtime-js's own first reconnect backoff step (~1s by default) plus socket reopen, channel rejoin, presence re-track, and a confirmatory broadcast round trip in both directions — generous starting budget per the same rationale as the rest of this file.",
+    "_note": "NOT re-measured in Prompt 62 — scripts/perf/realtime-load.mjs fails in this sandbox's Node v26.4.0 with ERR_MODULE_NOT_FOUND on campaignChannel.ts's extensionless `./channel` import (Node's native TS-stripping ESM loader here requires an explicit extension; it evidently didn't when this script was last validated). Confirmed pre-existing and unrelated to Prompt 62 — no file this script touches was changed by this prompt, and `--experimental-specifier-resolution=node` does not fix it either. Left unchanged rather than guessing; re-run on a Node version where the script loads (or after adding the .ts extension to that one import) to get a real current number before touching this budget."
   }
 }

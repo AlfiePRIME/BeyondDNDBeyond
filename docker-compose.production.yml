@@ -1,0 +1,90 @@
+# Usage
+#   Adds the app container to the existing self-hosted Supabase stack
+#   (supabase/docker-compose.yml) rather than replacing or restructuring
+#   it — this file only ever runs LAYERED on top of that one, from the
+#   repo root, with the project directory pinned to supabase/ so that
+#   file's own `./volumes/...` bind-mount paths keep resolving exactly as
+#   they do today:
+#
+#     docker build \
+#       --build-arg NEXT_PUBLIC_SUPABASE_URL=https://supabase.example.com \
+#       --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=<your production ANON_KEY> \
+#       -t beyonddndbeyond-app:latest .
+#
+#     docker compose \
+#       --env-file supabase/.env --env-file .env \
+#       -f supabase/docker-compose.yml -f docker-compose.production.yml \
+#       --project-directory supabase \
+#       up -d
+#
+#     docker compose \
+#       --env-file supabase/.env --env-file .env \
+#       -f supabase/docker-compose.yml -f docker-compose.production.yml \
+#       --project-directory supabase \
+#       down
+#
+# See README.md "Production deployment" for:
+#   - the full environment variable reference (which ones are build-time
+#     vs. run-time, and why)
+#   - why NEXT_PUBLIC_SUPABASE_URL must be the PUBLIC domain the browser
+#     reaches Supabase through (not an internal Compose service name),
+#     and the consequence that follows from that
+#   - Nginx Proxy Manager reverse-proxy configuration, including the
+#     WebSocket upgrade Supabase Realtime requires
+#
+# Build the image FIRST — this file references it by tag (no `build:`
+# block here) rather than building in place, mainly because `--project-directory
+# supabase` (needed above) would otherwise make a `build.context: .` in
+# this file resolve against supabase/ instead of the repo root. Keeping
+# image build a separate, explicit step sidesteps that entirely.
+
+name: supabase
+
+services:
+  app:
+    image: ${APP_IMAGE:-beyonddndbeyond-app}:${APP_IMAGE_TAG:-latest}
+    container_name: beyonddndbeyond-app
+    restart: unless-stopped
+    depends_on:
+      # Mirrors the `functions` service's own dependency in
+      # supabase/docker-compose.yml — the gateway being healthy implies
+      # the auth/rest/realtime/storage services behind it are reachable
+      # for a fresh request (each of those already gates on `db` being
+      # healthy before api-gw itself reports healthy upstream).
+      api-gw:
+        condition: service_healthy
+    environment:
+      # Server-only secrets, read from process.env at REQUEST time (not
+      # baked into the image) — rotate these with a container restart,
+      # no rebuild needed. Sourced straight from supabase/.env's existing
+      # SERVICE_ROLE_KEY rather than duplicating it under a second name.
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      # Optional — the app's one non-self-hosted dependency (AI-assisted
+      # NPC/lore drafting via the Anthropic API). Leave unset in .env and
+      # those actions hide themselves in the UI instead of erroring.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      # Consistent with supabase-studio's own healthcheck pattern in
+      # supabase/docker-compose.yml (Node's built-in fetch, no curl/wget
+      # installed in this slim runtime image).
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/api/health').then((r) => { if (!r.ok) throw new Error(String(r.status)); })"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    ports:
+      # Bound to localhost only by default — this container is meant to
+      # sit behind the existing Nginx Proxy Manager reverse proxy, not be
+      # reachable directly from the internet. If NPM runs on a different
+      # host than this Compose stack, either bind a specific
+      # VPN/private-network interface here instead of 127.0.0.1, or join
+      # this stack's default network as an external network from NPM's
+      # own Compose project so it can reach `app:3000` by service name
+      # without publishing a host port at all.
+      - "${APP_HOST_PORT_BINDING:-127.0.0.1:3000}:3000"
