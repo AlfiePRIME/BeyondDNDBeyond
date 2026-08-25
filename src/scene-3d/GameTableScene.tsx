@@ -6,6 +6,7 @@ import type { ThreeEvent } from "@react-three/fiber";
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y } from "./table";
 import { computeSeatLayout, type CameraMode, type Seat, type SeatMember } from "./seating";
 import { SeatAvatar } from "./SeatAvatar";
+import { Chair, SEAT_TOP_Y } from "./Chair";
 import {
   MapSurface,
   type MapSurfaceCell,
@@ -27,7 +28,6 @@ const TEAL = "#1ec8c8"; // --teal
 const WOOD_TOP = "#5a4028";
 const WOOD_LEG = "#42301c";
 
-const CUSHION = "#2a2140";
 const LOOK_TARGET = [0, TABLE_SURFACE_Y, 0] as const;
 const FALLBACK_CAMERA_POSITION: readonly [number, number, number] = [0, 10.5, 7.5];
 
@@ -40,22 +40,19 @@ function TableLeg({ x, z }: { x: number; z: number }) {
   );
 }
 
-// The Prompt 19 stool is gone — an avatar standing on a low dais with the
-// role-colored ring around its feet reads cleaner than a model clipping
-// through a stool.
+// The Prompt 19 stool, then the cushion-disc-and-ring "dais" that replaced
+// it, are both gone — a real chair (Chair.tsx) now carries the role's
+// accent color via its own trim, so a separate floor ring in the same
+// footprint would just be a redundant, competing signal.
 function TableSeat({ seat }: { seat: Seat }) {
-  const accent = seat.member.role === "dm" ? PURPLE : TEAL;
   return (
     <group position={seat.position} rotation={[0, seat.rotationY, 0]}>
-      <mesh position={[0, 0.02, 0]} receiveShadow>
-        <cylinderGeometry args={[0.5, 0.56, 0.04, 24]} />
-        <meshStandardMaterial color={CUSHION} roughness={0.7} />
-      </mesh>
-      <mesh position={[0, 0.045, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[0.5, 0.028, 10, 40]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={1.7} />
-      </mesh>
-      <group position={[0, 0.04, 0]}>
+      <Chair role={seat.member.role} />
+      {/* Feet land on the chair's own seat pad, not the floor — SeatAvatar
+          puts a model's feet at its own local origin (see its own
+          comment), so this offset must track wherever the pad's top
+          surface actually is. */}
+      <group position={[0, SEAT_TOP_Y, 0]}>
         <SeatAvatar url={seat.member.avatar_url ?? null} />
       </group>
     </group>

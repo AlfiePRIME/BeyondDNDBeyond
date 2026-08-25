@@ -41,6 +41,47 @@ const CAMERA_EYE_HEIGHT = 3.4;
 // (+z) side, matching the direction Prompt 19's fixed camera looked from.
 const FIRST_SEAT_ANGLE = Math.PI / 2;
 
+/**
+ * Reorders members so the DM lands at the array index whose angle
+ * (`FIRST_SEAT_ANGLE + (index/n) * 2π`, computeSeatLayout's existing
+ * per-index formula) works out closest to `FIRST_SEAT_ANGLE + π` — the
+ * far/-Z side of the table, opposite the near/+Z seat-0 slot. That's the
+ * edge where a map's row 0 renders (see mapFit.ts/MapSurface.tsx), so the
+ * DM ends up sitting behind the top of the map, looking down its length at
+ * the players — a real GM-screen posture. Runs before computeSeatLayout's
+ * per-index math; that math itself (ellipse position, camera, rotation)
+ * stays completely untouched — this function only controls which member
+ * ends up at which index.
+ *
+ * There's always exactly one DM (a DB-level unique constraint enforces
+ * this per campaign), but the early return keeps this safe if a caller
+ * (e.g. a test) ever passes a memberless-DM list.
+ */
+function placeDmAtNorthSlot(members: readonly SeatMember[]): readonly SeatMember[] {
+  const n = members.length;
+  const dmIndex = members.findIndex((member) => member.role === "dm");
+  if (dmIndex === -1) return members;
+
+  // At odd n there's no index exactly opposite FIRST_SEAT_ANGLE; this picks
+  // the closest one, off by at most π/n — expected, not a bug to chase.
+  const targetIndex = Math.round(n / 2) % n;
+
+  const dm = members[dmIndex];
+  const others = members.filter((_, index) => index !== dmIndex);
+
+  const reordered: SeatMember[] = [];
+  let otherCursor = 0;
+  for (let index = 0; index < n; index++) {
+    if (index === targetIndex) {
+      reordered.push(dm);
+    } else {
+      reordered.push(others[otherCursor]);
+      otherCursor++;
+    }
+  }
+  return reordered;
+}
+
 export function computeSeatLayout(
   members: readonly SeatMember[],
   table: { width: number; depth: number } = TABLE_TOP
@@ -51,7 +92,9 @@ export function computeSeatLayout(
   const semiX = (table.width / 2) * Math.SQRT2 + SEAT_MARGIN;
   const semiZ = (table.depth / 2) * Math.SQRT2 + SEAT_MARGIN;
 
-  return members.map((member, index) => {
+  const ordered = placeDmAtNorthSlot(members);
+
+  return ordered.map((member, index) => {
     const angle = FIRST_SEAT_ANGLE + (index / members.length) * Math.PI * 2;
     const x = semiX * Math.cos(angle);
     const z = semiZ * Math.sin(angle);
