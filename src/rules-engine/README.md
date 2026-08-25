@@ -145,6 +145,39 @@ way: the exactly-at-reach boundary on both sides of a move, one cell past it, di
 escapes and slides along the reach ring under the chessboard rule, longer weapon reach,
 spent-reaction and cannot-react exclusion, and the disengaged mover.
 
-Still future work: the perception/vision engine (Prompt 56) and advantage/disadvantage
-enforcement from conditions/vision (Prompt 59) — Prompt 48 provides the manual toggle and
-the two-d20 mechanics it will drive.
+As of Prompt 56: the perception/vision engine (`perception.ts`) — `computeVisibilityTier`
+resolves one observer/cell pair to a `VisibilityTier` (`"full" | "dim" | "none"`), and
+`computeVisibilityTiers` sweeps a whole array of `{id, position, ambientLight}` cells (map
+cells and token positions alike — a token is just another cell) against one observer in
+input order, the `computeQuickActions`/`computeOpportunityAttacks` shape. Rule, in order:
+(1) `ObserverVision.visionBlocked` — a plain boolean the CALLER derives from whether any of
+the observer's active conditions has `ConditionEffects.blocksVision: true` (Prompt 47's
+blinded, petrified, and unconscious) — short-circuits everything to `"none"` regardless of
+light or range; this module never reads a condition key or catalog itself, so any condition
+that carries (or later gains) that flag gets identical behavior for free, which is the
+"per-condition vision effect property" the task called for, reusing Prompt 47's existing
+flag rather than inventing a second, redundant one. (2) Absent that override, `effectiveLightLevel`
+picks the brightest of a cell's own ambient light and every resolved light source reaching it
+(`gridDistanceFeet(source.position, cell) <= source.radiusFeet`) — light only ever brightens,
+never darkens, and the brightest overlapping contribution wins over the closest or
+last-listed source. (3) Bright effective light is `"full"` for everyone; dim or dark is
+`"full"` when the cell is within `ObserverVision.darkvisionFeet` of the observer, else dim
+light is `"dim"` and darkness is `"none"`. Darkness-within-darkvision-range resolving to
+`"full"` rather than the stricter RAW "darkvision renders darkness as dim, not bright" is a
+deliberate simplification specified exactly as the task text framed it ("per SRD, darkvision
+treats darkness as dim light," used there to justify full visibility) — implemented as
+written, not corrected toward the stricter nuance. `CellLightLevel` and `ResolvedLightSource`
+structurally mirror data-access's `LightLevel`/`LightSource` (rules-engine can't import
+data-access, the `QuickActionInventoryItem` precedent) with the light source pre-resolved to
+a concrete position — this module never looks up an object/token anchor itself. Wall/
+line-of-sight blocking is still out of scope (the future upgrade Prompt 55's LOS flag is laid
+for). Unit-tested exhaustively: bright/dim/dark crossed with normal vision and darkvision at,
+inside, and outside range; light sources upgrading a dark or dim cell (including the
+radius-boundary edge and outside-radius-contributes-nothing); overlapping sources taking the
+brightest regardless of distance/order; the vision-blocked override winning over an
+otherwise-bright, easy-darkvision-range cell; and a made-up, non-"blinded" condition-effect
+flag producing identical behavior, proving the mechanism is genuinely generic (a source-level
+check confirms no condition-key string appears anywhere in `perception.ts`).
+
+Still future work: advantage/disadvantage enforcement from conditions/vision (Prompt 59) —
+Prompt 48 provides the manual toggle and the two-d20 mechanics it will drive.

@@ -3,10 +3,10 @@
 // enforced by eslint-plugin-boundaries (see eslint.config.mjs).
 //
 // Pure D&D 5e SRD mechanics: ability modifiers, saves, skills, spell slots,
-// attack bonuses, movement cost, and range/targeting queries, plus the
-// static SRD content dataset (races, classes, skills, spells, starting
-// equipment) they operate over. Perception/vision and advantage/
-// disadvantage are out of scope here — see Prompt 56 and Prompt 59.
+// attack bonuses, movement cost, range/targeting queries, and perception/
+// vision, plus the static SRD content dataset (races, classes, skills,
+// spells, starting equipment) they operate over. Advantage/disadvantage
+// enforcement is still out of scope here — see Prompt 59.
 export const MODULE_NAME = "rules-engine" as const;
 
 export type {
@@ -104,6 +104,20 @@ export {
 } from "./movement";
 
 export { usableAtRange, isUsableAtRange, type RangedAction } from "./range";
+
+export {
+  computeVisibilityTier,
+  computeVisibilityTiers,
+  effectiveLightLevel,
+  type VisibilityTier,
+  type CellLightLevel,
+  type ResolvedLightSource,
+  type ObserverVision,
+  type ComputeVisibilityTierParams,
+  type VisibilityCellInput,
+  type VisibilityResult,
+  type ComputeVisibilityTiersParams,
+} from "./perception";
 
 export {
   parseDiceNotation,
