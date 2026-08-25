@@ -108,6 +108,27 @@ function. Consumers: the map picker's per-card Duplicate button and the starter-
 create flow (`src/app/campaigns/[id]/maps/lib/templates.ts` defines the static Empty Room /
 Corridor / Tavern layouts over the 0016 preset asset ids).
 
+As of Prompt 42, `mapTransitions.ts` owns map-to-map transition links: a `map_transitions`
+table (migration `0025_map_transitions.sql`) mapping an origin cell on one map to an entry
+cell on another — directional (a two-way staircase is two authored rows), one outgoing
+transition per origin cell (`unique(from_map_id, from_x, from_y)`), both map FKs
+`on delete cascade`. RLS is DM-only for BOTH read and write, mirroring `map_folders`
+rather than the member-sees-live-map carve-out, because the runtime transition prompt is
+DM-facing only; every policy requires `can_write_map` on BOTH `from_map_id` AND
+`to_map_id` — the same both-sides check as `lore_page_links`, so a DM can never point a
+transition at a map in a campaign they don't control. CRUD is `listMapTransitions`
+(outgoing links for a map) / `createMapTransition` / `deleteMapTransition`. `mapTokens.ts`
+gains the companion `transitionMapToken(supabase, token, destination)` — the only write
+that changes a token's `map_id` (moveMapToken is same-map by construction). It handles the
+`unique(map_id, character_id)` collision deliberately: if the character already has a
+stale token on the destination map from an earlier visit, that existing row is moved to
+the entry cell and the source row is deleted (returning `removedTokenId` so callers can
+broadcast the removal), leaving exactly one row per character per map instead of an
+unhandled constraint violation. Authoring UI is a form-based "Link transition" tool in the
+map editor (destination picked from a dropdown + validated entry X/Y, since the editor
+renders only one 3D scene); the runtime offer lives in the Game Room and rides the
+existing token-change broadcast plus the Prompt 29 live-map-switch flow.
+
 This is a schema/RLS/data-access-only prompt (UI for these tables is deferred: NPC roster
 in 33, lore pages in 34, and further prompts for quests/session log/handouts/notes/house
 rules). Every write function is DM-gated purely by the table's own RLS (0020) — no RPC

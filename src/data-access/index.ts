@@ -115,12 +115,19 @@ export {
   placeCharacterToken,
   placeNpcToken,
   moveMapToken,
+  transitionMapToken,
   setTokenAllegiance,
   deleteMapToken,
   TOKEN_ALLEGIANCES,
   type MapToken,
   type TokenAllegiance,
 } from "./mapTokens";
+export {
+  listMapTransitions,
+  createMapTransition,
+  deleteMapTransition,
+  type MapTransition,
+} from "./mapTransitions";
 export {
   listCharacterResources,
   createCharacterResource,

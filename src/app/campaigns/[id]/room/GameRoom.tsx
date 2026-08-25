@@ -14,6 +14,7 @@ import {
   listMapCells,
   listMapObjects,
   listMapTokens,
+  listMapTransitions,
   moveMapToken,
   parseMapObjectBehavior,
   placeCharacterToken,
@@ -22,6 +23,7 @@ import {
   setLiveMap,
   setTokenAllegiance,
   subscribeToProfileChanges,
+  transitionMapToken,
   triggerMapObject,
   uploadHandoutFile,
   type CampaignMap,
@@ -30,6 +32,7 @@ import {
   type MapCell,
   type MapObject,
   type MapToken,
+  type MapTransition,
   type SupabaseClient,
   type TokenAllegiance,
 } from "@/data-access";
@@ -220,6 +223,53 @@ export function GameRoom({
     }
   }, []);
 
+  // A pending transition offer, shown to the DM only (see maybeOfferTransition).
+  const [transitionOffer, setTransitionOffer] = useState<{
+    token: MapToken;
+    transition: MapTransition;
+  } | null>(null);
+  const [transitionBusy, setTransitionBusy] = useState(false);
+  const [transitionError, setTransitionError] = useState<string | null>(null);
+  // Ref, not state: only broadcast/move handlers consult the list, so a
+  // fetch landing never needs a re-render.
+  const transitionsRef = useRef<MapTransition[]>([]);
+
+  const liveMapId = liveMap?.map.id ?? null;
+  useEffect(() => {
+    transitionsRef.current = [];
+    // Transitions are DM-only-readable (0025) and the offer is DM-only by
+    // design — a player's client would just get an empty list back anyway.
+    if (!currentUserIsDM || !liveMapId) return;
+    let cancelled = false;
+    listMapTransitions(createBrowserSupabaseClient(), liveMapId)
+      .then((rows) => {
+        if (!cancelled) transitionsRef.current = rows;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserIsDM, liveMapId]);
+
+  // The single point of authority for crossing a transition is the DM,
+  // matching setLiveMap being DM-only everywhere else: whoever moved the
+  // token (DM locally, or a player whose move arrives by broadcast), only
+  // the DM's client surfaces the offer — no player-facing decision UI, so
+  // two clients can never answer the same offer differently.
+  const maybeOfferTransition = useCallback(
+    (token: MapToken) => {
+      if (!currentUserIsDM) return;
+      const transition = transitionsRef.current.find(
+        (candidate) =>
+          candidate.from_map_id === token.map_id &&
+          candidate.from_x === token.x &&
+          candidate.from_y === token.y
+      );
+      if (transition) setTransitionOffer({ token, transition });
+    },
+    [currentUserIsDM]
+  );
+
   const [armedToken, setArmedToken] = useState<TokenArm | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
@@ -266,10 +316,11 @@ export function GameRoom({
     liveMapRef.current = next;
     setLiveMapState(next);
     // Whatever was armed or mid-drag referred to the previous map's
-    // cells/tokens.
+    // cells/tokens — and so did any pending transition offer.
     setArmedToken(null);
     tokenDragRef.current = null;
     setTokenDrag(null);
+    setTransitionOffer(null);
   }, []);
 
   // Live avatar sync: a postgres_changes feed on profiles (see data-access's
@@ -348,7 +399,16 @@ export function GameRoom({
       applyTriggered(payload.objectId, payload.triggered);
     });
     const unsubscribeToken = channel.subscribe<TokenPayload>(TOKEN_EVENT, (payload) => {
+      // Position compared against the pre-update row so only genuine moves
+      // (a player's drag, or the DM acting in another window) can raise a
+      // transition offer — placements and allegiance flips never do.
+      const previous =
+        liveMapRef.current?.tokens.find((candidate) => candidate.id === payload.tokenId) ?? null;
       applyTokenChange(payload.tokenId, payload.token);
+      const token = payload.token;
+      if (token && previous && (previous.x !== token.x || previous.y !== token.y)) {
+        maybeOfferTransition(token);
+      }
     });
     const unsubscribeHandout = channel.subscribe<HandoutPayload>(HANDOUT_EVENT, (payload) => {
       const row = payload.handout;
@@ -395,7 +455,7 @@ export function GameRoom({
       campaignChannelRef.current = null;
       void channel.leave();
     };
-  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered, applyTokenChange, applyHandoutChange]);
+  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered, applyTokenChange, applyHandoutChange, maybeOfferTransition]);
 
   const triggeringRef = useRef(false);
   const handleTrigger = useCallback(
@@ -485,13 +545,14 @@ export function GameRoom({
         applyTokenChange(token.id, token);
         setArmedToken(null);
         await publishTokenChange(token.id, token);
+        if (armedToken.kind === "move") maybeOfferTransition(token);
       } catch (err) {
         setTokenError(errorMessage(err) ?? "Could not place that token.");
       } finally {
         setTokenBusy(false);
       }
     },
-    [armedToken, tokenBusy, applyTokenChange, publishTokenChange]
+    [armedToken, tokenBusy, applyTokenChange, publishTokenChange, maybeOfferTransition]
   );
 
   const handleTokenDragStart = useCallback(
@@ -534,12 +595,13 @@ export function GameRoom({
       });
       applyTokenChange(token.id, token);
       await publishTokenChange(token.id, token);
+      maybeOfferTransition(token);
     } catch (err) {
       setTokenError(errorMessage(err) ?? "Could not move that token.");
     } finally {
       setTokenBusy(false);
     }
-  }, [tokenBusy, applyTokenChange, publishTokenChange]);
+  }, [tokenBusy, applyTokenChange, publishTokenChange, maybeOfferTransition]);
 
   const handleRemoveToken = useCallback(
     async (token: MapToken) => {
@@ -575,6 +637,56 @@ export function GameRoom({
       }
     },
     [tokenBusy, applyTokenChange, publishTokenChange]
+  );
+
+  const handleConfirmTransition = useCallback(
+    async (wholeParty: boolean) => {
+      const offer = transitionOffer;
+      const current = liveMapRef.current;
+      if (!offer || !current || transitionBusy) return;
+      setTransitionBusy(true);
+      setTransitionError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const { transition } = offer;
+        // The entry cell's stored elevation on the DESTINATION map (sparse
+        // rows, absent means 0) — same lookup in-map moves already do.
+        const destinationCells = await listMapCells(supabase, transition.to_map_id);
+        const destination = {
+          mapId: transition.to_map_id,
+          x: transition.to_x,
+          y: transition.to_y,
+          elevation: cellElevation(destinationCells, transition.to_x, transition.to_y),
+        };
+        // "Whole party" = every party-allegiance token on the source map
+        // (never NPCs/hostiles), plus the triggering token itself; all land
+        // stacked on the entry cell — tokens may share a cell here as
+        // anywhere else.
+        const movers = new Map<string, MapToken>([[offer.token.id, offer.token]]);
+        if (wholeParty) {
+          for (const token of current.tokens) {
+            if (token.allegiance === "party") movers.set(token.id, token);
+          }
+        }
+        for (const token of movers.values()) {
+          const { moved, removedTokenId } = await transitionMapToken(supabase, token, destination);
+          if (removedTokenId) await publishTokenChange(removedTokenId, null);
+          await publishTokenChange(moved.id, moved);
+        }
+        setTransitionOffer(null);
+        // Known limitation, by design: any token NOT moved through the
+        // transition stays at its old position on the old map, yet every
+        // connected client still follows this switch — there is only ONE
+        // live map per campaign, so a stay-behind token is simply absent
+        // from the new live map's view rather than splitting the table.
+        await handleSwitchMap(transition.to_map_id);
+      } catch (err) {
+        setTransitionError(errorMessage(err) ?? "Could not move through the transition.");
+      } finally {
+        setTransitionBusy(false);
+      }
+    },
+    [transitionOffer, transitionBusy, publishTokenChange, handleSwitchMap]
   );
 
   const handleCreateHandout = useCallback(
@@ -750,6 +862,20 @@ export function GameRoom({
     };
   }, [tokenDrag, liveMap, cellOverlay, characters]);
 
+  const transitionOfferView = useMemo(() => {
+    if (!transitionOffer) return null;
+    const character = transitionOffer.token.character_id
+      ? (characters.find((candidate) => candidate.id === transitionOffer.token.character_id) ?? null)
+      : null;
+    return {
+      destinationName:
+        availableMaps.find((candidate) => candidate.id === transitionOffer.transition.to_map_id)
+          ?.name ?? "another map",
+      tokenLabel: character?.name ?? transitionOffer.token.npc_name ?? "this token",
+      transition: transitionOffer.transition,
+    };
+  }, [transitionOffer, availableMaps, characters]);
+
   const interactiveEntries = useMemo<InteractiveEntry[]>(
     () =>
       (liveMap?.objects ?? []).flatMap((object) => {
@@ -877,6 +1003,65 @@ export function GameRoom({
           <div className={styles.handoutModalBody} data-testid="handout-reveal-modal">
             <span className={styles.objectName}>{handoutPopup.title}</span>
             <HandoutContent handout={handoutPopup} />
+          </div>
+        ) : null}
+      </Modal>
+      <Modal
+        open={transitionOfferView !== null}
+        onClose={() => {
+          if (!transitionBusy) setTransitionOffer(null);
+        }}
+        title="Map transition"
+        footer={
+          transitionOfferView ? (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={transitionBusy}
+                onClick={() => setTransitionOffer(null)}
+                data-testid="transition-dismiss"
+              >
+                Not now
+              </Button>
+              <Button
+                size="sm"
+                variant="teal"
+                disabled={transitionBusy}
+                onClick={() => void handleConfirmTransition(false)}
+                data-testid="transition-move-token"
+              >
+                {transitionBusy ? "Moving…" : "Just this token"}
+              </Button>
+              <Button
+                size="sm"
+                variant="accent"
+                disabled={transitionBusy}
+                onClick={() => void handleConfirmTransition(true)}
+                data-testid="transition-move-party"
+              >
+                Move the whole party
+              </Button>
+            </>
+          ) : null
+        }
+      >
+        {transitionOfferView ? (
+          <div data-testid="transition-offer-modal">
+            <p>
+              This leads to <span className={styles.objectName}>{transitionOfferView.destinationName}</span> —
+              move <span className={styles.objectName}>{transitionOfferView.tokenLabel}</span> to its entry
+              cell ({transitionOfferView.transition.to_x},{transitionOfferView.transition.to_y})?
+            </p>
+            <p className={styles.hint}>
+              The live map switches for everyone. Tokens left behind stay where they are on this map
+              and won&apos;t appear until the table returns here.
+            </p>
+            {transitionError ? (
+              <p role="alert" className={styles.errorText} data-testid="transition-offer-error">
+                {transitionError}
+              </p>
+            ) : null}
           </div>
         ) : null}
       </Modal>

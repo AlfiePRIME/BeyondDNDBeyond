@@ -94,6 +94,59 @@ export async function moveMapToken(
   return data;
 }
 
+/**
+ * Moves a token to a DIFFERENT map (a map-transition crossing) — the only
+ * write that changes map_id; moveMapToken is same-map by construction.
+ *
+ * Returns the resulting destination-map token plus the id of any row this
+ * removed, so callers can broadcast both effects.
+ */
+export async function transitionMapToken(
+  supabase: SupabaseClient,
+  token: MapToken,
+  destination: { mapId: string; x: number; y: number; elevation: number }
+): Promise<{ moved: MapToken; removedTokenId: string | null }> {
+  // map_tokens has unique(map_id, character_id) (0019) — nulls-distinct, so
+  // only PC tokens can collide. A character who visited the destination map
+  // earlier may still have a stale token sitting there, and re-pointing this
+  // token's map_id at it would violate the constraint; instead the STALE row
+  // becomes the character's token (moved to the entry cell) and the source
+  // row is deleted — one resulting row either way.
+  if (token.character_id) {
+    const { data: existing, error } = await supabase
+      .from("map_tokens")
+      .select()
+      .eq("map_id", destination.mapId)
+      .eq("character_id", token.character_id)
+      .maybeSingle();
+    if (error) throw error;
+    if (existing) {
+      const moved = await moveMapToken(supabase, existing.id, {
+        x: destination.x,
+        y: destination.y,
+        elevation: destination.elevation,
+      });
+      await deleteMapToken(supabase, token.id);
+      return { moved, removedTokenId: token.id };
+    }
+  }
+
+  const { data, error } = await supabase
+    .from("map_tokens")
+    .update({
+      map_id: destination.mapId,
+      x: destination.x,
+      y: destination.y,
+      elevation: destination.elevation,
+    })
+    .eq("id", token.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return { moved: data, removedTokenId: null };
+}
+
 export async function setTokenAllegiance(
   supabase: SupabaseClient,
   tokenId: string,

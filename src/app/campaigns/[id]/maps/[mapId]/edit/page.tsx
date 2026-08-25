@@ -1,6 +1,14 @@
 import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { getMap, isDM, listAssetsForCampaign, listMapCells, listMapObjects } from "@/data-access";
+import {
+  getMap,
+  isDM,
+  listAssetsForCampaign,
+  listMapCells,
+  listMapObjects,
+  listMapsForCampaign,
+  listMapTransitions,
+} from "@/data-access";
 import { isAiConfigured } from "@/ai";
 import { MapEditor } from "./MapEditor";
 import { resolvePaletteAssets } from "./lib/assetUrl";
@@ -34,10 +42,12 @@ export default async function MapEditPage({
   const map = await getMap(supabase, mapId);
   if (!map || map.campaign_id !== campaignId) notFound();
 
-  const [cells, objects, assets] = await Promise.all([
+  const [cells, objects, assets, campaignMaps, transitions] = await Promise.all([
     listMapCells(supabase, mapId),
     listMapObjects(supabase, mapId),
     listAssetsForCampaign(supabase, campaignId),
+    listMapsForCampaign(supabase, campaignId),
+    listMapTransitions(supabase, mapId),
   ]);
   const paletteAssets = await resolvePaletteAssets(supabase, assets);
 
@@ -50,6 +60,8 @@ export default async function MapEditPage({
       initialObjects={objects}
       assets={paletteAssets}
       aiEnabled={isAiConfigured()}
+      campaignMaps={campaignMaps}
+      initialTransitions={transitions}
     />
   );
 }

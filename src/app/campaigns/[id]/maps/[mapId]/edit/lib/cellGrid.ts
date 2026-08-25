@@ -14,12 +14,13 @@ export const DEFAULT_CELL: CellState = { elevation: 0, terrain: "normal" };
 // a 50 ft cliff at the rules-engine's 5 ft per step.
 export const MAX_ELEVATION = 10;
 
-export type EditorTool = "raise" | "lower" | "terrain" | "object" | "generate";
+export type EditorTool = "raise" | "lower" | "terrain" | "object" | "generate" | "transition";
 
 /** The paint-a-cell tools. "object" is excluded because it routes through
  * the discrete place/select/move flow, never through applyTool; "generate"
- * because its drag defines a selection rectangle, not per-cell edits. */
-export type SculptTool = Exclude<EditorTool, "object" | "generate">;
+ * because its drag defines a selection rectangle, not per-cell edits;
+ * "transition" because its click picks a link origin, editing nothing. */
+export type SculptTool = Exclude<EditorTool, "object" | "generate" | "transition">;
 
 export function cellKey(x: number, y: number): string {
   return `${x},${y}`;

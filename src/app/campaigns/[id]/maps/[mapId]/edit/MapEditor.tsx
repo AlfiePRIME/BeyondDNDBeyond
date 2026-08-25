@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Canvas } from "@react-three/fiber";
-import { Button, ChoiceCard, TextInput } from "@/ui-components";
+import { Button, ChoiceCard, Select, TextInput } from "@/ui-components";
 import {
   createMapObject,
+  createMapTransition,
   deleteMapObject,
+  deleteMapTransition,
   restoreMapObject,
   setMapObjectBehavior,
   updateMapObject,
@@ -15,6 +17,7 @@ import {
   type MapCell,
   type MapObject,
   type MapObjectBehavior,
+  type MapTransition,
   type SupabaseClient,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
@@ -93,6 +96,8 @@ export function MapEditor({
   initialObjects,
   assets,
   aiEnabled,
+  campaignMaps,
+  initialTransitions,
 }: {
   campaignId: string;
   campaignName: string;
@@ -101,6 +106,8 @@ export function MapEditor({
   initialObjects: MapObject[];
   assets: PaletteAsset[];
   aiEnabled: boolean;
+  campaignMaps: CampaignMap[];
+  initialTransitions: MapTransition[];
 }) {
   const [overlay, setOverlay] = useState(() => overlayFromRows(initialCells));
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
@@ -115,6 +122,19 @@ export function MapEditor({
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [moveArmed, setMoveArmed] = useState(false);
   const [objectError, setObjectError] = useState<string | null>(null);
+
+  const otherMaps = useMemo(
+    () => campaignMaps.filter((candidate) => candidate.id !== map.id),
+    [campaignMaps, map.id]
+  );
+
+  const [transitions, setTransitions] = useState<MapTransition[]>(initialTransitions);
+  const [transitionCell, setTransitionCell] = useState<{ x: number; y: number } | null>(null);
+  const [destMapId, setDestMapId] = useState<string>(otherMaps[0]?.id ?? "");
+  const [destX, setDestX] = useState("0");
+  const [destY, setDestY] = useState("0");
+  const [transitionBusy, setTransitionBusy] = useState(false);
+  const [transitionError, setTransitionError] = useState<string | null>(null);
 
   const [region, setRegion] = useState<EditorRegion | null>(null);
   const [areaPrompt, setAreaPrompt] = useState("");
@@ -251,7 +271,7 @@ export function MapEditor({
   const handlePaintCell = useCallback(
     (x: number, y: number) => {
       const tool = toolRef.current;
-      if (tool === "object") return;
+      if (tool === "object" || tool === "transition") return;
       if (historyBusyRef.current) return;
 
       if (tool === "generate") {
@@ -637,10 +657,68 @@ export function MapEditor({
     });
   }
 
+  const handleTransitionCellClick = useCallback((x: number, y: number) => {
+    setTransitionCell({ x, y });
+    setTransitionError(null);
+  }, []);
+
+  // Transition authoring stays OUTSIDE undo/redo: unlike paint strokes it's
+  // a deliberate, low-frequency act behind an explicit form submit with no
+  // accidental-stroke risk, and each link has its own immediate Remove.
+  async function handleCreateTransition() {
+    const origin = transitionCell;
+    const destMap = otherMaps.find((candidate) => candidate.id === destMapId) ?? null;
+    if (!origin || !destMap || transitionBusy) return;
+    if (
+      transitions.some(
+        (candidate) => candidate.from_x === origin.x && candidate.from_y === origin.y
+      )
+    ) {
+      setTransitionError("That cell already leads somewhere — remove its link first.");
+      return;
+    }
+    setTransitionBusy(true);
+    setTransitionError(null);
+    try {
+      const created = await createMapTransition(createBrowserSupabaseClient(), {
+        fromMapId: map.id,
+        fromX: origin.x,
+        fromY: origin.y,
+        toMapId: destMap.id,
+        toX: Number(destX),
+        toY: Number(destY),
+      });
+      setTransitions((prev) => [...prev, created]);
+      setTransitionCell(null);
+    } catch (err) {
+      setTransitionError(errorMessage(err) ?? "Could not create that transition.");
+    } finally {
+      setTransitionBusy(false);
+    }
+  }
+
+  async function handleRemoveTransition(transitionId: string) {
+    if (transitionBusy) return;
+    setTransitionBusy(true);
+    setTransitionError(null);
+    try {
+      await deleteMapTransition(createBrowserSupabaseClient(), transitionId);
+      setTransitions((prev) => prev.filter((candidate) => candidate.id !== transitionId));
+    } catch (err) {
+      setTransitionError(errorMessage(err) ?? "Could not remove that transition.");
+    } finally {
+      setTransitionBusy(false);
+    }
+  }
+
   function switchTool(next: EditorTool) {
     setTool(next);
     setSelectedObjectId(null);
     setMoveArmed(false);
+    if (next !== "transition") {
+      setTransitionCell(null);
+      setTransitionError(null);
+    }
     // The selection rectangle only outlives the generate tool while a draft
     // is under review — it marks where the preview branch applies.
     if (!previewRef.current && next !== "generate") {
@@ -833,6 +911,24 @@ export function MapEditor({
 
   const regionCellCount = region ? region.width * region.height : 0;
 
+  const mapNameById = useMemo(
+    () => new Map(campaignMaps.map((candidate) => [candidate.id, candidate.name])),
+    [campaignMaps]
+  );
+  const destMap = otherMaps.find((candidate) => candidate.id === destMapId) ?? null;
+  const destXNum = Number(destX);
+  const destYNum = Number(destY);
+  const destinationValid =
+    destMap !== null &&
+    destX.trim() !== "" &&
+    destY.trim() !== "" &&
+    Number.isInteger(destXNum) &&
+    Number.isInteger(destYNum) &&
+    destXNum >= 0 &&
+    destXNum < destMap.grid_width &&
+    destYNum >= 0 &&
+    destYNum < destMap.grid_height;
+
   return (
     <div className={styles.editor}>
       <Canvas dpr={[1, 2]}>
@@ -842,8 +938,20 @@ export function MapEditor({
           cells={cells}
           onPaintCell={handlePaintCell}
           onStrokeEnd={handleStrokeEnd}
-          onCellClick={tool === "object" ? handleCellClick : undefined}
-          region={region}
+          onCellClick={
+            tool === "object"
+              ? handleCellClick
+              : tool === "transition"
+                ? handleTransitionCellClick
+                : undefined
+          }
+          region={
+            tool === "transition"
+              ? transitionCell
+                ? { x: transitionCell.x, y: transitionCell.y, width: 1, height: 1 }
+                : null
+              : region
+          }
           objects={sceneObjects}
           selectedObjectId={selectedObjectId}
           onSelectObject={tool === "object" ? handleSelectObject : undefined}
@@ -1060,6 +1168,116 @@ export function MapEditor({
             {objectError ? (
               <p role="alert" className={styles.errorText} data-testid="object-error">
                 {objectError}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+        <span className={styles.toolbarLabel}>Transitions</span>
+        <div className={styles.toolRow}>
+          <Button
+            size="sm"
+            variant={tool === "transition" ? "primary" : "ghost"}
+            onClick={() => switchTool("transition")}
+            data-testid="tool-transition"
+          >
+            Link transition
+          </Button>
+        </div>
+        {tool === "transition" ? (
+          <>
+            {otherMaps.length === 0 ? (
+              <p className={styles.hint}>
+                This campaign has no other maps yet — create a second map to link to.
+              </p>
+            ) : transitionCell ? (
+              <>
+                <span className={styles.selectedMeta} data-testid="transition-origin-label">
+                  Origin cell ({transitionCell.x},{transitionCell.y})
+                </span>
+                <Select
+                  label="Destination map"
+                  value={destMapId}
+                  onChange={(event) => setDestMapId(event.target.value)}
+                  disabled={transitionBusy}
+                  data-testid="transition-destination-map"
+                >
+                  {otherMaps.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.name} · {candidate.grid_width}×{candidate.grid_height}
+                    </option>
+                  ))}
+                </Select>
+                <TextInput
+                  label={`Entry X (0–${destMap ? destMap.grid_width - 1 : 0})`}
+                  type="number"
+                  min={0}
+                  max={destMap ? destMap.grid_width - 1 : 0}
+                  value={destX}
+                  onChange={(event) => setDestX(event.target.value)}
+                  disabled={transitionBusy}
+                  data-testid="transition-entry-x"
+                />
+                <TextInput
+                  label={`Entry Y (0–${destMap ? destMap.grid_height - 1 : 0})`}
+                  type="number"
+                  min={0}
+                  max={destMap ? destMap.grid_height - 1 : 0}
+                  value={destY}
+                  onChange={(event) => setDestY(event.target.value)}
+                  disabled={transitionBusy}
+                  data-testid="transition-entry-y"
+                />
+                <div className={styles.toolRow}>
+                  <Button
+                    size="sm"
+                    variant="teal"
+                    disabled={transitionBusy || !destinationValid}
+                    onClick={handleCreateTransition}
+                    data-testid="create-transition"
+                  >
+                    {transitionBusy ? "Linking…" : "Create link"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={transitionBusy}
+                    onClick={() => setTransitionCell(null)}
+                    data-testid="cancel-transition"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className={styles.hint}>
+                Click the cell on this map that leads elsewhere, then pick where it goes.
+              </p>
+            )}
+            {transitions.length > 0 ? (
+              <div data-testid="transition-list">
+                {transitions.map((transition) => (
+                  <div key={transition.id} className={styles.toolRow} data-testid={`transition-${transition.id}`}>
+                    <span className={styles.selectedMeta}>
+                      ({transition.from_x},{transition.from_y}) →{" "}
+                      {mapNameById.get(transition.to_map_id) ?? "Unknown map"} (
+                      {transition.to_x},{transition.to_y})
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      disabled={transitionBusy}
+                      onClick={() => void handleRemoveTransition(transition.id)}
+                      data-testid={`remove-transition-${transition.id}`}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {transitionError ? (
+              <p role="alert" className={styles.errorText} data-testid="transition-error">
+                {transitionError}
               </p>
             ) : null}
           </>
