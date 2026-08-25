@@ -778,26 +778,19 @@
   background: color-mix(in srgb, var(--red) 18%, transparent);
 }
 
-/* The DM Controls panel: top edge, between the centered quick-actions
-   panel (400px) and the right-anchored handout panel (320px + 24px
-   margin), so all three top-row surfaces stay visible at once. A plain
-   labeled panel of sections on purpose — Prompt 53's action-economy
-   strictness toggle is specified to join the rule-overrides section as a
-   sibling section here. */
+/* The DM Controls panel. Phase 4: no longer `position: absolute` (was the
+   top edge, between the centered quick-actions panel and the right-
+   anchored handout panel) — the DM's book (DmBook.tsx/.module.css) is now
+   the ONLY thing that ever mounts this component, and its own
+   `.pageContent` owns position/width/background/border instead. Only the
+   layout-of-its-own-content half survives here: a plain labeled column of
+   sections, Prompt 53's action-economy strictness toggle joining the
+   rule-overrides section as a sibling section. */
 .dmControlsPanel {
-  position: absolute;
-  right: 368px;
-  top: 64px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 16px;
-  width: 300px;
-  max-height: 30vh;
-  overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  border-radius: 8px;
 }
 
 .dmControlsSection {
@@ -819,22 +812,16 @@
   border-radius: 6px;
 }
 
-/* Prompt 61: the DM's monster stat-block tooling — left edge, seated
-   between the top-anchored combat panel (64px + 26vh) and the
-   bottom-anchored token panel, sharing their width and translucent
-   surface. DM-only: GameRoom never renders it for players. */
+/* Prompt 61: the DM's monster stat-block tooling. Phase 4: no longer
+   `position: absolute` (was the left edge, between the top-anchored combat
+   panel and the bottom-anchored token panel) — the DM's book (DmBook.tsx/
+   .module.css) is now the ONLY thing that ever mounts this component, and
+   its own `.pageContent` owns position/width/background/border instead.
+   Only the layout-of-its-own-content half survives here. DM-only: GameRoom
+   never renders it for players. */
 .monsterPanel {
-  position: absolute;
-  left: 24px;
-  top: calc(64px + 26vh + 12px);
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 16px;
-  width: 300px;
-  max-height: 30vh;
-  overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--orange) 35%, transparent);
-  border-radius: 8px;
 }

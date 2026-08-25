@@ -30,23 +30,32 @@ const EMPTY_ATTACK: AttackDraft = { name: "", bonus: "", damageNotation: "" };
  * prompting for initiative and seating the combatant via add_combatant in
  * the same gesture. With no combat running, placement alone is the whole
  * action.
+ *
+ * Phase 4: mounted as the DM's book's "Enemies" page — the book keeps this
+ * mounted whenever that page is open regardless of whether a live map
+ * exists, so stat blocks can be prepped between maps; `hasLiveMap` gates
+ * only the Quick add action (which needs a live grid to click), not the
+ * panel's existence.
  */
 export function MonsterPanel({
   statBlocks,
   rosterNpcs,
   combatActive,
+  hasLiveMap,
   busy,
   error,
   onCreate,
   onUpdate,
   onDelete,
   onQuickAdd,
-  className,
 }: {
   statBlocks: MonsterStatBlock[];
   /** The Prompt 33 narrative roster, for the name pre-fill convenience. */
   rosterNpcs: Npc[];
   combatActive: boolean;
+  /** Gates Quick add only (its own doc comment above) — false between maps
+   * or before one has ever gone live. */
+  hasLiveMap: boolean;
   busy: boolean;
   error: string | null;
   onCreate: (params: {
@@ -69,13 +78,6 @@ export function MonsterPanel({
   onDelete: (statBlock: MonsterStatBlock) => void;
   /** Arms grid-click placement for this block's token (GameRoom). */
   onQuickAdd: (statBlock: MonsterStatBlock) => void;
-  /** Appended to the root `<aside>` — Phase C's DmToolPeel uses this for
-   * its reveal-entrance animation, applied directly here rather than on a
-   * wrapping div (a transform-based animation on a wrapper would become a
-   * new CSS containing block for this `position: absolute` root,
-   * relocating it relative to the wrapper instead of the room stage for
-   * the animation's duration — see DmToolPeel.tsx). */
-  className?: string;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -171,10 +173,7 @@ export function MonsterPanel({
   }
 
   return (
-    <aside
-      className={[styles.monsterPanel, className].filter(Boolean).join(" ")}
-      data-testid="monster-panel"
-    >
+    <aside className={styles.monsterPanel} data-testid="monster-panel">
       <div className={styles.objectHeader}>
         <span className={styles.panelLabel}>Monsters</span>
         <Badge tone="red">DM only</Badge>
@@ -211,9 +210,10 @@ export function MonsterPanel({
                 <Button
                   size="sm"
                   variant="accent"
-                  disabled={busy}
+                  disabled={busy || !hasLiveMap}
                   onClick={() => onQuickAdd(statBlock)}
                   data-testid={`quick-add-${statBlock.id}`}
+                  title={hasLiveMap ? undefined : "Switch to a live map to place tokens"}
                 >
                   Quick add
                 </Button>
@@ -240,9 +240,12 @@ export function MonsterPanel({
           ))}
         </div>
       )}
-      <p className={styles.hint}>
-        Quick add places the token by grid click
-        {combatActive ? ", then asks for its initiative to join the fight" : ""}.
+      <p className={styles.hint} data-testid="monster-panel-quick-add-hint">
+        {hasLiveMap
+          ? `Quick add places the token by grid click${
+              combatActive ? ", then asks for its initiative to join the fight" : ""
+            }.`
+          : "Stat blocks can be prepped here between maps — Quick add needs a live map to place tokens."}
       </p>
 
       <div className={styles.tokenSection} data-testid="stat-block-form">

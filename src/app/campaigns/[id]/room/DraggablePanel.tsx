@@ -25,12 +25,13 @@ import styles from "./DraggablePanel.module.css";
 /**
  * Stable identity for every Game Room panel mounted through DraggablePanel.
  * Phase B covers these 7; MonsterPanel/DmOverridesPanel are deliberately
- * NOT here (reserved for Phase C's different treatment — see the
- * PanelLayoutProvider doc comment's extension-point note below). Adding a
- * new draggable panel later is exactly: extend this union, add its default
- * anchor to DEFAULT_ANCHOR_CLASS (and a matching class in
- * DraggablePanel.module.css if none of the existing anchors fit), mount it
- * through DraggablePanel in GameRoom.
+ * NOT here — Phase 4's DM's book (DmBook.tsx) now hosts both, intentionally
+ * outside this drag/collapse system entirely (see the PanelLayoutProvider
+ * doc comment's extension-point note below). Adding a new draggable panel
+ * later is exactly: extend this union, add its default anchor to
+ * DEFAULT_ANCHOR_CLASS (and a matching class in DraggablePanel.module.css
+ * if none of the existing anchors fit), mount it through DraggablePanel in
+ * GameRoom.
  */
 export type PanelId =
   | "map"
@@ -141,12 +142,15 @@ const PanelLayoutContext = createContext<PanelLayoutContextValue | null>(null);
  * campaign-scoped — see profiles.ts), and debounces writes back so a drag
  * gesture never write-storms the database.
  *
- * EXTENSION POINT for Phase C/D: this context is the single source of
- * truth for panel position/collapsed/z-index state, decoupled from any
- * particular rendering of it. A later phase that needs to compose
- * something ELSE on top of a panel (e.g. Phase C's different, Peel-reveal
- * treatment for MonsterPanel/DmOverridesPanel) has two clean paths without
- * touching this file's internals:
+ * EXTENSION POINT, historically named for Phase C/D: this context is the
+ * single source of truth for panel position/collapsed/z-index state,
+ * decoupled from any particular rendering of it. As it turned out, neither
+ * later phase actually needed it — Phase C's Peel-reveal treatment for
+ * MonsterPanel/DmOverridesPanel was built, then abandoned (DmToolPeel.tsx,
+ * deleted); Phase 4's DM's book (DmBook.tsx) that superseded it is
+ * intentionally fixed-position and outside this whole system, not a new
+ * consumer of it. The extension point remains available for whatever
+ * future panel actually needs it:
  *
  *   1. Treat it exactly like the 7 panels here: add the panel's id to
  *      `PanelId` and a default anchor to `DEFAULT_ANCHOR_CLASS`, then

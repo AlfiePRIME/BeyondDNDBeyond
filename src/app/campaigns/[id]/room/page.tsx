@@ -10,8 +10,11 @@ import {
   listCombatCombatants,
   listCombatantConditions,
   listCombatantHiddenFrom,
+  listDmNotes,
   listHandouts,
   listLightSources,
+  listLorePages,
+  listLorePageLinksForCampaign,
   listMapCells,
   listMapObjects,
   listMapsForCampaign,
@@ -73,28 +76,52 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   // The DB read here (not any broadcast) is what makes fresh joins and
   // reloads land on the currently-live map — a client that wasn't connected
   // when the DM switched never saw the live-map-changed event.
-  const [assets, availableMaps, characters, handoutRows, initialRolls, initialStatBlocks, rosterNpcs] =
-    await Promise.all([
-      listAssetsForCampaign(supabase, campaignId),
-      // Non-DM RLS only exposes the live map anyway, and only the DM gets the
-      // picker — no point fetching a list for players.
-      currentUserIsDM ? listMapsForCampaign(supabase, campaignId) : Promise.resolve([]),
-      // Characters RLS trims this per viewer: a player gets only their own,
-      // the DM gets every campaign character — exactly who each may place.
-      listCharactersForCampaign(supabase, campaignId),
-      // Handouts RLS trims per viewer too: every row for the DM, revealed
-      // rows only for a player.
-      listHandouts(supabase, campaignId),
-      // Same DB-read reasoning as the live map: fresh joins see recent rolls
-      // without having been subscribed when they landed.
-      listRollLog(supabase, campaignId),
-      // Monster stat blocks (Prompt 61), member-readable — AC auto-fill
-      // for stat-blocked NPC targets needs them on every client.
-      listMonsterStatBlocks(supabase, campaignId),
-      // The narrative roster, only for the DM's MonsterPanel name
-      // pre-fill; players never see the panel, so no point fetching.
-      currentUserIsDM ? listNpcs(supabase, campaignId) : Promise.resolve([]),
-    ]);
+  const [
+    assets,
+    availableMaps,
+    characters,
+    handoutRows,
+    initialRolls,
+    initialStatBlocks,
+    rosterNpcs,
+    dmNoteRows,
+    initialLorePages,
+    initialLorePageLinks,
+  ] = await Promise.all([
+    listAssetsForCampaign(supabase, campaignId),
+    // Non-DM RLS only exposes the live map anyway, and only the DM gets the
+    // picker — no point fetching a list for players.
+    currentUserIsDM ? listMapsForCampaign(supabase, campaignId) : Promise.resolve([]),
+    // Characters RLS trims this per viewer: a player gets only their own,
+    // the DM gets every campaign character — exactly who each may place.
+    listCharactersForCampaign(supabase, campaignId),
+    // Handouts RLS trims per viewer too: every row for the DM, revealed
+    // rows only for a player.
+    listHandouts(supabase, campaignId),
+    // Same DB-read reasoning as the live map: fresh joins see recent rolls
+    // without having been subscribed when they landed.
+    listRollLog(supabase, campaignId),
+    // Monster stat blocks (Prompt 61), member-readable — AC auto-fill
+    // for stat-blocked NPC targets needs them on every client.
+    listMonsterStatBlocks(supabase, campaignId),
+    // The narrative roster, only for the DM's book's Enemies (MonsterPanel)
+    // name pre-fill; players never see the book, so no point fetching.
+    currentUserIsDM ? listNpcs(supabase, campaignId) : Promise.resolve([]),
+    // dm_notes' SELECT RLS (0020) has no member-read policy at all — same
+    // DM-gated fetch convention as rosterNpcs above, for the book's Notes
+    // page (DmNotes.tsx, embedded unmodified).
+    currentUserIsDM ? listDmNotes(supabase, campaignId) : Promise.resolve([]),
+    // Lore pages/links are member-readable (matching the standalone /lore
+    // route's own fetch) — the book's Lore page opens with no loading
+    // flash for the DM, same as every other "initial*" prop here.
+    listLorePages(supabase, campaignId),
+    listLorePageLinksForCampaign(supabase, campaignId),
+  ]);
+  // listDmNotes orders oldest-first (matching every other narrative list);
+  // reversed here since the book's Notes page reads better newest-on-top —
+  // the exact same reversal /dm-notes/page.tsx does for the standalone
+  // route.
+  const initialDmNotes = [...dmNoteRows].reverse();
   const initialHandouts = await Promise.all(
     handoutRows.map((handout) => resolveHandout(supabase, handout))
   );
@@ -152,6 +179,9 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialActionEconomyStrict={campaign.action_economy_strict}
       initialDayNightMode={campaign.day_night_mode}
       initialUiPreferences={currentUserProfile?.ui_preferences ?? { panelLayout: {} }}
+      initialDmNotes={initialDmNotes}
+      initialLorePages={initialLorePages}
+      initialLorePageLinks={initialLorePageLinks}
     />
   );
 }

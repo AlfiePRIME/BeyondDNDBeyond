@@ -64,8 +64,11 @@ import {
   type CombatCombatant,
   type CombatantEconomyFlag,
   type DayNightMode,
+  type DmNote,
   type Handout,
   type LightSource,
+  type LorePage,
+  type LorePageLink,
   type MapCell,
   type MapObject,
   type MapToken,
@@ -128,12 +131,11 @@ import { buildDiceTumbleSpec } from "../roll/tumble";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { DraggablePanel, PanelLayoutProvider } from "./DraggablePanel";
 import { DiceLogPanel } from "./DiceLogPanel";
-import { DmOverridesPanel } from "./DmOverridesPanel";
+import { DmBook } from "./DmBook";
 import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
-import { MonsterPanel } from "./MonsterPanel";
 import { TokenPanel, type TokenArm } from "./TokenPanel";
 import styles from "./room.module.css";
 
@@ -300,6 +302,9 @@ export function GameRoom({
   initialActionEconomyStrict,
   initialDayNightMode,
   initialUiPreferences,
+  initialDmNotes,
+  initialLorePages,
+  initialLorePageLinks,
 }: {
   campaignId: string;
   campaignName: string;
@@ -337,6 +342,18 @@ export function GameRoom({
    * returning user's saved Game Room panel layout renders on first paint
    * with no loading flash, kept live via subscribeToUiPreferencesChanges. */
   initialUiPreferences: UiPreferences;
+  /** dm_notes at load time (Phase 4), DM-only per its RLS (0020) — an empty
+   * array for a player, since GameRoom never fetches them for one (see
+   * page.tsx). Handed unmodified to the book's Notes page (DmNotes.tsx). */
+  initialDmNotes: DmNote[];
+  /** lore_pages at load time (Phase 4) — every member's own RLS-readable
+   * rows, same read the standalone /lore route makes, so the book's Lore
+   * page opens with no loading flash. */
+  initialLorePages: LorePage[];
+  /** lore_page_links at load time (Phase 4), campaign-wide (same
+   * listLorePageLinksForCampaign call the standalone /lore index makes) —
+   * the book's Lore page's read-only "Linked to" chips render from this. */
+  initialLorePageLinks: LorePageLink[];
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
@@ -1514,12 +1531,13 @@ export function GameRoom({
     [campaignId, economyBusy]
   );
 
-  // Temporary DM-only toggle (Phase 2 of the Game Room ambiance plan): the
-  // real home for this control is a later phase's "DM's book" page, which
-  // doesn't exist yet — this button is a stand-in, to be removed once that
-  // exists. Same persist-then-reflect-locally shape as
-  // handleSetEconomyStrict: other clients (and this one's own subscription
-  // echo) pick up the flip through the campaigns postgres_changes feed.
+  // The DM's day/night toggle handler — introduced in Phase 2 behind a
+  // temporary standalone button, now rendered from the DM's book's
+  // Day/Night page (DmBook.tsx) instead; this handler and the state above
+  // are unchanged, only WHERE they're rendered moved. Same persist-then-
+  // reflect-locally shape as handleSetEconomyStrict: other clients (and
+  // this one's own subscription echo) pick up the flip through the
+  // campaigns postgres_changes feed.
   const handleToggleDayNight = useCallback(async () => {
     if (dayNightBusy) return;
     const next: DayNightMode = dayNightMode === "day" ? "night" : "day";
@@ -2358,28 +2376,9 @@ export function GameRoom({
           >
             {cameraMode === "seat" ? "Free camera" : "Return to seat"}
           </Button>
-          {currentUserIsDM ? (
-            // Temporary DM-only control (see handleToggleDayNight's doc
-            // comment) — stands in for the day/night toggle's eventual
-            // real home in the DM's book, not yet built.
-            <Button
-              size="sm"
-              variant={dayNightMode === "night" ? "teal" : "ghost"}
-              disabled={dayNightBusy}
-              onClick={() => void handleToggleDayNight()}
-              data-testid="day-night-toggle"
-            >
-              {dayNightBusy ? "…" : dayNightMode === "night" ? "🌙 Night" : "☀️ Day"}
-            </Button>
-          ) : null}
           <span className={styles.roomLabel}>Game Room</span>
         </div>
       </header>
-      {dayNightError ? (
-        <p role="alert" className={styles.endError} data-testid="day-night-error">
-          {dayNightError}
-        </p>
-      ) : null}
       <DraggablePanel panelId="map">
         <MapPanel
           isDM={currentUserIsDM}
@@ -2410,22 +2409,6 @@ export function GameRoom({
             onSetAllegiance={handleSetAllegiance}
           />
         </DraggablePanel>
-      ) : null}
-      {/* The DM's monster tooling (Prompt 61): stat block create/edit/
-          list plus the quick-add flow. DM-only in the UI; 0038's RLS
-          rejects a non-DM hitting the table directly regardless. */}
-      {currentUserIsDM && liveMap ? (
-        <MonsterPanel
-          statBlocks={statBlocks}
-          rosterNpcs={rosterNpcs}
-          combatActive={combat !== null}
-          busy={monsterBusy || tokenBusy}
-          error={monsterError}
-          onCreate={handleCreateStatBlock}
-          onUpdate={handleUpdateStatBlock}
-          onDelete={handleDeleteStatBlock}
-          onQuickAdd={handleQuickAddMonster}
-        />
       ) : null}
       <DraggablePanel panelId="combat">
         <CombatPanel
@@ -2485,19 +2468,38 @@ export function GameRoom({
           onRollLanded={handleRollLanded}
         />
       </DraggablePanel>
-      {/* The DM Controls area (Prompt 52): pending rule-override flags to
-          approve/deny, plus (Prompt 53) the action-economy strictness
-          toggle as its sibling section. DM-only panel — every player still
-          sees the current mode via the combat panel's badge. */}
+      {/* Phase 4: the DM's book — Enemies (MonsterPanel), DM Controls
+          (DmOverridesPanel), Notes, Lore, and Day/Night, one fixed
+          screen-space overlay the DM opens on demand. Replaces the old
+          separate always-mounted MonsterPanel/DmOverridesPanel panels and
+          the temporary standalone day/night button above. DM-only: a
+          player's client never mounts this component at all. */}
       {currentUserIsDM ? (
-        <DmOverridesPanel
+        <DmBook
+          statBlocks={statBlocks}
+          rosterNpcs={rosterNpcs}
+          combatActive={combat !== null}
+          hasLiveMap={liveMap !== null}
+          monsterBusy={monsterBusy || tokenBusy}
+          monsterError={monsterError}
+          onCreateStatBlock={handleCreateStatBlock}
+          onUpdateStatBlock={handleUpdateStatBlock}
+          onDeleteStatBlock={handleDeleteStatBlock}
+          onQuickAddMonster={handleQuickAddMonster}
           campaignId={campaignId}
           characters={characterRows}
           members={roster}
-          strict={economyStrict}
-          strictBusy={economyBusy}
-          strictError={economyError}
-          onSetStrict={handleSetEconomyStrict}
+          economyStrict={economyStrict}
+          economyBusy={economyBusy}
+          economyError={economyError}
+          onSetEconomyStrict={handleSetEconomyStrict}
+          initialDmNotes={initialDmNotes}
+          initialLorePages={initialLorePages}
+          initialLorePageLinks={initialLorePageLinks}
+          dayNightMode={dayNightMode}
+          dayNightBusy={dayNightBusy}
+          dayNightError={dayNightError}
+          onToggleDayNight={() => void handleToggleDayNight()}
         />
       ) : null}
       <DraggablePanel panelId="diceLog">

@@ -6,10 +6,13 @@
 // a service-role client for setup and RLS-posture checks, real signed-in
 // browsers for the DM's UI toggle and the second (player) client's live
 // sync. Checks: campaigns.day_night_mode defaults to 'day'; the schema
-// CHECK rejects any value outside day/night; the DM-only toggle button is
-// offered to the DM and NOT to a player; clicking it in a real browser
-// persists the flip to the DB; a SECOND connected client (a player, who
-// clicked nothing) sees the same mode change live through its own
+// CHECK rejects any value outside day/night; the DM-only Day/Night controls
+// are offered to the DM and NOT to a player (Phase 4 update: these moved
+// from a temporary standalone button into the DM's book's own Day/Night
+// page — DmBook.tsx, verify-dm-book.mjs — as an explicit Day/Night button
+// pair; a player still sees no book at all); clicking Night in a real
+// browser persists the flip to the DB; a SECOND connected client (a player,
+// who clicked nothing) sees the same mode change live through its own
 // [data-testid="day-night-state"] debug mirror — the campaigns
 // postgres_changes feed, not the room's broadcast channel, same wiring as
 // action_economy_strict; a non-DM member CAN still write the column
@@ -198,19 +201,31 @@ try {
     (await dayNightState(dmPage)).mode === "day" && (await dayNightState(alicePage)).mode === "day"
   );
 
-  // -- 4. The toggle is offered to the DM, and NOT to the player. --
+  // -- 4. The toggle is offered to the DM, and NOT to the player.
+  //    STALE ASSUMPTION UPDATE (Phase 4): the standalone temporary
+  //    "day-night-toggle" button this script originally drove was removed
+  //    — the Day/Night control now lives on its own page inside the DM's
+  //    book (DmBook.tsx), as an explicit Day/Night button PAIR
+  //    ("day-night-day-button"/"day-night-night-button") rather than one
+  //    flip toggle. A non-DM player still gets no book at all, so neither
+  //    button (nor anything else DM-only) is ever present for them. --
   check(
-    "the DM sees the temporary day/night toggle button",
-    (await dmPage.$('[data-testid="day-night-toggle"]')) !== null
+    "a non-DM player is not offered the book at all, so no Day/Night controls either",
+    (await alicePage.$('[data-testid="dm-book"]')) === null
   );
+  await dmPage.waitForSelector('[data-testid="dm-book-toggle"]', { timeout: 30000 });
+  await dmPage.click('[data-testid="dm-book-toggle"]');
+  await dmPage.waitForSelector('[data-testid="dm-book-panel"]', { timeout: 10000 });
+  await dmPage.click('[data-testid="dm-book-tab-dayNight"]');
   check(
-    "a non-DM player is not offered the toggle button",
-    (await alicePage.$('[data-testid="day-night-toggle"]')) === null
+    "the DM sees the book's Day/Night buttons",
+    (await dmPage.$('[data-testid="day-night-day-button"]')) !== null &&
+      (await dmPage.$('[data-testid="day-night-night-button"]')) !== null
   );
 
   // -- 5. The DM clicks Night in a real browser: persists to the DB, and
   //    reaches the DM's own client. --
-  await dmPage.click('[data-testid="day-night-toggle"]');
+  await dmPage.click('[data-testid="day-night-night-button"]');
   const dmAfterClick = await waitForDayNight(dmPage, (state) => state.mode === "night");
   check("the DM's own client reflects the click immediately", dmAfterClick?.mode === "night", JSON.stringify(dmAfterClick));
 
@@ -234,7 +249,7 @@ try {
 
   // -- 7. Flip back to Day from the DM's page and confirm it reaches Alice
   //    too — the sync isn't a one-shot fluke in one direction only. --
-  await dmPage.click('[data-testid="day-night-toggle"]');
+  await dmPage.click('[data-testid="day-night-day-button"]');
   const dmBackToDay = await waitForDayNight(dmPage, (state) => state.mode === "day");
   const aliceBackToDay = await waitForDayNight(alicePage, (state) => state.mode === "day");
   check(

@@ -24,8 +24,11 @@
 // ever moving (no setCharacterResourceUses call anywhere in the path).
 //
 // Needs the local Supabase stack; starts `yarn dev` itself (and polls
-// /api/health) if :3000 isn't already serving.
+// /api/health) if the target port isn't already serving — respects APP_URL
+// so it can run alongside another dev server on :3000 (the verify-day-
+// night-mode.mjs/verify-dm-book.mjs convention).
 // Usage: node scripts/db/verify-action-overrides.mjs
+//        APP_URL=http://localhost:3120 node scripts/db/verify-action-overrides.mjs
 
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -35,7 +38,7 @@ import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const APP_URL = "http://localhost:3000";
+const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
 
 function loadEnv(path) {
   const env = {};
@@ -81,8 +84,14 @@ async function healthOk() {
 let devServer = null;
 async function ensureDevServer() {
   if (await healthOk()) return;
-  console.log("dev server not running — starting yarn dev…");
-  devServer = spawn("yarn", ["dev"], { cwd: rootDir, stdio: "ignore", detached: true });
+  const port = new URL(APP_URL).port || "3000";
+  console.log(`dev server not running at ${APP_URL} — starting yarn dev on port ${port}…`);
+  devServer = spawn("yarn", ["dev"], {
+    cwd: rootDir,
+    stdio: "ignore",
+    detached: true,
+    env: { ...process.env, PORT: port },
+  });
   for (let i = 0; i < 120; i++) {
     await sleep(1000);
     if (await healthOk()) return;
@@ -517,10 +526,20 @@ try {
   );
 
   // The DM's room: the flag appears in the DM Controls panel; approve it.
+  // STALE ASSUMPTION UPDATE (Phase 4): DmOverridesPanel used to be an
+  // always-mounted DM-only panel — it now lives inside the DM's book
+  // (DmBook.tsx), so it only exists in the DOM once the book is opened and
+  // switched to its "DM Controls" tab. Everything below this is otherwise
+  // unchanged: the same panel, the same testids, just reached through the
+  // book first.
   const dmContext = await browser.newContext();
   await dmContext.addCookies(sessionCookies(dm.session));
   const dmRoom = await dmContext.newPage();
   await dmRoom.goto(`${APP_URL}/campaigns/${campaignId}/room`);
+  await dmRoom.waitForSelector('[data-testid="dm-book-toggle"]', { timeout: 30000 });
+  await dmRoom.click('[data-testid="dm-book-toggle"]');
+  await dmRoom.waitForSelector('[data-testid="dm-book-panel"]', { timeout: 10000 });
+  await dmRoom.click('[data-testid="dm-book-tab-dmControls"]');
   check("the DM sees the DM Controls panel", await visible(dmRoom, "dm-controls-panel", 30000));
   check(
     "the pending flag lists in the DM Controls rule-overrides section",

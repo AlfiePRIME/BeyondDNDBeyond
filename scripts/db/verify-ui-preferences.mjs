@@ -8,9 +8,11 @@
 // per-user anon clients, PLUS a real browser driving the actual Game Room
 // to confirm the end-to-end feature — default positions on a fresh
 // profile, a drag persisting and surviving reload, a collapse persisting
-// and surviving reload, MonsterPanel/DmOverridesPanel staying completely
-// unaffected (Phase C's reserved territory), and the cross-campaign
-// persistence requirement (layout is per-USER, not per-campaign).
+// and surviving reload, MonsterPanel/DmOverridesPanel staying outside this
+// whole system (Phase 4's DM's book hosts both now — see verify-dm-book.mjs
+// for that feature itself; this file just re-confirms neither ever gained
+// a DraggablePanel wrapper), and the cross-campaign persistence requirement
+// (layout is per-USER, not per-campaign).
 //
 // Needs the local Supabase stack; starts `yarn dev` itself (and polls
 // /api/health) if the target port isn't already serving — set PORT to
@@ -408,45 +410,61 @@ try {
   await page.waitForTimeout(300);
 
   // -- 2b. MonsterPanel/DmOverridesPanel are completely unaffected by
-  //    Phase B: no draggable-panel wrapper exists for either. Phase C
-  //    later gave them a peel-reveal trigger instead (they're no longer
-  //    mounted at all until that tab is clicked) — reveal them first, then
-  //    confirm they still sit at their old hardcoded CSS position and
-  //    aren't draggable, same as before Phase C existed. --
+  //    Phase B: no draggable-panel wrapper exists for either. STALE
+  //    ASSUMPTION UPDATE (Phase 4): this section originally assumed Phase
+  //    C's abandoned Peel-reveal tabs ("monster-panel-tab"/"dm-controls-
+  //    panel-tab", never actually wired into GameRoom before that attempt
+  //    was reverted) — those testids never existed on a real page. Phase 4
+  //    replaced that reserved territory for real: both panels now live
+  //    inside the DM's book (DmBook.tsx), opened via "dm-book-toggle" and
+  //    switched to via "dm-book-tab-enemies"/"dm-book-tab-dmControls".
+  //    Still confirms: no DraggablePanel wrapper for either, and the book
+  //    itself (not either panel) is the only thing that could ever move —
+  //    dragging a panel's own header does nothing, because the book is a
+  //    fixed-position overlay outside the whole drag/collapse system. --
   check(
-    "MonsterPanel has NO DraggablePanel wrapper (untouched, reserved for Phase C)",
+    "MonsterPanel has NO DraggablePanel wrapper (Phase 4: hosted by the DM's book instead)",
     (await page.locator('[data-testid="draggable-panel-monster"]').count()) === 0
   );
   check(
-    "DmOverridesPanel has NO DraggablePanel wrapper (untouched, reserved for Phase C)",
+    "DmOverridesPanel has NO DraggablePanel wrapper (Phase 4: hosted by the DM's book instead)",
     (await page.locator('[data-testid="draggable-panel-dmControls"]').count()) === 0
   );
-  await page.getByTestId("monster-panel-tab").click();
-  await page.getByTestId("dm-controls-panel-tab").click();
-  await page.waitForTimeout(300);
+  await page.getByTestId("dm-book-toggle").click();
+  await page.waitForSelector('[data-testid="dm-book-panel"]', { timeout: 10000 });
+  // The book defaults to its Enemies page, so MonsterPanel is already
+  // showing; DM Controls needs its own tab.
   const monsterBox = await page.locator('[data-testid="monster-panel"]').boundingBox();
+  check("MonsterPanel renders inside the open book", monsterBox !== null, JSON.stringify(monsterBox));
+  await page.getByTestId("dm-book-tab-dmControls").click();
+  await page.waitForTimeout(300);
   const dmControlsBox = await page.locator('[data-testid="dm-controls-panel"]').boundingBox();
-  check(
-    "MonsterPanel sits at its old fixed position (24, 310 at this viewport)",
-    monsterBox !== null && Math.round(monsterBox.x) === 24 && Math.round(monsterBox.y) === 310,
-    JSON.stringify(monsterBox)
-  );
-  check(
-    "DmOverridesPanel sits at its old fixed position (772, 64 at this viewport)",
-    dmControlsBox !== null && Math.round(dmControlsBox.x) === 772 && Math.round(dmControlsBox.y) === 64,
-    JSON.stringify(dmControlsBox)
-  );
-  // Attempting to drag MonsterPanel's header must not move it at all.
+  check("DmOverridesPanel renders inside the open book", dmControlsBox !== null, JSON.stringify(dmControlsBox));
+  await page.getByTestId("dm-book-tab-enemies").click();
+  await page.waitForTimeout(300);
+  const bookBoxBeforeDrag = await page.locator('[data-testid="dm-book-panel"]').boundingBox();
+  const monsterBoxBeforeDrag = await page.locator('[data-testid="monster-panel"]').boundingBox();
+  // Attempting to drag MonsterPanel's header must not move it, or the book
+  // around it — the book is fixed-position, not part of DraggablePanel.
   await dragPanelBy(page, "monster-panel", 200, 50);
   await page.waitForTimeout(300);
+  const bookBoxAfterDrag = await page.locator('[data-testid="dm-book-panel"]').boundingBox();
   const monsterBoxAfterDrag = await page.locator('[data-testid="monster-panel"]').boundingBox();
   check(
-    "MonsterPanel does not move when its header is dragged (not draggable)",
-    monsterBoxAfterDrag !== null &&
-      Math.round(monsterBoxAfterDrag.x) === 24 &&
-      Math.round(monsterBoxAfterDrag.y) === 310,
-    JSON.stringify(monsterBoxAfterDrag)
+    "MonsterPanel (and the book around it) does not move when its header is dragged — the book is fixed-position, not draggable",
+    monsterBoxBeforeDrag !== null &&
+      monsterBoxAfterDrag !== null &&
+      bookBoxBeforeDrag !== null &&
+      bookBoxAfterDrag !== null &&
+      Math.round(monsterBoxBeforeDrag.x) === Math.round(monsterBoxAfterDrag.x) &&
+      Math.round(monsterBoxBeforeDrag.y) === Math.round(monsterBoxAfterDrag.y) &&
+      Math.round(bookBoxBeforeDrag.x) === Math.round(bookBoxAfterDrag.x) &&
+      Math.round(bookBoxBeforeDrag.y) === Math.round(bookBoxAfterDrag.y),
+    JSON.stringify({ monsterBefore: monsterBoxBeforeDrag, monsterAfter: monsterBoxAfterDrag, bookBefore: bookBoxBeforeDrag, bookAfter: bookBoxAfterDrag })
   );
+  // Close the book so it doesn't cover any later panel this script checks.
+  await page.getByTestId("dm-book-close").click();
+  await page.waitForTimeout(300);
 
   // -- 2c. Drag the combat panel to a new spot; confirm it persists to the
   //    database (after the debounce) and survives a reload. --
