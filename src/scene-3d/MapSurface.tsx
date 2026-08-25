@@ -251,6 +251,11 @@ export interface MapSurfaceObject {
   rotation: number;
   /** Loadable model URL, or null to render the placeholder prop. */
   url: string | null;
+  /** Stored forward-direction correction (degrees) for this object's model
+   * — see docs/design/model-orientation-and-posing.md §8. Absent/0 (the
+   * default for every asset with no stored model_orientation row)
+   * reproduces today's exact no-correction rendering. */
+  forwardOffsetDeg?: number;
   /** false keeps this object inert even when onSelectObject is provided —
    * the live viewer uses it so only triggerable objects are click targets. */
   selectable?: boolean;
@@ -276,6 +281,7 @@ interface ObjectMarkerProps {
   scale: number;
   rotation: number;
   url: string | null;
+  forwardOffsetDeg: number;
   selected: boolean;
   selectable: boolean;
   ghost: boolean;
@@ -307,6 +313,7 @@ const ObjectMarker = memo(function ObjectMarker({
   scale,
   rotation,
   url,
+  forwardOffsetDeg,
   selected,
   selectable,
   ghost,
@@ -327,7 +334,7 @@ const ObjectMarker = memo(function ObjectMarker({
           <meshBasicMaterial wireframe color={PURPLE} transparent opacity={0.45} />
         </mesh>
       ) : (
-        <PlacedObject url={url} />
+        <PlacedObject url={url} forwardOffsetDeg={forwardOffsetDeg} />
       )}
       {dimmed ? (
         <mesh position={[0, HIT_BOX_HEIGHT / 2, 0]}>
@@ -876,6 +883,7 @@ export function MapSurface({
           scale={cellSize}
           rotation={object.rotation}
           url={object.url}
+          forwardOffsetDeg={object.forwardOffsetDeg ?? 0}
           selected={object.id === selectedObjectId}
           selectable={Boolean(onSelectObject) && object.selectable !== false}
           ghost={object.ghost ?? false}

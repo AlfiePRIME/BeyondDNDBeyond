@@ -84,6 +84,13 @@ export {
   type AssetSourceType,
 } from "./assets";
 export {
+  getForwardOffsetDeg,
+  getForwardOffsetsForUrls,
+  setForwardOffsetDeg,
+  DEFAULT_FORWARD_OFFSET_DEG,
+  type ModelOrientation,
+} from "./modelOrientation";
+export {
   createMap,
   createPopulatedMap,
   duplicateMap,

@@ -27,7 +27,17 @@ export {
 } from "./MapSurface";
 export { computeTableMapMetrics } from "./mapFit";
 export { buildGridOverlayPositions } from "./gridOverlay";
-export { PlacedObject } from "./PlacedObject";
+export { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
+// Avatar's own normalization target — exported for the account/campaign
+// upload flows' rotate-and-confirm preview (OrientationPreview), which must
+// normalize a candidate avatar upload at the exact scale it will actually
+// render at.
+export { AVATAR_HEIGHT } from "./SeatAvatar";
+// The rotate-and-confirm upload step's live preview (see
+// docs/design/model-orientation-and-posing.md §8) — used by
+// AssetPalette.tsx's custom map-asset upload and AvatarPicker.tsx's custom
+// avatar upload via the shared app-layer ModelOrientationStep wrapper.
+export { OrientationPreview, type OrientationPreviewProps, type ModelNormalize } from "./OrientationPreview";
 export { DiceTumble, type DiceTumbleHandle, type DiceTumbleProps, type DiceTumbleSpec } from "./DiceTumble";
 // Phase 5: the DM's book as a real 3D prop (replacing DmBook.tsx's old
 // screen-fixed 2D overlay) — see DmBookProp.tsx's doc comment for why it

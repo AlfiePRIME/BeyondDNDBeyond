@@ -185,7 +185,10 @@ function TableSeat({ seat }: { seat: Seat }) {
           heights (Chair.tsx's SEAT_TOP_Y), so this is keyed per-role rather
           than one shared constant. */}
       <group position={[0, SEAT_TOP_Y[seat.member.role], 0]}>
-        <SeatAvatar url={seat.member.avatar_url ?? null} />
+        <SeatAvatar
+          url={seat.member.avatar_url ?? null}
+          forwardOffsetDeg={seat.member.avatar_forward_offset_deg ?? 0}
+        />
       </group>
     </group>
   );

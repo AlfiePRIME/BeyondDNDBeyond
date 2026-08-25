@@ -6,8 +6,11 @@ import { Box3, Vector3 } from "three";
 import type { Object3D } from "three";
 
 // Matches the generated presets' natural height, so a custom upload of any
-// raw size ends up the same stature as everyone else at the table.
-const AVATAR_HEIGHT = 1.7;
+// raw size ends up the same stature as everyone else at the table. Exported
+// so the account/campaign upload flows' rotate-and-confirm preview
+// (ModelOrientationStep/OrientationPreview) normalizes a candidate avatar
+// upload at the exact same scale it will actually render at.
+export const AVATAR_HEIGHT = 1.7;
 
 const PLACEHOLDER_COLOR = "#8f86ad";
 
@@ -31,7 +34,7 @@ function PlaceholderAvatar() {
   );
 }
 
-function AvatarModel({ url }: { url: string }) {
+function AvatarModel({ url, forwardOffsetDeg }: { url: string; forwardOffsetDeg: number }) {
   const { scene } = useGLTF(url);
   const { scale, offset } = useMemo(() => {
     const box = new Box3().setFromObject(scene as Object3D);
@@ -47,8 +50,22 @@ function AvatarModel({ url }: { url: string }) {
 
   // Clone (SkeletonUtils-aware) rather than rendering the cached scene
   // directly — two members with the same preset would otherwise fight over
-  // one Object3D, and useGLTF caches per URL.
-  return <Clone object={scene} scale={scale} position={offset} castShadow />;
+  // one Object3D, and useGLTF caches per URL. forwardOffsetDeg is the
+  // model's own stored correction (model_orientation, see
+  // docs/design/model-orientation-and-posing.md §8) — an intrinsic Y
+  // rotation applied here, independent of (and composing cleanly with) the
+  // seat's own extrinsic rotationY applied one level up by GameTableScene's
+  // TableSeat wrapper. 0 (the default for every avatar with no stored row)
+  // reproduces today's exact no-correction behavior.
+  return (
+    <Clone
+      object={scene}
+      scale={scale}
+      position={offset}
+      rotation={[0, (forwardOffsetDeg * Math.PI) / 180, 0]}
+      castShadow
+    />
+  );
 }
 
 interface AvatarErrorBoundaryProps {
@@ -73,12 +90,22 @@ class AvatarErrorBoundary extends Component<AvatarErrorBoundaryProps, { failed: 
   }
 }
 
-export function SeatAvatar({ url }: { url: string | null }) {
+export function SeatAvatar({
+  url,
+  forwardOffsetDeg = 0,
+}: {
+  url: string | null;
+  /** Stored forward-direction correction (degrees) — see
+   * docs/design/model-orientation-and-posing.md §8. Defaults to 0 (no
+   * correction), exactly today's behavior for every avatar predating this
+   * feature. */
+  forwardOffsetDeg?: number;
+}) {
   if (!url) return <PlaceholderAvatar />;
   return (
     <AvatarErrorBoundary url={url}>
       <Suspense fallback={<PlaceholderAvatar />}>
-        <AvatarModel url={url} />
+        <AvatarModel url={url} forwardOffsetDeg={forwardOffsetDeg} />
       </Suspense>
     </AvatarErrorBoundary>
   );

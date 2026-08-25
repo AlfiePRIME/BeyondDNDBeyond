@@ -737,10 +737,12 @@ export function GameRoom({
     const memberIds = new Set(members.map((member) => member.user_id));
     return subscribeToProfileChanges(supabase, async (profile) => {
       if (!memberIds.has(profile.id)) return;
-      const avatarUrl = await resolveAvatarUrl(supabase, profile.avatar_source, profile.avatar_ref);
+      const avatar = await resolveAvatarUrl(supabase, profile.avatar_source, profile.avatar_ref);
       setRoster((prev) =>
         prev.map((member) =>
-          member.user_id === profile.id ? { ...member, avatar_url: avatarUrl } : member
+          member.user_id === profile.id
+            ? { ...member, avatar_url: avatar.url, avatar_forward_offset_deg: avatar.forwardOffsetDeg }
+            : member
         )
       );
     });
@@ -1785,6 +1787,14 @@ export function GameRoom({
   }
 
   const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
+  // Stored forward-direction correction per asset (model_orientation, see
+  // docs/design/model-orientation-and-posing.md §8) — same id-keyed map
+  // shape as assetUrlById, read alongside it wherever a placed object's
+  // props are built below.
+  const assetForwardOffsetById = useMemo(
+    () => new Map(assets.map((asset) => [asset.id, asset.forwardOffsetDeg])),
+    [assets]
+  );
 
   // One overlay for both rendering and drag-cost lookups, so the cost the
   // readout charges is computed from exactly the surface being rendered.
@@ -2130,6 +2140,7 @@ export function GameRoom({
             elevation: (overlay.get(cellKey(object.x, object.y)) ?? DEFAULT_CELL).elevation,
             rotation: object.rotation,
             url: assetUrlById.get(object.asset_id) ?? null,
+            forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
             selectable: behavior !== null && (currentUserIsDM || behavior.playerTriggerable),
             ghost: hiddenNow,
             active: behavior?.action === "toggle_state" && behavior.triggered,
@@ -2189,7 +2200,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright
@@ -2245,6 +2256,27 @@ export function GameRoom({
         .map((cell) => cellKey(cell.x, cell.y)),
     });
   }, [liveMap]);
+
+  // Hidden render-state mirror for verify-model-orientation.mjs (the
+  // visionDebug/tableSurfaceDebug precedent above) — mirrors the exact
+  // forwardOffsetDeg props GameTableScene passes into PlacedObject (via
+  // tableMap.objects) and SeatAvatar (via roster's
+  // avatar_forward_offset_deg), the two general rendering sites
+  // docs/design/model-orientation-and-posing.md §8 generalizes orientation
+  // metadata to. WebGL output has no DOM to locate the applied rotation, so
+  // this mirrors the render DECISION rather than a pixel value, same
+  // reasoning as every other debug mirror on this page.
+  const modelOrientationDebug = useMemo(() => {
+    const objects: Record<string, number> = {};
+    for (const object of tableMap?.objects ?? []) {
+      objects[object.id] = object.forwardOffsetDeg ?? 0;
+    }
+    const avatars: Record<string, number> = {};
+    for (const member of roster) {
+      avatars[member.user_id] = member.avatar_forward_offset_deg ?? 0;
+    }
+    return JSON.stringify({ objects, avatars });
+  }, [tableMap, roster]);
 
   // Recomputed from the ORIGIN to the hovered cell on every update (the
   // straight path a deliberate walk would take), not accumulated from the
@@ -2452,6 +2484,11 @@ export function GameRoom({
           tableSurfaceDebug memo. */}
       <div data-testid="table-surface-state" hidden>
         {tableSurfaceDebug}
+      </div>
+      {/* Hidden render-state mirror for verify-model-orientation.mjs — see
+          the modelOrientationDebug memo. */}
+      <div data-testid="model-orientation-state" hidden>
+        {modelOrientationDebug}
       </div>
       {rulerReadout !== null ? (
         <div className={`${styles.moveReadout} ${styles.rulerReadout}`} data-testid="ruler-readout">

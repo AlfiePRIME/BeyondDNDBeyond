@@ -1,0 +1,39 @@
+.hint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 14px;
+}
+
+.hint strong {
+  color: var(--teal);
+}
+
+.canvasFrame {
+  width: 100%;
+  height: 260px;
+  border: 1px solid var(--dim);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0d0520;
+}
+
+.canvasFrame canvas {
+  display: block;
+}
+
+.rotateRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.readout {
+  text-align: center;
+  font-family: var(--font-m);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--teal);
+  margin: 10px 0 0;
+}

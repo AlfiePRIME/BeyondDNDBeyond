@@ -22,7 +22,7 @@ function PlaceholderProp() {
   );
 }
 
-function PropModel({ url }: { url: string }) {
+function PropModel({ url, forwardOffsetDeg }: { url: string; forwardOffsetDeg: number }) {
   const { scene } = useGLTF(url);
   const { scale, offset } = useMemo(() => {
     const box = new Box3().setFromObject(scene as Object3D);
@@ -39,8 +39,22 @@ function PropModel({ url }: { url: string }) {
 
   // Clone (SkeletonUtils-aware) rather than rendering the cached scene
   // directly — two placed objects using the same asset would otherwise fight
-  // over one Object3D, and useGLTF caches per URL.
-  return <Clone object={scene} scale={scale} position={offset} castShadow />;
+  // over one Object3D, and useGLTF caches per URL. forwardOffsetDeg is the
+  // asset's own stored correction (model_orientation, see
+  // docs/design/model-orientation-and-posing.md §8) — an intrinsic Y
+  // rotation applied here, independent of (and composing cleanly with) the
+  // object's own placement `rotation` applied one level up by MapSurface's
+  // ObjectMarker wrapper. 0 (the default for every asset with no stored row)
+  // reproduces today's exact no-correction behavior.
+  return (
+    <Clone
+      object={scene}
+      scale={scale}
+      position={offset}
+      rotation={[0, (forwardOffsetDeg * Math.PI) / 180, 0]}
+      castShadow
+    />
+  );
 }
 
 interface PropErrorBoundaryProps {
@@ -65,12 +79,22 @@ class PropErrorBoundary extends Component<PropErrorBoundaryProps, { failed: bool
   }
 }
 
-export function PlacedObject({ url }: { url: string | null }) {
+export function PlacedObject({
+  url,
+  forwardOffsetDeg = 0,
+}: {
+  url: string | null;
+  /** Stored forward-direction correction (degrees) — see
+   * docs/design/model-orientation-and-posing.md §8. Defaults to 0 (no
+   * correction), exactly today's behavior for every asset predating this
+   * feature. */
+  forwardOffsetDeg?: number;
+}) {
   if (!url) return <PlaceholderProp />;
   return (
     <PropErrorBoundary url={url}>
       <Suspense fallback={<PlaceholderProp />}>
-        <PropModel url={url} />
+        <PropModel url={url} forwardOffsetDeg={forwardOffsetDeg} />
       </Suspense>
     </PropErrorBoundary>
   );

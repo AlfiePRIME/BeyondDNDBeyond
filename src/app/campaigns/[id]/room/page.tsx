@@ -51,13 +51,15 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   const roomMembers: RoomMember[] = await Promise.all(
     members.map(async (member) => {
       const profile = await getProfile(supabase, member.user_id);
+      const avatar = await resolveAvatarUrl(
+        supabase,
+        profile?.avatar_source ?? null,
+        profile?.avatar_ref ?? null
+      );
       return {
         ...member,
-        avatar_url: await resolveAvatarUrl(
-          supabase,
-          profile?.avatar_source ?? null,
-          profile?.avatar_ref ?? null
-        ),
+        avatar_url: avatar.url,
+        avatar_forward_offset_deg: avatar.forwardOffsetDeg,
       };
     })
   );

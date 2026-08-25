@@ -71,6 +71,10 @@ import {
   consumeOverride,
   listActionOverrides,
   subscribeToActionOverrides,
+  getForwardOffsetDeg,
+  getForwardOffsetsForUrls,
+  setForwardOffsetDeg,
+  DEFAULT_FORWARD_OFFSET_DEG,
 } from "@/data-access";
 
 describe("data-access module", () => {
@@ -225,5 +229,12 @@ describe("data-access module", () => {
     expect(consumeOverride).toBeTypeOf("function");
     expect(listActionOverrides).toBeTypeOf("function");
     expect(subscribeToActionOverrides).toBeTypeOf("function");
+  });
+
+  it("exports the model orientation functions from the main barrel", () => {
+    expect(getForwardOffsetDeg).toBeTypeOf("function");
+    expect(getForwardOffsetsForUrls).toBeTypeOf("function");
+    expect(setForwardOffsetDeg).toBeTypeOf("function");
+    expect(DEFAULT_FORWARD_OFFSET_DEG).toBe(0);
   });
 });
