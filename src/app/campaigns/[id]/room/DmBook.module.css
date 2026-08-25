@@ -1,40 +1,36 @@
-/* Phase 4 (Game Room ambiance/tools plan): the DM's book — a plain 2D
-   screen-space overlay, a sibling of the <Canvas> in GameRoom.tsx (never
-   inside the 3D scene), replacing MonsterPanel/DmOverridesPanel's old
-   unconditional `position: absolute` mounts and the Phase 2 standalone
-   day/night button with one book the DM opens on demand. See DmBook.tsx's
-   doc comment for why this is plain HTML/CSS state, not CanvasUI/WebGL
-   (the abandoned Phase C Peel-reveal attempt).
+/* Phase 5 (the Game Room ambiance/tools plan's move to a physical 3D book):
+   the DM's book's real page content, now hosted inside a
+   non-perspective-transformed <Html> anchored to the 3D book prop's
+   position (src/scene-3d/DmBookProp.tsx), not a screen-fixed overlay —
+   see DmBook.tsx's doc comment for the Phase 4 -> Phase 5 history and for
+   why this is plain HTML/CSS state, not CanvasUI/WebGL (the abandoned
+   Phase C Peel-reveal attempt).
 
-   Fixed bottom-center, deliberately NOT part of DraggablePanel's
-   drag/collapse system (see DraggablePanel.tsx's PanelId doc comment —
-   this is the opposite of what that system offers). z-index sits well
-   above DraggablePanel's own ceiling (BASE_Z_INDEX 10 / ELEVATED_Z_INDEX 15
-   in DraggablePanel.tsx, plus whatever bringToFront increments reach in a
-   long session) so an open book is never hidden behind a dragged panel,
-   but stays comfortably below Modal's 10000 (ui.module.css) — an urgent
+   `.book` is now a self-contained floating card (drei's Html positions and
+   centers it in screen space itself — see DmBookProp's `<Html center>` —
+   so this rule owns only the card's own box styling, no positioning of its
+   own). Deliberately more modest than the old bottom-docked panel's
+   92vw/78vh ceiling — a genuinely book-sized floating card near the 3D
+   prop rather than a near-fullscreen sheet, both because that reads better
+   as "coming from the book" and because a smaller footprint leaves the
+   book's own on-screen position (DmBookPropProps.onProjectedPosition) clear
+   of the panel, so a DM can click the physical book again to close it
+   without the panel's own DOM being in the way (DmBookProp.tsx's
+   HTML_ANCHOR_Y doc comment).
+
+   z-index is DmBookProp's concern now (`<Html zIndexRange={[500, 0]}>`,
+   the same 500 the old screen-fixed `.root` used) — kept comfortably below
+   Modal's 10000 (ui.module.css) for the same reason as before: an urgent
    modal (handout reveal, transition offer) must still be able to cover an
    open book. */
-.root {
-  position: fixed;
-  left: 50%;
-  bottom: 0;
-  transform: translateX(-50%);
-  z-index: 500;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
 .book {
-  width: min(720px, 92vw);
-  height: min(560px, 78vh);
+  width: min(480px, 64vw);
+  height: min(400px, 50vh);
   display: flex;
   flex-direction: column;
   background: color-mix(in srgb, var(--surface2) 94%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  border-bottom: none;
-  border-radius: 12px 12px 0 0;
+  border-radius: 12px;
   box-shadow: var(--ga);
   overflow: hidden;
 }

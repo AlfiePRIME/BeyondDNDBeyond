@@ -218,6 +218,46 @@ async function attackRollIds(campaignId) {
   return new Set((data ?? []).map((row) => row.id));
 }
 
+// Phase 5: the DM's book is now a real 3D prop (src/scene-3d/DmBookProp.tsx)
+// clicked open rather than a screen-fixed "dm-book-toggle" button — see
+// verify-dm-book.mjs's own openDmBook/clickBook for the full doc comment on
+// why this targets DmBookProp's exact projected screen position
+// (GameRoom.tsx's dm-book-state debug mirror) instead of blind-scanning.
+async function readDmBookState(page) {
+  const el = await page.$('[data-testid="dm-book-state"]');
+  if (!el) return null;
+  return JSON.parse(await el.textContent());
+}
+
+async function waitForBookScreenPosition(page, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readDmBookState(page);
+    if (last?.screen) return last;
+    await sleep(100);
+  }
+  throw new Error(`dm-book-state never reported a screen projection — last: ${JSON.stringify(last)}`);
+}
+
+async function openDmBook(page) {
+  const box = await page.locator("canvas").boundingBox();
+  if (!box) throw new Error("no canvas on the page");
+  const state = await waitForBookScreenPosition(page);
+  const [sx, sy] = state.screen;
+  const offsets = [
+    [0, 0],
+    [20, 0], [-20, 0], [0, 20], [0, -20],
+    [40, 0], [-40, 0], [0, 40], [0, -40],
+  ];
+  for (const [dx, dy] of offsets) {
+    await page.mouse.click(box.x + sx + dx, box.y + sy + dy);
+    await sleep(200);
+    if ((await page.$('[data-testid="dm-book-panel"]')) !== null) return;
+  }
+  throw new Error(`could not click the 3D book open (tried screen=${JSON.stringify(state.screen)})`);
+}
+
 await ensureDevServer();
 
 const dm = await makeTestUser("dm");
@@ -532,13 +572,28 @@ try {
   // switched to its "DM Controls" tab. Everything below this is otherwise
   // unchanged: the same panel, the same testids, just reached through the
   // book first.
+  // STALE ASSUMPTION UPDATE (Phase 5): the book is now a real 3D prop
+  // (src/scene-3d/DmBookProp.tsx), opened with a real click instead of a
+  // screen-fixed "dm-book-toggle" button — see openDmBook above.
   const dmContext = await browser.newContext();
   await dmContext.addCookies(sessionCookies(dm.session));
   const dmRoom = await dmContext.newPage();
   await dmRoom.goto(`${APP_URL}/campaigns/${campaignId}/room`);
-  await dmRoom.waitForSelector('[data-testid="dm-book-toggle"]', { timeout: 30000 });
-  await dmRoom.click('[data-testid="dm-book-toggle"]');
-  await dmRoom.waitForSelector('[data-testid="dm-book-panel"]', { timeout: 10000 });
+  // state: "attached" — dm-book-state is a deliberately-permanently-hidden
+  // debug mirror (`<div hidden>`, the established convention across every
+  // such mirror in this codebase), so it never satisfies waitForSelector's
+  // default "visible" requirement; only its presence in the DOM matters.
+  await dmRoom.waitForSelector('[data-testid="dm-book-state"]', { state: "attached", timeout: 30000 });
+  // The debug mirror existing in the DOM only proves GameRoom's own JSX
+  // committed — it says nothing about whether the R3F <Canvas> has finished
+  // its own WebGL init or whether DmBookProp's useFrame has ticked even
+  // once yet (onProjectedPosition never fires before that). Every other
+  // openDmBook call site in this codebase's verify scripts settles on
+  // "map-panel" (or an explicit wait) first; this one jumped straight from
+  // navigation into openDmBook with no such margin.
+  await dmRoom.waitForSelector("canvas", { timeout: 30000 });
+  await dmRoom.waitForTimeout(1000);
+  await openDmBook(dmRoom);
   await dmRoom.click('[data-testid="dm-book-tab-dmControls"]');
   check("the DM sees the DM Controls panel", await visible(dmRoom, "dm-controls-panel", 30000));
   check(

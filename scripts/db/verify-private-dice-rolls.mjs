@@ -270,6 +270,25 @@ try {
   );
 
   // -------------------------------------------------------------------
+  // Phase 5 regression check: the DM's book is now a real 3D prop
+  // (src/scene-3d/DmBookProp.tsx) positioned in front of the DM's own seat
+  // — the same general area as this private dice tray. Confirm the two
+  // never land on the same spot on the table (GameRoom.tsx's dm-book-state/
+  // dm-private-tray-state debug mirrors, both DM-only, both always present
+  // once mounted regardless of whether the book itself is open).
+  // -------------------------------------------------------------------
+  const dmBookState = await dmRoom.$eval('[data-testid="dm-book-state"]', (el) => JSON.parse(el.textContent));
+  const dmTrayState = await dmRoom.$eval('[data-testid="dm-private-tray-state"]', (el) => JSON.parse(el.textContent));
+  const [bookX, , bookZ] = dmBookState.position;
+  const [trayX, , trayZ] = dmTrayState.position;
+  const bookTrayDistance = Math.hypot(bookX - trayX, bookZ - trayZ);
+  check(
+    "the DM's book prop and the private dice tray sit at meaningfully distinct positions (not the same spot on the table)",
+    bookTrayDistance > 0.7,
+    JSON.stringify({ book: dmBookState.position, tray: dmTrayState.position, bookTrayDistance })
+  );
+
+  // -------------------------------------------------------------------
   // 2. Baseline: a normal (public) roll from a PLAYER, before any private
   //    rolling happens, still works completely unchanged — reaches the
   //    DM's shared tray and both clients' persistent logs.

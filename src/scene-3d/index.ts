@@ -29,6 +29,10 @@ export { computeTableMapMetrics } from "./mapFit";
 export { buildGridOverlayPositions } from "./gridOverlay";
 export { PlacedObject } from "./PlacedObject";
 export { DiceTumble, type DiceTumbleHandle, type DiceTumbleProps, type DiceTumbleSpec } from "./DiceTumble";
+// Phase 5: the DM's book as a real 3D prop (replacing DmBook.tsx's old
+// screen-fixed 2D overlay) — see DmBookProp.tsx's doc comment for why it
+// takes the page content as `children` rather than importing DmBook itself.
+export { DmBookProp, type DmBookPropProps } from "./DmBookProp";
 export {
   computeSeatLayout,
   type CameraMode,

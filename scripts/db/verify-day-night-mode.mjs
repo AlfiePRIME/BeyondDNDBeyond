@@ -153,6 +153,48 @@ async function waitForDayNight(page, predicate, timeoutMs = 15000) {
   return last;
 }
 
+// Phase 5: the DM's book is now a real 3D prop (src/scene-3d/DmBookProp.tsx)
+// clicked open rather than a screen-fixed "dm-book-toggle" button — see
+// verify-dm-book.mjs's own openDmBook/clickBook for the full doc comment on
+// why this targets DmBookProp's exact projected screen position
+// (GameRoom.tsx's dm-book-state debug mirror) instead of blind-scanning.
+// Trimmed to just "open" here, since this script only ever needs the book
+// open once per DM page load.
+async function readDmBookState(page) {
+  const el = await page.$('[data-testid="dm-book-state"]');
+  if (!el) return null;
+  return JSON.parse(await el.textContent());
+}
+
+async function waitForBookScreenPosition(page, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readDmBookState(page);
+    if (last?.screen) return last;
+    await sleep(100);
+  }
+  throw new Error(`dm-book-state never reported a screen projection — last: ${JSON.stringify(last)}`);
+}
+
+async function openDmBook(page) {
+  const box = await page.locator("canvas").boundingBox();
+  if (!box) throw new Error("no canvas on the page");
+  const state = await waitForBookScreenPosition(page);
+  const [sx, sy] = state.screen;
+  const offsets = [
+    [0, 0],
+    [20, 0], [-20, 0], [0, 20], [0, -20],
+    [40, 0], [-40, 0], [0, 40], [0, -40],
+  ];
+  for (const [dx, dy] of offsets) {
+    await page.mouse.click(box.x + sx + dx, box.y + sy + dy);
+    await sleep(200);
+    if ((await page.$('[data-testid="dm-book-panel"]')) !== null) return;
+  }
+  throw new Error(`could not click the 3D book open (tried screen=${JSON.stringify(state.screen)})`);
+}
+
 await ensureDevServer();
 
 const dm = await makeTestUser("dm");
@@ -208,14 +250,17 @@ try {
   //    book (DmBook.tsx), as an explicit Day/Night button PAIR
   //    ("day-night-day-button"/"day-night-night-button") rather than one
   //    flip toggle. A non-DM player still gets no book at all, so neither
-  //    button (nor anything else DM-only) is ever present for them. --
+  //    button (nor anything else DM-only) is ever present for them.
+  //    STALE ASSUMPTION UPDATE (Phase 5): the book is now a real 3D prop
+  //    (src/scene-3d/DmBookProp.tsx), opened with a real click instead of a
+  //    screen-fixed "dm-book-toggle" button — see openDmBook above. A
+  //    player's client doesn't mount the prop at all, so its debug mirror
+  //    (dm-book-state) is the presence/absence check now, not "dm-book". --
   check(
     "a non-DM player is not offered the book at all, so no Day/Night controls either",
-    (await alicePage.$('[data-testid="dm-book"]')) === null
+    (await alicePage.$('[data-testid="dm-book-state"]')) === null
   );
-  await dmPage.waitForSelector('[data-testid="dm-book-toggle"]', { timeout: 30000 });
-  await dmPage.click('[data-testid="dm-book-toggle"]');
-  await dmPage.waitForSelector('[data-testid="dm-book-panel"]', { timeout: 10000 });
+  await openDmBook(dmPage);
   await dmPage.click('[data-testid="dm-book-tab-dayNight"]');
   check(
     "the DM sees the book's Day/Night buttons",

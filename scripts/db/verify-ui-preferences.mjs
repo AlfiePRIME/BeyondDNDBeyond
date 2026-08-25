@@ -189,6 +189,46 @@ function expectedDefaultPosition(panelId, viewport, measuredHeight) {
   }
 }
 
+// Phase 5: the DM's book is now a real 3D prop (src/scene-3d/DmBookProp.tsx)
+// clicked open rather than a screen-fixed "dm-book-toggle" button — see
+// verify-dm-book.mjs's own openDmBook/clickBook for the full doc comment on
+// why this targets DmBookProp's exact projected screen position
+// (GameRoom.tsx's dm-book-state debug mirror) instead of blind-scanning.
+async function readDmBookState(page) {
+  const el = await page.$('[data-testid="dm-book-state"]');
+  if (!el) return null;
+  return JSON.parse(await el.textContent());
+}
+
+async function waitForBookScreenPosition(page, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readDmBookState(page);
+    if (last?.screen) return last;
+    await sleep(100);
+  }
+  throw new Error(`dm-book-state never reported a screen projection — last: ${JSON.stringify(last)}`);
+}
+
+async function openDmBook(page) {
+  const box = await page.locator("canvas").boundingBox();
+  if (!box) throw new Error("no canvas on the page");
+  const state = await waitForBookScreenPosition(page);
+  const [sx, sy] = state.screen;
+  const offsets = [
+    [0, 0],
+    [20, 0], [-20, 0], [0, 20], [0, -20],
+    [40, 0], [-40, 0], [0, 40], [0, -40],
+  ];
+  for (const [dx, dy] of offsets) {
+    await page.mouse.click(box.x + sx + dx, box.y + sy + dy);
+    await sleep(200);
+    if ((await page.$('[data-testid="dm-book-panel"]')) !== null) return;
+  }
+  throw new Error(`could not click the 3D book open (tried screen=${JSON.stringify(state.screen)})`);
+}
+
 await ensureDevServer();
 
 const dm = await makeTestUser("dm");
@@ -421,7 +461,13 @@ try {
   //    Still confirms: no DraggablePanel wrapper for either, and the book
   //    itself (not either panel) is the only thing that could ever move —
   //    dragging a panel's own header does nothing, because the book is a
-  //    fixed-position overlay outside the whole drag/collapse system. --
+  //    fixed-position overlay outside the whole drag/collapse system.
+  //    STALE ASSUMPTION UPDATE (Phase 5): the book is now a real 3D prop
+  //    (src/scene-3d/DmBookProp.tsx), opened with a real click instead of a
+  //    screen-fixed "dm-book-toggle" button — see openDmBook above. Still
+  //    "fixed-position" in the sense this comment means: the book's world
+  //    position never moves in response to dragging a panel's header inside
+  //    it, which the drag check right below still confirms. --
   check(
     "MonsterPanel has NO DraggablePanel wrapper (Phase 4: hosted by the DM's book instead)",
     (await page.locator('[data-testid="draggable-panel-monster"]').count()) === 0
@@ -430,8 +476,7 @@ try {
     "DmOverridesPanel has NO DraggablePanel wrapper (Phase 4: hosted by the DM's book instead)",
     (await page.locator('[data-testid="draggable-panel-dmControls"]').count()) === 0
   );
-  await page.getByTestId("dm-book-toggle").click();
-  await page.waitForSelector('[data-testid="dm-book-panel"]', { timeout: 10000 });
+  await openDmBook(page);
   // The book defaults to its Enemies page, so MonsterPanel is already
   // showing; DM Controls needs its own tab.
   const monsterBox = await page.locator('[data-testid="monster-panel"]').boundingBox();

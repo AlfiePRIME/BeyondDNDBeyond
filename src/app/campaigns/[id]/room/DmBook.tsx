@@ -31,31 +31,37 @@ const PAGES: { id: BookPage; label: string }[] = [
 ];
 
 /**
- * The DM's book (Phase 4 of the Game Room ambiance/tools plan): a plain 2D
- * screen-space overlay — a sibling of the `<Canvas>` in GameRoom.tsx, never
- * anything inside the 3D scene — replacing MonsterPanel/DmOverridesPanel's
- * old unconditional, always-mounted-for-the-DM panels (and the Phase 2
- * standalone day/night button) with a single book the DM opens on demand.
- * Default collapsed to a small tab bottom-center; opens upward into a
- * five-page tabbed book, switching pages via a short CSS crossfade
- * (DmBook.module.css's `bookPageIn` keyframe).
+ * The DM's book's real page content: the five-tab Enemies/DM Controls/
+ * Notes/Lore/Day-Night book, switching pages via a short CSS crossfade
+ * (DmBook.module.css's `bookPageIn` keyframe). As of Phase 5 (the Game Room
+ * ambiance/tools plan's move to a physical 3D book), this is pure,
+ * prop-driven presentational content with no opinion on where it's hosted —
+ * GameRoom mounts it as `DmBookProp`'s `children`, inside a
+ * non-perspective-transformed `<Html>` anchored to the book's position in
+ * the 3D scene (src/scene-3d/DmBookProp.tsx), only while the 3D book is
+ * open. Before Phase 5 this component ALSO owned the open/closed toggle and
+ * rendered a plain 2D screen-fixed overlay (a sibling of the `<Canvas>`,
+ * never anything inside the 3D scene) — that shell is gone; opening/closing
+ * is now a real click on the 3D book prop, and `onClose` (below) is only
+ * the in-panel "✕ Close" button's escape hatch back to that same toggle.
  *
- * Ordinary React state for open/closed and the active page — deliberately
+ * Ordinary React state for the active page only now — still deliberately
  * NOT part of the DraggablePanel/PanelLayoutProvider drag/collapse system
- * (this is intentionally fixed-position, the opposite of what that system
- * offers), and NOT CanvasUI/WebGL. An earlier Phase C attempt used
- * CanvasUI's `Peel` as a small reveal tab (DmToolPeel.tsx, now deleted —
- * dead code from before this phase existed) but `Peel` turned out
- * unsuited to a multi-page book: it's a single binary open/closed reveal,
- * not a page-sequencer, and its `under` slot (the thing actually meant to
- * be revealed) only ever renders with html-in-canvas support, which this
- * project's target Chromium doesn't have.
+ * (DraggablePanel's own doc comment), and NOT CanvasUI/WebGL. An earlier
+ * Phase C attempt used CanvasUI's `Peel` as a small reveal tab
+ * (DmToolPeel.tsx, now deleted — dead code from before this phase existed)
+ * but `Peel` turned out unsuited to a multi-page book: it's a single binary
+ * open/closed reveal, not a page-sequencer, and its `under` slot (the thing
+ * actually meant to be revealed) only ever renders with html-in-canvas
+ * support, which this project's target Chromium doesn't have.
  *
- * Mounted by GameRoom only for the DM — `{currentUserIsDM ? <DmBook .../>
- * : null}` — so a player's client never renders this component at all:
- * no book tab, no page content, nothing in the DOM to find.
+ * Mounted by GameRoom only for the DM — a player's client never renders
+ * this component (or DmBookProp's `<Html>` at all): no book content, no
+ * page state, nothing in the DOM to find.
  */
 export function DmBook({
+  // Closing back to the 3D book's closed state.
+  onClose,
   // Enemies (MonsterPanel)
   statBlocks,
   rosterNpcs,
@@ -86,6 +92,7 @@ export function DmBook({
   dayNightError,
   onToggleDayNight,
 }: {
+  onClose: () => void;
   statBlocks: MonsterStatBlock[];
   rosterNpcs: Npc[];
   combatActive: boolean;
@@ -126,137 +133,117 @@ export function DmBook({
   dayNightError: string | null;
   onToggleDayNight: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [page, setPage] = useState<BookPage>("enemies");
 
-  if (!open) {
-    return (
-      <div className={styles.root} data-testid="dm-book">
+  return (
+    <div className={styles.book} data-testid="dm-book-panel">
+      <div className={styles.tabs}>
+        {PAGES.map((entry) => (
+          <Button
+            key={entry.id}
+            size="sm"
+            variant={page === entry.id ? "teal" : "ghost"}
+            aria-pressed={page === entry.id}
+            onClick={() => setPage(entry.id)}
+            data-testid={`dm-book-tab-${entry.id}`}
+          >
+            {entry.label}
+          </Button>
+        ))}
         <Button
           size="sm"
           variant="ghost"
-          aria-expanded={false}
-          aria-label="Open the DM's book"
-          onClick={() => setOpen(true)}
-          data-testid="dm-book-toggle"
+          className={styles.closeButton}
+          aria-expanded={true}
+          aria-label="Close the DM's book"
+          onClick={onClose}
+          data-testid="dm-book-close"
         >
-          📖 DM&apos;s book
+          ✕ Close
         </Button>
       </div>
-    );
-  }
-
-  return (
-    <div className={styles.root} data-testid="dm-book">
-      <div className={styles.book} data-testid="dm-book-panel">
-        <div className={styles.tabs}>
-          {PAGES.map((entry) => (
-            <Button
-              key={entry.id}
-              size="sm"
-              variant={page === entry.id ? "teal" : "ghost"}
-              aria-pressed={page === entry.id}
-              onClick={() => setPage(entry.id)}
-              data-testid={`dm-book-tab-${entry.id}`}
-            >
-              {entry.label}
-            </Button>
-          ))}
-          <Button
-            size="sm"
-            variant="ghost"
-            className={styles.closeButton}
-            aria-expanded={true}
-            aria-label="Close the DM's book"
-            onClick={() => setOpen(false)}
-            data-testid="dm-book-close"
-          >
-            ✕ Close
-          </Button>
-        </div>
-        <div key={page} className={styles.pageContent} data-testid="dm-book-page" data-page={page}>
-          {page === "enemies" ? (
-            <MonsterPanel
-              statBlocks={statBlocks}
-              rosterNpcs={rosterNpcs}
-              combatActive={combatActive}
-              hasLiveMap={hasLiveMap}
-              busy={monsterBusy}
-              error={monsterError}
-              onCreate={onCreateStatBlock}
-              onUpdate={onUpdateStatBlock}
-              onDelete={onDeleteStatBlock}
-              onQuickAdd={onQuickAddMonster}
-            />
-          ) : null}
-          {page === "dmControls" ? (
-            <DmOverridesPanel
-              campaignId={campaignId}
-              characters={characters}
-              members={members}
-              strict={economyStrict}
-              strictBusy={economyBusy}
-              strictError={economyError}
-              onSetStrict={onSetEconomyStrict}
-            />
-          ) : null}
-          {page === "notes" ? (
-            <div className={styles.notesPage}>
-              <DmNotes campaignId={campaignId} initialNotes={initialDmNotes} />
+      <div key={page} className={styles.pageContent} data-testid="dm-book-page" data-page={page}>
+        {page === "enemies" ? (
+          <MonsterPanel
+            statBlocks={statBlocks}
+            rosterNpcs={rosterNpcs}
+            combatActive={combatActive}
+            hasLiveMap={hasLiveMap}
+            busy={monsterBusy}
+            error={monsterError}
+            onCreate={onCreateStatBlock}
+            onUpdate={onUpdateStatBlock}
+            onDelete={onDeleteStatBlock}
+            onQuickAdd={onQuickAddMonster}
+          />
+        ) : null}
+        {page === "dmControls" ? (
+          <DmOverridesPanel
+            campaignId={campaignId}
+            characters={characters}
+            members={members}
+            strict={economyStrict}
+            strictBusy={economyBusy}
+            strictError={economyError}
+            onSetStrict={onSetEconomyStrict}
+          />
+        ) : null}
+        {page === "notes" ? (
+          <div className={styles.notesPage}>
+            <DmNotes campaignId={campaignId} initialNotes={initialDmNotes} />
+          </div>
+        ) : null}
+        {page === "lore" ? (
+          <DmBookLorePage
+            campaignId={campaignId}
+            initialPages={initialLorePages}
+            initialLinks={initialLorePageLinks}
+          />
+        ) : null}
+        {page === "dayNight" ? (
+          <div className={styles.dayNightPage}>
+            <span className={roomStyles.panelLabel}>Table lighting</span>
+            <p className={styles.dayNightHint}>
+              Purely cosmetic 3D-table lighting for the whole party — independent of the
+              per-cell vision/light-level system.
+            </p>
+            <div className={roomStyles.modeToggle} role="group" aria-label="Table lighting">
+              <button
+                type="button"
+                className={[roomStyles.modeButton, dayNightMode === "day" ? roomStyles.modeButtonActive : ""]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-pressed={dayNightMode === "day"}
+                disabled={dayNightBusy}
+                onClick={() => {
+                  if (dayNightMode !== "day") onToggleDayNight();
+                }}
+                data-testid="day-night-day-button"
+              >
+                ☀️ Day
+              </button>
+              <button
+                type="button"
+                className={[roomStyles.modeButton, dayNightMode === "night" ? roomStyles.modeButtonActive : ""]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-pressed={dayNightMode === "night"}
+                disabled={dayNightBusy}
+                onClick={() => {
+                  if (dayNightMode !== "night") onToggleDayNight();
+                }}
+                data-testid="day-night-night-button"
+              >
+                🌙 Night
+              </button>
             </div>
-          ) : null}
-          {page === "lore" ? (
-            <DmBookLorePage
-              campaignId={campaignId}
-              initialPages={initialLorePages}
-              initialLinks={initialLorePageLinks}
-            />
-          ) : null}
-          {page === "dayNight" ? (
-            <div className={styles.dayNightPage}>
-              <span className={roomStyles.panelLabel}>Table lighting</span>
-              <p className={styles.dayNightHint}>
-                Purely cosmetic 3D-table lighting for the whole party — independent of the
-                per-cell vision/light-level system.
+            {dayNightError ? (
+              <p role="alert" className={roomStyles.errorText} data-testid="day-night-error">
+                {dayNightError}
               </p>
-              <div className={roomStyles.modeToggle} role="group" aria-label="Table lighting">
-                <button
-                  type="button"
-                  className={[roomStyles.modeButton, dayNightMode === "day" ? roomStyles.modeButtonActive : ""]
-                    .filter(Boolean)
-                    .join(" ")}
-                  aria-pressed={dayNightMode === "day"}
-                  disabled={dayNightBusy}
-                  onClick={() => {
-                    if (dayNightMode !== "day") onToggleDayNight();
-                  }}
-                  data-testid="day-night-day-button"
-                >
-                  ☀️ Day
-                </button>
-                <button
-                  type="button"
-                  className={[roomStyles.modeButton, dayNightMode === "night" ? roomStyles.modeButtonActive : ""]
-                    .filter(Boolean)
-                    .join(" ")}
-                  aria-pressed={dayNightMode === "night"}
-                  disabled={dayNightBusy}
-                  onClick={() => {
-                    if (dayNightMode !== "night") onToggleDayNight();
-                  }}
-                  data-testid="day-night-night-button"
-                >
-                  🌙 Night
-                </button>
-              </div>
-              {dayNightError ? (
-                <p role="alert" className={roomStyles.errorText} data-testid="day-night-error">
-                  {dayNightError}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );

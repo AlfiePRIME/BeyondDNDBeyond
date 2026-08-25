@@ -101,6 +101,7 @@ import { Button, Modal } from "@/ui-components";
 import {
   computeSeatLayout,
   DiceTumble,
+  DmBookProp,
   GameTableScene,
   TABLE_SURFACE_Y,
   type CameraMode,
@@ -163,9 +164,40 @@ const DICE_ROLLED_EVENT = "dice-rolled";
 // on remembering it, not instantly).
 const SEEN_CELLS_FLUSH_MS = 1500;
 
-// Phase 3: how far in front of the DM's own seat (toward table center) the
-// private dice tray sits — see dmPrivateTrayPosition's doc comment.
-const DM_PRIVATE_TRAY_OFFSET = 0.5;
+// Phase 3: how far toward the table's center the private dice tray sits,
+// as a FRACTION of the DM seat's own distance from center — see
+// dmPrivateTrayPosition's doc comment for why this must be proportional,
+// not a fixed absolute distance. 0.6 keeps a comfortable margin inside
+// even the tightest axis (a seat sitting exactly on the depth axis, the
+// ellipse's shorter one) — verified against this table's real measured
+// dimensions (table.ts's TABLE_TOP): the worst case (a single-occupant
+// room, where the DM's seat sits exactly on the depth axis at its own
+// FIRST_SEAT_ANGLE) lands the tray at roughly 72% of the way to that
+// axis's table edge, not past it.
+const DM_PRIVATE_TRAY_CENTER_FRACTION = 0.6;
+
+// Phase 5: the DM's book (now a real 3D prop, DmBookProp) sits at a
+// different spot in front of the DM's own seat than the private dice tray
+// above — offset to one side (lateral, perpendicular to "forward") AND
+// considerably further out (1.6 vs. the tray's 0.5), rather than
+// dead-center at the same distance the tray uses, so the two never compete
+// for the same patch of table (real clearance margin between the tray's own
+// footprint and the book's, at any party size — see dmBookPosition's doc
+// comment for the exact vector math).
+//
+// The specific lateral distance (1.3) also keeps the book's projected
+// screen position (DmBookPropProps.onProjectedPosition) inside the gap
+// between DraggablePanel's CENTER-anchored panels (quickActions/diceLog,
+// ~34%-66% of viewport width) and its RIGHT-anchored ones (handout/map,
+// from ~75%), landing consistently around 69%-71% across party sizes —
+// verified numerically (computeSeatLayout's own math replayed for n=2..7)
+// and empirically against a live DM Room. This matters for
+// verify-dm-book.mjs, which clicks the book at that exact projected point
+// rather than blind-scanning the canvas — a point inside any
+// DraggablePanel's rendered footprint would eat the click instead of
+// reaching the WebGL raycaster underneath.
+const DM_BOOK_FORWARD_OFFSET = 1.6;
+const DM_BOOK_LATERAL_OFFSET = 1.3;
 
 interface LiveMapPayload {
   mapId: string | null;
@@ -392,25 +424,61 @@ export function GameRoom({
     () => seats.find((seat) => seat.member.role === "dm") ?? null,
     [seats]
   );
-  // A short distance in front of the DM's own seat, toward the table
-  // center, at table-surface height — Seat.rotationY is the yaw that
-  // points an object's local -Z forward at the table center (its own doc
-  // comment), so (-sin(rotationY), 0, -cos(rotationY)) is that same unit
-  // direction from the seat's position. 0.5 units puts the tray naturally
-  // inside the DM's own first-person view (CAMERA_SETBACK in seating.ts is
-  // 1.6, so this sits well short of the camera) regardless of party size or
-  // which physical seat the DM ends up placed at (the fixed-DM-seat work
-  // earlier this session made that position deterministic).
+  // A point between the DM's own seat and the table's center, at table-
+  // surface height. Interpolated as a FRACTION of the seat's own distance
+  // from center (DM_PRIVATE_TRAY_CENTER_FRACTION) rather than a fixed
+  // absolute offset — a fixed distance is only ever correct for the exact
+  // table size it was tuned against: this table's real dimensions come
+  // from a loaded, owner-provided glTF model (table.ts's TABLE_TOP), not a
+  // fixed procedural constant, so a hardcoded offset would silently start
+  // landing the tray off the table's edge the moment that model's measured
+  // size changes (confirmed happening in practice when the table was
+  // re-measured smaller than the original procedural placeholder — a fixed
+  // 0.5-unit offset left the tray floating past the new, shorter depth
+  // axis for a single-occupant room). The table and the seating ellipse
+  // are both centered on the world origin (every other system in this
+  // file already assumes this), so "a fraction of the way to center" is
+  // just scaling the seat's own position — no separate forward-vector
+  // trigonometry needed, and it degrades gracefully to any future table
+  // size without re-tuning.
   const dmPrivateTrayPosition = useMemo<[number, number, number]>(() => {
     if (!dmSeat) return [0, TABLE_SURFACE_Y + 0.01, 0];
-    const forwardX = -Math.sin(dmSeat.rotationY);
-    const forwardZ = -Math.cos(dmSeat.rotationY);
+    const keep = 1 - DM_PRIVATE_TRAY_CENTER_FRACTION;
     return [
-      dmSeat.position[0] + forwardX * DM_PRIVATE_TRAY_OFFSET,
+      dmSeat.position[0] * keep,
       TABLE_SURFACE_Y + 0.01,
-      dmSeat.position[2] + forwardZ * DM_PRIVATE_TRAY_OFFSET,
+      dmSeat.position[2] * keep,
     ];
   }, [dmSeat]);
+  // Phase 5: the DM's book prop's position — same forward-from-seat vector
+  // as the private tray above, PLUS a lateral component (perpendicular to
+  // "forward", i.e. "forward" rotated 90°: (cos, -sin) instead of
+  // (-sin, -cos)) so the book sits to one side of the tray rather than
+  // dead-center in front of the seat. DM_BOOK_FORWARD_OFFSET (1.6) is also
+  // considerably further out than the tray's 0.5, so the two offsets
+  // combined (further forward AND to one side) keep a real gap between the
+  // tray's footprint (TRAY_RADIUS 0.55 in DiceTumble.tsx) and the book's own
+  // (visible geometry well under half a meter across — DmBookProp.tsx) —
+  // roughly 1.25 units center-to-center vs. their combined radii of well
+  // under 1 — regardless of party size or which side of the ellipse the
+  // DM's fixed seat lands on.
+  const dmBookPosition = useMemo<[number, number, number]>(() => {
+    if (!dmSeat) return [DM_BOOK_LATERAL_OFFSET, TABLE_SURFACE_Y, 0];
+    const forwardX = -Math.sin(dmSeat.rotationY);
+    const forwardZ = -Math.cos(dmSeat.rotationY);
+    const lateralX = Math.cos(dmSeat.rotationY);
+    const lateralZ = -Math.sin(dmSeat.rotationY);
+    return [
+      dmSeat.position[0] + forwardX * DM_BOOK_FORWARD_OFFSET + lateralX * DM_BOOK_LATERAL_OFFSET,
+      TABLE_SURFACE_Y,
+      dmSeat.position[2] + forwardZ * DM_BOOK_FORWARD_OFFSET + lateralZ * DM_BOOK_LATERAL_OFFSET,
+    ];
+  }, [dmSeat]);
+  const [bookOpen, setBookOpen] = useState(false);
+  // Debug mirror only (see DmBookPropProps.onProjectedPosition's doc
+  // comment) — verify-dm-book.mjs has no other way to find a WebGL mesh's
+  // on-screen position to click.
+  const [bookScreenPosition, setBookScreenPosition] = useState<[number, number] | null>(null);
 
   const [liveMap, setLiveMapState] = useState<LiveMapData | null>(initialLiveMap);
   const [switching, setSwitching] = useState(false);
@@ -2281,6 +2349,52 @@ export function GameRoom({
             onQueueChange={setPrivateDiceQueueDebug}
           />
         ) : null}
+        {/* Phase 5: the DM's book — Enemies (MonsterPanel), DM Controls
+            (DmOverridesPanel), Notes, Lore, and Day/Night, now a real 3D
+            prop on the table (dmBookPosition's doc comment) instead of a
+            fixed screen-space overlay. Replaces the old MonsterPanel/
+            DmOverridesPanel always-mounted panels and the temporary
+            standalone day/night button before that. DM-only: a player's
+            client never mounts this at all, so there's no book mesh, no
+            click target, and (since `children` only renders while
+            `bookOpen`) no page content in the DOM either. */}
+        {currentUserIsDM ? (
+          <DmBookProp
+            position={dmBookPosition}
+            rotationY={dmSeat?.rotationY ?? 0}
+            open={bookOpen}
+            onToggleOpen={() => setBookOpen((current) => !current)}
+            onProjectedPosition={setBookScreenPosition}
+          >
+            <DmBook
+              onClose={() => setBookOpen(false)}
+              statBlocks={statBlocks}
+              rosterNpcs={rosterNpcs}
+              combatActive={combat !== null}
+              hasLiveMap={liveMap !== null}
+              monsterBusy={monsterBusy || tokenBusy}
+              monsterError={monsterError}
+              onCreateStatBlock={handleCreateStatBlock}
+              onUpdateStatBlock={handleUpdateStatBlock}
+              onDeleteStatBlock={handleDeleteStatBlock}
+              onQuickAddMonster={handleQuickAddMonster}
+              campaignId={campaignId}
+              characters={characterRows}
+              members={roster}
+              economyStrict={economyStrict}
+              economyBusy={economyBusy}
+              economyError={economyError}
+              onSetEconomyStrict={handleSetEconomyStrict}
+              initialDmNotes={initialDmNotes}
+              initialLorePages={initialLorePages}
+              initialLorePageLinks={initialLorePageLinks}
+              dayNightMode={dayNightMode}
+              dayNightBusy={dayNightBusy}
+              dayNightError={dayNightError}
+              onToggleDayNight={() => void handleToggleDayNight()}
+            />
+          </DmBookProp>
+        ) : null}
       </Canvas>
       {/* Hidden render-state mirror for verify-vision-rendering.mjs — see
           the visionDebug memo. */}
@@ -2309,6 +2423,29 @@ export function GameRoom({
       {currentUserIsDM ? (
         <div data-testid="private-dice-tumble-state" hidden>
           {JSON.stringify({ queue: privateDiceQueueDebug })}
+        </div>
+      ) : null}
+      {/* Hidden render-state mirror for the DM's book prop (Phase 5) — same
+          "WebGL has no DOM" reasoning as every other mirror on this page.
+          `open`/`position` mirror this client's own React state directly;
+          `screen` is DmBookProp's onProjectedPosition callback (its own doc
+          comment) — the only way verify-dm-book.mjs can find a WebGL mesh's
+          on-screen position to click. Absent entirely for a non-DM client,
+          since DmBookProp itself isn't mounted — verify-dm-book.mjs's
+          player-side check is exactly "this testid doesn't exist for me". */}
+      {currentUserIsDM ? (
+        <div data-testid="dm-book-state" hidden>
+          {JSON.stringify({ open: bookOpen, position: dmBookPosition, screen: bookScreenPosition })}
+        </div>
+      ) : null}
+      {/* Hidden render-state mirror of the private dice tray's own position
+          (Phase 5) — lets verify-dm-book.mjs/verify-private-dice-rolls.mjs
+          confirm the book and the private tray never land on the same spot,
+          without either script needing to re-derive the seat trigonometry
+          itself. */}
+      {currentUserIsDM ? (
+        <div data-testid="dm-private-tray-state" hidden>
+          {JSON.stringify({ position: dmPrivateTrayPosition })}
         </div>
       ) : null}
       {/* Hidden render-state mirror for verify-void-terrain.mjs — see the
@@ -2468,40 +2605,6 @@ export function GameRoom({
           onRollLanded={handleRollLanded}
         />
       </DraggablePanel>
-      {/* Phase 4: the DM's book — Enemies (MonsterPanel), DM Controls
-          (DmOverridesPanel), Notes, Lore, and Day/Night, one fixed
-          screen-space overlay the DM opens on demand. Replaces the old
-          separate always-mounted MonsterPanel/DmOverridesPanel panels and
-          the temporary standalone day/night button above. DM-only: a
-          player's client never mounts this component at all. */}
-      {currentUserIsDM ? (
-        <DmBook
-          statBlocks={statBlocks}
-          rosterNpcs={rosterNpcs}
-          combatActive={combat !== null}
-          hasLiveMap={liveMap !== null}
-          monsterBusy={monsterBusy || tokenBusy}
-          monsterError={monsterError}
-          onCreateStatBlock={handleCreateStatBlock}
-          onUpdateStatBlock={handleUpdateStatBlock}
-          onDeleteStatBlock={handleDeleteStatBlock}
-          onQuickAddMonster={handleQuickAddMonster}
-          campaignId={campaignId}
-          characters={characterRows}
-          members={roster}
-          economyStrict={economyStrict}
-          economyBusy={economyBusy}
-          economyError={economyError}
-          onSetEconomyStrict={handleSetEconomyStrict}
-          initialDmNotes={initialDmNotes}
-          initialLorePages={initialLorePages}
-          initialLorePageLinks={initialLorePageLinks}
-          dayNightMode={dayNightMode}
-          dayNightBusy={dayNightBusy}
-          dayNightError={dayNightError}
-          onToggleDayNight={() => void handleToggleDayNight()}
-        />
-      ) : null}
       <DraggablePanel panelId="diceLog">
         <DiceLogPanel
           campaignId={campaignId}
