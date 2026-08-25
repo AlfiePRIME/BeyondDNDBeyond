@@ -203,3 +203,13 @@ Automating the remaining flags (`ownAttacksHave*`, `abilityChecksHaveDisadvantag
 skills still take only the manual toggle. Unit-tested the resolveDeathSave way: both-empty,
 each side alone, both-present canceling (including one-vs-many on either side),
 never-stacking, and content-opacity.
+
+Post-plan (sheet-side identity editing): `srd/races.ts` gains `RACE_OPTION_NAMES` — the
+flattened base-race-plus-subrace option list character creation offers, one of which is
+what `characters.race` stores (a subrace pick stores the subrace name ALONE) — and
+`resolveRaceOption(name)`, which resolves that stored string back to a `RaceOptionStats`
+(`speedFeet`, `darkvisionFeet`) with the wizard's subrace-overrides-race precedence, or
+null for a name outside the catalog (e.g. an import's "Unknown"). Extracted from the
+wizard's inline derivation and the import flow's local `darkvisionForRaceName` when the
+character sheet's race editor became a third consumer; all three surfaces now share this
+one resolver, so creation and later race edits derive identical speed/darkvision.

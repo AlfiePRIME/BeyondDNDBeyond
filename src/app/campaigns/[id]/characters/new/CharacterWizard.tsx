@@ -10,6 +10,7 @@ import {
   STARTING_EQUIPMENT,
   abilityModifier,
   proficiencyBonus,
+  resolveRaceOption,
   savingThrowBonus,
   attackBonus,
   spellSlotsForClass,
@@ -148,11 +149,15 @@ export function CharacterWizard({
     return items.map((item) => ({ name: item, quantity: 1 }));
   }, [equipment, equipmentPicks]);
 
-  const speed = subrace?.speedFeet ?? race?.speedFeet ?? 30;
-  // Subrace overrides race where both define it — the speed precedence rule
-  // exactly (e.g. a Drow's 120 ft over the Elf's 60 ft); null means normal
-  // vision only. Stored on the character at creation, like speed.
-  const darkvisionFeet = subrace?.darkvisionFeet ?? race?.darkvisionFeet ?? null;
+  // Subrace overrides race where both define it (e.g. a Drow's 120 ft
+  // darkvision over the Elf's 60 ft); null darkvision means normal vision
+  // only. Resolved by the shared rules-engine resolver from the same
+  // race-or-subrace string the row will store, so creation and the sheet's
+  // later race edits derive identical stats. Stored on the character at
+  // creation.
+  const raceStats = race ? resolveRaceOption(subrace ? subrace.name : race.name) : null;
+  const speed = raceStats?.speedFeet ?? 30;
+  const darkvisionFeet = raceStats?.darkvisionFeet ?? null;
   const maxHp = klass && finalScores ? levelOneHitPoints(klass.hitDie, finalScores.constitution) : null;
   const armorClass = finalScores ? 10 + abilityModifier(finalScores.dexterity) : null;
 

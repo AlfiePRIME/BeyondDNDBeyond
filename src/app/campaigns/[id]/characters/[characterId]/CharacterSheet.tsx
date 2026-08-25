@@ -7,11 +7,13 @@ import {
   CONDITION_BY_KEY,
   EXHAUSTION_KEY,
   EXHAUSTION_LEVEL_DESCRIPTIONS,
+  RACE_OPTION_NAMES,
   SKILLS,
   SPELLS,
   abilityModifier,
   parseDiceNotation,
   proficiencyBonus,
+  resolveRaceOption,
   savingThrowBonus,
   skillCheckBonus,
   passiveScore,
@@ -132,6 +134,8 @@ export function CharacterSheet({
   );
   const [hpDraft, setHpDraft] = useState(String(initialCharacter.current_hp));
   const [acDraft, setAcDraft] = useState(String(initialCharacter.armor_class));
+  const [levelDraft, setLevelDraft] = useState(String(initialCharacter.level));
+  const [speedDraft, setSpeedDraft] = useState(String(initialCharacter.speed));
   const [newItemName, setNewItemName] = useState("");
   const [newItemQty, setNewItemQty] = useState("1");
   // The weapon-tagging editor (Prompt 51): collapsed by default so
@@ -296,6 +300,58 @@ export function CharacterSheet({
     }
     const ok = await persist({ armor_class: value });
     if (!ok) setAcDraft(String(character.armor_class));
+  }
+
+  async function commitLevel() {
+    const value = parseIntIn(levelDraft, 1, 20);
+    if (value === null || value === character.level) {
+      setLevelDraft(String(character.level));
+      return;
+    }
+    // Deliberately does NOT touch character_resources or the spells list —
+    // both stay the fully manual edit surfaces they already are (their
+    // level-1 assertions are manually maintained thereafter too).
+    const ok = await persist({ level: value });
+    if (!ok) setLevelDraft(String(character.level));
+  }
+
+  async function commitSpeed() {
+    const value = parseIntIn(speedDraft, 0, 300);
+    if (value === null || value === character.speed) {
+      setSpeedDraft(String(character.speed));
+      return;
+    }
+    const ok = await persist({ speed: value });
+    if (!ok) setSpeedDraft(String(character.speed));
+  }
+
+  /** Changing race re-derives speed and darkvision from the new pick — the
+   * same shared resolver creation uses — in the SAME updateCharacter call,
+   * so an edited character keeps the race → derived-stats consistency a
+   * freshly-created one is guaranteed. */
+  async function changeRace(nextRace: string) {
+    if (nextRace === character.race) return;
+    // Only catalog options are offered; the guard keeps a stray value (or
+    // the unrecognized-current-value display option) from persisting a race
+    // whose derived stats can't be resolved.
+    const stats = resolveRaceOption(nextRace);
+    if (!stats) return;
+    const previousSpeed = character.speed;
+    setSpeedDraft(String(stats.speedFeet));
+    const ok = await persist({
+      race: nextRace,
+      speed: stats.speedFeet,
+      darkvision_feet: stats.darkvisionFeet,
+    });
+    if (!ok) setSpeedDraft(String(previousSpeed));
+  }
+
+  /** Constrained to the CLASSES catalog so the rest of the app's
+   * CLASSES.find lookups always resolve an edited class. Deliberately does
+   * NOT touch character_resources or the spells list — see commitLevel. */
+  async function changeClass(nextClass: string) {
+    if (nextClass === character.class || !CLASSES.some((c) => c.name === nextClass)) return;
+    await persist({ class: nextClass });
   }
 
   async function toggleSkill(skill: SkillName) {
@@ -543,15 +599,74 @@ export function CharacterSheet({
           tone="purple"
           glow
           headerActions={
-            <span className={styles.headerBadges}>
-              <Badge tone="purple">{character.race}</Badge>
-              <Badge tone="teal">
-                {character.class} {character.level}
-              </Badge>
-            </span>
+            // Editors get real race/class/level controls in the grid below
+            // instead of these static badges.
+            canEdit ? undefined : (
+              <span className={styles.headerBadges}>
+                <Badge tone="purple">{character.race}</Badge>
+                <Badge tone="teal">
+                  {character.class} {character.level}
+                </Badge>
+              </span>
+            )
           }
         >
           <div className={styles.vitalsGrid}>
+            {canEdit ? (
+              <>
+                <div className={styles.vital}>
+                  <Select
+                    label="Race"
+                    value={character.race}
+                    onChange={(e) => void changeRace(e.target.value)}
+                    data-testid="sheet-race-select"
+                  >
+                    {RACE_OPTION_NAMES.includes(character.race) ? null : (
+                      // A stored race outside the catalog (e.g. an import's
+                      // "Unknown") still displays as the current selection;
+                      // changeRace refuses to re-save it.
+                      <option value={character.race}>{character.race}</option>
+                    )}
+                    {RACE_OPTION_NAMES.map((raceOption) => (
+                      <option key={raceOption} value={raceOption}>
+                        {raceOption}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className={styles.vital}>
+                  <Select
+                    label="Class"
+                    value={character.class}
+                    onChange={(e) => void changeClass(e.target.value)}
+                    data-testid="sheet-class-select"
+                  >
+                    {CLASSES.some((c) => c.name === character.class) ? null : (
+                      <option value={character.class}>{character.class}</option>
+                    )}
+                    {CLASSES.map((classOption) => (
+                      <option key={classOption.name} value={classOption.name}>
+                        {classOption.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className={styles.vital}>
+                  <span className={styles.vitalLabel}>Level</span>
+                  <input
+                    className={styles.vitalInput}
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={levelDraft}
+                    onChange={(e) => setLevelDraft(e.target.value)}
+                    onBlur={commitLevel}
+                    aria-label="Level"
+                    data-testid="sheet-level-input"
+                  />
+                </div>
+              </>
+            ) : null}
             <div className={styles.vital}>
               <span className={styles.vitalLabel}>Hit points</span>
               {canEdit ? (
@@ -649,7 +764,24 @@ export function CharacterSheet({
             </div>
             <div className={styles.vital}>
               <span className={styles.vitalLabel}>Speed</span>
-              <span className={styles.vitalValue}>{character.speed} ft</span>
+              {canEdit ? (
+                <span className={styles.hpControls}>
+                  <input
+                    className={styles.vitalInput}
+                    type="number"
+                    min={0}
+                    max={300}
+                    value={speedDraft}
+                    onChange={(e) => setSpeedDraft(e.target.value)}
+                    onBlur={commitSpeed}
+                    aria-label="Speed in feet"
+                    data-testid="sheet-speed-input"
+                  />
+                  <span className={styles.vitalMax}>ft</span>
+                </span>
+              ) : (
+                <span className={styles.vitalValue}>{character.speed} ft</span>
+              )}
             </div>
             <div className={styles.vital}>
               <span className={styles.vitalLabel}>Vision</span>

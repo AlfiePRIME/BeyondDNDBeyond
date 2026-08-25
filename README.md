@@ -5,7 +5,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 ## What it does
 
 - **3D table** — a shared room rendered in the browser (React Three Fiber / Three.js), with each player seated around the table from their own camera angle (or free orbit), seeing everyone else's chosen avatar in their seat.
-- **Character sheets** — full 5e SRD rules automation: ability modifiers, saves, skills, spell slots, attack bonuses, passive scores, all calculated live. Characters can be built from scratch or imported from a D&D Beyond PDF export.
+- **Character sheets** — full 5e SRD rules automation: ability modifiers, saves, skills, spell slots, attack bonuses, passive scores, all calculated live. Characters can be built from scratch or imported from a D&D Beyond PDF export, and everything on the sheet — race, class, and level included — stays editable afterwards, so a mis-set or mis-OCR'd field is fixable in place (a race change re-derives speed and darkvision automatically).
 - **Map builder** — the DM sculpts terrain with discrete elevation steps, paints difficult terrain, and populates rooms with built-in or custom-uploaded 3D props and interactive points of interest (levers, chests, doors) that reveal information or trigger effects live at the table.
 - **Combat mode** — initiative, HP, conditions, death saves, concentration, opportunity attacks, and a contextual quick-actions panel that surfaces in-range attacks/spells without forcing a player into them.
 - **Per-player vision** — darkness, darkvision, and blindness actually change what each player can see on the table, independently, with players retaining memory of areas they've previously seen. Hiding/Stealth works for both monsters and player characters.
@@ -220,6 +220,7 @@ node scripts/db/verify-vision-rendering.mjs # verify per-player vision rendering
 node scripts/db/verify-vision-advantage.mjs # verify vision-driven advantage/disadvantage on attack rolls: auto-disadvantage on an unperceived target, condition-flag advantage/disadvantage, SRD cancellation to a flat roll with both reasons stated, graceful no-map/no-token fallback (Prompt 59)
 node scripts/db/verify-hide-stealth.mjs # verify Hide/Stealth: per-observer passive-Perception resolution (NPC default 10), perception-eligibility skips, replace-not-accumulate, hidden-token rendering live in a real browser, reveal-on-attack with "attacking from hiding" advantage, manual reveal, hider-side RLS (Prompt 60)
 node scripts/db/verify-npc-stat-blocks.mjs # verify DM monster stat blocks: DM-only CRUD, quick-add before/mid-combat via add_combatant into the canonical turn order, stored-bonus/damage attacks through the roll route with the full death-save/instant-death/concentration bookkeeping, Strict economy gating, NPC HP clamps, stat-block AC auto-fill in a real browser, real passive Perception in Hide resolution (Prompt 61)
+node scripts/db/verify-character-edit.mjs # verify sheet-side race/class/level/speed editing: owner and DM edits persist through a real browser, a race change re-derives speed/darkvision in one call, imported characters are editable identically, class edits leave resources/spells untouched, non-owner RLS still holds
 ```
 
 The first two connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`)
@@ -251,6 +252,10 @@ live in an open room, a hidden token vanishing from one specific observer's open
 the moment its hidden-from row lands, and the attack form's stat-block AC auto-fill in
 both a DM's and a player's room — the latter seven scripts also start
 `yarn dev` themselves if needed, like `verify-concentration.mjs`).
+`verify-character-edit.mjs` follows the same hybrid shape — service-role client for setup,
+signed-in supabase-js clients for the RLS checks, a Playwright browser for the sheet's
+race/class/level/speed editing controls — and likewise starts `yarn dev` itself if `:3000`
+isn't already serving.
 
 **A real RLS gotcha worth knowing if you add more policies:** `INSERT ... RETURNING` (what
 `.insert().select()` does in supabase-js, or the `Prefer: return=representation` header)

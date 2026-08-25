@@ -39,7 +39,12 @@ export type {
   ExhaustionLevel,
 } from "./srd/types";
 
-export { RACES } from "./srd/races";
+export {
+  RACES,
+  RACE_OPTION_NAMES,
+  resolveRaceOption,
+  type RaceOptionStats,
+} from "./srd/races";
 export { CLASSES } from "./srd/classes";
 export { SKILLS, SKILL_ABILITY } from "./srd/skills";
 export { SPELLS } from "./srd/spells";

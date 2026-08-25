@@ -1,5 +1,12 @@
 import type { RaceDefinition } from "./types";
 
+/** The derived racial stats character creation stamps onto a character row
+ * (`speed` and `darkvision_feet`), resolved from its stored race string. */
+export interface RaceOptionStats {
+  speedFeet: number;
+  darkvisionFeet: number | null;
+}
+
 export const RACES: RaceDefinition[] = [
   {
     name: "Dwarf",
@@ -167,3 +174,41 @@ export const RACES: RaceDefinition[] = [
     traits: [{ name: "Hellish Resistance" }, { name: "Infernal Legacy" }],
   },
 ];
+
+/**
+ * Every selectable race option, flattened: base race names plus subrace
+ * names. This is the exact option list character creation (the wizard and
+ * the importer) offers, and `characters.race` stores one of these strings —
+ * a subrace pick stores the subrace name ALONE (e.g. "Wood Elf", never
+ * "Elf (Wood Elf)"), so any surface reading the column back resolves it
+ * with resolveRaceOption below.
+ */
+export const RACE_OPTION_NAMES: string[] = RACES.flatMap((race) => [
+  race.name,
+  ...(race.subraces?.map((subrace) => subrace.name) ?? []),
+]);
+
+/**
+ * Resolves a stored `characters.race` string (a race OR subrace name from
+ * RACE_OPTION_NAMES) to the derived stats creation writes alongside it,
+ * with the wizard's subrace-overrides-race precedence — e.g. a Wood Elf's
+ * 35 ft over the Elf's 30, a Drow's 120 ft darkvision over the Elf's 60,
+ * and a Hill Dwarf inheriting the Dwarf's 60 ft darkvision it doesn't
+ * redefine. An unknown name (e.g. an imported "Unknown") returns null:
+ * nothing can be derived from it.
+ */
+export function resolveRaceOption(name: string): RaceOptionStats | null {
+  for (const race of RACES) {
+    if (race.name === name) {
+      return { speedFeet: race.speedFeet, darkvisionFeet: race.darkvisionFeet ?? null };
+    }
+    const subrace = race.subraces?.find((s) => s.name === name);
+    if (subrace) {
+      return {
+        speedFeet: subrace.speedFeet ?? race.speedFeet,
+        darkvisionFeet: subrace.darkvisionFeet ?? race.darkvisionFeet ?? null,
+      };
+    }
+  }
+  return null;
+}
