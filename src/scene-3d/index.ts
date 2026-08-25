@@ -8,6 +8,7 @@ export {
   type TableLiveMap,
   type DayNightMode,
 } from "./GameTableScene";
+export { type TokenSlidePhase } from "./useTokenSlide";
 export {
   MapEditorScene,
   type MapEditorSceneProps,

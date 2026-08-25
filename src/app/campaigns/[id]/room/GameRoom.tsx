@@ -109,6 +109,7 @@ import {
   type DiceTumbleSpec,
   type Seat,
   type TableLiveMap,
+  type TokenSlidePhase,
 } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
 import {
@@ -406,6 +407,19 @@ export function GameRoom({
   // handleRollLanded's visibility branch.
   const privateDiceTumbleRef = useRef<DiceTumbleHandle>(null);
   const [privateDiceQueueDebug, setPrivateDiceQueueDebug] = useState<readonly string[]>([]);
+  // Mirrored into a hidden DOM node below, the exact same reasoning as
+  // diceQueueDebug above — see MapSurfaceProps.onTokenSlideDebug's doc
+  // comment. GameTableScene/MapSurface never see this set; it's populated
+  // purely by MapSurface calling back out whenever a token's own slide
+  // animation starts or settles.
+  const [slidingTokenIds, setSlidingTokenIds] = useState<readonly string[]>([]);
+  const handleTokenSlideDebug = useCallback((tokenId: string, phase: TokenSlidePhase) => {
+    setSlidingTokenIds((current) => {
+      const has = current.includes(tokenId);
+      if (phase === "sliding") return has ? current : [...current, tokenId];
+      return has ? current.filter((id) => id !== tokenId) : current;
+    });
+  }, []);
   // Render-time reset (not an effect) when the server hands down a fresh
   // member list — react.dev's "adjusting state when a prop changes" pattern.
   const [prevMembers, setPrevMembers] = useState(members);
@@ -2333,6 +2347,7 @@ export function GameRoom({
           onRulerDragOverCell={handleRulerDragOverCell}
           onRulerDragEnd={handleRulerDragEnd}
           dayNightMode={dayNightMode}
+          onTokenSlideDebug={handleTokenSlideDebug}
         />
         {/* A modest, fixed corner of the table (its own doc comment) — never
             full-screen, never over the map/tokens/camera controls. */}
@@ -2413,6 +2428,14 @@ export function GameRoom({
           currently-animating roll id; the rest are queued behind it. */}
       <div data-testid="dice-tumble-state" hidden>
         {JSON.stringify({ queue: diceQueueDebug })}
+      </div>
+      {/* Hidden render-state mirror for verify-token-slide.mjs — see
+          MapSurfaceProps.onTokenSlideDebug's doc comment. `sliding` lists the
+          ids of every token currently easing toward its target; a token not
+          listed is at rest — WebGL has no DOM of its own for Playwright to
+          observe a slide's timing directly. */}
+      <div data-testid="token-slide-state" hidden>
+        {JSON.stringify({ sliding: slidingTokenIds })}
       </div>
       {/* Hidden render-state mirror for the DM's private tray (Phase 3) —
           same reasoning as dice-tumble-state above, but for

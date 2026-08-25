@@ -7,6 +7,7 @@ import type { ThreeEvent } from "@react-three/fiber";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
 import { buildGridOverlayPositions } from "./gridOverlay";
+import { useTokenSlide, type TokenSlidePhase } from "./useTokenSlide";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
 // — same hex-mirroring reasoning as GameTableScene.
@@ -646,8 +647,11 @@ const TokenConcentrationBadge = memo(function TokenConcentrationBadge() {
 // cell all but disappears.
 const TokenMarker = memo(function TokenMarker({
   id,
-  worldX,
-  worldZ,
+  gridX,
+  gridY,
+  cellSize,
+  offsetX,
+  offsetZ,
   topY,
   scale,
   allegiance,
@@ -665,10 +669,14 @@ const TokenMarker = memo(function TokenMarker({
   concentrating,
   dimmed,
   onPointerDown,
+  onSlideDebug,
 }: {
   id: string;
-  worldX: number;
-  worldZ: number;
+  gridX: number;
+  gridY: number;
+  cellSize: number;
+  offsetX: number;
+  offsetZ: number;
   topY: number;
   scale: number;
   allegiance: MapTokenAllegiance;
@@ -681,14 +689,28 @@ const TokenMarker = memo(function TokenMarker({
   concentrating: boolean;
   dimmed: boolean;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
+  onSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const color = dimmed ? DIMMED_ALLEGIANCE_COLOR[allegiance] : ALLEGIANCE_COLOR[allegiance];
   // A dim pawn keeps a sliver of glow — fully zero reads as a different
   // material, not a darker one.
   const emissiveScale = dimmed ? 0.2 : 1;
+  // Slides from wherever the pawn last rendered to (gridX, gridY, topY)
+  // rather than snapping — see useTokenSlide's doc comment. Deliberately no
+  // JSX `position` prop on the group below: this ref's imperative per-frame
+  // writes are the ONLY thing that ever moves it, the same convention
+  // useDiceTumble uses, so there's nothing for a re-render to fight.
+  const { ref: slideRef, phase } = useTokenSlide({ gridX, gridY, topY, cellSize, offsetX, offsetZ });
+  // Verification-only: mirrors this token's slide phase out to whoever asked
+  // for it (see MapSurfaceProps.onTokenSlideDebug's doc comment) — a plain
+  // effect on the phase transition, not a per-frame subscription, since
+  // `phase` itself already only changes twice per slide.
+  useEffect(() => {
+    onSlideDebug?.(id, phase);
+  }, [id, phase, onSlideDebug]);
   return (
-    <group position={[worldX, topY, worldZ]} scale={scale}>
+    <group ref={slideRef} scale={scale}>
       <mesh position={[0, 0.05, 0]}>
         <cylinderGeometry args={[0.3, 0.36, 0.1, 20]} />
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
@@ -796,6 +818,15 @@ export interface MapSurfaceProps {
    * cell, committing on release) stay in the wrapping scene, same split as
    * the cell hooks above. */
   onTokenPointerDown?: (id: string, event: ThreeEvent<PointerEvent>) => void;
+  /** Verification-only: fires whenever a token's slide animation
+   * (useTokenSlide) starts or settles. Nothing in this module reads it back
+   * — the animation itself is entirely self-contained in the imperative
+   * per-frame ref writes — it exists purely so a caller can mirror it into
+   * a hidden DOM node for Playwright, the exact DiceTumbleProps.onQueueChange
+   * precedent: a WebGL canvas has no DOM of its own for a test to inspect a
+   * slide's timing directly. Omit it (as every real caller does today) and
+   * nothing changes about how tokens render or move. */
+  onTokenSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
 }
 
 /**
@@ -817,6 +848,7 @@ export function MapSurface({
   onCellPointerDown,
   onCellPointerOver,
   onTokenPointerDown,
+  onTokenSlideDebug,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
   const offsetX = ((gridWidth - 1) / 2) * cellSize;
@@ -889,8 +921,11 @@ export function MapSurface({
         <TokenMarker
           key={token.id}
           id={token.id}
-          worldX={token.x * cellSize - offsetX}
-          worldZ={token.y * cellSize - offsetZ}
+          gridX={token.x}
+          gridY={token.y}
+          cellSize={cellSize}
+          offsetX={offsetX}
+          offsetZ={offsetZ}
           topY={baseHeight + token.elevation * elevationStepHeight}
           scale={cellSize}
           allegiance={token.allegiance}
@@ -903,6 +938,7 @@ export function MapSurface({
           concentrating={token.concentrating ?? false}
           dimmed={token.dimmed ?? false}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
+          onSlideDebug={onTokenSlideDebug}
         />
       ))}
 
