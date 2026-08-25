@@ -66,6 +66,11 @@ import {
   createDmNote,
   updateDmNote,
   deleteDmNote,
+  requestOverride,
+  resolveOverride,
+  consumeOverride,
+  listActionOverrides,
+  subscribeToActionOverrides,
 } from "@/data-access";
 
 describe("data-access module", () => {
@@ -191,5 +196,13 @@ describe("data-access module", () => {
     expect(createDmNote).toBeTypeOf("function");
     expect(updateDmNote).toBeTypeOf("function");
     expect(deleteDmNote).toBeTypeOf("function");
+  });
+
+  it("exports the action override functions from the main barrel", () => {
+    expect(requestOverride).toBeTypeOf("function");
+    expect(resolveOverride).toBeTypeOf("function");
+    expect(consumeOverride).toBeTypeOf("function");
+    expect(listActionOverrides).toBeTypeOf("function");
+    expect(subscribeToActionOverrides).toBeTypeOf("function");
   });
 });

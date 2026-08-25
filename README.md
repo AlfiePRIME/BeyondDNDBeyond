@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-51 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, the avatar library/upload, D&D Beyond PDF character import, the Account page, the real-time campaign channel, reconnection/session resilience, the Lobby screen, the 3D table scene foundation, player seating/camera, rendering seated avatars, the session start/DM assignment flow, the map/asset data model, the built-in preset asset library, the custom asset upload pipeline, the map editor's terrain/elevation tool, object/POI placement, interactive POI behavior, live map rendering/switching on the tabletop, the grid overlay/token placement system, elevation/terrain-aware drag-to-move for tokens, the campaign narrative data model, the NPC roster, the world/lore page wiki, the session log/live handout reveal system, the private DM notes/house rules editors, AI-assisted NPC/lore drafting, AI-assisted procedural map area generation, map folders/thumbnails, map duplication/starter templates, map editor undo/redo, multi-floor map transitions, the measuring/ruler tool, the editor-only reference image underlay, the combat initiative tracker, in-combat HP/damage tracking, status condition tracking, the integrated server-side dice roller, death saving throws with instant death, concentration tracking, and the contextual quick-actions panel) are complete and verified end to end against a running local Supabase stack.
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-52 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, the avatar library/upload, D&D Beyond PDF character import, the Account page, the real-time campaign channel, reconnection/session resilience, the Lobby screen, the 3D table scene foundation, player seating/camera, rendering seated avatars, the session start/DM assignment flow, the map/asset data model, the built-in preset asset library, the custom asset upload pipeline, the map editor's terrain/elevation tool, object/POI placement, interactive POI behavior, live map rendering/switching on the tabletop, the grid overlay/token placement system, elevation/terrain-aware drag-to-move for tokens, the campaign narrative data model, the NPC roster, the world/lore page wiki, the session log/live handout reveal system, the private DM notes/house rules editors, AI-assisted NPC/lore drafting, AI-assisted procedural map area generation, map folders/thumbnails, map duplication/starter templates, map editor undo/redo, multi-floor map transitions, the measuring/ruler tool, the editor-only reference image underlay, the combat initiative tracker, in-combat HP/damage tracking, status condition tracking, the integrated server-side dice roller, death saving throws with instant death, concentration tracking, the contextual quick-actions panel, and the DM rule-override control) are complete and verified end to end against a running local Supabase stack.
 
 See [`Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md`](./Claude_Code_Prompts_BeyondDNDBeyond_2026-08-24.md) for the full 62-prompt roadmap — sequential, self-contained build instructions covering everything from project scaffolding through combat mechanics, the vision system, and self-hosted deployment.
 
@@ -154,6 +154,7 @@ node scripts/db/verify-dice-ui.mjs    # verify the dice log panel, sheet rolls, 
 node scripts/db/verify-death-saves.mjs # verify death saves, instant death, the at-0-HP damage rules (Prompt 49)
 node scripts/db/verify-concentration.mjs # verify concentration: damage-triggered CON saves, drop-to-0/condition breaks (Prompt 50)
 node scripts/db/verify-quick-actions.mjs # verify the quick-actions panel: range-with-movement, slot gating, one-click rolls in a real browser (Prompt 51)
+node scripts/db/verify-action-overrides.mjs # verify DM rule overrides: flag/approve/deny RLS, single-use consumption, live verdicts in a real browser (Prompt 52)
 ```
 
 The first two connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`)
@@ -165,11 +166,13 @@ actual RLS/RPC checks) — equally valid for exercising policies end to end, and
 the app itself talks to Supabase; the latter three also drive the roll Route Handler over real
 HTTP with signed-in session cookies (needs `yarn dev` running — `verify-concentration.mjs`
 starts one itself, polling `/api/health`, if `:3000` isn't already serving).
-`verify-dice-ui.mjs` and `verify-quick-actions.mjs` go one step further and drive real
-Playwright browsers against the dev server, for the parts only a live UI can exercise (the
-sheet's advantage toggle, the combat panel's Roll-initiative buttons, live sync landing in an
-actually-open Game Room, and the quick-actions panel's surfacing/one-click-fire behavior —
-the latter script also starts `yarn dev` itself if needed, like `verify-concentration.mjs`).
+`verify-dice-ui.mjs`, `verify-quick-actions.mjs`, and `verify-action-overrides.mjs` go one
+step further and drive real Playwright browsers against the dev server, for the parts only a
+live UI can exercise (the sheet's advantage toggle, the combat panel's Roll-initiative
+buttons, live sync landing in an actually-open Game Room, the quick-actions panel's
+surfacing/one-click-fire behavior, and the flag → DM-approve → use-anyway override cycle —
+the latter two scripts also start `yarn dev` themselves if needed, like
+`verify-concentration.mjs`).
 
 **A real RLS gotcha worth knowing if you add more policies:** `INSERT ... RETURNING` (what
 `.insert().select()` does in supabase-js, or the `Prefer: return=representation` header)

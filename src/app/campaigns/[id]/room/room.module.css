@@ -713,3 +713,52 @@
   gap: 6px;
   margin-left: auto;
 }
+
+/* Prompt 52: the blocked-action reason line on a quick-action row —
+   orange so "why this is disabled" reads apart from ordinary meta text. */
+.blockedReason {
+  font-family: var(--font-m);
+  font-size: 12px;
+  color: var(--orange);
+}
+
+/* The DM Controls panel: top edge, between the centered quick-actions
+   panel (400px) and the right-anchored handout panel (320px + 24px
+   margin), so all three top-row surfaces stay visible at once. A plain
+   labeled panel of sections on purpose — Prompt 53's action-economy
+   strictness toggle is specified to join the rule-overrides section as a
+   sibling section here. */
+.dmControlsPanel {
+  position: absolute;
+  right: 368px;
+  top: 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  width: 300px;
+  max-height: 30vh;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 8px;
+}
+
+.dmControlsSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Prompt 52: an override verdict in the shared log — the .rollEntry
+   layout with an accent-tinted card so a DM ruling is visibly not a dice
+   roll while sitting in the same chronological list. */
+.overrideEntry {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 6px;
+}

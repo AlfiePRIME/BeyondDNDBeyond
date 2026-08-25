@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/ui-components";
 import {
+  listActionOverrides,
+  subscribeToActionOverrides,
   subscribeToRollLog,
+  type ActionOverride,
   type Character,
   type MapToken,
   type RollLogEntry,
@@ -73,6 +76,14 @@ export function AdvantageToggle({
  * here too), a free-form roller, and the attack flow. Target AC is entered
  * manually — NPCs have no stored AC anywhere yet — with a convenience
  * auto-fill when the target is a PC whose row the roller can read.
+ *
+ * As of Prompt 52 the log ALSO subscribes to action_overrides and renders
+ * DM approvals/denials of flagged actions interleaved with the rolls by
+ * timestamp — visually distinct entries (no die results), in the same
+ * list, so everyone watching the rolls sees a DM ruling the moment it
+ * lands. Deliberately NOT written into roll_log itself: that table is
+ * dice-shaped (total, breakdown around die results) and a ruling isn't a
+ * roll — it's a second feed rendered in the same visual space.
  */
 export function DiceLogPanel({
   campaignId,
@@ -135,6 +146,49 @@ export function DiceLogPanel({
       );
     });
   }, [campaignId]);
+
+  // Override verdicts for the log (Prompt 52): fetched once, then kept
+  // fresh by the postgres_changes feed (updates as well as inserts —
+  // approved/denied are UPDATE transitions).
+  const [overrides, setOverrides] = useState<ActionOverride[]>([]);
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    let cancelled = false;
+    listActionOverrides(supabase, campaignId)
+      .then((rows) => {
+        if (!cancelled) setOverrides(rows);
+      })
+      .catch(() => undefined);
+    const unsubscribe = subscribeToActionOverrides(supabase, campaignId, (row) => {
+      setOverrides((current) => [row, ...current.filter((existing) => existing.id !== row.id)]);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [campaignId]);
+
+  // Rolls and override verdicts interleaved newest-first by timestamp —
+  // one chronological list in the same container, not a second list. A
+  // pending flag isn't a log event yet; a consumed override keeps its
+  // approval entry (resolved_at is the moment being recorded).
+  const feed = useMemo(() => {
+    const verdicts = overrides
+      .filter((override) => override.status !== "pending" && override.resolved_at !== null)
+      .map((override) => ({
+        kind: "override" as const,
+        at: override.resolved_at as string,
+        override,
+      }));
+    const rollEntries = rolls.map((roll) => ({
+      kind: "roll" as const,
+      at: roll.created_at,
+      roll,
+    }));
+    return [...rollEntries, ...verdicts]
+      .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
+      .slice(0, LOG_CAP);
+  }, [rolls, overrides]);
 
   function tokenLabel(token: MapToken): string {
     if (token.npc_name) return token.npc_name;
@@ -323,10 +377,28 @@ export function DiceLogPanel({
       ) : null}
 
       <div className={styles.rollList} data-testid="dice-log">
-        {rolls.length === 0 ? (
+        {feed.length === 0 ? (
           <p className={styles.hint}>No rolls yet — the whole table sees every roll here.</p>
         ) : (
-          rolls.map((roll) => {
+          feed.map((entry) => {
+            if (entry.kind === "override") {
+              const { override } = entry;
+              const verdict = override.status === "denied" ? "denied" : "approved";
+              return (
+                <div
+                  key={`override-${override.id}`}
+                  className={styles.overrideEntry}
+                  data-testid={`override-entry-${override.id}`}
+                >
+                  <span className={styles.rollMeta}>DM ruling</span>
+                  <span className={styles.rollHeadline}>
+                    DM {verdict} {memberNameById.get(override.requested_by) ?? "someone"}&apos;s
+                    override: {override.action_label} ({override.reason})
+                  </span>
+                </div>
+              );
+            }
+            const { roll } = entry;
             const damageLine =
               roll.breakdown.type === "d20" && roll.breakdown.attack
                 ? damageText(roll.breakdown.attack)

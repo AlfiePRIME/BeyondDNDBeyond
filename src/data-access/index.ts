@@ -183,6 +183,15 @@ export {
   type RollLogEntry,
 } from "./rolls";
 export {
+  requestOverride,
+  resolveOverride,
+  consumeOverride,
+  listActionOverrides,
+  subscribeToActionOverrides,
+  type ActionOverride,
+  type ActionOverrideStatus,
+} from "./actionOverrides";
+export {
   listNpcs,
   createNpc,
   updateNpc,

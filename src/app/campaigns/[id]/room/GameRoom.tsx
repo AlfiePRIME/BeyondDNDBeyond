@@ -78,6 +78,7 @@ import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { DiceLogPanel } from "./DiceLogPanel";
+import { DmOverridesPanel } from "./DmOverridesPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
@@ -1380,6 +1381,12 @@ export function GameRoom({
         tokens={liveMap?.tokens ?? []}
         onRollLanded={handleRollLanded}
       />
+      {/* The DM Controls area (Prompt 52): pending rule-override flags to
+          approve/deny — the panel Prompt 53's action-economy strictness
+          toggle is specified to join as a sibling section. */}
+      {currentUserIsDM ? (
+        <DmOverridesPanel campaignId={campaignId} characters={characterRows} members={roster} />
+      ) : null}
       <DiceLogPanel
         campaignId={campaignId}
         currentUserId={currentUserId}

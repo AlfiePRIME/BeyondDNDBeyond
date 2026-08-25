@@ -26,9 +26,13 @@ import {
 } from "@/rules-engine";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
+  consumeOverride,
   getActiveCombatantForCharacter,
+  listActionOverrides,
   listCombatantConditions,
+  requestOverride,
   updateCharacter,
+  subscribeToActionOverrides,
   subscribeToCharacterChanges,
   subscribeToCombatantConditionChanges,
   setCharacterResourceUses,
@@ -36,6 +40,7 @@ import {
   longRest,
   startConcentrating,
   stopConcentrating,
+  type ActionOverride,
   type Character,
   type CharacterResource,
   type CombatantCondition,
@@ -141,6 +146,10 @@ export function CharacterSheet({
   const [lastRoll, setLastRoll] = useState<RollLogEntry | null>(null);
   const [rolling, setRolling] = useState(false);
   const [rollError, setRollError] = useState<string | null>(null);
+  // Rule-override state (Prompt 52): the campaign's action_overrides rows
+  // and the latest verdict/consumption notice for the recent-roll area.
+  const [overrides, setOverrides] = useState<ActionOverride[]>([]);
+  const [overrideNotice, setOverrideNotice] = useState<string | null>(null);
 
   // Mid-combat damage/healing applied from the Game Room (a different page,
   // not connected to any shared realtime channel with this one) must land
@@ -188,6 +197,36 @@ export function CharacterSheet({
         }
       })();
     });
+  }, [campaignId, initialCharacter.id]);
+
+  // Override flags/verdicts land here live — the same postgres_changes
+  // page-not-on-the-campaign-channel reasoning as the HP and condition
+  // subscriptions above. An approval or denial of THIS character's flag
+  // also surfaces as a notice in the recent-roll area, so a player with
+  // only the sheet open sees the DM's ruling the moment it happens.
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    let cancelled = false;
+    listActionOverrides(supabase, campaignId)
+      .then((rows) => {
+        if (!cancelled) setOverrides(rows);
+      })
+      .catch(() => undefined);
+    const unsubscribe = subscribeToActionOverrides(supabase, campaignId, (row) => {
+      setOverrides((current) => [row, ...current.filter((existing) => existing.id !== row.id)]);
+      if (
+        row.character_id === initialCharacter.id &&
+        (row.status === "approved" || row.status === "denied")
+      ) {
+        setOverrideNotice(
+          `The DM ${row.status} the flagged use: ${row.action_label} (${row.reason}).`
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [campaignId, initialCharacter.id]);
 
   const klass = CLASSES.find((c) => c.name === character.class) ?? null;
@@ -378,6 +417,59 @@ export function CharacterSheet({
       setResources((rs) => rs.map((r) => (r.id === updated.id ? updated : r)));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Could not update the resource.");
+    }
+  }
+
+  /** The newest pending-or-approved override for this resource — the one
+   * flag/approval cycle in flight. Denied and consumed rows fall out, so
+   * the row reverts to needing a fresh flag after either terminal state. */
+  function activeOverrideForResource(resourceName: string): ActionOverride | null {
+    return (
+      overrides.find(
+        (candidate) =>
+          candidate.character_id === character.id &&
+          candidate.action_label === resourceName &&
+          (candidate.status === "pending" || candidate.status === "approved")
+      ) ?? null
+    );
+  }
+
+  async function flagResource(resource: CharacterResource) {
+    setSaveError(null);
+    try {
+      const row = await requestOverride(
+        createBrowserSupabaseClient(),
+        campaignId,
+        character.id,
+        resource.name,
+        "No uses remaining"
+      );
+      setOverrides((current) => [row, ...current.filter((existing) => existing.id !== row.id)]);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not flag the resource.");
+    }
+  }
+
+  /** Spends a DM-approved one-time use. Deliberately does NOT call
+   * setCharacterResourceUses — the override grants permission and leaves
+   * an audit trail only (the resource is at 0 and its DB CHECK couldn't
+   * go lower anyway); whether a use is still consumed is the DM's
+   * separate, explicit call through these same resource controls. The
+   * shared table log carries the approval for everyone; this notice just
+   * confirms locally that the granted use happened. */
+  async function spendApprovedOverride(override: ActionOverride) {
+    setSaveError(null);
+    try {
+      const consumed = await consumeOverride(createBrowserSupabaseClient(), override.id);
+      setOverrides((current) => [
+        consumed,
+        ...current.filter((existing) => existing.id !== consumed.id),
+      ]);
+      setOverrideNotice(
+        `Used ${override.action_label} with DM approval — stored uses unchanged, and a fresh flag is needed next time.`
+      );
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not use the DM-approved override.");
     }
   }
 
@@ -667,6 +759,14 @@ export function CharacterSheet({
                 Roll concentration save
               </Button>
             </div>
+          ) : null}
+          {overrideNotice ? (
+            // A DM ruling (or a spent DM-approved use) in the recent-roll
+            // area — visually distinct from a dice roll (no die results);
+            // the shared table log carries the same event for everyone.
+            <p className={styles.overrideNotice} data-testid="sheet-override-notice">
+              {overrideNotice}
+            </p>
           ) : null}
           {lastRoll ? (
             <div className={styles.rollResult} data-testid="sheet-roll-result">
@@ -1068,39 +1168,85 @@ export function CharacterSheet({
             <p className={styles.emptyHint}>No limited-use resources tracked.</p>
           ) : (
             <ul className={styles.rowList}>
-              {resources.map((resource) => (
-                <li key={resource.id} className={styles.itemRow}>
-                  <span className={styles.itemName}>
-                    {resource.name}{" "}
-                    <Badge tone="neutral">{RECHARGE_LABEL[resource.recharge]}</Badge>
-                  </span>
-                  <span className={styles.itemControls}>
-                    <span className={styles.resourceUses}>
-                      {resource.current_uses} / {resource.max_uses}
+              {resources.map((resource) => {
+                // The Prompt 52 override affordance: an exhausted resource
+                // says WHY Spend is disabled and offers the flag/approved
+                // cycle. Only the owner (or DM) sees the sheet at all, so
+                // canEdit is the right gate for the controls.
+                const exhausted = resource.current_uses <= 0;
+                const slug = resource.name.toLowerCase().replace(/\s+/g, "-");
+                const override = exhausted ? activeOverrideForResource(resource.name) : null;
+                return (
+                  <li key={resource.id} className={styles.itemRow}>
+                    <span className={styles.itemName}>
+                      {resource.name}{" "}
+                      <Badge tone="neutral">{RECHARGE_LABEL[resource.recharge]}</Badge>
                     </span>
-                    {canEdit ? (
-                      <>
-                        <Button
-                          variant="accent"
-                          size="sm"
-                          onClick={() => setResourceUses(resource, resource.current_uses - 1)}
-                          disabled={resource.current_uses <= 0}
+                    <span className={styles.itemControls}>
+                      {canEdit && exhausted ? (
+                        <span
+                          className={styles.blockedReason}
+                          data-testid={`resource-blocked-${slug}`}
                         >
-                          Spend
-                        </Button>
-                        <Button
-                          variant="teal"
-                          size="sm"
-                          onClick={() => setResourceUses(resource, resource.current_uses + 1)}
-                          disabled={resource.current_uses >= resource.max_uses}
-                        >
-                          Restore
-                        </Button>
-                      </>
-                    ) : null}
-                  </span>
-                </li>
-              ))}
+                          No uses remaining
+                        </span>
+                      ) : null}
+                      <span className={styles.resourceUses}>
+                        {resource.current_uses} / {resource.max_uses}
+                      </span>
+                      {canEdit ? (
+                        <>
+                          <Button
+                            variant="accent"
+                            size="sm"
+                            onClick={() => setResourceUses(resource, resource.current_uses - 1)}
+                            disabled={resource.current_uses <= 0}
+                          >
+                            Spend
+                          </Button>
+                          <Button
+                            variant="teal"
+                            size="sm"
+                            onClick={() => setResourceUses(resource, resource.current_uses + 1)}
+                            disabled={resource.current_uses >= resource.max_uses}
+                          >
+                            Restore
+                          </Button>
+                          {exhausted && override?.status === "approved" ? (
+                            // One-time, DM-granted: consumes the override
+                            // only — never setCharacterResourceUses (see
+                            // spendApprovedOverride).
+                            <Button
+                              variant="teal"
+                              size="sm"
+                              onClick={() => void spendApprovedOverride(override)}
+                              data-testid={`resource-use-anyway-${slug}`}
+                            >
+                              Use anyway (DM-approved)
+                            </Button>
+                          ) : exhausted && override ? (
+                            <span
+                              className={styles.spellMeta}
+                              data-testid={`resource-flagged-${slug}`}
+                            >
+                              Flagged — waiting for the DM
+                            </span>
+                          ) : exhausted ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void flagResource(resource)}
+                              data-testid={`resource-flag-${slug}`}
+                            >
+                              Flag to DM
+                            </Button>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Panel>

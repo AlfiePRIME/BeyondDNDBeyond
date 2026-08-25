@@ -76,6 +76,14 @@ export interface QuickAction {
    * order — every qualifying target, so the UI can offer a picker rather
    * than an arbitrary nearest-only default. */
   targetTokenIds: string[];
+  /** null when the action is currently usable. Set (Prompt 52) when the
+   * action is in range of a hostile but RESOURCE-blocked — a leveled
+   * spell with no matching-level slot remaining (or never provisioned) —
+   * so the UI can show it disabled with this reason and offer "Flag to
+   * DM" instead of silently omitting it. Range-blocked actions are still
+   * omitted entirely: movement/targeting is explicitly outside what the
+   * DM override covers. */
+  blockedReason: string | null;
 }
 
 export interface ComputeQuickActionsParams {
@@ -106,12 +114,18 @@ function reachableTargets(
 }
 
 /**
- * Every currently-usable quick action: each weapon-tagged inventory item
- * in range-with-movement of at least one hostile, then each known spell
- * with attack metadata that's in range-with-movement of at least one
- * hostile AND either a cantrip (unlimited use, no resource check) or
- * backed by a matching-level spell-slot resource with uses remaining.
- * Input order is preserved (inventory order, then known-spell order).
+ * Every quick action worth showing: each weapon-tagged inventory item in
+ * range-with-movement of at least one hostile, then each known spell with
+ * attack metadata that's in range-with-movement of at least one hostile.
+ * A leveled spell additionally needs a matching-level spell-slot resource
+ * with uses remaining (cantrips are unlimited) — since Prompt 52 a spell
+ * failing ONLY that resource check is still returned, with
+ * `blockedReason` set, so the panel can render it disabled with a "Flag
+ * to DM" affordance rather than dropping it silently; everything usable
+ * carries `blockedReason: null`. Out-of-range actions stay omitted (the
+ * override mechanic covers resource/rule restrictions, not
+ * movement/targeting). Input order is preserved (inventory order, then
+ * known-spell order).
  */
 export function computeQuickActions(params: ComputeQuickActionsParams): QuickAction[] {
   const { position, speed, hostiles, inventory, knownSpellNames, resources } = params;
@@ -130,6 +144,7 @@ export function computeQuickActions(params: ComputeQuickActionsParams): QuickAct
       rangeFeet,
       spellLevel: null,
       targetTokenIds,
+      blockedReason: null,
     });
   }
 
@@ -144,6 +159,12 @@ export function computeQuickActions(params: ComputeQuickActionsParams): QuickAct
     // does, since a self-range action has no hostile target to offer.
     if (spell.range === "self") continue;
     const rangeFeet = spell.range === "touch" ? DEFAULT_MELEE_RANGE_FEET : spell.range;
+    // Range decides inclusion at all (out of reach even with full
+    // movement = omitted, override-ineligible); the resource check below
+    // only decides usable-vs-blocked.
+    const targetTokenIds = reachableTargets(position, speed, rangeFeet, hostiles);
+    if (targetTokenIds.length === 0) continue;
+    let blockedReason: string | null = null;
     if (spell.level > 0) {
       const slotName = spellSlotResourceName(spell.level as SpellSlotLevel);
       const slot = resources.find((resource) => resource.name === slotName);
@@ -151,10 +172,12 @@ export function computeQuickActions(params: ComputeQuickActionsParams): QuickAct
       // (and so no Pact Magic mapping); a missing row means the slot level
       // was never provisioned, which is the same "nothing to spend" state
       // as an exhausted one.
-      if (!slot || slot.current_uses <= 0) continue;
+      if (!slot || slot.current_uses <= 0) {
+        // "1st-Level Spell Slots" -> "No 1st-level spell slots remaining".
+        const ordinal = slotName.replace("-Level Spell Slots", "");
+        blockedReason = `No ${ordinal}-level spell slots remaining`;
+      }
     }
-    const targetTokenIds = reachableTargets(position, speed, rangeFeet, hostiles);
-    if (targetTokenIds.length === 0) continue;
     actions.push({
       source: "spell",
       name: spell.name,
@@ -163,6 +186,7 @@ export function computeQuickActions(params: ComputeQuickActionsParams): QuickAct
       rangeFeet,
       spellLevel: spell.level,
       targetTokenIds,
+      blockedReason,
     });
   }
 

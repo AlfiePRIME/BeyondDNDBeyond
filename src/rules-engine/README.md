@@ -108,6 +108,19 @@ arbitrary nearest-only default. Unit-tested the resolveAttackOutcome way: in/out
 boundaries at exactly speed + reach, the diagonal chessboard measure, slot-exhausted and
 never-provisioned hiding, cantrips-always-available, and default-range behavior.
 
+As of Prompt 52: `QuickAction` gains `blockedReason: string | null`, and
+`computeQuickActions` no longer silently drops a leveled attack spell whose
+matching-level slot is exhausted (or never provisioned) — it returns the action anyway,
+with `blockedReason` set (e.g. `"No 1st-level spell slots remaining"`) and its target
+list intact, so the panel can render it disabled with the reason and a "Flag to DM"
+button for the DM rule-override flow, and an approved override can fire at those same
+targets. Every usable action carries `blockedReason: null`. The range gate is unchanged
+and still decides inclusion outright: an action out of reach even with full movement is
+omitted entirely, because movement/targeting is explicitly outside what the DM override
+covers — only resource/rule restrictions qualify. Same extended-existing-shape choice as
+Prompt 49's breakdown fields (one array with a discriminating field, not a second
+parallel array to keep ordered/deduplicated in step).
+
 Still future work: the perception/vision engine (Prompt 56) and advantage/disadvantage
 enforcement from conditions/vision (Prompt 59) — Prompt 48 provides the manual toggle and
 the two-d20 mechanics it will drive.

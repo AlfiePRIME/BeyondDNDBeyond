@@ -379,3 +379,26 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--purple) 18%, transparent);
 }
+
+/* Prompt 52: why an exhausted resource's Spend control is disabled —
+   orange so the reason reads apart from the teal uses counter. */
+.blockedReason {
+  font-family: var(--font-m);
+  font-size: 12px;
+  color: var(--orange);
+}
+
+/* Prompt 52: a DM override verdict (or a spent DM-approved use) surfacing
+   in the sheet's recent-roll area — accent-tinted so a ruling is visibly
+   not a dice roll while living in the same space. */
+.overrideNotice {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--font-m);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 6px;
+}

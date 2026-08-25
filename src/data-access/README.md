@@ -453,3 +453,28 @@ one-click attack. Firing a leveled spell quick action spends one matching slot t
 the existing `setCharacterResourceUses` (the casting-cost enforcement Prompt 50's
 concentration toggle deliberately left to this prompt); cantrips spend nothing. No new
 tables, RPCs, or policies anywhere in this prompt.
+
+As of Prompt 52, `actionOverrides.ts` owns the DM rule-override control: an
+`action_overrides` table (migration `0033_action_overrides.sql`) where a player flags an
+action blocked by a resource/rule restriction (`requestOverride` — plain insert; the
+INSERT policy requires `requested_by = auth.uid()` for a character the caller owns, or
+any campaign character for the DM), the DM rules on it (`resolveOverride` — a DM-only,
+pending-only update to `approved`/`denied` plus `resolved_by`/`resolved_at`), and the
+one-time grant is spent the moment the bypassed action actually fires
+(`consumeOverride` — requester-or-DM, approved-only). Both UPDATE transitions are plain
+policies, NOT an RPC, argued through the 0027-0032 rule: no cross-row invariant exists,
+the "only from the current status" gate lives in the policy's USING (which sees the
+pre-update row — the thing WITH CHECK can't), and single-use consumption is
+concurrency-safe for free because Postgres's qual recheck on the locked row makes the
+second of two racing consumes match zero rows; `consumeOverride` treats zero rows as
+"needs a fresh flag". Deliberately, NOTHING here mutates `character_resources`: an
+override grants permission and leaves an audit trail only — whether a use is still
+consumed is the DM's separate, explicit call through the existing resource controls.
+`listActionOverrides`/`subscribeToActionOverrides` are `listRollLog`/
+`subscribeToRollLog`'s exact postgres_changes shape (session `realtime.setAuth`, then a
+`campaign_id`-filtered channel — but on event `*`, since approvals/denials/consumption
+are UPDATE transitions), reaching the Game Room's DM Controls + dice log AND the
+character sheet page live, which isn't on the room's campaign channel. Overrides are
+NOT written into `roll_log` — that table is dice-shaped (`total`, `breakdown` around die
+results); the DiceLogPanel interleaves this second feed into the same chronological
+list by timestamp instead.

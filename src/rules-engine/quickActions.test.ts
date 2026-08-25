@@ -65,6 +65,7 @@ describe("computeQuickActions — weapons", () => {
       rangeFeet: 5,
       spellLevel: null,
       targetTokenIds: ["hostile-1"],
+      blockedReason: null,
     });
   });
 
@@ -153,15 +154,18 @@ describe("computeQuickActions — spells", () => {
       damageNotation: "1d10",
       rangeFeet: 120,
       spellLevel: 0,
+      blockedReason: null,
     });
   });
 
-  it("surfaces a leveled attack spell only while its matching slot has uses", () => {
+  it("surfaces a leveled attack spell as usable only while its matching slot has uses", () => {
     const withSlot = computeQuickActions(
       params({ knownSpellNames: ["Witch Bolt"], hostiles: adjacentHostile, resources: fullSlots })
     );
-    expect(withSlot.map((a) => a.name)).toEqual(["Witch Bolt"]);
+    expect(withSlot.map((a) => [a.name, a.blockedReason])).toEqual([["Witch Bolt", null]]);
+  });
 
+  it("returns a slot-exhausted spell as blocked (Prompt 52), not omitted", () => {
     const exhausted = computeQuickActions(
       params({
         knownSpellNames: ["Witch Bolt"],
@@ -169,12 +173,26 @@ describe("computeQuickActions — spells", () => {
         resources: [{ name: "1st-Level Spell Slots", current_uses: 0 }],
       })
     );
-    expect(exhausted).toEqual([]);
+    expect(exhausted).toHaveLength(1);
+    expect(exhausted[0]).toMatchObject({
+      source: "spell",
+      name: "Witch Bolt",
+      attackKind: "spell",
+      spellLevel: 1,
+      // Targets still listed: the action is in reach, only the resource
+      // blocks it, and an approved override fires at these same targets.
+      targetTokenIds: ["hostile-1"],
+      blockedReason: "No 1st-level spell slots remaining",
+    });
+  });
 
+  it("treats a never-provisioned slot level as the same blocked state as an exhausted one", () => {
     const neverProvisioned = computeQuickActions(
       params({ knownSpellNames: ["Witch Bolt"], hostiles: adjacentHostile, resources: [] })
     );
-    expect(neverProvisioned).toEqual([]);
+    expect(neverProvisioned.map((a) => [a.name, a.blockedReason])).toEqual([
+      ["Witch Bolt", "No 1st-level spell slots remaining"],
+    ]);
   });
 
   it("checks the slot level matching the spell, not just any slot", () => {
@@ -185,7 +203,9 @@ describe("computeQuickActions — spells", () => {
         resources: fullSlots, // 1st-level only
       })
     );
-    expect(wrongLevel).toEqual([]);
+    expect(wrongLevel.map((a) => [a.name, a.blockedReason])).toEqual([
+      ["Scorching Ray", "No 2nd-level spell slots remaining"],
+    ]);
 
     const rightLevel = computeQuickActions(
       params({
@@ -194,7 +214,17 @@ describe("computeQuickActions — spells", () => {
         resources: [{ name: "2nd-Level Spell Slots", current_uses: 1 }],
       })
     );
-    expect(rightLevel.map((a) => a.name)).toEqual(["Scorching Ray"]);
+    expect(rightLevel.map((a) => [a.name, a.blockedReason])).toEqual([["Scorching Ray", null]]);
+  });
+
+  it("still omits a resource-blocked spell that is out of range — range is never override-eligible", () => {
+    // Witch Bolt: 30 ft + 30 speed = 60 ft = 12 cells; 13 is out, so even
+    // with the slot exhausted (a flaggable restriction on its own) the
+    // action doesn't appear at all.
+    const actions = computeQuickActions(
+      params({ knownSpellNames: ["Witch Bolt"], hostiles: [hostileAt(13)], resources: [] })
+    );
+    expect(actions).toEqual([]);
   });
 
   it("applies the movement-extended range boundary to spells too", () => {

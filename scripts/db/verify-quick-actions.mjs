@@ -315,9 +315,15 @@ try {
     "the cantrip still surfaces with the slot exhausted",
     await visible("quick-action-spell-fire-bolt")
   );
+  // As of Prompt 52 an exhausted-slot spell no longer disappears from the
+  // panel — it renders BLOCKED (its reason plus a Flag to DM button, no
+  // fire control) so the DM rule-override flow can pick it up. The
+  // Prompt 51 guarantee this section protects is unchanged: the spell is
+  // not usable without a matching slot.
   check(
-    "the leveled spell disappears once its matching slot is exhausted",
-    await absent("quick-action-spell-witch-bolt")
+    "the leveled spell renders blocked, with no fire control, once its matching slot is exhausted",
+    (await visible("quick-action-blocked-spell-witch-bolt")) &&
+      (await absent("quick-action-fire-spell-witch-bolt"))
   );
   await admin.from("character_resources").update({ current_uses: 2 }).eq("id", slotResourceId);
 

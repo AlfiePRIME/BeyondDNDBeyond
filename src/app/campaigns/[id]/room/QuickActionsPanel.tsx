@@ -3,8 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Badge, Button } from "@/ui-components";
 import {
+  consumeOverride,
+  listActionOverrides,
   listCharacterResources,
+  requestOverride,
   setCharacterResourceUses,
+  subscribeToActionOverrides,
+  type ActionOverride,
   type Character,
   type CharacterResource,
   type MapToken,
@@ -46,6 +51,15 @@ function actionKey(action: QuickAction): string {
  * DiceLogPanel's free attack form, and every other surface stay exactly
  * as usable beside it, and nothing here gates on Action/Bonus Action
  * economy or consumes a movement budget — that's Prompt 53's scope.
+ *
+ * As of Prompt 52 a resource-blocked spell (no matching-level slot left)
+ * renders here too, disabled with its reason and a "Flag to DM" button.
+ * Once the DM approves the flag, the action gains a one-time "Use anyway
+ * (DM-approved)" control that fires the EXACT same postRoll attack
+ * request — but skips the slot decrement entirely (the override grants
+ * the action without a slot existing; whether a use is still consumed is
+ * the DM's separate, explicit call through the resource controls) — and
+ * then marks the override consumed, so a repeat needs a fresh flag.
  */
 export function QuickActionsPanel({
   campaignId,
@@ -79,6 +93,11 @@ export function QuickActionsPanel({
   } | null>(null);
   const [targetChoices, setTargetChoices] = useState<Record<string, string>>({});
   const [acDrafts, setAcDrafts] = useState<Record<string, string>>({});
+  // Override rows (Prompt 52), fetched once and kept fresh by the
+  // postgres_changes feed — a DM approval flips a blocked action to its
+  // one-time "Use anyway" form the moment it lands, and the consumed
+  // transition (from any client) reverts it to needing a fresh flag.
+  const [overrides, setOverrides] = useState<ActionOverride[]>([]);
 
   const characterById = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
@@ -127,6 +146,23 @@ export function QuickActionsPanel({
     [resourceState, actingCharacterId]
   );
 
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    let cancelled = false;
+    listActionOverrides(supabase, campaignId)
+      .then((rows) => {
+        if (!cancelled) setOverrides(rows);
+      })
+      .catch(() => undefined);
+    const unsubscribe = subscribeToActionOverrides(supabase, campaignId, (row) => {
+      setOverrides((current) => [row, ...current.filter((existing) => existing.id !== row.id)]);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [campaignId]);
+
   // Hostile combatants still on the live map — allegiance comes from the
   // token (the established hostile-vs-party distinction), membership in
   // the fight from the combatant rows.
@@ -171,13 +207,56 @@ export function QuickActionsPanel({
     return characterById.get(token.character_id ?? "")?.name ?? "Party member";
   }
 
-  async function fire(action: QuickAction, target: MapToken, targetAc: number) {
+  /** The newest pending-or-approved override for this action on the
+   * acting character — the one flag/approval cycle currently in flight.
+   * Denied and consumed rows fall out, so the action reverts to "Flag to
+   * DM" (a fresh flag) after either terminal state. */
+  function activeOverrideFor(action: QuickAction): ActionOverride | null {
+    if (!actingCharacter) return null;
+    return (
+      overrides.find(
+        (candidate) =>
+          candidate.character_id === actingCharacter.id &&
+          candidate.action_label === action.name &&
+          (candidate.status === "pending" || candidate.status === "approved")
+      ) ?? null
+    );
+  }
+
+  async function flag(action: QuickAction) {
+    if (busy || !actingCharacter || !action.blockedReason) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const row = await requestOverride(
+        createBrowserSupabaseClient(),
+        campaignId,
+        actingCharacter.id,
+        action.name,
+        action.blockedReason
+      );
+      setOverrides((current) => [row, ...current.filter((existing) => existing.id !== row.id)]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not flag the action — try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function fire(
+    action: QuickAction,
+    target: MapToken,
+    targetAc: number,
+    override?: ActionOverride
+  ) {
     if (busy || !actingCharacter) return;
     setBusy(true);
     setError(null);
     try {
       // The exact request shape DiceLogPanel's manual attack form sends —
       // verified byte-identical roll_log output in verify-quick-actions.
+      // A DM-approved override fire sends this SAME request: the override
+      // changes nothing about the roll itself.
       const roll = await postRoll(campaignId, {
         kind: "attack",
         characterId: actingCharacter.id,
@@ -189,6 +268,20 @@ export function QuickActionsPanel({
         mode,
       });
       onRollLanded(roll);
+      if (override) {
+        // The one-time bypass is spent the moment the roll lands. NO slot
+        // decrement here, by design: the override grants the action
+        // without a slot existing to spend (the exhausted row's DB CHECK
+        // couldn't go below 0 anyway), and whether a use is still
+        // consumed is the DM's separate, explicit call through the
+        // existing resource controls.
+        const consumed = await consumeOverride(createBrowserSupabaseClient(), override.id);
+        setOverrides((current) => [
+          consumed,
+          ...current.filter((existing) => existing.id !== consumed.id),
+        ]);
+        return;
+      }
       // Casting a leveled spell spends its slot (the enforcement the
       // sheet's concentration toggle deliberately left to this prompt);
       // cantrips are unlimited. A concurrent-spend conflict just leaves
@@ -243,6 +336,10 @@ export function QuickActionsPanel({
           />
           {actions.map((action) => {
             const key = actionKey(action);
+            const override = action.blockedReason ? activeOverrideFor(action) : null;
+            // A blocked action only exposes the fire controls once the DM
+            // has approved its flag (and that approval isn't spent yet).
+            const canFire = action.blockedReason === null || override?.status === "approved";
             const chosen = targetChoices[key];
             const selectedTokenId =
               chosen && action.targetTokenIds.includes(chosen)
@@ -275,6 +372,36 @@ export function QuickActionsPanel({
                 <span className={styles.quickActionMeta}>
                   {action.damageNotation} · {action.rangeFeet} ft
                 </span>
+                {action.blockedReason ? (
+                  <span
+                    className={styles.blockedReason}
+                    data-testid={`quick-action-blocked-${key}`}
+                  >
+                    {action.blockedReason}
+                  </span>
+                ) : null}
+                {!canFire ? (
+                  <span className={styles.quickActionControls}>
+                    {override ? (
+                      <span
+                        className={styles.quickActionMeta}
+                        data-testid={`quick-action-flagged-${key}`}
+                      >
+                        Flagged — waiting for the DM
+                      </span>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => void flag(action)}
+                        data-testid={`quick-action-flag-${key}`}
+                      >
+                        Flag to DM
+                      </Button>
+                    )}
+                  </span>
+                ) : (
                 <span className={styles.quickActionControls}>
                   {action.targetTokenIds.length > 1 ? (
                     <select
@@ -327,16 +454,22 @@ export function QuickActionsPanel({
                   )}
                   <Button
                     size="sm"
-                    variant="accent"
+                    variant={override ? "teal" : "accent"}
                     disabled={busy || targetAc === null}
                     onClick={() => {
-                      if (targetAc !== null) void fire(action, target, targetAc);
+                      if (targetAc !== null)
+                        void fire(action, target, targetAc, override ?? undefined);
                     }}
-                    data-testid={`quick-action-fire-${key}`}
+                    data-testid={
+                      override
+                        ? `quick-action-override-fire-${key}`
+                        : `quick-action-fire-${key}`
+                    }
                   >
-                    Attack
+                    {override ? "Use anyway (DM-approved)" : "Attack"}
                   </Button>
                 </span>
+                )}
               </div>
             );
           })}
