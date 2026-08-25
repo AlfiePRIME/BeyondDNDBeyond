@@ -18,6 +18,14 @@ export interface SeatMember {
    * built-in placeholder.
    */
   avatar_url?: string | null;
+  /**
+   * Stored forward-direction correction (degrees) for this member's avatar
+   * model — see docs/design/model-orientation-and-posing.md §8. Resolved in
+   * the app layer alongside avatar_url, for the same reason. Absent/null
+   * means 0 (no correction), same default as every avatar predating this
+   * feature.
+   */
+  avatar_forward_offset_deg?: number | null;
 }
 
 export type CameraMode = "seat" | "orbit";

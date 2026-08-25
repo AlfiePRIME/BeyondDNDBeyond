@@ -4,11 +4,14 @@ import { useRef, useState } from "react";
 import { Button, ChoiceCard, SectionHeader, TextInput } from "@/ui-components";
 import {
   createCustomAsset,
+  setForwardOffsetDeg,
   uploadMapAssetFile,
   type MapAsset,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { validateGlbFile } from "@/app/lib/validate-glb";
+import { ModelOrientationStep } from "@/app/ModelOrientationStep";
+import { PLACED_OBJECT_SIZE } from "@/scene-3d";
 import styles from "./assets.module.css";
 
 export interface AssetPaletteProps {
@@ -29,20 +32,36 @@ export function AssetPalette({ campaignId, initialAssets, canUpload }: AssetPale
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [addedName, setAddedName] = useState<string | null>(null);
+  // Set once a chosen file passes validation, cleared once the
+  // rotate-and-confirm step (ModelOrientationStep) resolves — see
+  // completeUpload. Non-null is exactly "the modal is open".
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  async function handleUpload(fileList: FileList | null) {
+  async function handleFileChosen(fileList: FileList | null) {
     const file = fileList?.[0];
     if (!file) return;
     setError(null);
     setAddedName(null);
     setBusy(true);
+    const result = await validateGlbFile(file, "map assets");
+    if (!result.ok) {
+      setError(result.message);
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    // Hands off to the rotate-and-confirm step (model-orientation-and-
+    // posing.md §8) — completeUpload runs once the uploader skips or
+    // confirms a forward-direction offset.
+    setPendingFile(file);
+  }
+
+  async function completeUpload(forwardOffsetDeg: number) {
+    const file = pendingFile;
+    if (!file) return;
+    setPendingFile(null);
     try {
-      const result = await validateGlbFile(file, "map assets");
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
       const supabase = createBrowserSupabaseClient();
       const path = await uploadMapAssetFile(supabase, campaignId, file);
       const asset = await createCustomAsset(supabase, {
@@ -50,6 +69,13 @@ export function AssetPalette({ campaignId, initialAssets, canUpload }: AssetPale
         name,
         modelRef: path,
       });
+      // Rides the createCustomAsset write above — its own INSERT RLS
+      // (0015) already enforced DM-only for this whole upload, so
+      // model_orientation's own write policy stays deliberately open (see
+      // 0043_model_orientation.sql). Every custom asset gets a row, even at
+      // the default 0 — simpler than special-casing the common "no
+      // correction needed" case.
+      await setForwardOffsetDeg(supabase, path, forwardOffsetDeg);
       setAssets((current) => [...current, asset]);
       setAddedName(asset.name);
       setName("");
@@ -100,7 +126,7 @@ export function AssetPalette({ campaignId, initialAssets, canUpload }: AssetPale
             aria-label="Upload a custom map asset model"
             className={styles.hiddenFileInput}
             disabled={busy}
-            onChange={(event) => handleUpload(event.target.files)}
+            onChange={(event) => handleFileChosen(event.target.files)}
           />
           <p className={styles.uploadHint}>Custom assets: binary glTF (.glb), max 10MB.</p>
           {error ? (
@@ -114,6 +140,13 @@ export function AssetPalette({ campaignId, initialAssets, canUpload }: AssetPale
             </p>
           ) : null}
         </div>
+      ) : null}
+      {pendingFile ? (
+        <ModelOrientationStep
+          file={pendingFile}
+          normalize={{ kind: "maxDimension", targetSize: PLACED_OBJECT_SIZE }}
+          onDone={(forwardOffsetDeg) => void completeUpload(forwardOffsetDeg)}
+        />
       ) : null}
     </div>
   );

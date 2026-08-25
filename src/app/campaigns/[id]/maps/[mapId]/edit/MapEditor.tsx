@@ -1231,6 +1231,13 @@ export function MapEditor({
   );
 
   const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
+  // Stored forward-direction correction per asset (model_orientation, see
+  // docs/design/model-orientation-and-posing.md §8) — same id-keyed map
+  // shape as assetUrlById, read alongside it below.
+  const assetForwardOffsetById = useMemo(
+    () => new Map(assets.map((asset) => [asset.id, asset.forwardOffsetDeg])),
+    [assets]
+  );
 
   const sceneObjects = useMemo<MapSurfaceObject[]>(() => {
     // Rendered on the cell's live displayed surface (preview ground inside
@@ -1246,6 +1253,7 @@ export function MapEditor({
         elevation: surfaceElevation(object.x, object.y),
         rotation: object.rotation,
         url: assetUrlById.get(object.asset_id) ?? null,
+        forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
       })),
       ...(preview?.objects.map((object) => ({
         id: object.id,
@@ -1254,10 +1262,11 @@ export function MapEditor({
         elevation: surfaceElevation(object.x, object.y),
         rotation: object.rotation,
         url: assetUrlById.get(object.assetId) ?? null,
+        forwardOffsetDeg: assetForwardOffsetById.get(object.assetId) ?? 0,
         ghost: true,
       })) ?? []),
     ];
-  }, [objects, overlay, preview, assetUrlById]);
+  }, [objects, overlay, preview, assetUrlById, assetForwardOffsetById]);
 
   async function handleSave() {
     if (dirty.size === 0 || saving) return;

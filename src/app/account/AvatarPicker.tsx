@@ -2,10 +2,12 @@
 
 import { useRef, useState } from "react";
 import { ChoiceCard } from "@/ui-components";
-import { setProfileAvatar, uploadAvatarFile, type AvatarSource } from "@/data-access";
+import { setForwardOffsetDeg, setProfileAvatar, uploadAvatarFile, type AvatarSource } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { AVATAR_PRESETS } from "./avatar-presets";
 import { validateGlbFile } from "@/app/lib/validate-glb";
+import { ModelOrientationStep } from "@/app/ModelOrientationStep";
+import { AVATAR_HEIGHT } from "@/scene-3d";
 import styles from "./account.module.css";
 
 export interface AvatarPickerProps {
@@ -26,6 +28,10 @@ export function AvatarPicker({ userId, initialSource, initialRef }: AvatarPicker
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // Set once a chosen file passes validation, cleared once the
+  // rotate-and-confirm step (ModelOrientationStep) resolves — see
+  // completeUpload. Non-null is exactly "the modal is open".
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function choosePreset(presetId: string) {
@@ -46,21 +52,41 @@ export function AvatarPicker({ userId, initialSource, initialRef }: AvatarPicker
     }
   }
 
-  async function handleUpload(fileList: FileList | null) {
+  async function handleFileChosen(fileList: FileList | null) {
     const file = fileList?.[0];
     if (!file) return;
     setError(null);
     setSaved(false);
     setBusy(true);
+    const result = await validateGlbFile(file, "avatars");
+    if (!result.ok) {
+      setError(result.message);
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    // Hands off to the rotate-and-confirm step (model-orientation-and-
+    // posing.md §8) — completeUpload runs once the uploader skips or
+    // confirms a forward-direction offset.
+    setPendingFile(file);
+  }
+
+  async function completeUpload(forwardOffsetDeg: number) {
+    const file = pendingFile;
+    if (!file) return;
+    setPendingFile(null);
     try {
-      const result = await validateGlbFile(file, "avatars");
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
       const supabase = createBrowserSupabaseClient();
       const path = await uploadAvatarFile(supabase, userId, file);
       await setProfileAvatar(supabase, userId, { source: "custom", ref: path });
+      // MUST be an upsert, not an insert: uploadAvatarFile always writes to
+      // the SAME fixed per-user path ({userId}/avatar.glb, upsert:true), so
+      // a re-upload's orientation write reuses the exact key its
+      // predecessor used. An insert here would leave the previous upload's
+      // row in place, silently misapplied to this new model — see
+      // 0043_model_orientation.sql's gotcha and setForwardOffsetDeg's own
+      // doc comment.
+      await setForwardOffsetDeg(supabase, path, forwardOffsetDeg);
       setSelection({ source: "custom", ref: path });
       setSaved(true);
     } catch {
@@ -99,7 +125,7 @@ export function AvatarPicker({ userId, initialSource, initialRef }: AvatarPicker
         aria-label="Upload a custom avatar model"
         className={styles.hiddenFileInput}
         disabled={busy}
-        onChange={(event) => handleUpload(event.target.files)}
+        onChange={(event) => handleFileChosen(event.target.files)}
       />
       <p className={styles.uploadHint}>Custom models: binary glTF (.glb), max 10MB.</p>
       {error ? (
@@ -111,6 +137,13 @@ export function AvatarPicker({ userId, initialSource, initialRef }: AvatarPicker
         <p role="status" className={styles.savedText}>
           Avatar saved.
         </p>
+      ) : null}
+      {pendingFile ? (
+        <ModelOrientationStep
+          file={pendingFile}
+          normalize={{ kind: "height", targetHeight: AVATAR_HEIGHT }}
+          onDone={(forwardOffsetDeg) => void completeUpload(forwardOffsetDeg)}
+        />
       ) : null}
     </div>
   );
