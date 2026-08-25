@@ -28,41 +28,100 @@ const CUSHION = "#2a2140";
 const PLAYER_CHAIR_URL = "/table/player-chair.glb";
 const DM_CHAIR_URL = "/table/dm-chair.glb";
 
+// Which way each source file's own seat/front actually faces, empirically
+// checked (not assumed) by temporarily rendering each raw glTF standalone
+// with an AxesHelper fixed to its own local origin plus a Box3Helper, from
+// four axis-aligned cameras (+Z/-Z/+X/-X) framing the whole model — the
+// same throwaway-probe approach this file's other measurement comments
+// document. For BOTH files, the +Z-facing elevation showed the seat cushion
+// and armrests face-on (the open, sit-in-me side) and the -Z-facing
+// elevation showed the plain, closed exterior of the backrest — i.e. both
+// models were authored treating local +Z as their own "forward," not -Z.
+// seating.ts's rotationY assumes an occupant's local -Z is forward (its own
+// doc comment; SeatAvatar's avatars already honor that and aren't reported
+// backwards), so each model needs a baked-in 180° yaw here to align its own
+// +Z-front with the shared -Z-forward convention. The two files were
+// authored independently (see this file's header note) and were checked
+// independently for exactly that reason — they happening to agree on +Z is
+// a coincidence the probe confirmed, not an assumption that let one stand
+// in for the other.
+const PLAYER_CHAIR_FORWARD_CORRECTION = Math.PI;
+const DM_CHAIR_FORWARD_CORRECTION = Math.PI;
+
 // Target total heights (floor to the tallest point) for the loaded glTF
-// chairs, following SeatAvatar's scale-to-known-height pattern. The two
-// source models already lean this way on their own raw export scale (the
-// DM throne measures ~1.83x the player chair's raw height before either is
-// normalized) — these targets preserve that natural distinction rather
-// than inventing one, landing close to the old procedural chairs' own
-// ~1.46:1 throne-to-chair ratio, and keep the player chair near the old
-// procedural chair's ~1.0 total height for scene continuity.
+// chairs, following SeatAvatar's scale-to-known-height pattern.
+//
+// Before touching either number, both raw models' Box3 (size + center) were
+// re-checked against a real render (a standalone probe: each glTF alone
+// with a Box3Helper drawn around it, screenshotted from four axis-aligned
+// cameras) to rule out the "too small" symptom actually being a bad
+// measurement — a stray/oversized invisible mesh, doubled geometry, or a
+// units mismatch would all inflate `size.y` and make the scale-to-height
+// math shrink the *visible* chair well below the intended target. Neither
+// model has that problem: the player chair is a single mesh whose own
+// tight geometry bounding box IS the visible chair with no slack, and the
+// DM throne's Box3Helper hugs all 13 real sub-meshes (the same 13 the
+// SEAT_TOP_Y measurement below already enumerates) with no 14th stray node
+// contributing extra, invisible size. Raw sizes are also plausibly
+// meters-scale for actual furniture (~1.26 and ~2.32), not the ~100x-off
+// magnitude a cm/m export mixup would produce. So the measurement itself
+// was sound going in — confirmed empirically, not assumed.
+//
+// PLAYER_CHAIR_HEIGHT=1.0 was ALSO already correct on that same empirical
+// basis: a real dining chair's total back height runs ~0.9-1.0m, and 1.0 is
+// the top of that real-world anchor, not an arbitrary number — so it's
+// left unchanged. What actually read as "too small" for the player chair
+// turned out to be the 180°-backwards orientation fixed above (a chair
+// facing away from its own seat cushion visually foreshortens/hides its
+// own silhouette from most seat-adjacent camera angles) plus a table
+// (TABLE_SURFACE_Y, table.ts) whose own height (1.4) was deliberately kept
+// far taller than a real table for unrelated camera/fog tuning — a
+// correctly-sized real chair was always going to look modest parked next
+// to that tabletop, and that's a table-side concern, not this file's.
+//
+// DM_CHAIR_HEIGHT is the one genuine target-height fix: the old value
+// (1.5) was explicitly derived as a fixed ratio of the player chair
+// (~1.46x, chasing the old procedural throne's own ratio — see git
+// history), which is exactly the anti-pattern a "throne" needs to avoid.
+// Rendered in the real scene at 1.5, the throne's own backrest topped out
+// noticeably below the standing placeholder avatar's head — the opposite
+// of how a throne is supposed to read next to whoever's in it. 2.0 is
+// picked on the throne's own merits instead: noticeably taller than
+// AVATAR_HEIGHT (SeatAvatar.tsx, 1.7) so the piece of furniture alone
+// reads as bigger than a person before anyone's even at the table, while
+// its footprint (uniform scale, so height and width grow together) still
+// lands well inside TABLE_TOP's 4.36-unit width rather than overwhelming
+// the table itself.
 const PLAYER_CHAIR_HEIGHT = 1.0;
-const DM_CHAIR_HEIGHT = 1.5;
+const DM_CHAIR_HEIGHT = 2.0;
 
 // Each loaded chair's seat-pad top height above the floor, in scene units —
 // measured directly off each glTF's real geometry at its actual rendered
 // (post-scale) size, not guessed: for the DM throne (13 separate nodes),
 // one sub-mesh ("Cube_low", a squarish, moderately-thick slab resting atop
-// the throne's central pedestal column) sits at world Y 0.4357-0.5693,
-// exactly where a seat cushion set into a grand throne frame should be —
-// its own footprint is a modest fraction of the throne's full width/depth,
-// which fits a cushion inset within a wider frame/armrests, not a full-
-// width plank. The player chair is a single fused mesh with no isolable
-// seat sub-mesh, so instead every vertex's world Y was binned into a
-// histogram (see the throwaway probe script this was measured with): the
-// densest wide, near-full-footprint horizontal band (spanning ~88-97% of
-// the chair's own width/depth, unlike the narrower band at ~12% height
-// that's almost certainly a leg stretcher) lands at world Y ≈ 0.515 — that
-// full-footprint span is what distinguishes an actual seat plank from a
-// stretcher bar or armrest, both of which are narrower. Both figures
-// checked against a standing avatar in the actual rendered scene (a
-// temporary bright marker at this exact height, not just the placeholder
-// mannequin's fuzzy silhouette) — neither floats above the cushion nor
-// sinks into it, the exact bug class this file was flagged to re-check now
-// that the two chairs have independently measured, no-longer-identical
-// heights.
+// the throne's central pedestal column) sits at world Y 0.6100-0.7970 at
+// DM_CHAIR_HEIGHT's current 2.0 (re-measured with the same probe after
+// raising the target — a yaw around Y can't change any point's Y, so the
+// forward-correction rotation above doesn't affect this number, only a
+// changed target height does), exactly where a seat cushion set into a
+// grand throne frame should be — its own footprint is a modest fraction of
+// the throne's full width/depth, which fits a cushion inset within a wider
+// frame/armrests, not a full-width plank. The player chair is a single
+// fused mesh with no isolable seat sub-mesh, so instead every vertex's
+// world Y was binned into a histogram (see the throwaway probe script this
+// was measured with): the densest wide, near-full-footprint horizontal
+// band (spanning ~88-97% of the chair's own width/depth, unlike the
+// narrower band at ~12% height that's almost certainly a leg stretcher)
+// lands at world Y ≈ 0.515 — that full-footprint span is what distinguishes
+// an actual seat plank from a stretcher bar or armrest, both of which are
+// narrower. Both figures checked against a standing avatar in the actual
+// rendered scene (a temporary bright marker at this exact height, not just
+// the placeholder mannequin's fuzzy silhouette) — neither floats above the
+// cushion nor sinks into it, the exact bug class this file was flagged to
+// re-check now that the two chairs have independently measured,
+// no-longer-identical heights.
 export const SEAT_TOP_Y: Record<"dm" | "player", number> = {
-  dm: 0.57,
+  dm: 0.76,
   player: 0.52,
 };
 
@@ -74,21 +133,35 @@ export const SEAT_TOP_Y: Record<"dm" | "player", number> = {
 // itself. Cushion half-thickness is subtracted back out because SEAT_Y below
 // is the cushion mesh's own (center) position, not its top surface.
 const PLAYER_CUSHION_THICKNESS = 0.06;
-const DM_CUSHION_THICKNESS = 0.07;
+// Scaled by the same ratio DM_CHAIR_HEIGHT moved by (below) — the fallback
+// throne's own hand-tuned shape (this constant, and every literal in
+// ProceduralDmChair) was originally tuned to look right at the old
+// DM_CHAIR_HEIGHT of 1.5; multiplying every one of its own dimensions by
+// this ratio keeps the whole fallback proportionate to whatever the real
+// model's current target height is, rather than just growing its legs
+// (via DM_SEAT_Y) while leaving its cushion/backrest/armrests at their old,
+// now-undersized-looking absolute size.
+const DM_PROCEDURAL_SCALE = DM_CHAIR_HEIGHT / 1.5;
+const DM_CUSHION_THICKNESS = 0.07 * DM_PROCEDURAL_SCALE;
 const PLAYER_SEAT_Y = SEAT_TOP_Y.player - PLAYER_CUSHION_THICKNESS / 2;
 const DM_SEAT_Y = SEAT_TOP_Y.dm - DM_CUSHION_THICKNESS / 2;
 
 /** Four thin cylindrical legs from the floor up to the underside of the
  * seat pad, at the seat pad's corners inset slightly so they read as legs
- * rather than poking past the pad's edge. */
+ * rather than poking past the pad's edge. `radius` defaults to the
+ * original player-chair proportions; the DM throne passes a
+ * DM_PROCEDURAL_SCALE-d pair so its legs read as sturdy enough for a much
+ * wider seat instead of comparatively spindly. */
 function ChairLegs({
   halfFootprint,
   wood,
   seatY,
+  radius = [0.03, 0.035],
 }: {
   halfFootprint: number;
   wood: string;
   seatY: number;
+  radius?: [number, number];
 }) {
   const inset = halfFootprint - 0.06;
   const legHeight = seatY - 0.03;
@@ -102,7 +175,7 @@ function ChairLegs({
     <>
       {corners.map(([x, z]) => (
         <mesh key={`${x},${z}`} position={[x, legHeight / 2, z]} castShadow>
-          <cylinderGeometry args={[0.03, 0.035, legHeight, 8]} />
+          <cylinderGeometry args={[radius[0], radius[1], legHeight, 8]} />
           <meshStandardMaterial color={wood} roughness={0.8} />
         </mesh>
       ))}
@@ -144,52 +217,66 @@ function ProceduralPlayerChair() {
 // backrest topped with a purple-emissive finial, darker wood, purple trim
 // along the backrest's edges instead of teal. Kept around as the
 // load-failure/loading-state fallback for the real dm-chair.glb model (see
-// Chair below); like the player chair above, every upper-body offset is
-// expressed relative to DM_SEAT_Y.
+// Chair below). Every offset here is `DM_SEAT_Y + (own hand-tuned delta *
+// DM_PROCEDURAL_SCALE)` — the seat anchor itself is never scaled (it's
+// already the correct absolute height from SEAT_TOP_Y), only each part's
+// own size/position *relative to that anchor* grows or shrinks with
+// DM_PROCEDURAL_SCALE, so the whole shape stays proportionate to whatever
+// DM_CHAIR_HEIGHT currently is instead of drifting out of proportion with
+// the seat pad.
 function ProceduralDmChair() {
-  const half = 0.31; // 0.62 footprint / 2
+  const half = 0.31 * DM_PROCEDURAL_SCALE; // 0.62 footprint / 2, scaled
   return (
     <group>
-      <ChairLegs halfFootprint={half} wood={DM_WOOD} seatY={DM_SEAT_Y} />
+      <ChairLegs
+        halfFootprint={half}
+        wood={DM_WOOD}
+        seatY={DM_SEAT_Y}
+        radius={[0.03 * DM_PROCEDURAL_SCALE, 0.035 * DM_PROCEDURAL_SCALE]}
+      />
       <mesh position={[0, DM_SEAT_Y, 0]} castShadow receiveShadow>
-        <boxGeometry args={[0.62, DM_CUSHION_THICKNESS, 0.62]} />
+        <boxGeometry args={[0.62 * DM_PROCEDURAL_SCALE, DM_CUSHION_THICKNESS, 0.62 * DM_PROCEDURAL_SCALE]} />
         <meshStandardMaterial color={CUSHION} roughness={0.65} />
       </mesh>
 
       {/* Armrests flank the seat, resting just above the pad. */}
-      <mesh position={[half + 0.03, DM_SEAT_Y + 0.09, 0]} castShadow>
-        <boxGeometry args={[0.06, 0.18, 0.5]} />
+      <mesh position={[half + 0.03 * DM_PROCEDURAL_SCALE, DM_SEAT_Y + 0.09 * DM_PROCEDURAL_SCALE, 0]} castShadow>
+        <boxGeometry args={[0.06 * DM_PROCEDURAL_SCALE, 0.18 * DM_PROCEDURAL_SCALE, 0.5 * DM_PROCEDURAL_SCALE]} />
         <meshStandardMaterial color={DM_WOOD} roughness={0.75} />
       </mesh>
-      <mesh position={[-(half + 0.03), DM_SEAT_Y + 0.09, 0]} castShadow>
-        <boxGeometry args={[0.06, 0.18, 0.5]} />
+      <mesh position={[-(half + 0.03 * DM_PROCEDURAL_SCALE), DM_SEAT_Y + 0.09 * DM_PROCEDURAL_SCALE, 0]} castShadow>
+        <boxGeometry args={[0.06 * DM_PROCEDURAL_SCALE, 0.18 * DM_PROCEDURAL_SCALE, 0.5 * DM_PROCEDURAL_SCALE]} />
         <meshStandardMaterial color={DM_WOOD} roughness={0.75} />
       </mesh>
 
-      {/* Tall backrest — reaches ~1.4 total height vs. the player chair's
-          ~1.0, the throne's main size signal. */}
-      <mesh position={[0, DM_SEAT_Y + 0.455, 0.34]} castShadow>
-        <boxGeometry args={[0.62, 1.05, 0.08]} />
+      {/* Tall backrest — reaches ~1.4x the player chair's own total height
+          at this file's original tuning basis, the throne's main size
+          signal; DM_PROCEDURAL_SCALE keeps that same relative reach at
+          whatever DM_CHAIR_HEIGHT is now. */}
+      <mesh position={[0, DM_SEAT_Y + 0.455 * DM_PROCEDURAL_SCALE, 0.34 * DM_PROCEDURAL_SCALE]} castShadow>
+        <boxGeometry args={[0.62 * DM_PROCEDURAL_SCALE, 1.05 * DM_PROCEDURAL_SCALE, 0.08 * DM_PROCEDURAL_SCALE]} />
         <meshStandardMaterial color={DM_WOOD} roughness={0.7} />
       </mesh>
 
       {/* Purple trim along the backrest's vertical edges and top. */}
-      <mesh position={[0.28, DM_SEAT_Y + 0.48, 0.34]}>
-        <boxGeometry args={[0.03, 1.0, 0.03]} />
+      <mesh position={[0.28 * DM_PROCEDURAL_SCALE, DM_SEAT_Y + 0.48 * DM_PROCEDURAL_SCALE, 0.34 * DM_PROCEDURAL_SCALE]}>
+        <boxGeometry args={[0.03 * DM_PROCEDURAL_SCALE, 1.0 * DM_PROCEDURAL_SCALE, 0.03 * DM_PROCEDURAL_SCALE]} />
         <meshStandardMaterial color={PURPLE} emissive={PURPLE} emissiveIntensity={1.7} />
       </mesh>
-      <mesh position={[-0.28, DM_SEAT_Y + 0.48, 0.34]}>
-        <boxGeometry args={[0.03, 1.0, 0.03]} />
+      <mesh
+        position={[-0.28 * DM_PROCEDURAL_SCALE, DM_SEAT_Y + 0.48 * DM_PROCEDURAL_SCALE, 0.34 * DM_PROCEDURAL_SCALE]}
+      >
+        <boxGeometry args={[0.03 * DM_PROCEDURAL_SCALE, 1.0 * DM_PROCEDURAL_SCALE, 0.03 * DM_PROCEDURAL_SCALE]} />
         <meshStandardMaterial color={PURPLE} emissive={PURPLE} emissiveIntensity={1.7} />
       </mesh>
-      <mesh position={[0, DM_SEAT_Y + 0.98, 0.34]}>
-        <boxGeometry args={[0.58, 0.03, 0.03]} />
+      <mesh position={[0, DM_SEAT_Y + 0.98 * DM_PROCEDURAL_SCALE, 0.34 * DM_PROCEDURAL_SCALE]}>
+        <boxGeometry args={[0.58 * DM_PROCEDURAL_SCALE, 0.03 * DM_PROCEDURAL_SCALE, 0.03 * DM_PROCEDURAL_SCALE]} />
         <meshStandardMaterial color={PURPLE} emissive={PURPLE} emissiveIntensity={1.7} />
       </mesh>
 
       {/* Finial ornament at the top of the backrest. */}
-      <mesh position={[0, DM_SEAT_Y + 1.04, 0.34]} castShadow>
-        <coneGeometry args={[0.06, 0.16, 12]} />
+      <mesh position={[0, DM_SEAT_Y + 1.04 * DM_PROCEDURAL_SCALE, 0.34 * DM_PROCEDURAL_SCALE]} castShadow>
+        <coneGeometry args={[0.06 * DM_PROCEDURAL_SCALE, 0.16 * DM_PROCEDURAL_SCALE, 12]} />
         <meshStandardMaterial color={PURPLE} emissive={PURPLE} emissiveIntensity={1.9} />
       </mesh>
     </group>
@@ -201,21 +288,60 @@ function ProceduralDmChair() {
  * plus recenter-to-origin math as SeatAvatar's AvatarModel: real bounding
  * box via Box3, uniform scale to `targetHeight`, recentered on x/z with the
  * model's lowest point pinned to the local origin's y=0 regardless of where
- * the export placed its own origin. Clone (not the cached scene directly)
- * since every seat mounts its own instance and useGLTF caches per URL.
+ * the export placed its own origin, PLUS a baked-in yaw (`forwardCorrection`
+ * — one of the two *_FORWARD_CORRECTION constants above) that spins the
+ * model to face the shared -Z-forward convention before TableSeat's own
+ * per-seat rotation is applied on top.
+ *
+ * The recenter offset is computed from the ROTATED center, not the raw one
+ * — three.js composes an Object3D's transform as
+ * `position + rotation·(scale·localPoint)`, i.e. the fixed `position` is
+ * added in world space *after* `rotation`, so centering with the raw
+ * (pre-rotation) center would spin the model in place around its own
+ * off-center origin and then shift the now-off-center result sideways by a
+ * stale offset. Rotating the scaled center first and centering on THAT
+ * keeps the model's own vertical axis — wherever it ends up pointing after
+ * the yaw — passing through local (0, *, 0), exactly like the unrotated
+ * SeatAvatar/table case. Y is untouched by this: a yaw around Y can't
+ * change any point's Y coordinate, so the floor-pinning term (`-box.min.y
+ * * scale`) is exactly the same with or without `forwardCorrection`, and so
+ * is every SEAT_TOP_Y measurement below (all taken after this offset).
+ * Clone (not the cached scene directly) since every seat mounts its own
+ * instance and useGLTF caches per URL.
  */
-function ChairModel({ url, targetHeight }: { url: string; targetHeight: number }) {
+function ChairModel({
+  url,
+  targetHeight,
+  forwardCorrection,
+}: {
+  url: string;
+  targetHeight: number;
+  forwardCorrection: number;
+}) {
   const { scene } = useGLTF(url);
   const { scale, offset } = useMemo(() => {
     const box = new Box3().setFromObject(scene as Object3D);
     const size = box.getSize(new Vector3());
     const center = box.getCenter(new Vector3());
     const scale = size.y > 1e-3 ? targetHeight / size.y : 1;
-    const offset: [number, number, number] = [-center.x * scale, -box.min.y * scale, -center.z * scale];
+    const rotatedCenterXZ = new Vector3(center.x * scale, 0, center.z * scale).applyAxisAngle(
+      new Vector3(0, 1, 0),
+      forwardCorrection
+    );
+    const offset: [number, number, number] = [-rotatedCenterXZ.x, -box.min.y * scale, -rotatedCenterXZ.z];
     return { scale, offset };
-  }, [scene, targetHeight]);
+  }, [scene, targetHeight, forwardCorrection]);
 
-  return <Clone object={scene} scale={scale} position={offset} castShadow receiveShadow />;
+  return (
+    <Clone
+      object={scene}
+      scale={scale}
+      position={offset}
+      rotation={[0, forwardCorrection, 0]}
+      castShadow
+      receiveShadow
+    />
+  );
 }
 
 interface ChairErrorBoundaryProps {
@@ -246,9 +372,11 @@ class ChairErrorBoundary extends Component<ChairErrorBoundaryProps, { failed: bo
  * Loads the real dm-chair.glb/player-chair.glb models (SeatAvatar's
  * load/scale/recenter/Clone pattern), Suspense- and error-boundary-wrapped
  * so a slow or failed load falls back to the original fully-procedural
- * chair (`ProceduralDmChair`/`ProceduralPlayerChair`, both preserved
- * unchanged in shape, just re-anchored to the same measured seat heights)
- * rather than an empty or broken seat.
+ * chair (`ProceduralDmChair`/`ProceduralPlayerChair`, both re-anchored to
+ * the same measured seat heights; `ProceduralPlayerChair`'s own shape is
+ * unchanged, `ProceduralDmChair`'s is uniformly rescaled by
+ * DM_PROCEDURAL_SCALE so it stays proportionate to DM_CHAIR_HEIGHT) rather
+ * than an empty or broken seat.
  * `SeatAvatar` renders on top of this unchanged — this component owns only
  * the furniture beneath the avatar.
  */
@@ -257,7 +385,11 @@ export function Chair({ role }: { role: "dm" | "player" }) {
     return (
       <ChairErrorBoundary fallback={<ProceduralDmChair />}>
         <Suspense fallback={<ProceduralDmChair />}>
-          <ChairModel url={DM_CHAIR_URL} targetHeight={DM_CHAIR_HEIGHT} />
+          <ChairModel
+            url={DM_CHAIR_URL}
+            targetHeight={DM_CHAIR_HEIGHT}
+            forwardCorrection={DM_CHAIR_FORWARD_CORRECTION}
+          />
         </Suspense>
       </ChairErrorBoundary>
     );
@@ -265,7 +397,11 @@ export function Chair({ role }: { role: "dm" | "player" }) {
   return (
     <ChairErrorBoundary fallback={<ProceduralPlayerChair />}>
       <Suspense fallback={<ProceduralPlayerChair />}>
-        <ChairModel url={PLAYER_CHAIR_URL} targetHeight={PLAYER_CHAIR_HEIGHT} />
+        <ChairModel
+          url={PLAYER_CHAIR_URL}
+          targetHeight={PLAYER_CHAIR_HEIGHT}
+          forwardCorrection={PLAYER_CHAIR_FORWARD_CORRECTION}
+        />
       </Suspense>
     </ChairErrorBoundary>
   );
