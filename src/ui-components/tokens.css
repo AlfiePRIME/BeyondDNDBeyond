@@ -41,8 +41,8 @@
 
   /* Fonts */
   --font-h: 'Share Tech', 'Orbitron', 'Rajdhani', 'Trebuchet MS', system-ui, sans-serif;
-  --font-b: 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
-  --font-m: 'Courier New', 'Lucida Console', monospace;
+  --font-b: var(--font-inter), 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
+  --font-m: var(--font-jetbrains-mono), 'Courier New', 'Lucida Console', monospace;
 
   /* Layout constants */
   --nav-h: 60px;
