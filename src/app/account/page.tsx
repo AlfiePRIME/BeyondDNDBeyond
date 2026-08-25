@@ -90,9 +90,11 @@ export default async function AccountPage() {
               <Link href="/campaigns">dashboard</Link>.
             </p>
           ) : (
-            memberships.map((membership) => (
-              <CampaignManageRow key={membership.campaign.id} membership={membership} />
-            ))
+            <div className={styles.campaignsGrid}>
+              {memberships.map((membership) => (
+                <CampaignManageRow key={membership.campaign.id} membership={membership} />
+              ))}
+            </div>
           )}
         </Panel>
       </main>

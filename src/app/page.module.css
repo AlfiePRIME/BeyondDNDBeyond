@@ -7,7 +7,7 @@
 
 .lobby {
   width: 100%;
-  max-width: 720px;
+  max-width: 960px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -75,22 +75,21 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 12px;
 }
 
 .memberRow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 4px 16px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--dim2);
-}
-
-.memberRow:last-child {
-  border-bottom: none;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
 }
 
 .memberName {
@@ -145,22 +144,24 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  /* The modal shell caps its own width (see Modal.tsx / ui.module.css),
+     so this mostly renders as a single column there — the auto-fill
+     still lets it pick up a second column if that shell ever widens. */
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
 }
 
 .startRow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px 16px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--dim2);
-}
-
-.startRow:last-child {
-  border-bottom: none;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
 }
 
 .startName {

@@ -7,7 +7,7 @@
 
 .dashboard {
   width: 100%;
-  max-width: 720px;
+  max-width: 900px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -35,8 +35,8 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 12px;
 }
 
@@ -46,12 +46,10 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 4px 16px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--dim2);
-}
-
-.campaignRow:last-child {
-  border-bottom: none;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
 }
 
 .campaignName {
