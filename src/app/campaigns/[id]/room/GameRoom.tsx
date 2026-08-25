@@ -46,6 +46,7 @@ import {
   setActionEconomyStrict,
   setCombatantEconomyFlag,
   setCombatantInitiative,
+  setDayNightMode,
   setHandoutRevealed,
   setLiveMap,
   setTokenAllegiance,
@@ -62,6 +63,7 @@ import {
   type Character,
   type CombatCombatant,
   type CombatantEconomyFlag,
+  type DayNightMode,
   type Handout,
   type LightSource,
   type MapCell,
@@ -289,6 +291,7 @@ export function GameRoom({
   initialCombat,
   initialRolls,
   initialActionEconomyStrict,
+  initialDayNightMode,
   initialUiPreferences,
 }: {
   campaignId: string;
@@ -316,6 +319,12 @@ export function GameRoom({
   /** campaigns.action_economy_strict at load time — kept live below via
    * the campaigns postgres_changes feed. */
   initialActionEconomyStrict: boolean;
+  /** campaigns.day_night_mode at load time (Phase 2 of the Game Room
+   * ambiance plan) — kept live below via the same campaigns
+   * postgres_changes feed as initialActionEconomyStrict. Purely cosmetic
+   * 3D-table lighting; unrelated to the per-cell vision/light-level
+   * system. */
+  initialDayNightMode: DayNightMode;
   /** profiles.ui_preferences at load time (Phase B) — the current user's,
    * not any other member's; handed to PanelLayoutProvider below so a
    * returning user's saved Game Room panel layout renders on first paint
@@ -393,6 +402,14 @@ export function GameRoom({
   const [economyStrict, setEconomyStrict] = useState(initialActionEconomyStrict);
   const [economyBusy, setEconomyBusy] = useState(false);
   const [economyError, setEconomyError] = useState<string | null>(null);
+  // The DM's day/night lighting toggle (Phase 2 of the Game Room ambiance
+  // plan), live-synced below via the same campaigns postgres_changes feed
+  // as economyStrict — NOT the room's broadcast channel, so a flip made
+  // from any connected client reaches every member's table. Purely
+  // cosmetic; does not touch the per-cell vision/light-level system.
+  const [dayNightMode, setDayNightModeState] = useState<DayNightMode>(initialDayNightMode);
+  const [dayNightBusy, setDayNightBusy] = useState(false);
+  const [dayNightError, setDayNightError] = useState<string | null>(null);
   // Character rows go stateful as of Prompt 46: mid-combat damage/healing
   // changes current_hp, and the combat panel's HP readout and the token HP
   // bars both render from these rows. Same render-time prop reset as
@@ -557,13 +574,15 @@ export function GameRoom({
     setTransitionOffer(null);
   }, []);
 
-  // Live strictness sync: the campaigns postgres_changes feed (0034 added
-  // campaigns to the publication) — a mid-combat mode flip must reach
-  // every connected player, including the flipping DM's other windows.
+  // Live strictness + day/night sync: the campaigns postgres_changes feed
+  // (0034 added campaigns to the publication) — a mid-combat mode flip, or
+  // a DM's lighting toggle, must reach every connected player, including
+  // the flipping DM's other windows.
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
     return subscribeToCampaignChanges(supabase, campaignId, (campaign) => {
       setEconomyStrict(campaign.action_economy_strict);
+      setDayNightModeState(campaign.day_night_mode);
     });
   }, [campaignId]);
 
@@ -1437,6 +1456,27 @@ export function GameRoom({
     [campaignId, economyBusy]
   );
 
+  // Temporary DM-only toggle (Phase 2 of the Game Room ambiance plan): the
+  // real home for this control is a later phase's "DM's book" page, which
+  // doesn't exist yet — this button is a stand-in, to be removed once that
+  // exists. Same persist-then-reflect-locally shape as
+  // handleSetEconomyStrict: other clients (and this one's own subscription
+  // echo) pick up the flip through the campaigns postgres_changes feed.
+  const handleToggleDayNight = useCallback(async () => {
+    if (dayNightBusy) return;
+    const next: DayNightMode = dayNightMode === "day" ? "night" : "day";
+    setDayNightBusy(true);
+    setDayNightError(null);
+    try {
+      await setDayNightMode(createBrowserSupabaseClient(), campaignId, next);
+      setDayNightModeState(next);
+    } catch (err) {
+      setDayNightError(errorMessage(err) ?? "Could not change the table's lighting.");
+    } finally {
+      setDayNightBusy(false);
+    }
+  }, [campaignId, dayNightBusy, dayNightMode]);
+
   // The d20 is rolled by the roll Route Handler (server-side randomness,
   // same as initiative), which applies the outcome via apply_death_save_roll
   // and logs it; this client then does the usual refresh + combat-changed
@@ -2148,6 +2188,7 @@ export function GameRoom({
           onRulerDragStart={handleRulerDragStart}
           onRulerDragOverCell={handleRulerDragOverCell}
           onRulerDragEnd={handleRulerDragEnd}
+          dayNightMode={dayNightMode}
         />
         {/* A modest, fixed corner of the table (its own doc comment) — never
             full-screen, never over the map/tokens/camera controls. */}
@@ -2157,6 +2198,13 @@ export function GameRoom({
           the visionDebug memo. */}
       <div data-testid="vision-state" hidden>
         {visionDebug}
+      </div>
+      {/* Hidden render-state mirror for verify-day-night-mode.mjs — WebGL
+          output has no DOM to locate, same reasoning as vision-state above.
+          Mirrors exactly what campaigns.day_night_mode currently is on this
+          client, i.e. the mode GameTableScene was told to render. */}
+      <div data-testid="day-night-state" hidden>
+        {JSON.stringify({ mode: dayNightMode })}
       </div>
       {/* Hidden render-state mirror for verify-dice-tumble.mjs — see
           DiceTumbleProps.onQueueChange's doc comment. Index 0 is always the
@@ -2229,9 +2277,28 @@ export function GameRoom({
           >
             {cameraMode === "seat" ? "Free camera" : "Return to seat"}
           </Button>
+          {currentUserIsDM ? (
+            // Temporary DM-only control (see handleToggleDayNight's doc
+            // comment) — stands in for the day/night toggle's eventual
+            // real home in the DM's book, not yet built.
+            <Button
+              size="sm"
+              variant={dayNightMode === "night" ? "teal" : "ghost"}
+              disabled={dayNightBusy}
+              onClick={() => void handleToggleDayNight()}
+              data-testid="day-night-toggle"
+            >
+              {dayNightBusy ? "…" : dayNightMode === "night" ? "🌙 Night" : "☀️ Day"}
+            </Button>
+          ) : null}
           <span className={styles.roomLabel}>Game Room</span>
         </div>
       </header>
+      {dayNightError ? (
+        <p role="alert" className={styles.endError} data-testid="day-night-error">
+          {dayNightError}
+        </p>
+      ) : null}
       <DraggablePanel panelId="map">
         <MapPanel
           isDM={currentUserIsDM}

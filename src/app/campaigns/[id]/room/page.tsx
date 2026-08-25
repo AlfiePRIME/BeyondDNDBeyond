@@ -150,6 +150,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialCombat={initialCombat}
       initialRolls={initialRolls}
       initialActionEconomyStrict={campaign.action_economy_strict}
+      initialDayNightMode={campaign.day_night_mode}
       initialUiPreferences={currentUserProfile?.ui_preferences ?? { panelLayout: {} }}
     />
   );

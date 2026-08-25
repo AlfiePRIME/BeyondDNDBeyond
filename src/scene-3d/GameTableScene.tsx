@@ -18,7 +18,6 @@ import { computeTableMapMetrics } from "./mapFit";
 // Room ambiance pulls from the app's design tokens (see
 // src/ui-components/tokens.css) — scene-3d can't import CSS custom
 // properties, so the hex values are mirrored here.
-const ROOM_BG = "#0d0520"; // --surface2
 const PURPLE = "#9b00ff"; // --purple
 const TEAL = "#1ec8c8"; // --teal
 
@@ -27,6 +26,45 @@ const TEAL = "#1ec8c8"; // --teal
 // the room lighting instead.
 const WOOD_TOP = "#5a4028";
 const WOOD_LEG = "#42301c";
+
+/** Day/night lighting presets (Phase 2 of the Game Room ambiance plan) —
+ * purely cosmetic room mood, unrelated to the per-cell vision/light-level
+ * system (map_cells.light). "day" is byte-for-byte the values this scene
+ * shipped with before this preset existed, so switching this feature on
+ * causes zero visual change until a DM actively toggles to Night.
+ * "night" reuses the app's two darkest design tokens for the room
+ * background/fog (rather than inventing new colors), cools and dims the
+ * sun/ambient pair to a moonlight tone, and pushes both accent pointLights
+ * up so the purple/teal pools read more dramatically against the darker
+ * room. */
+const DAY_NIGHT_PRESETS = {
+  day: {
+    roomBg: "#0d0520", // --surface2
+    fogNear: 16,
+    fogFar: 34,
+    ambientColor: "#b9a6ff",
+    ambientIntensity: 0.55,
+    sunColor: "#ffe9c9",
+    sunIntensity: 3.4,
+    sunPosition: [5, 10, 3] as const,
+    purpleIntensity: 300,
+    tealIntensity: 200,
+  },
+  night: {
+    roomBg: "#060012", // --surface, the app's darkest token
+    fogNear: 12,
+    fogFar: 28,
+    ambientColor: "#5a6ad1", // cool moonlit violet-blue
+    ambientIntensity: 0.22,
+    sunColor: "#aebfff", // cool moonlight, vs. day's warm sunlight
+    sunIntensity: 0.9,
+    sunPosition: [5, 10, 3] as const,
+    purpleIntensity: 460,
+    tealIntensity: 320,
+  },
+} as const;
+
+export type DayNightMode = keyof typeof DAY_NIGHT_PRESETS;
 
 const LOOK_TARGET = [0, TABLE_SURFACE_Y, 0] as const;
 const FALLBACK_CAMERA_POSITION: readonly [number, number, number] = [0, 10.5, 7.5];
@@ -103,6 +141,10 @@ export interface GameTableSceneProps {
   onRulerDragOverCell?: (x: number, y: number) => void;
   /** Pointer released — the measurement is discarded, never committed. */
   onRulerDragEnd?: () => void;
+  /** Cosmetic room-lighting preset (Phase 2 of the Game Room ambiance
+   * plan); defaults to "day" — today's original, unchanged values. Has no
+   * effect on the per-cell vision/light-level system. */
+  dayNightMode?: DayNightMode;
 }
 
 export function GameTableScene({
@@ -119,9 +161,11 @@ export function GameTableScene({
   onRulerDragStart,
   onRulerDragOverCell,
   onRulerDragEnd,
+  dayNightMode = "day",
 }: GameTableSceneProps) {
   const legX = TABLE_TOP.width / 2 - 0.45;
   const legZ = TABLE_TOP.depth / 2 - 0.45;
+  const lighting = DAY_NIGHT_PRESETS[dayNightMode];
 
   const seats = useMemo(() => computeSeatLayout(members), [members]);
   const mapMetrics = useMemo(
@@ -238,14 +282,14 @@ export function GameTableScene({
         />
       )}
 
-      <color attach="background" args={[ROOM_BG]} />
-      <fog attach="fog" args={[ROOM_BG, 16, 34]} />
+      <color attach="background" args={[lighting.roomBg]} />
+      <fog attach="fog" args={[lighting.roomBg, lighting.fogNear, lighting.fogFar]} />
 
-      <ambientLight color="#b9a6ff" intensity={0.55} />
+      <ambientLight color={lighting.ambientColor} intensity={lighting.ambientIntensity} />
       <directionalLight
-        color="#ffe9c9"
-        intensity={3.4}
-        position={[5, 10, 3]}
+        color={lighting.sunColor}
+        intensity={lighting.sunIntensity}
+        position={lighting.sunPosition}
         castShadow
         shadow-mapSize={[1024, 1024]}
         shadow-camera-left={-8}
@@ -253,8 +297,8 @@ export function GameTableScene({
         shadow-camera-top={8}
         shadow-camera-bottom={-8}
       />
-      <pointLight color={PURPLE} intensity={300} position={[-9, 4, -6]} distance={40} />
-      <pointLight color={TEAL} intensity={200} position={[9, 3.5, 6]} distance={40} />
+      <pointLight color={PURPLE} intensity={lighting.purpleIntensity} position={[-9, 4, -6]} distance={40} />
+      <pointLight color={TEAL} intensity={lighting.tealIntensity} position={[9, 3.5, 6]} distance={40} />
 
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <circleGeometry args={[24, 48]} />

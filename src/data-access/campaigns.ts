@@ -11,8 +11,13 @@ export interface Campaign {
   /** Strict (default) hard-blocks over-budget actions/movement in combat;
    * Freeform only tracks and displays usage (Prompt 53). */
   action_economy_strict: boolean;
+  /** Purely cosmetic 3D-table lighting preset (Phase 2 of the Game Room
+   * ambiance plan) — unrelated to the per-cell vision/light-level system. */
+  day_night_mode: DayNightMode;
   created_at: string;
 }
+
+export type DayNightMode = "day" | "night";
 
 export type CampaignRole = "dm" | "player";
 
@@ -264,6 +269,36 @@ export async function setActionEconomyStrict(
 
   if (error) throw error;
   if (count === 0) throw new Error("Only the campaign's DM can change action-economy enforcement.");
+}
+
+/**
+ * Flips the campaign's 3D-table lighting preset (Phase 2 of the Game Room
+ * ambiance plan) — the setActionEconomyStrict/setHouseRules shape exactly:
+ * a plain column write through campaigns' existing UPDATE RLS with the
+ * same zero-rows-affected detection. No new policy needed: campaigns has a
+ * single blanket UPDATE policy (0011, "the DM can update their campaign",
+ * gated on is_campaign_dm) that already covers every column on the row,
+ * this one included — confirmed directly against the running database
+ * (verify-day-night-mode.mjs), not assumed. So despite the "DM-only is a
+ * UI concern" framing on some of this file's older sibling functions, this
+ * one is DM-only at BOTH layers, same as renameCampaign/setHouseRules: a
+ * non-DM's direct write returns zero rows affected, same as theirs. Live
+ * sync rides subscribeToCampaignChanges below, same as
+ * action_economy_strict. Purely cosmetic: unrelated to the per-cell
+ * vision/light-level system.
+ */
+export async function setDayNightMode(
+  supabase: SupabaseClient,
+  campaignId: string,
+  mode: DayNightMode
+): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaigns")
+    .update({ day_night_mode: mode }, { count: "exact" })
+    .eq("id", campaignId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can change the table's lighting.");
 }
 
 /**

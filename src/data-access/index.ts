@@ -50,11 +50,13 @@ export {
   endSession,
   setHouseRules,
   setActionEconomyStrict,
+  setDayNightMode,
   subscribeToCampaignChanges,
   type Campaign,
   type CampaignRole,
   type CampaignMembership,
   type CampaignMember,
+  type DayNightMode,
 } from "./campaigns";
 export {
   createCharacter,
