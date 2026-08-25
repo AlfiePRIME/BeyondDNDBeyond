@@ -7,6 +7,7 @@ import { AppNav } from "../../AppNav";
 import { TransferDMForm } from "./TransferDMForm";
 import { CampaignRoster } from "./CampaignRoster";
 import { HouseRules } from "./HouseRules";
+import { InviteCodeBadge } from "./InviteCodeBadge";
 import styles from "./campaign.module.css";
 
 export default async function CampaignDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -36,6 +37,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
 
   const otherMembers = members.filter((m) => m.user_id !== user.id);
   const currentUserDisplayName = members.find((m) => m.user_id === user.id)?.display_name ?? null;
+  const currentUserHasCharacter = characters.some((character) => character.owner_id === user.id);
 
   return (
     <div className={styles.page}>
@@ -48,6 +50,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           glow
           headerActions={
             <span className={styles.charactersActions}>
+              {currentUserIsDM ? <InviteCodeBadge inviteCode={campaign.invite_code} /> : null}
               {currentUserIsDM ? (
                 <Link href={`/campaigns/${campaignId}/maps`} className={styles.createLink}>
                   Map editor
@@ -103,6 +106,21 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
             </span>
           }
         >
+          {!currentUserHasCharacter ? (
+            <div className={styles.personalCta} data-testid="personal-character-cta">
+              <p className={styles.personalCtaText}>
+                You don&apos;t have a character in this campaign yet — create one to join the adventure.
+              </p>
+              <span className={styles.charactersActions}>
+                <Link href={`/campaigns/${campaignId}/characters/new`} className={styles.createLink}>
+                  + Create a character
+                </Link>
+                <Link href={`/campaigns/${campaignId}/characters/import`} className={styles.createLink}>
+                  Import from D&D Beyond PDF
+                </Link>
+              </span>
+            </div>
+          ) : null}
           {characters.length === 0 ? (
             <p className={styles.emptyHint}>No characters yet — create one to join the adventure.</p>
           ) : (

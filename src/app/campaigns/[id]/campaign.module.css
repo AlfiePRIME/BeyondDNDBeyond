@@ -59,13 +59,70 @@
 
 .charactersActions {
   display: inline-flex;
+  align-items: center;
   gap: 14px;
+}
+
+.inviteCode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.inviteCode code {
+  font-family: var(--font-m);
+  color: var(--teal);
+  letter-spacing: 0.05em;
+}
+
+.copyButton {
+  font-family: var(--font-m);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--teal);
+  background: transparent;
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 2px 6px;
+  cursor: pointer;
+  transition:
+    color 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.copyButton:hover {
+  color: var(--text);
+  border-color: var(--teal);
 }
 
 .emptyHint {
   color: var(--muted);
   line-height: 1.6;
   margin: 0;
+}
+
+.personalCta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 12px 14px;
+  margin: 0 0 14px;
+  background: var(--surface2);
+  border: 1px solid var(--pink);
+  border-radius: var(--r);
+  box-shadow: var(--gk);
+}
+
+.personalCtaText {
+  color: var(--text);
+  line-height: 1.5;
+  margin: 0;
+  font-weight: 600;
 }
 
 .characterMeta {

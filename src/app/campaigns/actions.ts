@@ -23,14 +23,15 @@ export async function createCampaignAction(
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
+  let campaign;
   try {
-    await createCampaign(supabase, { name, creatorId: user.id });
+    campaign = await createCampaign(supabase, { name, creatorId: user.id });
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Could not create the campaign." };
   }
 
   revalidatePath("/campaigns");
-  return {};
+  redirect(`/campaigns/${campaign.id}`);
 }
 
 export async function joinCampaignAction(
@@ -48,12 +49,13 @@ export async function joinCampaignAction(
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
+  let joined;
   try {
-    await joinCampaignByInviteCode(supabase, inviteCode);
+    joined = await joinCampaignByInviteCode(supabase, inviteCode);
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Could not join that campaign." };
   }
 
   revalidatePath("/campaigns");
-  return {};
+  redirect(`/campaigns/${joined.campaignId}`);
 }
