@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OrbitControls, PerspectiveCamera, RoundedBox } from "@react-three/drei";
+import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Clone, OrbitControls, PerspectiveCamera, RoundedBox, useGLTF } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
+import { Box3, Vector3 } from "three";
+import type { Object3D } from "three";
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y } from "./table";
 import { computeSeatLayout, type CameraMode, type Seat, type SeatMember } from "./seating";
 import { SeatAvatar } from "./SeatAvatar";
@@ -78,6 +80,95 @@ function TableLeg({ x, z }: { x: number; z: number }) {
   );
 }
 
+// The original fully-procedural table (a RoundedBox slab on four cylinder
+// legs) — kept as the load-failure/loading-state fallback for the real
+// table.glb model (see Table below) so a 404 or parse failure never leaves
+// the room without a table to sit at.
+function ProceduralTable() {
+  const legX = TABLE_TOP.width / 2 - 0.45;
+  const legZ = TABLE_TOP.depth / 2 - 0.45;
+  return (
+    <>
+      <RoundedBox
+        args={[TABLE_TOP.width, TABLE_TOP.thickness, TABLE_TOP.depth]}
+        radius={0.06}
+        position={[0, LEG.height + TABLE_TOP.thickness / 2, 0]}
+        castShadow
+        receiveShadow
+      >
+        <meshStandardMaterial color={WOOD_TOP} roughness={0.72} />
+      </RoundedBox>
+      <TableLeg x={-legX} z={-legZ} />
+      <TableLeg x={legX} z={-legZ} />
+      <TableLeg x={-legX} z={legZ} />
+      <TableLeg x={legX} z={legZ} />
+    </>
+  );
+}
+
+const TABLE_URL = "/table/table.glb";
+// The model's own long axis, as exported, is its local Z — not X — so it's
+// rotated 90° about Y before rendering to land that long axis on the
+// scene's X ("width"), matching every other convention here (seating's
+// ellipse, the fallback camera position) that assumes the table is wider
+// than it is deep. See table.ts's own comment on TABLE_TOP for the full
+// bounding-box measurement this and TABLE_SURFACE_Y are both based on.
+const TABLE_ROTATION_Y = Math.PI / 2;
+
+/**
+ * Loads and normalizes the real table model — SeatAvatar's scale-to-known-
+ * height plus recenter-to-origin pattern again, except the "known height"
+ * here is TABLE_SURFACE_Y (every other system's source of truth for where
+ * the tabletop surface sits) rather than a fixed avatar height. Recentering
+ * happens before the outer rotation, so it's computed in the model's own
+ * unrotated local space and the rotation just spins the already-centered
+ * result around the vertical axis through its own center.
+ */
+function TableModel() {
+  const { scene } = useGLTF(TABLE_URL);
+  const { scale, offset } = useMemo(() => {
+    const box = new Box3().setFromObject(scene as Object3D);
+    const size = box.getSize(new Vector3());
+    const center = box.getCenter(new Vector3());
+    const scale = size.y > 1e-3 ? TABLE_SURFACE_Y / size.y : 1;
+    const offset: [number, number, number] = [-center.x * scale, -box.min.y * scale, -center.z * scale];
+    return { scale, offset };
+  }, [scene]);
+
+  return (
+    <group rotation={[0, TABLE_ROTATION_Y, 0]}>
+      <Clone object={scene} scale={scale} position={offset} castShadow receiveShadow />
+    </group>
+  );
+}
+
+/** Falls back to the procedural table on a load/parse failure — same
+ * reasoning as Chair.tsx's ChairErrorBoundary, but for the shared table
+ * (there's only ever one, so no per-instance URL to key a reset on). */
+class TableErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? <ProceduralTable /> : this.props.children;
+  }
+}
+
+function Table() {
+  return (
+    <TableErrorBoundary>
+      <Suspense fallback={<ProceduralTable />}>
+        <TableModel />
+      </Suspense>
+    </TableErrorBoundary>
+  );
+}
+
+useGLTF.preload(TABLE_URL);
+
 // The Prompt 19 stool, then the cushion-disc-and-ring "dais" that replaced
 // it, are both gone — a real chair (Chair.tsx) now carries the role's
 // accent color via its own trim, so a separate floor ring in the same
@@ -89,8 +180,11 @@ function TableSeat({ seat }: { seat: Seat }) {
       {/* Feet land on the chair's own seat pad, not the floor — SeatAvatar
           puts a model's feet at its own local origin (see its own
           comment), so this offset must track wherever the pad's top
-          surface actually is. */}
-      <group position={[0, SEAT_TOP_Y, 0]}>
+          surface actually is. The DM's throne and the player chair are now
+          independently-measured real models with their own real seat
+          heights (Chair.tsx's SEAT_TOP_Y), so this is keyed per-role rather
+          than one shared constant. */}
+      <group position={[0, SEAT_TOP_Y[seat.member.role], 0]}>
         <SeatAvatar url={seat.member.avatar_url ?? null} />
       </group>
     </group>
@@ -163,8 +257,6 @@ export function GameTableScene({
   onRulerDragEnd,
   dayNightMode = "day",
 }: GameTableSceneProps) {
-  const legX = TABLE_TOP.width / 2 - 0.45;
-  const legZ = TABLE_TOP.depth / 2 - 0.45;
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
 
   const seats = useMemo(() => computeSeatLayout(members), [members]);
@@ -305,15 +397,7 @@ export function GameTableScene({
         <meshStandardMaterial color="#1a1338" roughness={0.95} />
       </mesh>
 
-      <RoundedBox
-        args={[TABLE_TOP.width, TABLE_TOP.thickness, TABLE_TOP.depth]}
-        radius={0.06}
-        position={[0, LEG.height + TABLE_TOP.thickness / 2, 0]}
-        castShadow
-        receiveShadow
-      >
-        <meshStandardMaterial color={WOOD_TOP} roughness={0.72} />
-      </RoundedBox>
+      <Table />
 
       {liveMap && mapMetrics ? (
         // Nudged just above the tabletop so the map's base slab never
@@ -349,11 +433,6 @@ export function GameTableScene({
           />
         </group>
       ) : null}
-
-      <TableLeg x={-legX} z={-legZ} />
-      <TableLeg x={legX} z={-legZ} />
-      <TableLeg x={-legX} z={legZ} />
-      <TableLeg x={legX} z={legZ} />
 
       {seats.map((seat) => (
         <TableSeat key={seat.member.user_id} seat={seat} />

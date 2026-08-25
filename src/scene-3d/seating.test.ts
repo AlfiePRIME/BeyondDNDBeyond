@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { computeSeatLayout, type SeatMember } from "@/scene-3d";
+import { TABLE_TOP } from "./table";
 
-const TABLE = { width: 7, depth: 4.4 };
+// Imports the real constant rather than a hardcoded copy so this test can
+// never silently drift from table.ts's actual dimensions.
+const TABLE = TABLE_TOP;
 
 // Mirrors seating.ts's own private FIRST_SEAT_ANGLE — not exported, so the
 // DM-placement tests below re-derive the "closest to opposite" seat index
