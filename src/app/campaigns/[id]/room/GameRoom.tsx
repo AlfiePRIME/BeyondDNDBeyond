@@ -87,6 +87,7 @@ import {
   CONDITION_BY_KEY,
   EXHAUSTION_KEY,
   computeOpportunityAttacks,
+  computeReachableCells,
   computeVisibilityTiers,
   meleeReachFeet,
   pathMovementCost,
@@ -94,6 +95,7 @@ import {
   type AdvantageMode,
   type ConditionKey,
   type GridPoint,
+  type MovementCellInput,
   type VisibilityCellInput,
   type VisibilityTier,
 } from "@/rules-engine";
@@ -107,6 +109,7 @@ import {
   type CameraMode,
   type DiceTumbleHandle,
   type DiceTumbleSpec,
+  type MapSurfaceCell,
   type Seat,
   type TableLiveMap,
 } from "@/scene-3d";
@@ -150,6 +153,17 @@ const TRIGGER_EVENT = "map-object-triggered";
 const TOKEN_EVENT = "token-changed";
 const HANDOUT_EVENT = "handout-revealed";
 const COMBAT_EVENT = "combat-changed";
+// Click-select-to-move (replaces the old drag gesture): an ephemeral
+// "who's got a token picked up right now" poke, same non-persisted-state
+// shape as DICE_ROLLED_EVENT — nothing is ever read back from the DB, so
+// there is deliberately no onReconnect REFETCH pair, just a reset-to-empty
+// (see the campaign channel effect below). Broadcasts reach every member
+// (this app's whole vision-masking/hidden-from posture: the server/wire
+// already carries everything to everyone; per-viewer restriction is a
+// RENDERING decision, not a security boundary), but only the selecting
+// user's own client and the DM's ever render anything from it — see
+// visibleSelections below.
+const TOKEN_SELECTED_EVENT = "token-selected";
 // Phase D: an ephemeral visual cue, not state — unlike every event above,
 // there is deliberately no paired onReconnect handler for it. A dropped
 // broadcast just means a missed animation, never a stale number anywhere:
@@ -259,11 +273,13 @@ export interface LiveMapData {
   lightSources: LightSource[];
 }
 
-/** An in-flight drag-to-move gesture: nothing is persisted until release. */
-interface TokenDrag {
-  tokenId: string;
-  origin: GridPoint;
-  current: GridPoint;
+/** TOKEN_SELECTED_EVENT's payload: `tokenId: null` clears — a broadcast
+ * receiver keyed by `userId` can't tell "still selected" from "never told
+ * us" any other way. See remoteSelectionByUser below for how this is
+ * folded into per-viewer render state. */
+interface TokenSelectedPayload {
+  userId: string;
+  tokenId: string | null;
 }
 
 /** An in-flight ruler measurement: purely local, never persisted at all —
@@ -305,6 +321,84 @@ function dragPathCost(
       return { terrain: state.terrain, elevationSteps: state.elevation };
     })
   );
+}
+
+/** The canonical "whose turn is it" lookup — the same current_turn_index
+ * clamp handleTokenDragEnd (now commitTokenMove) always applied inline,
+ * pulled out once so it can't drift between there and the reachable-cells
+ * computation below, which needs the identical answer to decide "is this
+ * token's own tracked turn". */
+function currentCombatantOf(combat: CombatState | null): CombatCombatant | null {
+  if (!combat) return null;
+  const currentIndex = Math.min(
+    combat.encounter.current_turn_index,
+    Math.max(combat.combatants.length - 1, 0)
+  );
+  return combat.combatants[currentIndex] ?? null;
+}
+
+/**
+ * The click-select flow's targeting aid: this token's reachable cells for
+ * THIS turn, or null when there's nothing budget-limited to show — either
+ * this isn't the token's own tracked turn, or (a bare NPC/monster combatant
+ * with no linked character) there's no known speed to budget against.
+ * `null` here is the "skip the highlight, unconstrained click-to-place"
+ * signal the confirmed decision calls for; it deliberately does NOT mean
+ * "nothing is reachable".
+ *
+ * Reads the SAME combat/combatant data the action-economy readout already
+ * uses (character.speed minus the combatant's own movement_used_feet,
+ * never mind whether Strict mode would actually enforce it — the readout's
+ * own "over speed" flag already shows in both modes, so the highlight
+ * matches that existing posture rather than only appearing in Strict) and
+ * feeds computeReachableCells the identical whole-map terrain/elevation
+ * sweep buildDenseCells already produces for rendering, so a cell can never
+ * highlight as reachable and then turn out unaffordable when the move is
+ * actually priced (or vice versa) — the same guarantee the rules-engine
+ * README documents for the function itself.
+ */
+function reachableCellSetForToken(params: {
+  tokenId: string;
+  liveMap: LiveMapData;
+  cellOverlay: ReadonlyMap<string, CellState>;
+  combat: CombatState | null;
+  characterRows: Character[];
+}): Set<string> | null {
+  const { tokenId, liveMap, cellOverlay, combat, characterRows } = params;
+  const token = liveMap.tokens.find((candidate) => candidate.id === tokenId);
+  if (!token) return null;
+  const currentCombatant = currentCombatantOf(combat);
+  if (!currentCombatant || currentCombatant.token_id !== tokenId) return null;
+  const character = token.character_id
+    ? (characterRows.find((candidate) => candidate.id === token.character_id) ?? null)
+    : null;
+  // No linked character (a bare NPC/monster placeholder) means no speed
+  // anywhere to budget against — the same "no budget" case the old drag
+  // gesture's numeric cost readout special-cased. Rather than invent a
+  // meaning for an unbounded or zero budget, this simply skips the
+  // highlight; the move itself still goes through moveCombatToken exactly
+  // as it always did (tracked-ness depends only on the combatant/token
+  // match above, never on whether a character exists).
+  if (!character) return null;
+  const budgetFeet = Math.max(character.speed - currentCombatant.movement_used_feet, 0);
+  const dense = buildDenseCells(liveMap.map.grid_width, liveMap.map.grid_height, cellOverlay);
+  const cells: MovementCellInput[] = dense.map((cell) => ({
+    position: { x: cell.x, y: cell.y },
+    terrain: cell.terrain,
+    elevationSteps: cell.elevation,
+  }));
+  // Every OTHER token's current cell — never this one's own, which
+  // computeReachableCells always exempts as the zero-cost origin anyway.
+  const occupiedCells = liveMap.tokens
+    .filter((candidate) => candidate.id !== tokenId)
+    .map((candidate) => ({ x: candidate.x, y: candidate.y }));
+  const reachable = computeReachableCells({
+    origin: { x: token.x, y: token.y },
+    cells,
+    budgetFeet,
+    occupiedCells,
+  });
+  return new Set(reachable.map((point) => cellKey(point.x, point.y)));
 }
 
 // Structural message read, not `instanceof Error` — the browser-bundled
@@ -643,14 +737,52 @@ export function GameRoom({
   const [armedToken, setArmedToken] = useState<TokenArm | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
-  // Same ahead-of-React ref pattern as liveMapRef: drag-over and drag-end
-  // arrive from raw pointer events, often several per frame.
-  const [tokenDrag, setTokenDrag] = useState<TokenDrag | null>(null);
-  const tokenDragRef = useRef<TokenDrag | null>(null);
+  // Click-select-to-move (replaces the old click-hold-drag gesture): the
+  // token THIS client has picked up, if any. Purely local — never broadcast
+  // directly (publishTokenSelection below sends the poke), and the only
+  // state that drives THIS client's own confirm/cancel interaction (a
+  // remote selection, once received, is render-only — see
+  // remoteSelectionByUser).
+  const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
+  // Every OTHER client's currently-selected token, by user id — folded from
+  // TOKEN_SELECTED_EVENT broadcasts (a user id absent from this map has
+  // nothing selected). Used only to decide what to RENDER (the highlight +
+  // raised-token treatment) for a selection this viewer didn't make
+  // themselves; see visibleSelections below for the per-viewer gate
+  // (currentUserIsDM, or the broadcaster's own id).
+  const [remoteSelectionByUser, setRemoteSelectionByUser] = useState<ReadonlyMap<string, string>>(
+    new Map()
+  );
+
+  // One overlay for both rendering and move-cost lookups (moved up from
+  // where the removed drag readout used to sit — the reachable-cells memo
+  // below needs it too), so the cost the reachable-cells highlight and any
+  // committed move are both computed from exactly the surface being
+  // rendered.
+  const cellOverlay = useMemo(
+    () => (liveMap ? overlayFromRows(liveMap.cells) : null),
+    [liveMap]
+  );
+
+  // The click-select flow's targeting aid for THIS client's own selection —
+  // see reachableCellSetForToken's doc comment for what null vs. a concrete
+  // set means. Recomputed live off combat/liveMap/characterRows, so a
+  // concurrent change (another window advancing the turn, a stat edit)
+  // can never leave this showing a stale budget.
+  const reachableSetForSelection = useMemo(() => {
+    if (!selectedTokenId || !liveMap || !cellOverlay) return null;
+    return reachableCellSetForToken({
+      tokenId: selectedTokenId,
+      liveMap,
+      cellOverlay,
+      combat,
+      characterRows,
+    });
+  }, [selectedTokenId, liveMap, cellOverlay, combat, characterRows]);
 
   const [rulerActive, setRulerActive] = useState(false);
-  // Same ahead-of-React ref pattern as tokenDragRef — the drag-over stream
-  // arrives from raw pointer events.
+  // Same ahead-of-React ref pattern as liveMapRef: the drag-over stream
+  // arrives from raw pointer events, often several per frame.
   const [rulerDrag, setRulerDrag] = useState<RulerDrag | null>(null);
   const rulerDragRef = useRef<RulerDrag | null>(null);
 
@@ -692,12 +824,14 @@ export function GameRoom({
     if (seq !== refreshSeqRef.current) return;
     liveMapRef.current = next;
     setLiveMapState(next);
-    // Whatever was armed or mid-drag referred to the previous map's
-    // cells/tokens — and so did any pending transition offer or in-flight
-    // measurement.
+    // Whatever was armed or selected referred to the previous map's
+    // cells/tokens — and so did any pending transition offer, in-flight
+    // measurement, or remote selection broadcast (a stale entry there is
+    // harmless — see remoteSelectionByUser's own comment — but nothing on
+    // the OLD map should still glow once the table itself has moved on).
     setArmedToken(null);
-    tokenDragRef.current = null;
-    setTokenDrag(null);
+    setSelectedTokenId(null);
+    setRemoteSelectionByUser(new Map());
     rulerDragRef.current = null;
     setRulerDrag(null);
     setTransitionOffer(null);
@@ -807,8 +941,9 @@ export function GameRoom({
     });
     const unsubscribeToken = channel.subscribe<TokenPayload>(TOKEN_EVENT, (payload) => {
       // Position compared against the pre-update row so only genuine moves
-      // (a player's drag, or the DM acting in another window) can raise a
-      // transition offer — placements and allegiance flips never do.
+      // (a player's click-confirmed move, or the DM acting in another
+      // window) can raise a transition offer — placements and allegiance
+      // flips never do.
       const previous =
         liveMapRef.current?.tokens.find((candidate) => candidate.id === payload.tokenId) ?? null;
       applyTokenChange(payload.tokenId, payload.token);
@@ -863,6 +998,28 @@ export function GameRoom({
     const unsubscribeCombatReconnect = channel.onReconnect(async () => {
       await refreshCombat(supabase).catch(() => undefined);
     });
+    // Click-select-to-move's own poke: fold the sender's current selection
+    // into the by-user map (see remoteSelectionByUser's own comment).
+    const unsubscribeTokenSelected = channel.subscribe<TokenSelectedPayload>(
+      TOKEN_SELECTED_EVENT,
+      (payload) => {
+        setRemoteSelectionByUser((current) => {
+          const next = new Map(current);
+          if (payload.tokenId) next.set(payload.userId, payload.tokenId);
+          else next.delete(payload.userId);
+          return next;
+        });
+      }
+    );
+    // Ephemeral like DICE_ROLLED_EVENT — nothing durable to re-read on
+    // reconnect, so this just drops whatever was known rather than
+    // re-fetching: a missed clear leaving a stale glow on the DM's table
+    // until the next real change is a far smaller cost than trying to
+    // invent a "who currently has what selected" snapshot query for state
+    // that was never persisted anywhere.
+    const unsubscribeTokenSelectedReconnect = channel.onReconnect(() => {
+      setRemoteSelectionByUser(new Map());
+    });
 
     return () => {
       unsubscribeLiveMap();
@@ -874,6 +1031,8 @@ export function GameRoom({
       unsubscribeCombat();
       unsubscribeCombatReconnect();
       unsubscribeDiceRolled();
+      unsubscribeTokenSelected();
+      unsubscribeTokenSelectedReconnect();
       campaignChannelRef.current = null;
       void channel.leave();
     };
@@ -1058,168 +1217,282 @@ export function GameRoom({
     }
   }, [monsterJoin, combat, monsterInitiativeDraft, monsterJoinBusy, campaignId, refreshCombat]);
 
-  const handleTokenDragStart = useCallback(
+  // Click-select-to-move (replaces the old click-hold-drag gesture):
+  // publish this client's current selection (or its clearing) so the DM's
+  // client — and only the DM's, unless the broadcaster is the DM
+  // themselves — can render the highlight/raised-token treatment for it. A
+  // player's own selection needs no broadcast to render for THAT player;
+  // it's already local state (selectedTokenId below).
+  const publishTokenSelection = useCallback(
+    async (tokenId: string | null) => {
+      await campaignChannelRef.current?.publish<TokenSelectedPayload>(TOKEN_SELECTED_EVENT, {
+        userId: currentUserId,
+        tokenId,
+      });
+    },
+    [currentUserId]
+  );
+
+  // The sole entry point into the new gesture, wired to GameTableScene's
+  // onTokenClick below. Mirrors handleTokenDragStart's old permission/busy
+  // guards; MapSurface already gates which tokens even reach this callback
+  // at all (its own per-viewer `draggable` permission — the DM, or the
+  // owner of the linked character — unchanged by this prompt).
+  const handleTokenSelect = useCallback(
     (tokenId: string) => {
       const current = liveMapRef.current;
       if (!current || tokenBusy) return;
-      const token = current.tokens.find((candidate) => candidate.id === tokenId);
-      if (!token) return;
-      const origin = { x: token.x, y: token.y };
-      tokenDragRef.current = { tokenId, origin, current: origin };
-      setTokenDrag(tokenDragRef.current);
-    },
-    [tokenBusy]
-  );
-
-  const handleTokenDragOverCell = useCallback((x: number, y: number) => {
-    const drag = tokenDragRef.current;
-    if (!drag || (drag.current.x === x && drag.current.y === y)) return;
-    tokenDragRef.current = { ...drag, current: { x, y } };
-    setTokenDrag(tokenDragRef.current);
-  }, []);
-
-  const handleTokenDragEnd = useCallback(async () => {
-    const drag = tokenDragRef.current;
-    tokenDragRef.current = null;
-    setTokenDrag(null);
-    const current = liveMapRef.current;
-    if (!drag || !current || tokenBusy) return;
-    // A press-and-release in place is a grab, not a move — no write, and no
-    // 0 ft "move" broadcast to the table.
-    if (drag.current.x === drag.origin.x && drag.current.y === drag.origin.y) return;
-    // Dropped onto a void cell: rejected BEFORE either move path (tracked
-    // moveCombatToken or plain moveMapToken) is attempted — the token snaps
-    // back where it was, with the reason stated rather than a cost error.
-    if (cellIsVoid(current.cells, drag.current.x, drag.current.y)) {
-      setTokenError(VOID_CELL_MESSAGE);
-      return;
-    }
-    setTokenBusy(true);
-    setTokenError(null);
-    try {
-      const supabase = createBrowserSupabaseClient();
-      const position = {
-        x: drag.current.x,
-        y: drag.current.y,
-        elevation: cellElevation(current.cells, drag.current.x, drag.current.y),
-      };
-      // The action-economy fork (Prompt 53): ONLY the current combatant's
-      // own tracked turn goes through move_combat_token, which charges the
-      // move's cost against movement_used_feet and, in Strict mode, hard-
-      // blocks a move past the character's speed (the RPC rejects, nothing
-      // moves, and the message lands in tokenError like any other failed
-      // move). Every other drag — no combat, a token not in the fight,
-      // someone else's turn — keeps the existing untracked moveMapToken
-      // path unchanged. The cost is the same origin-to-destination
-      // dragPathCost the readout displayed, charged against the same
-      // overlay the table renders from.
-      const combatants = combat?.combatants ?? [];
-      const currentIndex = combat
-        ? Math.min(combat.encounter.current_turn_index, Math.max(combatants.length - 1, 0))
-        : -1;
-      const currentCombatant = currentIndex >= 0 ? (combatants[currentIndex] ?? null) : null;
-      const tracked = currentCombatant !== null && currentCombatant.token_id === drag.tokenId;
-      // A tracked move whose straight path crosses a void cell costs
-      // Infinity — no budget can pay it, and JSON couldn't even carry it to
-      // the RPC — so it's rejected here with the real reason (the readout
-      // already showed ∞ ft). Untracked drags stay free-form and uncharged,
-      // exactly as before: outside a tracked turn nothing walks the path,
-      // so only the destination-void guard above applies.
-      const cost = tracked
-        ? dragPathCost(overlayFromRows(current.cells), drag.origin, drag.current)
-        : null;
-      if (cost !== null && !Number.isFinite(cost)) {
-        setTokenError("That walk would cross the void — there's no floor along the way.");
+      if (selectedTokenId === tokenId) {
+        // Clicking the already-selected token again: the primary
+        // documented cancel gesture. Escape, and clicking a cell that
+        // isn't a valid destination, both also cancel — see
+        // handleSelectedTokenCellClick and the Escape effect below.
+        setSelectedTokenId(null);
+        void publishTokenSelection(null);
         return;
       }
-      const token =
-        tracked && cost !== null
-          ? await moveCombatToken(supabase, drag.tokenId, position, cost)
-          : await moveMapToken(supabase, drag.tokenId, position);
-      applyTokenChange(token.id, token);
-      await publishTokenChange(token.id, token);
-      if (tracked && combat && currentCombatant) {
-        // Opportunity-attack detection (Prompt 54), on the tracked path
-        // only — an untracked move (no combat, off-turn, not in the
-        // fight) is never "this turn's movement". Pure rules-engine math
-        // over what this client already holds: the drag's pre/post cells,
-        // the opposed-allegiance combatants' token positions, each one's
-        // melee reach (its readable character's tagged melee/finesse
-        // weapons, or the plain 5 ft default — NPCs have no stats
-        // anywhere), their live reaction state, and whatever clearly
-        // rules out reacting at all (an incapacitating condition, a
-        // readable character dead or at 0 HP; another player's
-        // unreadable PC just isn't second-guessed). One pending
-        // opportunity_attacks row lands per qualifying hostile —
-        // best-effort after the already-committed move, reaching every
-        // controller through the postgres_changes feed.
-        const moverToken = current.tokens.find((candidate) => candidate.id === drag.tokenId);
-        const opposed =
-          moverToken?.allegiance === "party"
-            ? "hostile"
-            : moverToken?.allegiance === "hostile"
-              ? "party"
-              : null;
-        if (opposed) {
-          const incapacitatedIds = new Set(
-            combat.conditions
-              .filter(
-                (condition) =>
-                  condition.condition_key !== EXHAUSTION_KEY &&
-                  CONDITION_BY_KEY.get(condition.condition_key as ConditionKey)?.effects
-                    .incapacitated
-              )
-              .map((condition) => condition.combatant_id)
-          );
-          const hostiles = combat.combatants.flatMap((combatant) => {
-            if (combatant.id === currentCombatant.id) return [];
-            const hostileToken = current.tokens.find(
-              (candidate) => candidate.id === combatant.token_id
-            );
-            if (!hostileToken || hostileToken.allegiance !== opposed) return [];
-            const character = combatant.character_id
-              ? (characterRows.find((row) => row.id === combatant.character_id) ?? null)
-              : null;
-            return [
-              {
-                combatantId: combatant.id,
-                position: { x: hostileToken.x, y: hostileToken.y },
-                reachFeet: meleeReachFeet(character?.inventory ?? []),
-                reactionUsed: combatant.reaction_used,
-                cannotReact:
-                  incapacitatedIds.has(combatant.id) ||
-                  (character !== null && (character.is_dead || character.current_hp === 0)),
-              },
-            ];
-          });
-          const reactorIds = computeOpportunityAttacks({
-            moverFrom: drag.origin,
-            moverTo: drag.current,
-            moverDisengaged: currentCombatant.disengaged,
-            hostiles,
-          });
-          await createOpportunityAttacks(supabase, {
-            campaignId,
-            encounterId: combat.encounter.id,
-            moverCombatantId: currentCombatant.id,
-            reactorCombatantIds: reactorIds,
-          }).catch(() => undefined);
-        }
+      if (!current.tokens.some((candidate) => candidate.id === tokenId)) return;
+      // A new selection supersedes any DM placement/reposition arming in
+      // progress — the two gestures share the same cell-click target (the
+      // onCellClick prop below) and would otherwise fight over what a
+      // click means.
+      setArmedToken(null);
+      setSelectedTokenId(tokenId);
+      void publishTokenSelection(tokenId);
+    },
+    [tokenBusy, selectedTokenId, publishTokenSelection]
+  );
+
+  // TokenPanel's own arm gesture (place-character/place-npc/place-monster,
+  // and the pre-existing, DM-repositioning "move" kind — see TokenArm's own
+  // doc comment for why that one is a completely different mechanism from
+  // the click-select flow this prompt adds). The same mutual-exclusivity
+  // handleTokenSelect enforces the other way: arming supersedes any live
+  // click-select-to-move selection, so the two never compete for what a
+  // cell click means.
+  const handleArmToken = useCallback(
+    (arm: TokenArm) => {
+      if (selectedTokenId) {
+        setSelectedTokenId(null);
+        void publishTokenSelection(null);
       }
-      if (tracked) {
-        // The combatant's movement_used_feet changed — refresh this
-        // client's readout and poke everyone else's, the usual combat-
-        // mutation flow.
-        await refreshCombat(supabase).catch(() => undefined);
-        await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
-      }
-      maybeOfferTransition(token);
-    } catch (err) {
-      setTokenError(errorMessage(err) ?? "Could not move that token.");
-    } finally {
-      setTokenBusy(false);
+      setArmedToken(arm);
+    },
+    [selectedTokenId, publishTokenSelection]
+  );
+
+  // Escape cancels a live selection — the keyboard half of "a clear way to
+  // cancel a selection" (the other two: click the selected token again, or
+  // click a cell that isn't a valid destination — see
+  // handleSelectedTokenCellClick). Scoped to selection only: ruler mode and
+  // armed placement already have their own dedicated toggles/cancel
+  // controls, untouched here.
+  useEffect(() => {
+    if (!selectedTokenId) return;
+    function handleSelectionEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setSelectedTokenId(null);
+      void publishTokenSelection(null);
     }
-  }, [tokenBusy, combat, campaignId, characterRows, refreshCombat, applyTokenChange, publishTokenChange, maybeOfferTransition]);
+    window.addEventListener("keydown", handleSelectionEscape);
+    return () => window.removeEventListener("keydown", handleSelectionEscape);
+  }, [selectedTokenId, publishTokenSelection]);
+
+  /**
+   * The one place a token's position actually changes for a real move (not
+   * a placement) — cost/budget/void-path/opportunity-attack handling, all
+   * in one place so the click-to-confirm flow below can never drift from
+   * what this exact logic did as handleTokenDragEnd before this prompt.
+   * Parameterized on an already-resolved origin/destination rather than
+   * reading an in-flight drag ref, since a click confirms in one step with
+   * nothing in-flight to read back — callers are expected to have already
+   * handled the "same cell" no-op and the destination-void rejection
+   * appropriate to their own gesture (see handleSelectedTokenCellClick);
+   * this function only ever commits.
+   */
+  const commitTokenMove = useCallback(
+    async (tokenId: string, origin: GridPoint, destination: GridPoint) => {
+      const current = liveMapRef.current;
+      if (!current || tokenBusy) return;
+      setTokenBusy(true);
+      setTokenError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const position = {
+          x: destination.x,
+          y: destination.y,
+          elevation: cellElevation(current.cells, destination.x, destination.y),
+        };
+        // The action-economy fork (Prompt 53): ONLY the current combatant's
+        // own tracked turn goes through move_combat_token, which charges the
+        // move's cost against movement_used_feet and, in Strict mode, hard-
+        // blocks a move past the character's speed (the RPC rejects, nothing
+        // moves, and the message lands in tokenError like any other failed
+        // move). Every other move — no combat, a token not in the fight,
+        // someone else's turn — keeps the existing untracked moveMapToken
+        // path unchanged. The cost is the same origin-to-destination
+        // dragPathCost the old readout displayed, charged against the same
+        // overlay the table renders from.
+        const currentCombatant = currentCombatantOf(combat);
+        const tracked = currentCombatant !== null && currentCombatant.token_id === tokenId;
+        // A tracked move whose straight path crosses a void cell costs
+        // Infinity — no budget can pay it, and JSON couldn't even carry it
+        // to the RPC — so it's rejected here with the real reason. Untracked
+        // moves stay free-form and uncharged, exactly as before: outside a
+        // tracked turn nothing walks the path, so only the destination-void
+        // guard the caller already ran applies.
+        const cost = tracked
+          ? dragPathCost(overlayFromRows(current.cells), origin, destination)
+          : null;
+        if (cost !== null && !Number.isFinite(cost)) {
+          setTokenError("That walk would cross the void — there's no floor along the way.");
+          return;
+        }
+        const token =
+          tracked && cost !== null
+            ? await moveCombatToken(supabase, tokenId, position, cost)
+            : await moveMapToken(supabase, tokenId, position);
+        applyTokenChange(token.id, token);
+        await publishTokenChange(token.id, token);
+        if (tracked && combat && currentCombatant) {
+          // Opportunity-attack detection (Prompt 54), on the tracked path
+          // only — an untracked move (no combat, off-turn, not in the
+          // fight) is never "this turn's movement". Pure rules-engine math
+          // over what this client already holds: the pre/post cells, the
+          // opposed-allegiance combatants' token positions, each one's
+          // melee reach (its readable character's tagged melee/finesse
+          // weapons, or the plain 5 ft default — NPCs have no stats
+          // anywhere), their live reaction state, and whatever clearly
+          // rules out reacting at all (an incapacitating condition, a
+          // readable character dead or at 0 HP; another player's
+          // unreadable PC just isn't second-guessed). One pending
+          // opportunity_attacks row lands per qualifying hostile —
+          // best-effort after the already-committed move, reaching every
+          // controller through the postgres_changes feed.
+          const moverToken = current.tokens.find((candidate) => candidate.id === tokenId);
+          const opposed =
+            moverToken?.allegiance === "party"
+              ? "hostile"
+              : moverToken?.allegiance === "hostile"
+                ? "party"
+                : null;
+          if (opposed) {
+            const incapacitatedIds = new Set(
+              combat.conditions
+                .filter(
+                  (condition) =>
+                    condition.condition_key !== EXHAUSTION_KEY &&
+                    CONDITION_BY_KEY.get(condition.condition_key as ConditionKey)?.effects
+                      .incapacitated
+                )
+                .map((condition) => condition.combatant_id)
+            );
+            const hostiles = combat.combatants.flatMap((combatant) => {
+              if (combatant.id === currentCombatant.id) return [];
+              const hostileToken = current.tokens.find(
+                (candidate) => candidate.id === combatant.token_id
+              );
+              if (!hostileToken || hostileToken.allegiance !== opposed) return [];
+              const character = combatant.character_id
+                ? (characterRows.find((row) => row.id === combatant.character_id) ?? null)
+                : null;
+              return [
+                {
+                  combatantId: combatant.id,
+                  position: { x: hostileToken.x, y: hostileToken.y },
+                  reachFeet: meleeReachFeet(character?.inventory ?? []),
+                  reactionUsed: combatant.reaction_used,
+                  cannotReact:
+                    incapacitatedIds.has(combatant.id) ||
+                    (character !== null && (character.is_dead || character.current_hp === 0)),
+                },
+              ];
+            });
+            const reactorIds = computeOpportunityAttacks({
+              moverFrom: origin,
+              moverTo: destination,
+              moverDisengaged: currentCombatant.disengaged,
+              hostiles,
+            });
+            await createOpportunityAttacks(supabase, {
+              campaignId,
+              encounterId: combat.encounter.id,
+              moverCombatantId: currentCombatant.id,
+              reactorCombatantIds: reactorIds,
+            }).catch(() => undefined);
+          }
+        }
+        if (tracked) {
+          // The combatant's movement_used_feet changed — refresh this
+          // client's readout and poke everyone else's, the usual combat-
+          // mutation flow.
+          await refreshCombat(supabase).catch(() => undefined);
+          await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+        }
+        maybeOfferTransition(token);
+      } catch (err) {
+        setTokenError(errorMessage(err) ?? "Could not move that token.");
+      } finally {
+        setTokenBusy(false);
+      }
+    },
+    [tokenBusy, combat, campaignId, characterRows, refreshCombat, applyTokenChange, publishTokenChange, maybeOfferTransition]
+  );
+
+  // The click-to-confirm half of the click-select gesture, wired as
+  // onCellClick below whenever a token is selected (armed placement takes
+  // priority — see the JSX prop — so the two never compete for the same
+  // click). Destination handling, in order: the token's own cell is a
+  // no-op cancel (matching the old drag gesture's "press-and-release in
+  // place is a grab, not a move"); a void cell is always rejected with the
+  // clear reason, selection left live so the player can just retry
+  // (mirrors handleCellClick's armed-placement behavior — an error doesn't
+  // disarm); and, whenever a highlight is showing (this token's own
+  // tracked, budgeted turn — reachableSetForSelection non-null), any OTHER
+  // unhighlighted cell is a silent cancel: "changed my mind", not "try
+  // anyway and let the server reject it", since the highlight exists
+  // precisely to express which cells are legal to click-confirm. Outside a
+  // tracked/budgeted turn (reachableSetForSelection is null) every passable
+  // cell is fair game, matching today's unconstrained placement/DM-
+  // reposition behavior. A genuine server-side rejection (Strict mode,
+  // over budget) can still surface from commitTokenMove itself — e.g. a
+  // budget that shrank from another window's action between selecting and
+  // clicking — and lands in tokenError exactly like any other failed move,
+  // with the selection already cleared below before the request goes out.
+  const handleSelectedTokenCellClick = useCallback(
+    (x: number, y: number) => {
+      const current = liveMapRef.current;
+      const tokenId = selectedTokenId;
+      if (!tokenId || !current || tokenBusy) return;
+      const token = current.tokens.find((candidate) => candidate.id === tokenId);
+      if (!token) {
+        // The selected token vanished from under the selection (removed by
+        // someone else) — nothing sane to confirm.
+        setSelectedTokenId(null);
+        void publishTokenSelection(null);
+        return;
+      }
+      const origin = { x: token.x, y: token.y };
+      if (x === origin.x && y === origin.y) {
+        setSelectedTokenId(null);
+        void publishTokenSelection(null);
+        return;
+      }
+      if (cellIsVoid(current.cells, x, y)) {
+        setTokenError(VOID_CELL_MESSAGE);
+        return;
+      }
+      if (reachableSetForSelection && !reachableSetForSelection.has(cellKey(x, y))) {
+        setSelectedTokenId(null);
+        void publishTokenSelection(null);
+        return;
+      }
+      setSelectedTokenId(null);
+      void publishTokenSelection(null);
+      void commitTokenMove(tokenId, origin, { x, y });
+    },
+    [selectedTokenId, tokenBusy, reachableSetForSelection, publishTokenSelection, commitTokenMove]
+  );
 
   // The ruler trio never touches Supabase or any token — start records two
   // cells, drag-over updates one of them, end throws both away.
@@ -1480,10 +1753,19 @@ export function GameRoom({
 
   // Quick add, step one: arm the ordinary grid-click placement (the
   // place-npc interaction) with the stat block linked and its name as the
-  // token's npc_name; handleCellClick finishes the flow.
-  const handleQuickAddMonster = useCallback((statBlock: MonsterStatBlock) => {
-    setArmedToken({ kind: "place-monster", statBlockId: statBlock.id, npcName: statBlock.name });
-  }, []);
+  // token's npc_name; handleCellClick finishes the flow. Also clears any
+  // live click-select-to-move selection — the same mutual-exclusivity
+  // handleTokenSelect enforces the other way around.
+  const handleQuickAddMonster = useCallback(
+    (statBlock: MonsterStatBlock) => {
+      if (selectedTokenId) {
+        setSelectedTokenId(null);
+        void publishTokenSelection(null);
+      }
+      setArmedToken({ kind: "place-monster", statBlockId: statBlock.id, npcName: statBlock.name });
+    },
+    [selectedTokenId, publishTokenSelection]
+  );
 
   const handleToggleCondition = useCallback(
     (combatant: CombatCombatant, key: ConditionKey, active: boolean) => {
@@ -1796,13 +2078,6 @@ export function GameRoom({
     [assets]
   );
 
-  // One overlay for both rendering and drag-cost lookups, so the cost the
-  // readout charges is computed from exactly the surface being rendered.
-  const cellOverlay = useMemo(
-    () => (liveMap ? overlayFromRows(liveMap.cells) : null),
-    [liveMap]
-  );
-
   const ownCharacterIds = useMemo(
     () =>
       new Set(
@@ -2082,9 +2357,39 @@ export function GameRoom({
     }, SEEN_CELLS_FLUSH_MS);
   }, [visionMasking, cellOverlay, liveMapId, flushSeenCells]);
 
-  // Identity only — depending on the whole drag would rebuild the table
-  // model on every hovered cell.
-  const draggingTokenId = tokenDrag?.tokenId ?? null;
+  // Per-viewer render gate for the click-select flow's highlight/raised-
+  // token treatment (Map: tokenId -> the selecting user's id, value unused
+  // beyond membership): this client's OWN selection always qualifies; a
+  // REMOTE one (broadcast by another client) only qualifies for the DM, or
+  // for the broadcaster's own other window — every other viewer must see
+  // no change at all, the confirmed per-viewer requirement. Rendering the
+  // OTHER selection-visible clients' state is the same "server/broadcast
+  // already carries it to everyone, rendering is the restriction" posture
+  // as visionMasking above, not a security boundary.
+  const visibleSelections = useMemo(() => {
+    const entries = new Map<string, string>();
+    if (selectedTokenId) entries.set(selectedTokenId, currentUserId);
+    for (const [userId, tokenId] of remoteSelectionByUser) {
+      if (currentUserIsDM || userId === currentUserId) entries.set(tokenId, userId);
+    }
+    return entries;
+  }, [selectedTokenId, currentUserId, remoteSelectionByUser, currentUserIsDM]);
+
+  // The union of every visible selection's reachable-cell highlight — in
+  // ordinary play at most one at a time, but a DM watching a player's
+  // tracked turn while also having their own token selected shouldn't lose
+  // either glow. Computed the identical way reachableSetForSelection is,
+  // just over whichever selections this viewer may see rather than only
+  // this client's own.
+  const highlightedCellKeysForViewer = useMemo(() => {
+    if (visibleSelections.size === 0 || !liveMap || !cellOverlay) return null;
+    const combined = new Set<string>();
+    for (const tokenId of visibleSelections.keys()) {
+      const reachable = reachableCellSetForToken({ tokenId, liveMap, cellOverlay, combat, characterRows });
+      if (reachable) for (const key of reachable) combined.add(key);
+    }
+    return combined.size > 0 ? combined : null;
+  }, [visibleSelections, liveMap, cellOverlay, combat, characterRows]);
 
   const tableMap = useMemo<TableLiveMap | null>(() => {
     if (!liveMap || !cellOverlay) return null;
@@ -2097,15 +2402,22 @@ export function GameRoom({
     const tierByCell = visionMasking?.tierByCell ?? null;
     const tierAt = (x: number, y: number): VisibilityTier =>
       tierByCell ? (tierByCell.get(cellKey(x, y)) ?? "none") : "full";
+    // Reachable-cell highlighting only applies to a cell this viewer is
+    // ALREADY being shown live (full or dim) — a remembered/fogged cell
+    // stays exactly as fogged rendering already portrays it, never gaining
+    // a highlight that would leak "something is there" past what vision
+    // masking already decided this viewer perceives.
+    const withHighlight = (cell: MapSurfaceCell): MapSurfaceCell =>
+      highlightedCellKeysForViewer?.has(cellKey(cell.x, cell.y)) ? { ...cell, highlighted: true } : cell;
     return {
       gridWidth: liveMap.map.grid_width,
       gridHeight: liveMap.map.grid_height,
       cells: buildDenseCells(liveMap.map.grid_width, liveMap.map.grid_height, overlay).flatMap(
         (cell) => {
-          if (!tierByCell) return [cell];
+          if (!tierByCell) return [withHighlight(cell)];
           const tier = tierAt(cell.x, cell.y);
-          if (tier === "full") return [cell];
-          if (tier === "dim") return [{ ...cell, visibility: "dim" as const }];
+          if (tier === "full") return [withHighlight(cell)];
+          if (tier === "dim") return [withHighlight({ ...cell, visibility: "dim" as const })];
           // Not currently perceived: the remembered snapshot, or nothing
           // at all (fog-of-war "unknown"). A remembered cell renders the
           // SNAPSHOT's terrain/elevation/light, not live state — and per
@@ -2174,9 +2486,15 @@ export function GameRoom({
           // token elevation is a placement-time snapshot, not the render input.
           elevation: (overlay.get(cellKey(token.x, token.y)) ?? DEFAULT_CELL).elevation,
           allegiance: token.allegiance,
-          selected:
-            (armedToken?.kind === "move" && armedToken.tokenId === token.id) ||
-            token.id === draggingTokenId,
+          // The pre-existing, visible-to-everyone ring for TokenPanel's
+          // separate armed "move" mechanism (DM free repositioning — see
+          // TokenArm's own doc comment) — unrelated to, and unaffected by,
+          // the new click-select flow's per-viewer treatment just below.
+          selected: armedToken?.kind === "move" && armedToken.tokenId === token.id,
+          // The click-select flow's "picked up" treatment — per-viewer
+          // (visibleSelections already resolved who may see it: the
+          // selecting client itself, or the DM), unlike `selected` above.
+          raised: visibleSelections.has(token.id),
           // Mirrors TokenPanel's canControl: the DM, or the owner of the
           // token's linked character (the RLS write rule, applied client-side
           // so uncontrollable tokens never become grab targets).
@@ -2200,7 +2518,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, draggingTokenId, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright
@@ -2278,31 +2596,53 @@ export function GameRoom({
     return JSON.stringify({ objects, avatars });
   }, [tableMap, roster]);
 
-  // Recomputed from the ORIGIN to the hovered cell on every update (the
-  // straight path a deliberate walk would take), not accumulated from the
-  // pointer's literal trail — mouse wobble must not inflate the cost.
-  const dragReadout = useMemo(() => {
-    if (!tokenDrag || !liveMap || !cellOverlay) return null;
-    const token = liveMap.tokens.find((candidate) => candidate.id === tokenDrag.tokenId);
+  // Hidden render-state mirror for verify-token-click-select.mjs — WebGL
+  // has no DOM to query pixel colors from, the same reasoning as every
+  // other mirror on this page. Reflects exactly what THIS client would
+  // render: its own selection and the reachable set gating its own
+  // click-to-confirm (reachableSetForSelection), plus the actual
+  // per-viewer test this mirror exists for — visibleSelections and
+  // highlightedCellKeysForViewer, which stay empty/null for any viewer who
+  // shouldn't see someone else's selection at all (the confirmed
+  // per-viewer requirement).
+  const selectionDebug = useMemo(
+    () =>
+      JSON.stringify({
+        selectedTokenId,
+        reachableCells: reachableSetForSelection ? [...reachableSetForSelection] : null,
+        visibleSelections: Object.fromEntries(visibleSelections),
+        highlightedCells: highlightedCellKeysForViewer ? [...highlightedCellKeysForViewer] : null,
+      }),
+    [selectedTokenId, reachableSetForSelection, visibleSelections, highlightedCellKeysForViewer]
+  );
+
+  // The click-select flow's floating hint (replaces the old numeric drag-
+  // cost readout, which had nothing to recompute against once there was no
+  // continuous drag position to read): this client's OWN selection only —
+  // a selection the DM merely SEES on the table (a player's, rendered via
+  // visibleSelections) needs no matching DOM hint here, since only the
+  // selecting client can actually confirm or cancel it.
+  const selectionHint = useMemo(() => {
+    if (!selectedTokenId || !liveMap) return null;
+    const token = liveMap.tokens.find((candidate) => candidate.id === selectedTokenId);
     if (!token) return null;
-    const cost = dragPathCost(cellOverlay, tokenDrag.origin, tokenDrag.current);
-    // NPC placeholders have no stat block until Prompt 61, so no budget —
-    // just the running cost. PC budgets come from the linked character,
-    // which every viewer allowed to drag the token can read (owner or DM).
     const character = token.character_id
       ? (characterRows.find((candidate) => candidate.id === token.character_id) ?? null)
       : null;
-    const speed = character?.speed ?? null;
     return {
       label: character?.name ?? token.npc_name ?? "token",
-      cost,
-      speed,
-      over: speed !== null && cost > speed,
+      // null: no computed budget this turn — every passable cell is a
+      // valid click-to-confirm target (the confirmed "skip the highlight"
+      // decision). A number is the highlighted, budget-limited set's size
+      // (always at least 1 — the token's own cell is always included).
+      reachableCount: reachableSetForSelection ? reachableSetForSelection.size : null,
     };
-  }, [tokenDrag, liveMap, cellOverlay, characterRows]);
+  }, [selectedTokenId, liveMap, characterRows, reachableSetForSelection]);
 
-  // Same recompute-from-origin reasoning as dragReadout, same dragPathCost,
-  // same overlay — just no token, no speed, and no budget to be over.
+  // Recomputed from the ORIGIN to the hovered cell on every update (the
+  // straight path a deliberate walk would take), not accumulated from the
+  // pointer's literal trail — mouse wobble must not inflate the cost.
+  // Ruler mode's own drag gesture is untouched by this prompt.
   const rulerReadout = useMemo(
     () => (rulerDrag && cellOverlay ? dragPathCost(cellOverlay, rulerDrag.origin, rulerDrag.current) : null),
     [rulerDrag, cellOverlay]
@@ -2356,10 +2696,10 @@ export function GameRoom({
           cameraMode={cameraMode}
           liveMap={tableMap}
           onSelectMapObject={handleSelectMapObject}
-          onCellClick={armedToken ? handleCellClick : undefined}
-          onTokenDragStart={handleTokenDragStart}
-          onTokenDragOverCell={handleTokenDragOverCell}
-          onTokenDragEnd={handleTokenDragEnd}
+          onCellClick={
+            armedToken ? handleCellClick : selectedTokenId ? handleSelectedTokenCellClick : undefined
+          }
+          onTokenClick={handleTokenSelect}
           rulerActive={rulerActive}
           onRulerDragStart={handleRulerDragStart}
           onRulerDragOverCell={handleRulerDragOverCell}
@@ -2490,6 +2830,11 @@ export function GameRoom({
       <div data-testid="model-orientation-state" hidden>
         {modelOrientationDebug}
       </div>
+      {/* Hidden render-state mirror for verify-token-click-select.mjs —
+          see the selectionDebug memo. */}
+      <div data-testid="token-selection-state" hidden>
+        {selectionDebug}
+      </div>
       {rulerReadout !== null ? (
         <div className={`${styles.moveReadout} ${styles.rulerReadout}`} data-testid="ruler-readout">
           <span className={styles.moveReadoutLabel}>Measuring</span>
@@ -2501,22 +2846,31 @@ export function GameRoom({
           <span className={styles.moveReadoutLabel}>ruler only — nothing moves</span>
         </div>
       ) : null}
-      {dragReadout ? (
-        <div
-          className={`${styles.moveReadout}${dragReadout.over ? ` ${styles.moveReadoutOver}` : ""}`}
-          data-testid="move-cost-readout"
-        >
-          <span className={styles.moveReadoutLabel}>Moving {dragReadout.label}</span>
-          <span className={styles.moveReadoutCost} data-testid="move-cost-feet">
-            {/* ∞ over a void cell — see the ruler readout's comment. */}
-            {Number.isFinite(dragReadout.cost) ? dragReadout.cost : "∞"} ft
-            {dragReadout.speed !== null ? ` / ${dragReadout.speed} ft speed` : ""}
+      {/* Click-select-to-move's own floating hint (replaces the old drag
+          cost readout): this client's own selection only — see
+          selectionHint's doc comment. Explicit Cancel button alongside the
+          two other documented cancel gestures (click the token again,
+          Escape) — see handleTokenSelect/the Escape effect above. */}
+      {selectionHint ? (
+        <div className={styles.moveReadout} data-testid="token-selection-hint">
+          <span className={styles.moveReadoutLabel}>Selected {selectionHint.label}</span>
+          <span className={styles.moveReadoutCost} data-testid="token-selection-guidance">
+            {selectionHint.reachableCount !== null
+              ? `${selectionHint.reachableCount} cell${selectionHint.reachableCount === 1 ? "" : "s"} reachable this turn`
+              : "click any passable cell to move"}
           </span>
-          {dragReadout.over ? (
-            <span className={styles.moveReadoutFlag} data-testid="move-over-budget">
-              Over speed
-            </span>
-          ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            className={styles.moveReadoutAction}
+            onClick={() => {
+              setSelectedTokenId(null);
+              void publishTokenSelection(null);
+            }}
+            data-testid="cancel-token-selection"
+          >
+            Cancel
+          </Button>
         </div>
       ) : null}
       <header className={styles.overlay}>
@@ -2577,7 +2931,7 @@ export function GameRoom({
             armed={armedToken}
             busy={tokenBusy}
             error={tokenError}
-            onArm={setArmedToken}
+            onArm={handleArmToken}
             onCancel={() => setArmedToken(null)}
             onRemove={handleRemoveToken}
             onSetAllegiance={handleSetAllegiance}

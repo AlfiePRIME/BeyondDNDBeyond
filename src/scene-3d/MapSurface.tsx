@@ -13,6 +13,15 @@ import { buildGridOverlayPositions } from "./gridOverlay";
 const PURPLE = "#9b00ff"; // --purple
 const TEAL = "#1ec8c8"; // --teal
 
+// Click-select-to-move's reachable-cell highlight: a distinct hue from the
+// hover glow (TEAL) and the editor's not-yet-committed preview tint
+// (PURPLE) — a highlighted cell should read as "you may move here" even
+// before the pointer is over it, and stay visually distinguishable from
+// hovering one of them. Reuses the same "full HP" green already established
+// elsewhere on this table (TokenMarker's hpBarColor) rather than inventing
+// a new accent.
+const HIGHLIGHT_COLOR = "#3ddc68";
+
 // Terrain reads by hue (cool slate = normal, warm amber = difficult), not
 // just brightness — elevation already owns the light/dark axis below.
 const NORMAL_BASE = "#463a70";
@@ -128,6 +137,13 @@ export interface MapSurfaceCell {
    * it per cell from the viewer's computed visibility tier, and the editor
    * never sets it. */
   visibility?: MapSurfaceVisibility;
+  /** Click-select-to-move's reachable-cell highlight: a static "you may
+   * move here" glow, independent of hover — the game table sets this from
+   * its own per-viewer computed reachable set (see GameRoom's
+   * reachableCellSetForToken); the editor never sets it. Never true for a
+   * void cell (computeReachableCells never returns one), so VoidCellPick
+   * below has no matching prop. */
+  highlighted?: boolean;
 }
 
 interface CellBlockProps {
@@ -142,6 +158,7 @@ interface CellBlockProps {
   preview: boolean;
   light: MapSurfaceLightLevel | undefined;
   visibility: MapSurfaceVisibility | undefined;
+  highlighted: boolean;
   onDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
   onOver?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
 }
@@ -162,6 +179,7 @@ const CellBlock = memo(function CellBlock({
   preview,
   light,
   visibility,
+  highlighted,
   onDown,
   onOver,
 }: CellBlockProps) {
@@ -186,12 +204,16 @@ const CellBlock = memo(function CellBlock({
       {/* Hover glow gated on interactive too: when the handlers detach
           mid-hover (the table disarming token placement), no pointer-out
           ever fires, and an unguarded `hovered` would stay lit forever.
-          Preview cells glow purple (hover's teal wins while hovered) — the
-          "not committed yet" tint matches the ghost objects' wireframe hue. */}
+          Reachable-cell highlighting wins over the "not committed yet"
+          preview tint but loses to the hover glow — hovering a highlighted
+          cell should still visibly confirm "this is the one about to be
+          confirmed", not blend into the rest of the highlighted set. Never
+          gated on `interactive`: a highlighted cell glows whether or not
+          THIS render also attached pointer handlers to it. */}
       <meshStandardMaterial
         color={cellColor(terrain, elevation, light, visibility)}
-        emissive={hoverLit ? TEAL : PURPLE}
-        emissiveIntensity={hoverLit ? 0.4 : preview ? 0.3 : 0}
+        emissive={hoverLit ? TEAL : highlighted ? HIGHLIGHT_COLOR : PURPLE}
+        emissiveIntensity={hoverLit ? 0.4 : highlighted ? 0.35 : preview ? 0.3 : 0}
         roughness={0.65}
       />
     </mesh>
@@ -414,11 +436,22 @@ export interface MapSurfaceToken {
   /** The cell's current elevation in steps, caller-derived like objects'. */
   elevation: number;
   allegiance: MapTokenAllegiance;
-  /** Draws the armed-for-move highlight ring. */
+  /** Draws the pre-existing, visible-to-EVERY-viewer armed-for-move ring
+   * (TokenPanel's separate DM-repositioning "move" mechanism). Unrelated to
+   * `raised` below, which is the NEW click-select flow's OWN, per-viewer
+   * treatment — the caller (GameRoom) is what makes it per-viewer, by
+   * simply never setting it in a viewer's own render model; this component
+   * has no privacy logic of its own. */
   selected?: boolean;
-  /** Makes the token a grab target for onTokenPointerDown — the caller sets
-   * it per viewer (DM, or the owner of the linked character). */
+  /** Makes the token a click target for onTokenPointerDown — the caller
+   * sets it per viewer (DM, or the owner of the linked character). */
   draggable?: boolean;
+  /** Click-select-to-move's own "picked up" treatment: a raised, slightly
+   * glowing pawn — distinct from, and independent of, `selected` above (see
+   * its doc comment for why these are two separate mechanisms). The caller
+   * sets this only for a viewer allowed to see the selection (the selecting
+   * player, or the DM) — every other viewer simply never receives it. */
+  raised?: boolean;
   /** Draws the HP bar above the pawn. Omitted when there's nothing to show:
    * NPC tokens (no HP tracking exists for them yet), or a PC whose
    * character the viewer can't read under RLS. */
@@ -648,6 +681,11 @@ const TokenConcentrationBadge = memo(function TokenConcentrationBadge() {
   );
 });
 
+// How far a click-selected pawn lifts off the table — enough to read as
+// "picked up" at the table's fitted per-map scale without floating so high
+// it looks detached from its cell.
+const RAISE_HEIGHT = 0.22;
+
 // A pawn silhouette (disc + stem + head) rather than a flat disc: the seat
 // cameras view the table at a shallow angle, where a flat disc on a small
 // cell all but disappears.
@@ -659,6 +697,7 @@ const TokenMarker = memo(function TokenMarker({
   scale,
   allegiance,
   selected,
+  raised,
   draggable,
   // Split into two primitives (not the MapSurfaceToken.hp object) so the
   // memo's shallow compare keeps working.
@@ -680,6 +719,7 @@ const TokenMarker = memo(function TokenMarker({
   scale: number;
   allegiance: MapTokenAllegiance;
   selected: boolean;
+  raised: boolean;
   draggable: boolean;
   hpCurrent: number | null;
   hpMax: number | null;
@@ -692,10 +732,13 @@ const TokenMarker = memo(function TokenMarker({
   const [hovered, setHovered] = useState(false);
   const color = dimmed ? DIMMED_ALLEGIANCE_COLOR[allegiance] : ALLEGIANCE_COLOR[allegiance];
   // A dim pawn keeps a sliver of glow — fully zero reads as a different
-  // material, not a darker one.
-  const emissiveScale = dimmed ? 0.2 : 1;
+  // material, not a darker one. A raised (click-selected) pawn gets a
+  // brighter glow on top of whatever dimmed already did — the lift alone
+  // can be subtle at a shallow seat-camera angle, so the glow carries part
+  // of the "picked up" read too.
+  const emissiveScale = (dimmed ? 0.2 : 1) * (raised ? 1.4 : 1);
   return (
-    <group position={[worldX, topY, worldZ]} scale={scale}>
+    <group position={[worldX, topY + (raised ? RAISE_HEIGHT : 0), worldZ]} scale={scale}>
       <mesh position={[0, 0.05, 0]}>
         <cylinderGeometry args={[0.3, 0.36, 0.1, 20]} />
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
@@ -708,6 +751,18 @@ const TokenMarker = memo(function TokenMarker({
         <sphereGeometry args={[0.17, 16, 16]} />
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5 * emissiveScale} roughness={0.35} />
       </mesh>
+      {raised ? (
+        // A "landing spot" ring left behind at the pawn's actual cell
+        // height (the group itself is already lifted by RAISE_HEIGHT, so
+        // this sits RAISE_HEIGHT below origin) — ties the lifted pawn back
+        // to the cell it's actually still standing on, and reuses the same
+        // highlight green the reachable cells glow, so the two visuals read
+        // as one feature.
+        <mesh position={[0, -RAISE_HEIGHT + 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.4, 0.03, 10, 32]} />
+          <meshBasicMaterial color={HIGHLIGHT_COLOR} transparent opacity={0.85} />
+        </mesh>
+      ) : null}
       {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
       {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
       {deathSaveLabel !== "" ? <TokenDeathSaveBadge label={deathSaveLabel} /> : null}
@@ -867,6 +922,7 @@ export function MapSurface({
             preview={cell.preview ?? false}
             light={cell.light}
             visibility={cell.visibility}
+            highlighted={cell.highlighted ?? false}
             onDown={onCellPointerDown}
             onOver={onCellPointerOver}
           />
@@ -903,6 +959,7 @@ export function MapSurface({
           scale={cellSize}
           allegiance={token.allegiance}
           selected={token.selected ?? false}
+          raised={token.raised ?? false}
           draggable={Boolean(onTokenPointerDown) && (token.draggable ?? false)}
           hpCurrent={token.hp?.current ?? null}
           hpMax={token.hp?.max ?? null}

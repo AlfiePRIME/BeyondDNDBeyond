@@ -14,7 +14,9 @@
 // void cell is rejected with a clear message in the editor (objects — token
 // placement deliberately does not exist in the editor; map_tokens are placed
 // from the Game Room's TokenPanel) and in the Game Room (armed placement
-// click and drag-to-move both); and a normal move elsewhere on the map still
+// click and the click-select-to-move flow both — see the click-select-to-
+// move prompt, which replaced the room's old click-hold-drag gesture with
+// click token / click cell); and a normal move elsewhere on the map still
 // works.
 //
 // The scenes are WebGL (no DOM to locate), so rendering assertions read the
@@ -26,7 +28,7 @@
 // for (the overlay builds from the same array and skips void — unit-locked
 // in gridOverlay.test.ts). Canvas gestures that must land on a SPECIFIC cell
 // can't be aimed blindly, so the map under test is 3x3 and all-void except
-// where a check needs a floor — any cell a scanned click/drag hits is then a
+// where a check needs a floor — any cell a scanned click hits is then a
 // deterministic void (or the single floored) cell.
 //
 // Needs the local Supabase stack; starts `yarn dev` itself (and polls
@@ -375,33 +377,66 @@ try {
     JSON.stringify(tokenRow)
   );
 
-  // ── 10. Drag-to-move onto void: rejected before any move path runs. ──
+  // ── 10. Click-select-to-move onto void: rejected before any move path
+  //        runs. Click the token to select it (no combat is running here,
+  //        so it's the unconstrained/untracked case — every passable cell
+  //        would be a valid click-to-confirm target, but every OTHER cell
+  //        on this map is void), then click elsewhere on the 3x3 board —
+  //        every such cell is void, so any successful click-select lands
+  //        the rejection. A miss that instead re-hits the token's own
+  //        (1,1) cell/point just cancels the selection with no error (the
+  //        documented "click a non-destination cell cancels" / "click the
+  //        token again cancels" behavior) rather than showing one — the
+  //        loop notices via the token-selection-state mirror (this
+  //        viewer's own selectedTokenId dropping to null) and re-selects
+  //        before continuing. ──
   if (placedAt && tokenRow) {
     // The error (if any) left over from the placement scan clears on the
-    // successful placement — confirm a clean slate before dragging.
+    // successful placement — confirm a clean slate before selecting.
     check("the rejection message cleared once a valid placement succeeded", !(await isVisible(roomPage, "token-error")));
-    let dragError = null;
-    for (const dx of [64, 96, -64, 128, -96, 160, -128, 192]) {
-      await roomPage.mouse.move(placedAt.x, placedAt.y);
-      await roomPage.mouse.down();
-      await roomPage.mouse.move(placedAt.x + dx, placedAt.y, { steps: 12 });
-      await roomPage.mouse.up();
+    // Click the token once to select it (the click-select-to-move flow's
+    // own gesture — see this file's own header comment).
+    await roomPage.mouse.click(placedAt.x, placedAt.y);
+    await sleep(250);
+    let voidError = null;
+    for (const [dx, dy] of [
+      [64, 0],
+      [96, 0],
+      [-64, 0],
+      [128, 0],
+      [-96, 0],
+      [0, 64],
+      [0, -64],
+      [128, 64],
+    ]) {
+      await roomPage.mouse.click(placedAt.x + dx, placedAt.y + dy);
       await sleep(250);
       if (await isVisible(roomPage, "token-error")) {
-        dragError = await roomPage.textContent('[data-testid="token-error"]');
+        voidError = await roomPage.textContent('[data-testid="token-error"]');
         break;
+      }
+      // A miss either did nothing (off the tiny map/canvas) or — if it
+      // re-hit the token's own cell/point — cancelled the selection
+      // outright (no error, by design). Only re-select when the mirror
+      // confirms the selection actually dropped, so a genuine no-op miss
+      // (selection still live) doesn't get toggled off by an unconditional
+      // re-click.
+      const stillSelected = (await readMirror(roomPage, "token-selection-state")).selectedTokenId === tokenRow.id;
+      if (!stillSelected) {
+        await roomPage.mouse.click(placedAt.x, placedAt.y);
+        await sleep(150);
       }
     }
     check(
-      "drag-to-move dropped on a void cell is rejected with the same clear message",
-      dragError !== null && /no floor/i.test(dragError) && /void/i.test(dragError),
-      dragError ?? "no token-error appeared after drags"
+      "click-confirming a void cell is rejected with the same clear message",
+      voidError !== null && /no floor/i.test(voidError) && /void/i.test(voidError),
+      voidError ?? "no token-error appeared after clicking void cells"
     );
-    const { data: tokenAfterDrag } = await admin.from("map_tokens").select().eq("id", tokenRow.id).maybeSingle();
+    const { data: tokenAfterVoidClick } = await admin.from("map_tokens").select().eq("id", tokenRow.id).maybeSingle();
     check(
-      "the token snapped back — still on (1,1), nothing was written",
-      tokenAfterDrag?.x === 1 && tokenAfterDrag?.y === 1,
-      JSON.stringify(tokenAfterDrag)
+      "the token never moved — still on (1,1), nothing was written",
+      tokenAfterVoidClick?.x === 1 && tokenAfterVoidClick?.y === 1,
+      JSON.stringify(tokenAfterVoidClick)
     );
 
     // ── 11. A normal move elsewhere is unaffected: floor a second cell and

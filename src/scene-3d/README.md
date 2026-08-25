@@ -64,14 +64,36 @@ fit down to the table's small footprint; the editor's larger unit-scale cells do
 As of Prompt 31: tokens gained a `draggable` flag (set by the caller per viewer — the DM, or
 the owner of the linked character) that attaches an invisible cell-sized hit cylinder and a
 raw `onTokenPointerDown` hook, mirroring `ObjectMarker`'s hit-box pattern; non-draggable pawns
-stay raycast-free. `MapSurface` itself only reports the press — drag semantics (which cell is
-hovered, committing on release) live in the wrapping scene, same split as `onCellPointerDown`/
-`onCellPointerOver`. `GameTableScene` owns the gesture: a press on a draggable token starts a
-drag, the existing per-cell `onPointerOver` path reports hovered cells while it's live, a
-`window` `pointerup` ends it (same pattern as the editor's stroke end), and `OrbitControls` is
-disabled mid-drag so grabbing a token doesn't also spin the camera. Movement cost itself is
-computed in the `app` layer from `@/rules-engine`, not here — the scene only ever reports plain
-cell coordinates.
+stay raycast-free. `MapSurface` itself only reports the press — the wrapping scene owns what a
+press means, same split as `onCellPointerDown`/`onCellPointerOver`.
+
+As of the click-select-to-move addition (post-roadmap — "replace token drag-to-move with
+click-select / highlight-cells / click-to-confirm", not a numbered prompt): the click-hold-
+drag gesture Prompt 31 built on top of that same hit cylinder is GONE — `GameTableScene`'s
+`onTokenDragStart`/`onTokenDragOverCell`/`onTokenDragEnd` trio is replaced by a single
+`onTokenClick(tokenId)`, fired straight from the press with no in-flight drag state at all (a
+click is the whole gesture; there's nothing to track between press and release the way a held
+drag needed). `OrbitControls` no longer has a mid-drag guard to disable, either — only ruler
+mode's own press-drag-release still needs one. The `app` layer now owns an explicit
+select/highlight/confirm state machine instead of a raw drag ref: `MapSurfaceCell` gained a
+`highlighted` flag (a static, always-on emissive glow — `HIGHLIGHT_COLOR`, distinct from both
+the hover teal and the editor's preview purple, and NOT gated on `interactive` the way hover
+is, since a highlighted cell should read as "you may move here" before the pointer is ever
+over it) and `MapSurfaceToken` gained a `raised` flag (a `RAISE_HEIGHT` lift plus a brighter
+glow and a green "landing spot" ring left at the token's actual cell height — the "picked up"
+treatment). Both are computed once per render exactly like everything else here: `MapSurface`
+has no privacy logic of its own, so a per-viewer requirement (only the selecting player and
+the DM may ever see either flag) is entirely the `app` layer's job — simply never setting
+`highlighted`/`raised` in a viewer's own render model for a selection that isn't theirs to see
+(the same posture Prompt 58's vision masking already established: the component renders
+whatever it's told, the caller decides what that is per viewer). `raised` is deliberately a
+SEPARATE flag from the pre-existing `selected` (Prompt 31's own armed-for-move ring, still
+visible to every viewer, still driven by TokenPanel's unrelated DM-repositioning "move"
+mechanism) rather than a reuse of it — reusing `selected` for the new per-viewer treatment
+would have made it visible to everyone, exactly what the confirmed requirement rules out.
+Movement cost/budget itself is still computed in the `app` layer from `@/rules-engine` (now
+including `computeReachableCells` for the highlighted set), not here — the scene only ever
+reports plain cell/token identities and draws the flags it's given.
 
 As of Prompt 38: `MapSurfaceCell` gained an optional `preview` flag — the map editor's
 AI-generated area draft renders its cells with a purple emissive tint (the hover glow's teal
@@ -87,14 +109,17 @@ scene only reports per-cell pointer events and draws the marker it's given, the 
 as every other gesture.
 
 As of Prompt 43: `GameTableScene` gained a ruler mode — `rulerActive: boolean` plus an
-`onRulerDragStart(x, y)`/`onRulerDragOverCell(x, y)`/`onRulerDragEnd()` trio mirroring the
-token-drag props. While `rulerActive`, a bare cell press starts a measurement gesture routed
-through the same per-cell pointer machinery (press, then per-cell `onPointerOver` while live,
-then a `window` `pointerup` to end), and the scene withholds `onCellPointerDown`-for-click,
-`onSelectObject`, and `onTokenPointerDown` from `MapSurface` entirely — so a press anywhere
-on the map measures from the cell beneath it and can never place, trigger, or grab anything.
-`OrbitControls` is disabled mid-measure, same as mid-token-drag. As always, the scene only
-reports cell coordinates; distance/cost semantics (and the readout) live in the `app` layer.
+`onRulerDragStart(x, y)`/`onRulerDragOverCell(x, y)`/`onRulerDragEnd()` trio (at the time,
+mirroring the token-drag props; the token side of that mirror is gone since the click-select-
+to-move addition above, but the ruler's own press-drag-release trio is untouched). While
+`rulerActive`, a bare cell press starts a measurement gesture routed through the same per-cell
+pointer machinery (press, then per-cell `onPointerOver` while live, then a `window` `pointerup`
+to end), and the scene withholds `onCellPointerDown`-for-click, `onSelectObject`, and
+`onTokenPointerDown` from `MapSurface` entirely — so a press anywhere on the map measures from
+the cell beneath it and can never place, select, trigger, or click a token. `OrbitControls` is
+disabled mid-measure (its only remaining drag-in-progress guard, now that a token click is a
+single press with nothing to guard). As always, the scene only reports cell coordinates;
+distance/cost semantics (and the readout) live in the `app` layer.
 
 As of Prompt 44: `MapEditorScene` gained a `referenceImage` prop (`EditorReferenceImage`: an
 already-signed URL plus x/y in grid-cell units from the grid's center and one uniform scale),

@@ -214,18 +214,16 @@ export interface GameTableSceneProps {
   /** Makes the map's selectable objects click targets (POI triggering). */
   onSelectMapObject?: (id: string) => void;
   /** Left-click on a map cell — provided only while a token is armed for
-   * placement/move, so the cells stay raycast-free the rest of the time
-   * (the Prompt 29 no-cell-handlers reasoning, now conditional). */
+   * placement/move OR click-selected for the budget-aware move flow, so
+   * the cells stay raycast-free the rest of the time (the Prompt 29
+   * no-cell-handlers reasoning, now conditional on either gesture). */
   onCellClick?: (x: number, y: number) => void;
-  /** Press on a draggable token started a drag-to-move. The scene owns only
-   * the gesture (which token, which cell is hovered, when the pointer
-   * released); the app layer owns the semantics — origin cell, path cost,
-   * committing the move. */
-  onTokenDragStart?: (tokenId: string) => void;
-  /** The cell the pointer is currently over during an active token drag. */
-  onTokenDragOverCell?: (x: number, y: number) => void;
-  /** Pointer released — the app commits at the last drag-over cell. */
-  onTokenDragEnd?: () => void;
+  /** Click on a selectable token — click-select-to-move (replaces the old
+   * click-hold-drag gesture). The scene owns only the raw press (which
+   * token; button-0 only, same guard the cell click path already applies);
+   * the app layer owns the semantics — selecting it, computing/showing its
+   * reachable cells, and what a later cell click does with the selection. */
+  onTokenClick?: (tokenId: string) => void;
   /** Ruler mode: a bare cell press starts a measurement drag instead of
    * whatever onCellClick/token-grab would otherwise do — the two gestures
    * are mutually exclusive by construction, not by callback etiquette. */
@@ -251,9 +249,7 @@ export function GameTableScene({
   liveMap = null,
   onSelectMapObject,
   onCellClick,
-  onTokenDragStart,
-  onTokenDragOverCell,
-  onTokenDragEnd,
+  onTokenClick,
   rulerActive = false,
   onRulerDragStart,
   onRulerDragOverCell,
@@ -279,40 +275,31 @@ export function GameTableScene({
     [onCellClick]
   );
 
-  // Same ref pattern as MapEditorScene: the window pointerup listeners below
-  // must see the latest callbacks without re-subscribing per render.
-  const onTokenDragStartRef = useRef(onTokenDragStart);
-  const onTokenDragOverCellRef = useRef(onTokenDragOverCell);
-  const onTokenDragEndRef = useRef(onTokenDragEnd);
+  // Same ref pattern as MapEditorScene: the ruler's window pointerup
+  // listener below must see the latest callbacks without re-subscribing
+  // per render.
   const onRulerDragStartRef = useRef(onRulerDragStart);
   const onRulerDragOverCellRef = useRef(onRulerDragOverCell);
   const onRulerDragEndRef = useRef(onRulerDragEnd);
   useEffect(() => {
-    onTokenDragStartRef.current = onTokenDragStart;
-    onTokenDragOverCellRef.current = onTokenDragOverCell;
-    onTokenDragEndRef.current = onTokenDragEnd;
     onRulerDragStartRef.current = onRulerDragStart;
     onRulerDragOverCellRef.current = onRulerDragOverCell;
     onRulerDragEndRef.current = onRulerDragEnd;
-  }, [onTokenDragStart, onTokenDragOverCell, onTokenDragEnd, onRulerDragStart, onRulerDragOverCell, onRulerDragEnd]);
+  }, [onRulerDragStart, onRulerDragOverCell, onRulerDragEnd]);
 
-  // State rather than a ref: cells only get pointer-over handlers (and the
-  // orbit camera only releases the left button) while a drag is live, which
-  // needs a render — the conditional-raycasting reasoning of onCellClick.
-  const [dragging, setDragging] = useState(false);
+  // Click-select-to-move (replaces the old click-hold-drag gesture): a
+  // single press is the whole gesture, so — unlike the ruler's own
+  // press-drag-release below — there's no in-flight state to track here at
+  // all; the app layer owns everything from "which token" onward.
+  const handleTokenPointerDown = useCallback(
+    (tokenId: string) => {
+      onTokenClick?.(tokenId);
+    },
+    [onTokenClick]
+  );
 
-  const handleTokenPointerDown = useCallback((tokenId: string) => {
-    setDragging(true);
-    onTokenDragStartRef.current?.(tokenId);
-  }, []);
-
-  const handleCellDragOver = useCallback((x: number, y: number, event: ThreeEvent<PointerEvent>) => {
-    event.stopPropagation();
-    onTokenDragOverCellRef.current?.(x, y);
-  }, []);
-
-  // The ruler's press-drag-release mirrors the token drag exactly, tracked
-  // as its own boolean so each gesture's drag-over reaches its own callback.
+  // The ruler's press-drag-release is untouched by this prompt, tracked as
+  // its own boolean so its drag-over reaches its own callback.
   const [measuring, setMeasuring] = useState(false);
 
   const handleRulerPointerDown = useCallback(
@@ -332,16 +319,6 @@ export function GameTableScene({
 
   // The release can land anywhere — off the map, off the canvas — so the
   // pointerup listener lives on window, same as the editor's stroke end.
-  useEffect(() => {
-    if (!dragging) return;
-    const endDrag = () => {
-      setDragging(false);
-      onTokenDragEndRef.current?.();
-    };
-    window.addEventListener("pointerup", endDrag);
-    return () => window.removeEventListener("pointerup", endDrag);
-  }, [dragging]);
-
   useEffect(() => {
     if (!measuring) return;
     const endMeasure = () => {
@@ -364,12 +341,14 @@ export function GameTableScene({
         onUpdate={(camera) => camera.lookAt(...LOOK_TARGET)}
       />
       {cameraMode === "orbit" && (
-        // Disabled mid-drag so grabbing a token (or sweeping the ruler)
-        // doesn't also orbit the camera — OrbitControls checks enabled per
-        // pointermove, so flipping it mid-gesture halts the rotation
-        // immediately.
+        // Disabled mid-measurement so sweeping the ruler doesn't also orbit
+        // the camera — OrbitControls checks enabled per pointermove, so
+        // flipping it mid-gesture halts the rotation immediately. Token
+        // selection needs no such guard: it's a single press, not a
+        // held-down drag, so there's never a moment where the camera would
+        // fight it.
         <OrbitControls
-          enabled={!dragging && !measuring}
+          enabled={!measuring}
           target={[...LOOK_TARGET]}
           minDistance={1.5}
           maxDistance={22}
@@ -415,10 +394,10 @@ export function GameTableScene({
             tokens={liveMap.tokens}
             gridOverlay
             // Ruler mode owns the pointer outright: a cell press measures
-            // instead of placing/moving, POI objects go inert (their hit
-            // boxes would otherwise swallow the press), and tokens lose
-            // their grab hit boxes — so a press anywhere on the map falls
-            // through to the cell beneath it.
+            // instead of placing/moving/selecting, POI objects go inert
+            // (their hit boxes would otherwise swallow the press), and
+            // tokens lose their click hit boxes — so a press anywhere on
+            // the map falls through to the cell beneath it.
             onSelectObject={rulerActive ? undefined : onSelectMapObject}
             onCellPointerDown={
               rulerActive
@@ -427,11 +406,9 @@ export function GameTableScene({
                   ? handleCellPointerDown
                   : undefined
             }
-            onCellPointerOver={
-              dragging ? handleCellDragOver : measuring ? handleRulerDragOver : undefined
-            }
+            onCellPointerOver={measuring ? handleRulerDragOver : undefined}
             onTokenPointerDown={
-              !rulerActive && onTokenDragStart ? handleTokenPointerDown : undefined
+              !rulerActive && onTokenClick ? handleTokenPointerDown : undefined
             }
           />
         </group>
