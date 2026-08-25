@@ -1,5 +1,9 @@
 import { notFound, redirect } from "next/navigation";
-import { CLASSES, spellSlotsForClass, type ClassName, type SpellSlotLevel } from "@/rules-engine";
+// spellSlotResourceName/SPELL_SLOT_LEVELS were a local ORDINAL table here
+// until Prompt 51 extracted them into the rules engine, so the
+// quick-actions availability check reads the exact names this page
+// provisions.
+import { CLASSES, SPELL_SLOT_LEVELS, spellSlotResourceName, spellSlotsForClass, type ClassName } from "@/rules-engine";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
   getActiveCombatantForCharacter,
@@ -11,23 +15,6 @@ import {
   type CharacterResource,
 } from "@/data-access";
 import { CharacterSheet } from "./CharacterSheet";
-
-const SLOT_LEVELS: SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-const ORDINAL: Record<SpellSlotLevel, string> = {
-  1: "1st",
-  2: "2nd",
-  3: "3rd",
-  4: "4th",
-  5: "5th",
-  6: "6th",
-  7: "7th",
-  8: "8th",
-  9: "9th",
-};
-
-function spellSlotResourceName(level: SpellSlotLevel): string {
-  return `${ORDINAL[level]}-Level Spell Slots`;
-}
 
 export default async function CharacterSheetPage({
   params,
@@ -60,7 +47,7 @@ export default async function CharacterSheetPage({
   // on first load of a caster's sheet (idempotent by name).
   if (klass?.spellcastingAbility) {
     const slots = spellSlotsForClass(klass.name as ClassName, character.level);
-    const missing = SLOT_LEVELS.filter(
+    const missing = SPELL_SLOT_LEVELS.filter(
       (level) =>
         slots[level] > 0 && !resources.some((r) => r.name === spellSlotResourceName(level))
     );

@@ -1,4 +1,4 @@
-import type { Spell, SpellLevel, SpellRange, SpellSchool, TargetType } from "./types";
+import type { Spell, SpellAttack, SpellLevel, SpellRange, SpellSchool, TargetType } from "./types";
 
 type SpellTuple = [
   name: string,
@@ -367,6 +367,50 @@ const SPELL_TUPLES: SpellTuple[] = [
   ["Wish", 9, "conjuration", "self", "self", false],
 ];
 
+/**
+ * Spell-attack metadata (Prompt 51), cross-checked against the actual SRD
+ * 5.1 spell descriptions the same way Prompt 47's condition catalog was —
+ * an entry exists ONLY where the SRD text says "make a melee spell attack"
+ * or "make a ranged spell attack" AND the spell deals fixed on-hit damage
+ * dice. `damageNotation` is the BASE dice (cantrips at character level 1-4;
+ * cantrip level scaling isn't modeled anywhere in the app — the manual
+ * attack flow types damage by hand too); per-hit riders (Acid Arrow's
+ * end-of-turn 2d4, Witch Bolt's sustained arc) and multi-beam repetition
+ * (Scorching Ray's three rays are three separate attack rolls at 2d6 each)
+ * stay narration, exactly like the manual flow.
+ *
+ * Deliberately ABSENT despite the SRD using a spell attack roll:
+ * - Produce Flame, Flame Blade, Vampiric Touch — catalog `range: "self"`
+ *   (the attack happens from a self-range effect), and self-range spells
+ *   are excluded from the quick-actions surface by design.
+ * - Ray of Enfeeblement, Contagion — a spell attack roll but NO damage
+ *   dice; the attack flow requires damage notation.
+ * - Spiritual Weapon, Arcane Hand, Arcane Sword — conjured effects whose
+ *   attacks recur on later bonus actions (and Spiritual Weapon adds the
+ *   caster's ability modifier to damage, which a static notation can't
+ *   express); not a single cast-and-resolve attack.
+ * Saving-throw spells (Acid Splash, Sacred Flame, Poison Spray, Fireball…)
+ * and auto-hit spells (Magic Missile) are out of scope per the Spell.attack
+ * contract.
+ */
+const SPELL_ATTACKS: Record<string, SpellAttack> = {
+  // Cantrips
+  "Chill Touch": { kind: "ranged", damageNotation: "1d8" }, // ranged despite the name — SRD: "make a ranged spell attack", 1d8 necrotic
+  "Eldritch Blast": { kind: "ranged", damageNotation: "1d10" }, // 1d10 force per beam
+  "Fire Bolt": { kind: "ranged", damageNotation: "1d10" }, // 1d10 fire
+  "Ray of Frost": { kind: "ranged", damageNotation: "1d8" }, // 1d8 cold
+  "Shocking Grasp": { kind: "melee", damageNotation: "1d8" }, // 1d8 lightning
+  // Level 1
+  "Chromatic Orb": { kind: "ranged", damageNotation: "3d8" }, // 3d8 of the chosen type
+  "Guiding Bolt": { kind: "ranged", damageNotation: "4d6" }, // 4d6 radiant
+  "Inflict Wounds": { kind: "melee", damageNotation: "3d10" }, // 3d10 necrotic
+  "Ray of Sickness": { kind: "ranged", damageNotation: "2d8" }, // 2d8 poison
+  "Witch Bolt": { kind: "ranged", damageNotation: "1d12" }, // 1d12 lightning on the initial attack
+  // Level 2
+  "Acid Arrow": { kind: "ranged", damageNotation: "4d4" }, // 4d4 acid on hit (the delayed 2d4 is a rider)
+  "Scorching Ray": { kind: "ranged", damageNotation: "2d6" }, // 2d6 fire per ray
+};
+
 export const SPELLS: Spell[] = SPELL_TUPLES.map(([name, level, school, range, targetType, concentration]) => ({
   name,
   level,
@@ -374,4 +418,5 @@ export const SPELLS: Spell[] = SPELL_TUPLES.map(([name, level, school, range, ta
   range,
   targetType,
   concentration,
+  ...(SPELL_ATTACKS[name] ? { attack: SPELL_ATTACKS[name] } : {}),
 }));

@@ -183,9 +183,20 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* Wrap so the full-width weapon editor can sit under its item row. */
+  flex-wrap: wrap;
   gap: 12px;
   padding: 8px 0;
   border-bottom: 1px solid var(--dim2);
+}
+
+/* The Prompt 51 weapon-tagging editor: a collapsed-by-default full-width
+   strip under its inventory row, the addRow control shape. */
+.weaponEditor {
+  flex-basis: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
 }
 
 .itemRow:last-child {

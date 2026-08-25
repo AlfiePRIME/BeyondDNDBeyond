@@ -80,6 +80,34 @@ spell catalog's `concentration` flag, the conditions catalog's `effects.incapaci
 arithmetic (`max(10, floor(damage / 2))`) lives in the damage RPCs' SQL, where the damage
 number already is, not here.
 
+As of Prompt 51: quick-action decision logic (`quickActions.ts`) plus two small additive
+data-model extensions it reads. `Spell` gains an optional `attack?: { kind: "melee" |
+"ranged"; damageNotation: string }`, curated in `srd/spells.ts` against the actual SRD 5.1
+text (the Prompt 47 condition-catalog rigor): an entry exists ONLY where the SRD says "make
+a melee/ranged spell attack" AND fixed on-hit damage dice exist — twelve spells (Chill
+Touch, Eldritch Blast, Fire Bolt, Ray of Frost, Shocking Grasp; Chromatic Orb, Guiding
+Bolt, Inflict Wounds, Ray of Sickness, Witch Bolt; Acid Arrow, Scorching Ray), with the
+per-spell notation and every deliberate exclusion (save-based, auto-hit, no-damage-dice,
+self-range, and conjured-recurring-attack spells) documented at the table. `kind` is range
+flavor only — melee AND ranged spell attacks both roll with the spellcasting ability, so
+the roll route's attackKind is always "spell". `spellSlots.ts` gains
+`spellSlotResourceName(level)` and `SPELL_SLOT_LEVELS`, extracted from the character sheet
+page's previously-local ORDINAL table so slot provisioning and slot-availability checks
+share one source of truth. `computeQuickActions` itself is pure and DB-free like
+`pathMovementCost` (the caller supplies positions, weapon-tagged inventory, known spell
+names, and resource rows): an action is usable when `gridDistanceFeet(actor, hostile) -
+speed <= range` — the character is assumed able to spend their FULL speed closing distance,
+deliberately NOT a movement-budget tracker (none exists anywhere; Prompt 53's action
+economy owns turn gating) — with melee/finesse defaulting to 5 ft reach, untyped ranged
+weapons to a documented 60 ft stand-in (no per-weapon SRD range table is modeled yet),
+`"touch"` counting as 5 ft, and `"self"` skipped defensively. Leveled spells additionally
+need `current_uses > 0` on the MATCHING-level slot resource (no upcast fallback, so no
+Pact Magic mapping — a documented simplification); cantrips are unlimited. Every
+qualifying hostile is returned per action so the UI offers a target picker, never an
+arbitrary nearest-only default. Unit-tested the resolveAttackOutcome way: in/out-of-range
+boundaries at exactly speed + reach, the diagonal chessboard measure, slot-exhausted and
+never-provisioned hiding, cantrips-always-available, and default-range behavior.
+
 Still future work: the perception/vision engine (Prompt 56) and advantage/disadvantage
 enforcement from conditions/vision (Prompt 59) — Prompt 48 provides the manual toggle and
 the two-d20 mechanics it will drive.

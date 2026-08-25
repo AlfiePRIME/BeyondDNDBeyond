@@ -5,6 +5,34 @@ export type SpellSlotLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
 export type SpellSlots = Record<SpellSlotLevel, number>;
 
+/** Every slot level, in order — the iteration order provisioning and
+ * lookups share. */
+export const SPELL_SLOT_LEVELS: SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+const ORDINAL: Record<SpellSlotLevel, string> = {
+  1: "1st",
+  2: "2nd",
+  3: "3rd",
+  4: "4th",
+  5: "5th",
+  6: "6th",
+  7: "7th",
+  8: "8th",
+  9: "9th",
+};
+
+/**
+ * The `character_resources.name` under which a slot level's uses are
+ * tracked (the sheet provisions these rows lazily on a caster's first
+ * sheet load). Extracted here in Prompt 51 from the character sheet
+ * page's local copy so the sheet and the quick-actions availability check
+ * derive the same names from one source of truth — it's a pure function
+ * of SpellSlotLevel, so this module is its natural home.
+ */
+export function spellSlotResourceName(level: SpellSlotLevel): string {
+  return `${ORDINAL[level]}-Level Spell Slots`;
+}
+
 const EMPTY_SLOTS: SpellSlots = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 };
 
 function slotsFromArray(counts: readonly number[]): SpellSlots {

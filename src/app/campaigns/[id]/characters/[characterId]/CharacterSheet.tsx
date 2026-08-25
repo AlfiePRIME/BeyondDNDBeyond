@@ -10,16 +10,19 @@ import {
   SKILLS,
   SPELLS,
   abilityModifier,
+  parseDiceNotation,
   proficiencyBonus,
   savingThrowBonus,
   skillCheckBonus,
   passiveScore,
+  weaponRangeFeet,
   type AbilityScore,
   type AbilityScores,
   type AdvantageMode,
   type ConditionKey,
   type SkillName,
   type SpellRange,
+  type WeaponAttackKind,
 } from "@/rules-engine";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
@@ -71,6 +74,14 @@ const RECHARGE_LABEL: Record<CharacterResource["recharge"], string> = {
   daily: "Daily",
 };
 
+const WEAPON_KIND_LABEL: Record<WeaponAttackKind, string> = {
+  melee: "Melee",
+  ranged: "Ranged",
+  finesse: "Finesse",
+};
+
+const WEAPON_KINDS: WeaponAttackKind[] = ["melee", "ranged", "finesse"];
+
 function formatModifier(value: number): string {
   return value >= 0 ? `+${value}` : `${value}`;
 }
@@ -118,6 +129,12 @@ export function CharacterSheet({
   const [acDraft, setAcDraft] = useState(String(initialCharacter.armor_class));
   const [newItemName, setNewItemName] = useState("");
   const [newItemQty, setNewItemQty] = useState("1");
+  // The weapon-tagging editor (Prompt 51): collapsed by default so
+  // non-weapon gear stays uncluttered; at most one item's editor open.
+  const [weaponEditIndex, setWeaponEditIndex] = useState<number | null>(null);
+  const [weaponKindDraft, setWeaponKindDraft] = useState<"" | WeaponAttackKind>("");
+  const [weaponDamageDraft, setWeaponDamageDraft] = useState("");
+  const [weaponRangeDraft, setWeaponRangeDraft] = useState("");
   const [spellToAdd, setSpellToAdd] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [rollMode, setRollMode] = useState<AdvantageMode>("normal");
@@ -275,7 +292,45 @@ export function CharacterSheet({
   }
 
   async function removeItem(index: number) {
+    setWeaponEditIndex(null);
     await persist({ inventory: character.inventory.filter((_, i) => i !== index) });
+  }
+
+  function openWeaponEditor(index: number) {
+    const item = character.inventory[index];
+    setWeaponEditIndex(index);
+    setWeaponKindDraft(item?.attackKind ?? "");
+    setWeaponDamageDraft(item?.damageNotation ?? "");
+    setWeaponRangeDraft(item?.rangeFeet !== undefined ? String(item.rangeFeet) : "");
+  }
+
+  const weaponDamageValid = parseDiceNotation(weaponDamageDraft.trim()) !== null;
+  const weaponRangeValue =
+    weaponRangeDraft.trim() === "" ? null : parseIntIn(weaponRangeDraft, 5, 1000);
+  // "Not a weapon" is always saveable (it clears the tag); a weapon needs
+  // valid damage dice, and the range override — when given at all — must
+  // be a sane number of feet.
+  const weaponDraftValid =
+    weaponKindDraft === "" ||
+    (weaponDamageValid && (weaponRangeDraft.trim() === "" || weaponRangeValue !== null));
+
+  async function saveWeaponTag(index: number) {
+    if (!weaponDraftValid) return;
+    const next: InventoryItem[] = character.inventory.map((item, i) => {
+      if (i !== index) return item;
+      // Rebuilt from scratch so clearing the tag really removes the
+      // weapon fields from the stored jsonb rather than nulling them.
+      const base: InventoryItem = { name: item.name, quantity: item.quantity };
+      if (weaponKindDraft === "") return base;
+      return {
+        ...base,
+        attackKind: weaponKindDraft,
+        damageNotation: weaponDamageDraft.trim(),
+        ...(weaponRangeValue !== null ? { rangeFeet: weaponRangeValue } : {}),
+      };
+    });
+    const ok = await persist({ inventory: next });
+    if (ok) setWeaponEditIndex(null);
   }
 
   async function addSpell() {
@@ -758,7 +813,16 @@ export function CharacterSheet({
             <ul className={styles.rowList}>
               {character.inventory.map((item, index) => (
                 <li key={`${item.name}-${index}`} className={styles.itemRow}>
-                  <span className={styles.itemName}>{item.name}</span>
+                  <span className={styles.itemName}>
+                    {item.name}
+                    {item.attackKind && item.damageNotation ? (
+                      <Badge tone="teal" data-testid={`weapon-badge-${index}`}>
+                        {WEAPON_KIND_LABEL[item.attackKind]} · {item.damageNotation} ·{" "}
+                        {weaponRangeFeet({ attackKind: item.attackKind, rangeFeet: item.rangeFeet })}{" "}
+                        ft
+                      </Badge>
+                    ) : null}
+                  </span>
                   <span className={styles.itemControls}>
                     {canEdit ? (
                       <Button
@@ -783,6 +847,19 @@ export function CharacterSheet({
                           +
                         </Button>
                         <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            weaponEditIndex === index
+                              ? setWeaponEditIndex(null)
+                              : openWeaponEditor(index)
+                          }
+                          aria-label={`Edit weapon tagging for ${item.name}`}
+                          data-testid={`weapon-toggle-${index}`}
+                        >
+                          {item.attackKind ? "Edit weapon" : "Tag weapon"}
+                        </Button>
+                        <Button
                           variant="danger"
                           size="sm"
                           onClick={() => removeItem(index)}
@@ -793,6 +870,57 @@ export function CharacterSheet({
                       </>
                     ) : null}
                   </span>
+                  {canEdit && weaponEditIndex === index ? (
+                    // Tags this item as a weapon the quick-actions panel
+                    // can offer: kind, damage dice, and an optional range
+                    // override (defaults: 5 ft melee/finesse, 60 ft
+                    // ranged).
+                    <span className={styles.weaponEditor} data-testid={`weapon-editor-${index}`}>
+                      <Select
+                        label="Weapon kind"
+                        value={weaponKindDraft}
+                        onChange={(e) =>
+                          setWeaponKindDraft(e.target.value as "" | WeaponAttackKind)
+                        }
+                        data-testid="weapon-kind-select"
+                      >
+                        <option value="">Not a weapon</option>
+                        {WEAPON_KINDS.map((kind) => (
+                          <option key={kind} value={kind}>
+                            {WEAPON_KIND_LABEL[kind]}
+                          </option>
+                        ))}
+                      </Select>
+                      {weaponKindDraft !== "" ? (
+                        <>
+                          <TextInput
+                            label="Damage dice"
+                            value={weaponDamageDraft}
+                            onChange={(e) => setWeaponDamageDraft(e.target.value)}
+                            placeholder="e.g. 1d8"
+                            data-testid="weapon-damage-input"
+                          />
+                          <TextInput
+                            label={`Range ft (default ${weaponKindDraft === "ranged" ? 60 : 5})`}
+                            type="number"
+                            min={5}
+                            value={weaponRangeDraft}
+                            onChange={(e) => setWeaponRangeDraft(e.target.value)}
+                            data-testid="weapon-range-input"
+                          />
+                        </>
+                      ) : null}
+                      <Button
+                        variant="teal"
+                        size="sm"
+                        onClick={() => saveWeaponTag(index)}
+                        disabled={!weaponDraftValid}
+                        data-testid="weapon-save"
+                      >
+                        Save
+                      </Button>
+                    </span>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -856,6 +984,9 @@ export function CharacterSheet({
                                 <span className={styles.spellMeta}>
                                   {spell.school} · {formatRange(spell.range)}
                                   {spell.concentration ? " · conc." : ""}
+                                  {spell.attack
+                                    ? ` · ${spell.attack.kind} spell attack, ${spell.attack.damageNotation}`
+                                    : ""}
                                 </span>
                               ) : null}
                               {canEdit && spell?.concentration ? (

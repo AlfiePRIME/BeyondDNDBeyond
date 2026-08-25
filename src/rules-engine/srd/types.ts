@@ -135,6 +135,24 @@ export type SpellRange = number | "self" | "touch";
 
 export type TargetType = "self" | "single" | "area" | "point";
 
+/**
+ * How a spell that RAW resolves via a SPELL ATTACK ROLL against a single
+ * target lands (Prompt 51). `kind` records the SRD's melee-vs-ranged spell
+ * attack wording (display/range flavor only — BOTH use the spellcasting
+ * ability, so the roll route's attackKind is always "spell");
+ * `damageNotation` is the spell's base on-hit dice in the dice module's
+ * notation. Populated ONLY for catalog spells whose SRD 5.1 text says
+ * "make a melee/ranged spell attack" AND that deal fixed on-hit dice —
+ * spells resolved by a saving throw the TARGET makes (Fireball), auto-hit
+ * spells (Magic Missile), and attack-roll spells with no damage dice (Ray
+ * of Enfeeblement, Contagion) leave this undefined. See srd/spells.ts for
+ * the curated table and its per-spell reasoning.
+ */
+export interface SpellAttack {
+  kind: "melee" | "ranged";
+  damageNotation: string;
+}
+
 export interface Spell {
   name: string;
   level: SpellLevel;
@@ -142,6 +160,7 @@ export interface Spell {
   range: SpellRange;
   targetType: TargetType;
   concentration: boolean;
+  attack?: SpellAttack;
 }
 
 export type ConditionKey =

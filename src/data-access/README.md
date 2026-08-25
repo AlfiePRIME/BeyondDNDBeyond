@@ -431,3 +431,25 @@ the Constitution SAVE bonus via the same shared `savingThrowModifiers` logic the
 kind uses; the breakdown's `concentrationSave` (`ConcentrationSaveResolution`: `dc`,
 `total`, `passed`, `spellName` — the at-risk spell captured before the roll) is fully
 formed before the RPC runs, so unlike `rollDeathSave` nothing is spliced in afterward.
+
+As of Prompt 51, `characters.ts`'s `InventoryItem` gains three OPTIONAL weapon fields —
+`attackKind?: "melee" | "ranged" | "finesse"` (the rules engine's `WeaponAttackKind`),
+`damageNotation?: string`, `rangeFeet?: number` — tagging an item as attackable from the
+Game Room's quick-actions panel. NO migration: `characters.inventory` is already a
+schemaless jsonb array (0007), so new optional fields ride the existing `updateCharacter`
+patch path and older rows simply lack them (plain gear stays `{name, quantity}`). When
+`rangeFeet` is omitted the rules engine defaults 5 ft for melee/finesse and a documented
+60 ft stand-in for ranged. The tagging UI is a collapsed-by-default editor on the
+character sheet's EXISTING inventory rows; the consumer is `QuickActionsPanel`
+(`src/app/campaigns/[id]/room/`), which reads the current-turn character's
+`character_resources` rows (spell-slot availability via the rules engine's now-shared
+`spellSlotResourceName`) and fires ordinary `kind: "attack"` rolls through the roll
+route — the exact `postRoll` request DiceLogPanel's manual attack form sends, so
+`roll_log` rows come out shape-identical to manually-triggered ones. NPC targets still
+type their AC inline (NPCs deliberately have no stored AC anywhere — proper stat blocks
+are Prompt 61's scope, and this prompt follows the existing DiceLogPanel convention
+rather than preempting it), while a readable PC target's AC auto-fills for a true
+one-click attack. Firing a leveled spell quick action spends one matching slot through
+the existing `setCharacterResourceUses` (the casting-cost enforcement Prompt 50's
+concentration toggle deliberately left to this prompt); cantrips spend nothing. No new
+tables, RPCs, or policies anywhere in this prompt.

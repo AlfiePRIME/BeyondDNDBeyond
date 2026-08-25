@@ -30,6 +30,7 @@ export type {
   SpellRange,
   TargetType,
   Spell,
+  SpellAttack,
   EquipmentChoice,
   ClassStartingEquipment,
   ConditionKey,
@@ -59,10 +60,25 @@ export {
   getSpellSlots,
   spellSlotsForClass,
   getPactMagicSlots,
+  spellSlotResourceName,
+  SPELL_SLOT_LEVELS,
   type SpellSlotLevel,
   type SpellSlots,
 } from "./spellSlots";
 export { attackBonus, type AttackKind } from "./attackBonus";
+
+export {
+  computeQuickActions,
+  weaponRangeFeet,
+  DEFAULT_MELEE_RANGE_FEET,
+  DEFAULT_RANGED_RANGE_FEET,
+  type WeaponAttackKind,
+  type QuickAction,
+  type QuickActionInventoryItem,
+  type QuickActionResource,
+  type QuickActionTargetInput,
+  type ComputeQuickActionsParams,
+} from "./quickActions";
 
 export {
   cellMovementCost,

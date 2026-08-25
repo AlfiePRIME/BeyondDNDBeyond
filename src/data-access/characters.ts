@@ -1,8 +1,23 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { WeaponAttackKind } from "@/rules-engine";
 
+/**
+ * One carried item in `characters.inventory` (a jsonb array — no
+ * migration needed for new optional fields; older rows simply lack them).
+ * The three optional weapon fields (Prompt 51) tag an item as attackable
+ * from the quick-actions panel: `attackKind` picks which of the roll
+ * route's weapon attack kinds it rolls as, `damageNotation` is its damage
+ * dice in the dice module's notation, and `rangeFeet` optionally overrides
+ * the defaults (5 ft reach for melee/finesse, a documented 60 ft stand-in
+ * for ranged — no per-weapon SRD range table is modeled anywhere yet).
+ * Plain gear leaves all three unset.
+ */
 export interface InventoryItem {
   name: string;
   quantity: number;
+  attackKind?: WeaponAttackKind;
+  damageNotation?: string;
+  rangeFeet?: number;
 }
 
 export interface KnownSpell {

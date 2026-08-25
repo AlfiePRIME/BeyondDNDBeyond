@@ -78,6 +78,7 @@ import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { DiceLogPanel } from "./DiceLogPanel";
+import { QuickActionsPanel } from "./QuickActionsPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
 import { TokenPanel, type TokenArm } from "./TokenPanel";
@@ -1366,6 +1367,18 @@ export function GameRoom({
         onExhaustionDelta={handleExhaustionDelta}
         onRollDeathSave={handleRollDeathSave}
         onRollConcentrationSave={handleRollConcentrationSave}
+      />
+      {/* A shortcut only — renders (for the current PC's owner or the DM)
+          ALONGSIDE the combat panel, dice panel, and sheet, never instead
+          of them. */}
+      <QuickActionsPanel
+        campaignId={campaignId}
+        currentUserId={currentUserId}
+        isDM={currentUserIsDM}
+        characters={characterRows}
+        combat={combat}
+        tokens={liveMap?.tokens ?? []}
+        onRollLanded={handleRollLanded}
       />
       <DiceLogPanel
         campaignId={campaignId}
