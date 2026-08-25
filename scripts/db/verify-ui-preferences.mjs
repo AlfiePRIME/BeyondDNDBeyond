@@ -407,9 +407,12 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.waitForTimeout(300);
 
-  // -- 2b. MonsterPanel/DmOverridesPanel are completely unaffected: no
-  //    draggable-panel wrapper exists for either, and they sit at their
-  //    old hardcoded CSS position (Phase C's reserved territory). --
+  // -- 2b. MonsterPanel/DmOverridesPanel are completely unaffected by
+  //    Phase B: no draggable-panel wrapper exists for either. Phase C
+  //    later gave them a peel-reveal trigger instead (they're no longer
+  //    mounted at all until that tab is clicked) — reveal them first, then
+  //    confirm they still sit at their old hardcoded CSS position and
+  //    aren't draggable, same as before Phase C existed. --
   check(
     "MonsterPanel has NO DraggablePanel wrapper (untouched, reserved for Phase C)",
     (await page.locator('[data-testid="draggable-panel-monster"]').count()) === 0
@@ -418,6 +421,9 @@ try {
     "DmOverridesPanel has NO DraggablePanel wrapper (untouched, reserved for Phase C)",
     (await page.locator('[data-testid="draggable-panel-dmControls"]').count()) === 0
   );
+  await page.getByTestId("monster-panel-tab").click();
+  await page.getByTestId("dm-controls-panel-tab").click();
+  await page.waitForTimeout(300);
   const monsterBox = await page.locator('[data-testid="monster-panel"]').boundingBox();
   const dmControlsBox = await page.locator('[data-testid="dm-controls-panel"]').boundingBox();
   check(

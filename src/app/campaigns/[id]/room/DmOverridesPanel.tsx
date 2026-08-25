@@ -44,6 +44,7 @@ export function DmOverridesPanel({
   strictBusy,
   strictError,
   onSetStrict,
+  className,
 }: {
   campaignId: string;
   /** The DM reads every character row under RLS, so names resolve here. */
@@ -53,6 +54,13 @@ export function DmOverridesPanel({
   strictBusy: boolean;
   strictError: string | null;
   onSetStrict: (strict: boolean) => void;
+  /** Appended to the root `<aside>` — Phase C's DmToolPeel uses this for
+   * its reveal-entrance animation, applied directly here rather than on a
+   * wrapping div (a transform-based animation on a wrapper would become a
+   * new CSS containing block for this `position: absolute` root,
+   * relocating it relative to the wrapper instead of the room stage for
+   * the animation's duration — see DmToolPeel.tsx). */
+  className?: string;
 }) {
   const [overrides, setOverrides] = useState<ActionOverride[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -104,7 +112,10 @@ export function DmOverridesPanel({
   }
 
   return (
-    <aside className={styles.dmControlsPanel} data-testid="dm-controls-panel">
+    <aside
+      className={[styles.dmControlsPanel, className].filter(Boolean).join(" ")}
+      data-testid="dm-controls-panel"
+    >
       <span className={styles.panelLabel}>DM Controls</span>
       <div className={styles.dmControlsSection} data-testid="dm-economy-section">
         <span className={styles.diceSectionLabel}>Action economy</span>

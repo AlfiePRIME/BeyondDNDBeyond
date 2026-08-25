@@ -114,6 +114,8 @@ import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { DraggablePanel, PanelLayoutProvider } from "./DraggablePanel";
+import { DmToolPeel, dmToolRevealClassName } from "./DmToolPeel";
+import dmToolPeelStyles from "./DmToolPeel.module.css";
 import { DiceLogPanel } from "./DiceLogPanel";
 import { DmOverridesPanel } from "./DmOverridesPanel";
 import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
@@ -2211,19 +2213,27 @@ export function GameRoom({
       ) : null}
       {/* The DM's monster tooling (Prompt 61): stat block create/edit/
           list plus the quick-add flow. DM-only in the UI; 0038's RLS
-          rejects a non-DM hitting the table directly regardless. */}
+          rejects a non-DM hitting the table directly regardless. Phase C:
+          entirely DM-only content/controls get the peel-to-reveal
+          treatment instead of Phase B's drag/collapse (see
+          DraggablePanel.tsx's PanelId doc comment) — DmToolPeel owns the
+          open/closed state, so MonsterPanel itself only mounts (and only
+          then subscribes/renders) once revealed. */}
       {currentUserIsDM && liveMap ? (
-        <MonsterPanel
-          statBlocks={statBlocks}
-          rosterNpcs={rosterNpcs}
-          combatActive={combat !== null}
-          busy={monsterBusy || tokenBusy}
-          error={monsterError}
-          onCreate={handleCreateStatBlock}
-          onUpdate={handleUpdateStatBlock}
-          onDelete={handleDeleteStatBlock}
-          onQuickAdd={handleQuickAddMonster}
-        />
+        <DmToolPeel label="Monsters" side="left" anchorClassName={dmToolPeelStyles.monsterAnchor} testId="monster-panel-tab">
+          <MonsterPanel
+            className={dmToolRevealClassName}
+            statBlocks={statBlocks}
+            rosterNpcs={rosterNpcs}
+            combatActive={combat !== null}
+            busy={monsterBusy || tokenBusy}
+            error={monsterError}
+            onCreate={handleCreateStatBlock}
+            onUpdate={handleUpdateStatBlock}
+            onDelete={handleDeleteStatBlock}
+            onQuickAdd={handleQuickAddMonster}
+          />
+        </DmToolPeel>
       ) : null}
       <DraggablePanel panelId="combat">
         <CombatPanel
@@ -2286,17 +2296,28 @@ export function GameRoom({
       {/* The DM Controls area (Prompt 52): pending rule-override flags to
           approve/deny, plus (Prompt 53) the action-economy strictness
           toggle as its sibling section. DM-only panel — every player still
-          sees the current mode via the combat panel's badge. */}
+          sees the current mode via the combat panel's badge. Phase C:
+          same peel-to-reveal treatment as MonsterPanel above, its own
+          independent tab at this panel's own corner (see DmToolPeel.tsx's
+          doc comment on why these two don't share one trigger). */}
       {currentUserIsDM ? (
-        <DmOverridesPanel
-          campaignId={campaignId}
-          characters={characterRows}
-          members={roster}
-          strict={economyStrict}
-          strictBusy={economyBusy}
-          strictError={economyError}
-          onSetStrict={handleSetEconomyStrict}
-        />
+        <DmToolPeel
+          label="DM Controls"
+          side="left"
+          anchorClassName={dmToolPeelStyles.dmOverridesAnchor}
+          testId="dm-controls-panel-tab"
+        >
+          <DmOverridesPanel
+            className={dmToolRevealClassName}
+            campaignId={campaignId}
+            characters={characterRows}
+            members={roster}
+            strict={economyStrict}
+            strictBusy={economyBusy}
+            strictError={economyError}
+            onSetStrict={handleSetEconomyStrict}
+          />
+        </DmToolPeel>
       ) : null}
       <DraggablePanel panelId="diceLog">
         <DiceLogPanel

@@ -41,6 +41,7 @@ export function MonsterPanel({
   onUpdate,
   onDelete,
   onQuickAdd,
+  className,
 }: {
   statBlocks: MonsterStatBlock[];
   /** The Prompt 33 narrative roster, for the name pre-fill convenience. */
@@ -68,6 +69,13 @@ export function MonsterPanel({
   onDelete: (statBlock: MonsterStatBlock) => void;
   /** Arms grid-click placement for this block's token (GameRoom). */
   onQuickAdd: (statBlock: MonsterStatBlock) => void;
+  /** Appended to the root `<aside>` — Phase C's DmToolPeel uses this for
+   * its reveal-entrance animation, applied directly here rather than on a
+   * wrapping div (a transform-based animation on a wrapper would become a
+   * new CSS containing block for this `position: absolute` root,
+   * relocating it relative to the wrapper instead of the room stage for
+   * the animation's duration — see DmToolPeel.tsx). */
+  className?: string;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -163,7 +171,10 @@ export function MonsterPanel({
   }
 
   return (
-    <aside className={styles.monsterPanel} data-testid="monster-panel">
+    <aside
+      className={[styles.monsterPanel, className].filter(Boolean).join(" ")}
+      data-testid="monster-panel"
+    >
       <div className={styles.objectHeader}>
         <span className={styles.panelLabel}>Monsters</span>
         <Badge tone="red">DM only</Badge>
