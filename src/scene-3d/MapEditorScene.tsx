@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { BoxGeometry, EdgesGeometry, MOUSE } from "three";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BoxGeometry, EdgesGeometry, MOUSE, SRGBColorSpace, TextureLoader, type Texture } from "three";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
 import {
@@ -23,6 +23,73 @@ const CELL_SIZE = EDITOR_MAP_METRICS.cellSize;
 // Tall enough to stay visible around max-elevation terrain (10 steps at
 // 0.35 world units each, on a 0.14 slab).
 const REGION_MARKER_HEIGHT = 10 * EDITOR_MAP_METRICS.elevationStepHeight + 0.4;
+
+// Sandwiched between the editor's ground disc (-0.02) and the cell blocks'
+// bottoms (0): far enough from both to never z-fight, and always UNDER the
+// grid so painted cells are never occluded by the guide art.
+const REFERENCE_IMAGE_Y = -0.01;
+
+/** The DM's uploaded battle-map guide art, already resolved to a loadable
+ * URL by the app layer. x/y are grid-cell units from the grid's center;
+ * scale multiplies the image's fitted-to-grid base size. */
+export interface EditorReferenceImage {
+  url: string;
+  x: number;
+  y: number;
+  scale: number;
+}
+
+// Editor-exclusive by design, which is why this lives here and not in
+// MapSurface: MapSurface is shared with GameTableScene, and a reference
+// image must be STRUCTURALLY impossible to render on the player-facing
+// table — the table has no prop for it, so there is nothing to leak.
+function ReferenceImagePlane({
+  image,
+  gridWidth,
+  gridHeight,
+}: {
+  image: EditorReferenceImage;
+  gridWidth: number;
+  gridHeight: number;
+}) {
+  const [texture, setTexture] = useState<Texture | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    new TextureLoader().load(image.url, (loaded) => {
+      if (disposed) {
+        loaded.dispose();
+        return;
+      }
+      loaded.colorSpace = SRGBColorSpace;
+      setTexture(loaded);
+    });
+    return () => {
+      disposed = true;
+      setTexture((previous) => {
+        previous?.dispose();
+        return null;
+      });
+    };
+  }, [image.url]);
+
+  if (!texture) return null;
+  const art = texture.image as { width: number; height: number };
+  // Contain-fit at scale 1: the image's larger relative dimension spans the
+  // grid exactly, so a fresh upload lands roughly aligned with the grid the
+  // DM will sculpt over (MapSurface centers the grid on the origin).
+  const fit = Math.min((gridWidth * CELL_SIZE) / art.width, (gridHeight * CELL_SIZE) / art.height);
+  return (
+    <mesh
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[image.x * CELL_SIZE, REFERENCE_IMAGE_Y, image.y * CELL_SIZE]}
+    >
+      <planeGeometry args={[art.width * fit * image.scale, art.height * fit * image.scale]} />
+      {/* Basic material, tone mapping off: the guide art should read as the
+          DM's original image, not as a lit surface tinted by the room rig. */}
+      <meshBasicMaterial map={texture} toneMapped={false} />
+    </mesh>
+  );
+}
 
 /** A DM-selected rectangle of cells, in grid coordinates. */
 export interface EditorRegion {
@@ -102,6 +169,10 @@ export interface MapEditorSceneProps {
    * cell beneath; when absent they're inert and clicks fall through to the
    * cell, so sculpt tools still paint occupied cells. */
   onSelectObject?: (id: string) => void;
+  /** The DM's guide art rendered under the grid; null/absent renders none.
+   * Deliberately an editor-scene prop, NOT a MapSurface one — see
+   * ReferenceImagePlane. */
+  referenceImage?: EditorReferenceImage | null;
 }
 
 export function MapEditorScene({
@@ -115,6 +186,7 @@ export function MapEditorScene({
   objects,
   selectedObjectId,
   onSelectObject,
+  referenceImage,
 }: MapEditorSceneProps) {
   const onPaintCellRef = useRef(onPaintCell);
   const onStrokeEndRef = useRef(onStrokeEnd);
@@ -207,6 +279,14 @@ export function MapEditorScene({
         <circleGeometry args={[span * 1.6, 48]} />
         <meshStandardMaterial color={GROUND} roughness={0.95} />
       </mesh>
+
+      {referenceImage ? (
+        <ReferenceImagePlane
+          image={referenceImage}
+          gridWidth={gridWidth}
+          gridHeight={gridHeight}
+        />
+      ) : null}
 
       <MapSurface
         gridWidth={gridWidth}

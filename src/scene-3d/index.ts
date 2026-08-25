@@ -7,6 +7,7 @@ export {
   MapEditorScene,
   type MapEditorSceneProps,
   type EditorRegion,
+  type EditorReferenceImage,
 } from "./MapEditorScene";
 export {
   MapSurface,

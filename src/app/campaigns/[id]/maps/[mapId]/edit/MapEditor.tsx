@@ -5,13 +5,18 @@ import Link from "next/link";
 import { Canvas } from "@react-three/fiber";
 import { Button, ChoiceCard, Select, TextInput } from "@/ui-components";
 import {
+  clearMapReferenceImage,
   createMapObject,
   createMapTransition,
   deleteMapObject,
+  deleteMapReferenceImageFile,
   deleteMapTransition,
+  getMapReferenceImageSignedUrl,
   restoreMapObject,
   setMapObjectBehavior,
+  setMapReferenceImage,
   updateMapObject,
+  uploadMapReferenceImageFile,
   upsertMapCells,
   type CampaignMap,
   type MapCell,
@@ -21,7 +26,12 @@ import {
   type SupabaseClient,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
-import { MapEditorScene, type EditorRegion, type MapSurfaceObject } from "@/scene-3d";
+import {
+  MapEditorScene,
+  type EditorReferenceImage,
+  type EditorRegion,
+  type MapSurfaceObject,
+} from "@/scene-3d";
 import type { TerrainType } from "@/rules-engine";
 import {
   applyTool,
@@ -62,6 +72,11 @@ function errorMessage(err: unknown): string | null {
 // server-only.
 const MAX_AREA_PROMPT_LENGTH = 500;
 const MAX_AREA_CELLS = 400;
+
+// Mirrors the map-references bucket's limits (0026) so an oversized or
+// wrong-type file fails with a readable message instead of a policy error.
+const REFERENCE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const REFERENCE_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 /** An AI-proposed object placement, client-side only until the DM accepts —
  * unlike normal placements it has no DB row yet, so it carries a temp id and
@@ -135,6 +150,26 @@ export function MapEditor({
   const [destY, setDestY] = useState("0");
   const [transitionBusy, setTransitionBusy] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
+
+  const [referenceRef, setReferenceRef] = useState(map.reference_image_ref);
+  // Keyed by the ref it was signed for, so a removed/replaced image derives
+  // to null/stale-free without a synchronous state reset in the effect.
+  const [signedReference, setSignedReference] = useState<{ ref: string; url: string } | null>(
+    null
+  );
+  const referenceUrl =
+    referenceRef && signedReference?.ref === referenceRef ? signedReference.url : null;
+  const [referenceX, setReferenceX] = useState(String(map.reference_image_x ?? 0));
+  const [referenceY, setReferenceY] = useState(String(map.reference_image_y ?? 0));
+  const [referenceScale, setReferenceScale] = useState(String(map.reference_image_scale ?? 1));
+  const [referenceBusy, setReferenceBusy] = useState(false);
+  const [referenceError, setReferenceError] = useState<string | null>(null);
+  const referenceFileInputRef = useRef<HTMLInputElement>(null);
+  const persistedPlacementRef = useRef({
+    x: map.reference_image_x ?? 0,
+    y: map.reference_image_y ?? 0,
+    scale: map.reference_image_scale ?? 1,
+  });
 
   const [region, setRegion] = useState<EditorRegion | null>(null);
   const [areaPrompt, setAreaPrompt] = useState("");
@@ -657,6 +692,126 @@ export function MapEditor({
     });
   }
 
+  useEffect(() => {
+    if (!referenceRef) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const url = await getMapReferenceImageSignedUrl(
+          createBrowserSupabaseClient(),
+          referenceRef,
+          REFERENCE_SIGNED_URL_TTL_SECONDS
+        );
+        if (!cancelled) setSignedReference({ ref: referenceRef, url });
+      } catch {
+        if (!cancelled) setReferenceError("Couldn't load the reference image — reload to retry.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [referenceRef]);
+
+  // Placement persists debounced rather than per keystroke: the inputs drive
+  // the 3D plane live, and the settled values reach the database as one
+  // write. Latest-wins — a re-fire cancels the pending timer.
+  useEffect(() => {
+    if (!referenceRef) return;
+    const x = Number(referenceX);
+    const y = Number(referenceY);
+    const scale = Number(referenceScale);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(scale) || scale <= 0) return;
+    const persisted = persistedPlacementRef.current;
+    if (x === persisted.x && y === persisted.y && scale === persisted.scale) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          await setMapReferenceImage(createBrowserSupabaseClient(), map.id, {
+            ref: referenceRef,
+            x,
+            y,
+            scale,
+          });
+          persistedPlacementRef.current = { x, y, scale };
+        } catch (err) {
+          setReferenceError(errorMessage(err) ?? "Couldn't save the reference image placement.");
+        }
+      })();
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [referenceRef, referenceX, referenceY, referenceScale, map.id]);
+
+  async function handleReferenceUpload(fileList: FileList | null) {
+    const file = fileList?.[0];
+    if (referenceFileInputRef.current) referenceFileInputRef.current.value = "";
+    if (!file || referenceBusy) return;
+    if (file.size > REFERENCE_IMAGE_MAX_BYTES) {
+      setReferenceError("Reference images are capped at 10MB.");
+      return;
+    }
+    setReferenceBusy(true);
+    setReferenceError(null);
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const previous = referenceRef;
+      // A replacement keeps the current placement — the DM is swapping art,
+      // not re-aligning it; a first upload starts at the defaults already in
+      // the inputs.
+      const x = Number(referenceX);
+      const y = Number(referenceY);
+      const scale = Number(referenceScale);
+      const placement = {
+        x: Number.isFinite(x) ? x : persistedPlacementRef.current.x,
+        y: Number.isFinite(y) ? y : persistedPlacementRef.current.y,
+        scale: Number.isFinite(scale) && scale > 0 ? scale : persistedPlacementRef.current.scale,
+      };
+      const path = await uploadMapReferenceImageFile(supabase, map.id, file);
+      await setMapReferenceImage(supabase, map.id, { ref: path, ...placement });
+      persistedPlacementRef.current = placement;
+      if (previous) void deleteMapReferenceImageFile(supabase, previous).catch(() => undefined);
+      setReferenceRef(path);
+    } catch (err) {
+      setReferenceError(errorMessage(err) ?? "Couldn't upload that image — try again.");
+    } finally {
+      setReferenceBusy(false);
+    }
+  }
+
+  async function handleReferenceRemove() {
+    if (!referenceRef || referenceBusy) return;
+    setReferenceBusy(true);
+    setReferenceError(null);
+    try {
+      const supabase = createBrowserSupabaseClient();
+      await clearMapReferenceImage(supabase, map.id);
+      void deleteMapReferenceImageFile(supabase, referenceRef).catch(() => undefined);
+      setReferenceRef(null);
+      setReferenceX("0");
+      setReferenceY("0");
+      setReferenceScale("1");
+      persistedPlacementRef.current = { x: 0, y: 0, scale: 1 };
+    } catch (err) {
+      setReferenceError(errorMessage(err) ?? "Couldn't remove the reference image.");
+    } finally {
+      setReferenceBusy(false);
+    }
+  }
+
+  const referenceImage = useMemo<EditorReferenceImage | null>(() => {
+    if (!referenceUrl) return null;
+    const x = Number(referenceX);
+    const y = Number(referenceY);
+    const scale = Number(referenceScale);
+    // Mid-edit invalid input falls back to a sane placement so the plane
+    // never vanishes or degenerates while the DM types.
+    return {
+      url: referenceUrl,
+      x: Number.isFinite(x) ? x : 0,
+      y: Number.isFinite(y) ? y : 0,
+      scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+    };
+  }, [referenceUrl, referenceX, referenceY, referenceScale]);
+
   const handleTransitionCellClick = useCallback((x: number, y: number) => {
     setTransitionCell({ x, y });
     setTransitionError(null);
@@ -955,6 +1110,7 @@ export function MapEditor({
           objects={sceneObjects}
           selectedObjectId={selectedObjectId}
           onSelectObject={tool === "object" ? handleSelectObject : undefined}
+          referenceImage={referenceImage}
         />
       </Canvas>
 
@@ -1354,6 +1510,97 @@ export function MapEditor({
               )
             ) : null}
           </>
+        ) : null}
+        <span className={styles.toolbarLabel}>Reference image</span>
+        {referenceRef ? (
+          <>
+            <div className={styles.toolRow}>
+              <TextInput
+                label="Offset X"
+                type="number"
+                step={0.5}
+                value={referenceX}
+                onChange={(event) => setReferenceX(event.target.value)}
+                className={styles.referenceField}
+                data-testid="reference-offset-x"
+              />
+              <TextInput
+                label="Offset Y"
+                type="number"
+                step={0.5}
+                value={referenceY}
+                onChange={(event) => setReferenceY(event.target.value)}
+                className={styles.referenceField}
+                data-testid="reference-offset-y"
+              />
+              <TextInput
+                label="Scale"
+                type="number"
+                step={0.1}
+                min={0.1}
+                value={referenceScale}
+                onChange={(event) => setReferenceScale(event.target.value)}
+                className={styles.referenceField}
+                data-testid="reference-scale"
+              />
+            </div>
+            <div className={styles.toolRow}>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={referenceBusy}
+                onClick={() => referenceFileInputRef.current?.click()}
+                data-testid="reference-replace"
+              >
+                {referenceBusy ? "Uploading…" : "Replace image"}
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={referenceBusy}
+                onClick={() => void handleReferenceRemove()}
+                data-testid="reference-remove"
+              >
+                Remove
+              </Button>
+            </div>
+            <p className={styles.hint}>
+              Guide art under the grid — offsets in cells from the grid&apos;s center. Only you see
+              it; it never renders on the live table.
+            </p>
+          </>
+        ) : (
+          <>
+            <div className={styles.toolRow}>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={referenceBusy}
+                onClick={() => referenceFileInputRef.current?.click()}
+                data-testid="reference-upload"
+              >
+                {referenceBusy ? "Uploading…" : "Upload image"}
+              </Button>
+            </div>
+            <p className={styles.hint}>
+              Sculpt over existing battle-map art — PNG, JPEG, or WebP, up to 10MB.
+            </p>
+          </>
+        )}
+        <input
+          ref={referenceFileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          aria-label="Upload a reference image"
+          className={styles.hiddenFileInput}
+          disabled={referenceBusy}
+          onChange={(event) => void handleReferenceUpload(event.target.files)}
+          data-testid="reference-file-input"
+        />
+        {referenceError ? (
+          <p role="alert" className={styles.errorText} data-testid="reference-error">
+            {referenceError}
+          </p>
         ) : null}
         <p className={styles.hint}>
           Left click or drag applies the tool · right-drag orbits · scroll zooms · middle-drag pans

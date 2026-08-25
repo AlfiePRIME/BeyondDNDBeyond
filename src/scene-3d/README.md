@@ -95,3 +95,17 @@ then a `window` `pointerup` to end), and the scene withholds `onCellPointerDown`
 on the map measures from the cell beneath it and can never place, trigger, or grab anything.
 `OrbitControls` is disabled mid-measure, same as mid-token-drag. As always, the scene only
 reports cell coordinates; distance/cost semantics (and the readout) live in the `app` layer.
+
+As of Prompt 44: `MapEditorScene` gained a `referenceImage` prop (`EditorReferenceImage`: an
+already-signed URL plus x/y in grid-cell units from the grid's center and one uniform scale),
+rendered by `ReferenceImagePlane` as a textured plane sandwiched between the editor's ground
+disc and the cell blocks' bottoms — always UNDER the grid, so sculpted cells are never
+occluded or z-fought by the guide art. At scale 1 the image is contain-fitted to the grid
+footprint, which `MapSurface` centers on the origin, so the two share the same ground-plane
+coordinate space. This is the first deliberately editor-EXCLUSIVE piece of map rendering:
+it lives in `MapEditorScene` itself, NOT in the shared `MapSurface`, precisely so that
+`GameTableScene` — which renders through `MapSurface` — has zero prop, zero code path, and
+zero awareness of the reference-image concept. A DM's guide art being absent from the
+player-facing table is structural (there is nothing to wire up), not a prop that happens to
+be unset. Anything else meant for both surfaces still belongs in `MapSurface`; anything that
+must never reach the live table belongs beside `ReferenceImagePlane`.

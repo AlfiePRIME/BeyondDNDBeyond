@@ -129,6 +129,24 @@ map editor (destination picked from a dropdown + validated entry X/Y, since the 
 renders only one 3D scene); the runtime offer lives in the Game Room and rides the
 existing token-change broadcast plus the Prompt 29 live-map-switch flow.
 
+As of Prompt 44, `maps.ts` also owns DM reference images — existing battle-map art rendered
+under the map editor's grid as a sculpting guide. Four nullable `campaign_maps` columns
+(migration `0026_map_reference_images.sql`): `reference_image_ref` (Storage object path),
+`reference_image_x`/`reference_image_y` (grid-cell units from the grid's center), and
+`reference_image_scale` (one uniform factor multiplying a fitted-to-grid base size), with an
+all-or-none CHECK so the path and placement can only exist together. Files live in a private
+`map-references` bucket (PNG/JPEG/WebP, 10MB cap) with the same map-scoped
+`{map_id}/{uuid}.ext` paths as `map-thumbnails` — but its SELECT policy uses `can_write_map`,
+NOT `can_read_map`, on purpose: a thumbnail becomes player-visible once its map is live,
+whereas a reference image is an editor-only aid that must never be player-visible under any
+circumstance, so every direction (read AND write) requires being the owning campaign's DM.
+`uploadMapReferenceImageFile`/`deleteMapReferenceImageFile`/`getMapReferenceImageSignedUrl`
+mirror the thumbnail trio (taking a `File` from an input, not a canvas `Blob`), and
+`setMapReferenceImage`/`clearMapReferenceImage` move the four columns as a unit. The only
+consumer is the map editor's "Reference image" toolbar section; the player-facing Game Room
+has no code path touching any of this — see `src/scene-3d/README.md` for the rendering-side
+boundary.
+
 This is a schema/RLS/data-access-only prompt (UI for these tables is deferred: NPC roster
 in 33, lore pages in 34, and further prompts for quests/session log/handouts/notes/house
 rules). Every write function is DM-gated purely by the table's own RLS (0020) — no RPC

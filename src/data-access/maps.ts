@@ -9,6 +9,10 @@ export interface CampaignMap {
   grid_height: number;
   folder_id: string | null;
   thumbnail_ref: string | null;
+  reference_image_ref: string | null;
+  reference_image_x: number | null;
+  reference_image_y: number | null;
+  reference_image_scale: number | null;
   created_at: string;
 }
 
@@ -356,6 +360,115 @@ export async function getMapThumbnailSignedUrl(
 
   if (error) throw error;
   return data.signedUrl;
+}
+
+// Extensions the bucket's allowed_mime_types (0026) accepts, keyed by the
+// File's reported type — an unknown type fails here, client-side, instead
+// of as an opaque Storage policy error.
+const REFERENCE_IMAGE_EXTENSIONS: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+};
+
+/**
+ * Uploads a DM's battle-map reference art to the map-references bucket
+ * (0026) and returns the object path to store as reference_image_ref. Same
+ * map-scoped fresh-unique-path scheme as thumbnails, but the bucket is
+ * DM-only in BOTH directions — a reference image is never player-visible,
+ * even for the live map.
+ */
+export async function uploadMapReferenceImageFile(
+  supabase: SupabaseClient,
+  mapId: string,
+  file: File
+): Promise<string> {
+  const extension = REFERENCE_IMAGE_EXTENSIONS[file.type];
+  if (!extension) throw new Error("Reference images must be PNG, JPEG, or WebP.");
+  const path = `${mapId}/${crypto.randomUUID()}.${extension}`;
+  const { error } = await supabase.storage
+    .from("map-references")
+    .upload(path, file, { contentType: file.type });
+
+  if (error) throw error;
+  return path;
+}
+
+/** Best-effort cleanup when an image is replaced or removed — each upload
+ * takes a new path, so stale objects otherwise accumulate forever. */
+export async function deleteMapReferenceImageFile(
+  supabase: SupabaseClient,
+  path: string
+): Promise<void> {
+  const { error } = await supabase.storage.from("map-references").remove([path]);
+  if (error) throw error;
+}
+
+/**
+ * Signed download URL for a reference image — same private-bucket
+ * signed-URL model as getMapThumbnailSignedUrl, but the bucket's SELECT
+ * policy uses can_write_map, so only the owning campaign's DM can mint one.
+ */
+export async function getMapReferenceImageSignedUrl(
+  supabase: SupabaseClient,
+  path: string,
+  expiresInSeconds: number
+): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from("map-references")
+    .createSignedUrl(path, expiresInSeconds);
+
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+/**
+ * Persists the reference image's path and placement together — the schema's
+ * all-or-none constraint (0026) means they can only change as a unit.
+ * Position is in grid-cell units from the grid's center; scale multiplies
+ * the image's fitted-to-grid base size.
+ */
+export async function setMapReferenceImage(
+  supabase: SupabaseClient,
+  mapId: string,
+  params: { ref: string; x: number; y: number; scale: number }
+): Promise<CampaignMap> {
+  const { data, error } = await supabase
+    .from("campaign_maps")
+    .update({
+      reference_image_ref: params.ref,
+      reference_image_x: params.x,
+      reference_image_y: params.y,
+      reference_image_scale: params.scale,
+    })
+    .eq("id", mapId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/** Removes the reference image entirely (all four columns back to null);
+ * deleting the Storage object is the caller's separate best-effort step. */
+export async function clearMapReferenceImage(
+  supabase: SupabaseClient,
+  mapId: string
+): Promise<CampaignMap> {
+  const { data, error } = await supabase
+    .from("campaign_maps")
+    .update({
+      reference_image_ref: null,
+      reference_image_x: null,
+      reference_image_y: null,
+      reference_image_scale: null,
+    })
+    .eq("id", mapId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
 }
 
 /**
