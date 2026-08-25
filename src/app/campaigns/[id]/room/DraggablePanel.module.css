@@ -1,0 +1,118 @@
+/* DraggablePanel's own wrapper — the positioning layer that replaces each
+   retrofitted panel's old `position: absolute` rule in room.module.css.
+   z-index is set inline per panel/per drag (DraggablePanel.tsx); left/top
+   are set inline ONLY once a real position exists (a saved preference, or
+   an in-session drag) — until then, one of the anchorXxx classes below
+   applies instead, so an untouched panel stays exactly as
+   viewport-responsive as the position: absolute rule it replaces (a fixed
+   pixel default would put e.g. a bottom-anchored panel off-screen on a
+   shorter viewport than whatever it was measured against). */
+.wrapper {
+  position: fixed;
+  /* A drag must not trigger the browser's native touch scroll/zoom
+     gestures on the panel itself. */
+  touch-action: none;
+}
+
+/* Every retrofitted panel's historical default position, migrated
+   verbatim from room.module.css's old `position: absolute` rules (see
+   each rule's origin noted below) — applied only while the panel has no
+   saved/dragged position (DraggablePanel.tsx picks exactly one of these
+   per panelId via DEFAULT_ANCHOR_CLASS). */
+.anchorTopLeft {
+  /* .combatPanel's old position */
+  top: 64px;
+  left: 24px;
+}
+
+.anchorTopRight {
+  /* .handoutPanel's old position */
+  top: 64px;
+  right: 24px;
+}
+
+.anchorBottomLeft {
+  /* .tokenPanel's old position */
+  bottom: 24px;
+  left: 24px;
+}
+
+.anchorBottomRight {
+  /* .sidePanel's (MapPanel) old position */
+  bottom: 24px;
+  right: 24px;
+}
+
+.anchorTopCenter {
+  /* .quickActionsPanel's old position */
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* .opportunityPanel's old position — previously `top: calc(64px + 30vh +
+   12px)` because it read quickActionsPanel's own CSS max-height so the two
+   could never overlap. That coupling is meaningless now that quickActions
+   can be dragged anywhere; this keeps the same literal numbers (a
+   plain, independent calc(), not a cross-reference to another selector)
+   purely so today's user sees no change, not because anything still reads
+   quickActions' rule. */
+.anchorTopCenterLow {
+  top: calc(64px + 30vh + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.anchorBottomCenter {
+  /* .dicePanel's old position */
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* The wrapped panel's own root element's first child is its existing
+   header/title row (see DraggablePanel.tsx's structural contract) —
+   reused as the drag handle rather than adding a redundant new one. */
+.wrapper > * > :first-child {
+  cursor: grab;
+}
+
+.wrapper.dragging > * > :first-child {
+  cursor: grabbing;
+}
+
+/* Dragging must not let the browser start selecting text underneath the
+   pointer as it moves. */
+.wrapper.dragging {
+  user-select: none;
+}
+
+/* Collapsed: hide every child of the panel's root element AFTER its first
+   (the header stays visible) — a small, unobtrusive bar rather than the
+   panel vanishing outright. Pure CSS, no changes to any panel component's
+   own markup. */
+.wrapper.collapsed > * > :not(:first-child) {
+  display: none;
+}
+
+/* A small chip peeking off the panel's top-right corner — deliberately
+   NOT inside the panel's own header row (which several panels already
+   pack with a badge/status text), so it can't collide with existing
+   header content. Selector doubled up on .wrapper for specificity over
+   Button's own base rules (position/padding) without !important. */
+.wrapper .collapseToggle {
+  position: absolute;
+  top: -11px;
+  right: -11px;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  line-height: 1;
+  background: var(--surface2);
+}

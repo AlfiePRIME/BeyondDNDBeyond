@@ -26,11 +26,15 @@ export {
   upsertProfile,
   isProfileComplete,
   setProfileAvatar,
+  setUiPreferences,
   uploadAvatarFile,
   getAvatarSignedUrl,
   subscribeToProfileChanges,
+  subscribeToUiPreferencesChanges,
   type Profile,
   type AvatarSource,
+  type UiPreferences,
+  type PanelLayoutEntry,
 } from "./profiles";
 export {
   listCampaignsForUser,

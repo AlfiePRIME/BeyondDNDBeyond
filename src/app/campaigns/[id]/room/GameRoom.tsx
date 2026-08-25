@@ -75,6 +75,7 @@ import {
   type SeenCellSnapshot,
   type SupabaseClient,
   type TokenAllegiance,
+  type UiPreferences,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
@@ -112,6 +113,7 @@ import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
 import { CombatPanel, type CombatState } from "./CombatPanel";
+import { DraggablePanel, PanelLayoutProvider } from "./DraggablePanel";
 import { DiceLogPanel } from "./DiceLogPanel";
 import { DmOverridesPanel } from "./DmOverridesPanel";
 import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
@@ -264,6 +266,7 @@ export function GameRoom({
   initialCombat,
   initialRolls,
   initialActionEconomyStrict,
+  initialUiPreferences,
 }: {
   campaignId: string;
   campaignName: string;
@@ -290,6 +293,11 @@ export function GameRoom({
   /** campaigns.action_economy_strict at load time — kept live below via
    * the campaigns postgres_changes feed. */
   initialActionEconomyStrict: boolean;
+  /** profiles.ui_preferences at load time (Phase B) — the current user's,
+   * not any other member's; handed to PanelLayoutProvider below so a
+   * returning user's saved Game Room panel layout renders on first paint
+   * with no loading flash, kept live via subscribeToUiPreferencesChanges. */
+  initialUiPreferences: UiPreferences;
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
@@ -2078,6 +2086,7 @@ export function GameRoom({
   );
 
   return (
+    <PanelLayoutProvider userId={currentUserId} initialPreferences={initialUiPreferences}>
     <div className={styles.room}>
       <Canvas shadows dpr={[1, 2]}>
         <GameTableScene
@@ -2169,32 +2178,36 @@ export function GameRoom({
           <span className={styles.roomLabel}>Game Room</span>
         </div>
       </header>
-      <MapPanel
-        isDM={currentUserIsDM}
-        maps={availableMaps}
-        liveMapId={liveMap?.map.id ?? null}
-        liveMapName={liveMap?.map.name ?? null}
-        switching={switching}
-        switchError={switchError}
-        onSwitch={handleSwitchMap}
-        entries={interactiveEntries}
-        onTrigger={handleTrigger}
-        triggerError={triggerError}
-      />
-      {liveMap ? (
-        <TokenPanel
+      <DraggablePanel panelId="map">
+        <MapPanel
           isDM={currentUserIsDM}
-          currentUserId={currentUserId}
-          characters={characterRows}
-          tokens={liveMap.tokens}
-          armed={armedToken}
-          busy={tokenBusy}
-          error={tokenError}
-          onArm={setArmedToken}
-          onCancel={() => setArmedToken(null)}
-          onRemove={handleRemoveToken}
-          onSetAllegiance={handleSetAllegiance}
+          maps={availableMaps}
+          liveMapId={liveMap?.map.id ?? null}
+          liveMapName={liveMap?.map.name ?? null}
+          switching={switching}
+          switchError={switchError}
+          onSwitch={handleSwitchMap}
+          entries={interactiveEntries}
+          onTrigger={handleTrigger}
+          triggerError={triggerError}
         />
+      </DraggablePanel>
+      {liveMap ? (
+        <DraggablePanel panelId="tokens">
+          <TokenPanel
+            isDM={currentUserIsDM}
+            currentUserId={currentUserId}
+            characters={characterRows}
+            tokens={liveMap.tokens}
+            armed={armedToken}
+            busy={tokenBusy}
+            error={tokenError}
+            onArm={setArmedToken}
+            onCancel={() => setArmedToken(null)}
+            onRemove={handleRemoveToken}
+            onSetAllegiance={handleSetAllegiance}
+          />
+        </DraggablePanel>
       ) : null}
       {/* The DM's monster tooling (Prompt 61): stat block create/edit/
           list plus the quick-add flow. DM-only in the UI; 0038's RLS
@@ -2212,57 +2225,64 @@ export function GameRoom({
           onQuickAdd={handleQuickAddMonster}
         />
       ) : null}
-      <CombatPanel
-        isDM={currentUserIsDM}
-        currentUserId={currentUserId}
-        characters={characterRows}
-        statBlocks={statBlocks}
-        combat={combat}
-        busy={combatBusy}
-        error={combatError}
-        strict={economyStrict}
-        onStart={handleStartCombat}
-        onAdvance={handleAdvanceTurn}
-        onEnd={handleEndCombat}
-        onSetInitiative={handleSetInitiative}
-        onRollInitiative={handleRollInitiative}
-        onApplyHp={handleApplyHp}
-        onToggleCondition={handleToggleCondition}
-        onExhaustionDelta={handleExhaustionDelta}
-        onRollDeathSave={handleRollDeathSave}
-        onRollConcentrationSave={handleRollConcentrationSave}
-        onToggleEconomyFlag={handleToggleEconomyFlag}
-        onDeclareDisengage={handleDeclareDisengage}
-        onRollHide={handleRollHide}
-        onStopHiding={handleStopHiding}
-      />
+      <DraggablePanel panelId="combat">
+        <CombatPanel
+          isDM={currentUserIsDM}
+          currentUserId={currentUserId}
+          characters={characterRows}
+          statBlocks={statBlocks}
+          combat={combat}
+          busy={combatBusy}
+          error={combatError}
+          strict={economyStrict}
+          onStart={handleStartCombat}
+          onAdvance={handleAdvanceTurn}
+          onEnd={handleEndCombat}
+          onSetInitiative={handleSetInitiative}
+          onRollInitiative={handleRollInitiative}
+          onApplyHp={handleApplyHp}
+          onToggleCondition={handleToggleCondition}
+          onExhaustionDelta={handleExhaustionDelta}
+          onRollDeathSave={handleRollDeathSave}
+          onRollConcentrationSave={handleRollConcentrationSave}
+          onToggleEconomyFlag={handleToggleEconomyFlag}
+          onDeclareDisengage={handleDeclareDisengage}
+          onRollHide={handleRollHide}
+          onStopHiding={handleStopHiding}
+        />
+      </DraggablePanel>
       {/* Pending opportunity-attack prompts (Prompt 54): visible to the
           whole table, actionable only by each reactor's controller — the
           DM for NPC reactors, the owning player for PCs. Renders nothing
-          while no offer is pending. */}
-      <OpportunityAttackPanel
-        campaignId={campaignId}
-        currentUserId={currentUserId}
-        isDM={currentUserIsDM}
-        characters={characterRows}
-        statBlocks={statBlocks}
-        combat={combat}
-        onRollLanded={handleRollLanded}
-        onReactionSpent={handleReactionSpent}
-      />
+          while no offer is pending — DraggablePanel detects that and hides
+          its own wrapper too (see DraggablePanel's doc comment). */}
+      <DraggablePanel panelId="opportunityAttack">
+        <OpportunityAttackPanel
+          campaignId={campaignId}
+          currentUserId={currentUserId}
+          isDM={currentUserIsDM}
+          characters={characterRows}
+          statBlocks={statBlocks}
+          combat={combat}
+          onRollLanded={handleRollLanded}
+          onReactionSpent={handleReactionSpent}
+        />
+      </DraggablePanel>
       {/* A shortcut only — renders (for the current PC's owner or the DM)
           ALONGSIDE the combat panel, dice panel, and sheet, never instead
           of them. */}
-      <QuickActionsPanel
-        campaignId={campaignId}
-        currentUserId={currentUserId}
-        isDM={currentUserIsDM}
-        characters={characterRows}
-        statBlocks={statBlocks}
-        combat={combat}
-        tokens={liveMap?.tokens ?? []}
-        onRollLanded={handleRollLanded}
-      />
+      <DraggablePanel panelId="quickActions">
+        <QuickActionsPanel
+          campaignId={campaignId}
+          currentUserId={currentUserId}
+          isDM={currentUserIsDM}
+          characters={characterRows}
+          statBlocks={statBlocks}
+          combat={combat}
+          tokens={liveMap?.tokens ?? []}
+          onRollLanded={handleRollLanded}
+        />
+      </DraggablePanel>
       {/* The DM Controls area (Prompt 52): pending rule-override flags to
           approve/deny, plus (Prompt 53) the action-economy strictness
           toggle as its sibling section. DM-only panel — every player still
@@ -2278,27 +2298,31 @@ export function GameRoom({
           onSetStrict={handleSetEconomyStrict}
         />
       ) : null}
-      <DiceLogPanel
-        campaignId={campaignId}
-        currentUserId={currentUserId}
-        isDM={currentUserIsDM}
-        characters={characterRows}
-        statBlocks={statBlocks}
-        combat={combat}
-        tokens={liveMap?.tokens ?? []}
-        members={roster}
-        initialRolls={initialRolls}
-        onRollLanded={handleRollLanded}
-      />
-      <HandoutPanel
-        isDM={currentUserIsDM}
-        handouts={handouts}
-        busy={handoutBusy}
-        error={handoutError}
-        onCreate={handleCreateHandout}
-        onToggleReveal={handleToggleHandoutRevealed}
-        onDelete={handleDeleteHandout}
-      />
+      <DraggablePanel panelId="diceLog">
+        <DiceLogPanel
+          campaignId={campaignId}
+          currentUserId={currentUserId}
+          isDM={currentUserIsDM}
+          characters={characterRows}
+          statBlocks={statBlocks}
+          combat={combat}
+          tokens={liveMap?.tokens ?? []}
+          members={roster}
+          initialRolls={initialRolls}
+          onRollLanded={handleRollLanded}
+        />
+      </DraggablePanel>
+      <DraggablePanel panelId="handout">
+        <HandoutPanel
+          isDM={currentUserIsDM}
+          handouts={handouts}
+          busy={handoutBusy}
+          error={handoutError}
+          onCreate={handleCreateHandout}
+          onToggleReveal={handleToggleHandoutRevealed}
+          onDelete={handleDeleteHandout}
+        />
+      </DraggablePanel>
       <Modal
         open={handoutPopup !== null}
         onClose={() => setHandoutPopup(null)}
@@ -2451,5 +2475,6 @@ export function GameRoom({
         </p>
       ) : null}
     </div>
+    </PanelLayoutProvider>
   );
 }

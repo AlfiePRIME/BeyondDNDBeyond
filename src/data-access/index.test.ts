@@ -136,17 +136,38 @@ describe("data-access module", () => {
 
   it("treats a profile with no display name as incomplete", () => {
     expect(isProfileComplete(null)).toBe(false);
-    expect(isProfileComplete({ id: "x", display_name: null, avatar_source: null, avatar_ref: null, created_at: "" })).toBe(
-      false
-    );
-    expect(isProfileComplete({ id: "x", display_name: "  ", avatar_source: null, avatar_ref: null, created_at: "" })).toBe(
-      false
-    );
+    expect(
+      isProfileComplete({
+        id: "x",
+        display_name: null,
+        avatar_source: null,
+        avatar_ref: null,
+        created_at: "",
+        ui_preferences: { panelLayout: {} },
+      })
+    ).toBe(false);
+    expect(
+      isProfileComplete({
+        id: "x",
+        display_name: "  ",
+        avatar_source: null,
+        avatar_ref: null,
+        created_at: "",
+        ui_preferences: { panelLayout: {} },
+      })
+    ).toBe(false);
   });
 
   it("treats a profile with a display name as complete", () => {
     expect(
-      isProfileComplete({ id: "x", display_name: "Vex", avatar_source: null, avatar_ref: null, created_at: "" })
+      isProfileComplete({
+        id: "x",
+        display_name: "Vex",
+        avatar_source: null,
+        avatar_ref: null,
+        created_at: "",
+        ui_preferences: { panelLayout: {} },
+      })
     ).toBe(true);
   });
 

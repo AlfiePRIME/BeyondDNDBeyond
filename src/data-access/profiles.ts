@@ -4,12 +4,40 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * storage object path in the avatars bucket. */
 export type AvatarSource = "preset" | "custom";
 
+/**
+ * One Game Room panel's persisted layout (Phase B of the UI overhaul) — the
+ * only shape stored inside ui_preferences.panelLayout. Position is always
+ * the panel's top-left corner in viewport pixels; `collapsed` hides the
+ * panel's body while its header/drag-handle stays visible.
+ */
+export interface PanelLayoutEntry {
+  x: number;
+  y: number;
+  collapsed: boolean;
+}
+
+/**
+ * profiles.ui_preferences' only schema (0040) — schemaless jsonb otherwise,
+ * the behavior_config/roll_log.breakdown convention: the app layer defines
+ * the real shape, not the database. `panelLayout` is keyed by the stable
+ * panel ids DraggablePanel/GameRoom use (see
+ * src/app/campaigns/[id]/room/DraggablePanel.tsx's PanelId) — deliberately
+ * NOT namespaced per-campaign, so a user's layout follows them into every
+ * campaign and session. A key may be absent (never dragged/collapsed yet);
+ * DraggablePanel's layout context supplies that panel's hardcoded default
+ * in that case.
+ */
+export interface UiPreferences {
+  panelLayout: Record<string, PanelLayoutEntry>;
+}
+
 export interface Profile {
   id: string;
   display_name: string | null;
   avatar_source: AvatarSource | null;
   avatar_ref: string | null;
   created_at: string;
+  ui_preferences: UiPreferences;
 }
 
 export async function getProfile(supabase: SupabaseClient, userId: string): Promise<Profile | null> {
@@ -48,6 +76,28 @@ export async function setProfileAvatar(
   const { error } = await supabase
     .from("profiles")
     .update({ avatar_source: selection.source, avatar_ref: selection.ref })
+    .eq("id", userId);
+
+  if (error) throw error;
+}
+
+/**
+ * Overwrites the caller's whole ui_preferences document (Phase B) — a plain
+ * column write through profiles' existing self-only UPDATE policy (0001),
+ * the setProfileAvatar shape exactly. Whole-document replacement, not a
+ * per-panel patch: DraggablePanel's layout context holds the full
+ * panelLayout map in memory and calls this with the complete, already-
+ * merged document, so there's no server-side merge to get wrong and no
+ * lost-update risk between two panels' debounced writes racing.
+ */
+export async function setUiPreferences(
+  supabase: SupabaseClient,
+  userId: string,
+  preferences: UiPreferences
+): Promise<void> {
+  const { error } = await supabase
+    .from("profiles")
+    .update({ ui_preferences: preferences })
     .eq("id", userId);
 
   if (error) throw error;
@@ -110,6 +160,55 @@ export function subscribeToProfileChanges(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "profiles" },
         (payload) => handler(payload.new as Profile)
+      )
+      .subscribe();
+  })();
+
+  return () => {
+    removed = true;
+    if (channel) void supabase.removeChannel(channel);
+  };
+}
+
+/**
+ * Fires `handler` with the caller's OWN ui_preferences after any update to
+ * it, from any tab/device/campaign — the subscribeToCampaignChanges shape
+ * (row-filtered via `filter`, rather than subscribeToProfileChanges' filter-
+ * everything-client-side approach, since a layout change has no roster to
+ * cross-reference) rather than a broadcast: DraggablePanel's layout context
+ * is mounted once in GameRoom, and a drag made in a DIFFERENT campaign's
+ * room (or the account page, if one is ever added there) must still reach
+ * this tab, which no campaign-scoped broadcast channel could ever do. Same
+ * deterministic-claims setAuth dance as subscribeToProfileChanges/
+ * subscribeToCampaignChanges — required so the subscription joins as the
+ * authenticated role and profiles' SELECT policy doesn't silently drop
+ * every event.
+ */
+export function subscribeToUiPreferencesChanges(
+  supabase: SupabaseClient,
+  userId: string,
+  handler: (preferences: UiPreferences) => void
+): () => void {
+  let removed = false;
+  let channel: ReturnType<SupabaseClient["channel"]> | null = null;
+
+  void (async () => {
+    const { data } = await supabase.auth.getSession();
+    if (removed) return;
+    if (data.session) await supabase.realtime.setAuth(data.session.access_token);
+    if (removed) return;
+
+    channel = supabase
+      .channel(`ui-preferences-changes:${userId}:${crypto.randomUUID()}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "profiles",
+          filter: `id=eq.${userId}`,
+        },
+        (payload) => handler((payload.new as Profile).ui_preferences)
       )
       .subscribe();
   })();

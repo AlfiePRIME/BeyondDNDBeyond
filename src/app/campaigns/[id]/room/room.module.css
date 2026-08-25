@@ -52,10 +52,16 @@
   color: var(--dim);
 }
 
+/* Phase B: .sidePanel/.tokenPanel/.handoutPanel/.combatPanel no longer
+   carry their own `position: absolute` placement — DraggablePanel's own
+   wrapper (DraggablePanel.module.css) now owns positioning (drag-to-move,
+   persisted per user), with each panel's historical position here
+   migrated to DraggablePanel's DEFAULT_ANCHOR_CLASS as that panel's
+   default when no saved preference exists (a CSS anchor class, not a
+   fixed pixel pair — see that constant's doc comment for why). Everything
+   else about these rules (size, translucency, accent border) is
+   unchanged. */
 .sidePanel {
-  position: absolute;
-  right: 24px;
-  bottom: 24px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -69,9 +75,6 @@
 }
 
 .tokenPanel {
-  position: absolute;
-  left: 24px;
-  bottom: 24px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -85,17 +88,11 @@
 }
 
 .handoutPanel {
-  position: absolute;
-  right: 24px;
-  top: 64px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 16px;
   width: 320px;
-  /* Shares the right edge with .sidePanel (bottom-anchored, 70vh max) —
-     capping well short of that keeps the two from overlapping on all but
-     the shortest viewports. */
   max-height: 26vh;
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
@@ -104,16 +101,11 @@
 }
 
 .combatPanel {
-  position: absolute;
-  left: 24px;
-  top: 64px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 16px;
   width: 300px;
-  /* Shares the left edge with .tokenPanel (bottom-anchored, 70vh max) —
-     same short-viewport reasoning as .handoutPanel on the right edge. */
   max-height: 26vh;
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
@@ -562,11 +554,10 @@
   color: var(--accent);
 }
 
+/* Phase B: no longer `position: absolute` — see .sidePanel's comment
+   above; DiceLogPanel's historical centered-bottom position migrated to
+   DraggablePanel's .anchorBottomCenter (DEFAULT_ANCHOR_CLASS.diceLog). */
 .dicePanel {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 24px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -678,15 +669,13 @@
   color: var(--dim);
 }
 
-/* The Prompt 51 quick-actions panel: top-center, between the combat panel
-   (top-left) and handout panel (top-right), clear of the bottom-anchored
-   dice/token/map panels. A persistent per-turn panel, visually echoing the
-   Prompt 49/50 prompt-banner accents without being a transient banner. */
+/* The Prompt 51 quick-actions panel. Phase B: no longer `position:
+   absolute` (was top-center by default) — see .sidePanel's comment above;
+   its historical centered-top position migrated to DraggablePanel's
+   .anchorTopCenter (DEFAULT_ANCHOR_CLASS.quickActions). A persistent per-turn panel,
+   visually echoing the Prompt 49/50 prompt-banner accents without being a
+   transient banner. */
 .quickActionsPanel {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  top: 64px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -749,15 +738,16 @@
 }
 
 /* Prompt 54: the opportunity-attack prompt surface — a transient banner
-   stack, center-screen just below where the quick-actions panel can
-   reach (top 64px + its 30vh max), so it never hides behind the per-turn
-   panels while carrying the Prompt 49/50 prompt-banner visual weight: it
-   only exists while an offer is pending, and it must not get lost. */
+   stack carrying the Prompt 49/50 prompt-banner visual weight: it only
+   exists while an offer is pending, and it must not get lost. Phase B: no
+   longer `position: absolute` with a `top: calc(64px + 30vh + 12px)` that
+   literally referenced quickActionsPanel's own max-height so the two could
+   never overlap — that coupling becomes meaningless once quickActions can
+   be dragged anywhere. DraggablePanel's .anchorTopCenterLow
+   (DEFAULT_ANCHOR_CLASS.opportunityAttack) keeps the identical calc()
+   expression as its own independent rule instead (today's user sees no
+   change), not a cross-reference to quickActionsPanel's selector. */
 .opportunityPanel {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  top: calc(64px + 30vh + 12px);
   display: flex;
   flex-direction: column;
   gap: 8px;

@@ -733,3 +733,25 @@ union flows through `maps.ts` and `mapSeenCells.ts` with no code change here;
 `map_cells` held), so remembered void cells needed no migration either. Painting a cell
 void goes through the existing `upsertMapCells` under the existing `can_write_map` RLS —
 the same authorization as painting normal/difficult.
+
+As of Phase B of the UI overhaul (draggable/collapsible Game Room panels — not one of
+the numbered prompts), `profiles` gains `ui_preferences jsonb not null default '{}'`
+(migration `0040_ui_preferences.sql`), typed by `UiPreferences`/`PanelLayoutEntry` in
+`profiles.ts`: `{ panelLayout: { [panelId]: { x, y, collapsed } } }`, the
+behavior_config/roll_log.breakdown schemaless-jsonb convention — the app layer owns the
+only real schema, so a future panel id needs no migration to add. Deliberately on
+`profiles`, not `campaigns`: layout is a personal preference that must follow a user
+into every campaign and session (a confirmed project-owner requirement), the opposite
+of `live_map`'s per-campaign scoping. No new RLS policy — `profiles`' existing
+self-only UPDATE policy (0001) is a blanket `id = auth.uid()` with no column
+restriction, confirmed by reading `pg_policies` directly rather than assumed, so it
+already covers this column exactly like `display_name`/`avatar_ref`. `setUiPreferences`
+is the `setProfileAvatar` shape (whole-document replacement, so there's no server-side
+merge and no lost-update race between two panels' debounced writes). `subscribeToUiPreferencesChanges`
+is `subscribeToCampaignChanges`'s row-filtered postgres_changes shape (`filter:
+id=eq.<userId>`) rather than `subscribeToProfileChanges`'s filter-everything-client-side
+approach — a layout change has no roster to cross-reference, and it must reach a tab
+sitting in a DIFFERENT campaign's room, which no campaign-scoped broadcast channel could
+do. The actual drag/collapse/z-index UI lives entirely in
+`src/app/campaigns/[id]/room/DraggablePanel.tsx` (Game-Room-specific layout behavior,
+not a data-access concern) — this module only stores and syncs the resulting document.

@@ -62,6 +62,14 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   const currentMember = roomMembers.find((member) => member.user_id === user.id);
   const currentUserIsDM = currentMember?.role === "dm";
 
+  // Read once for SSR, same as every other "initial*" prop below — a
+  // returning user's saved Game Room panel layout (Phase B) renders
+  // correctly on the very first paint, no loading flash. Not derived from
+  // the roomMembers loop above (which only keeps each member's avatar_url)
+  // since ui_preferences is the CALLER's own, private-enough-to-fetch-once
+  // document, not table-public roster data.
+  const currentUserProfile = await getProfile(supabase, user.id);
+
   // The DB read here (not any broadcast) is what makes fresh joins and
   // reloads land on the currently-live map — a client that wasn't connected
   // when the DM switched never saw the live-map-changed event.
@@ -142,6 +150,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialCombat={initialCombat}
       initialRolls={initialRolls}
       initialActionEconomyStrict={campaign.action_economy_strict}
+      initialUiPreferences={currentUserProfile?.ui_preferences ?? { panelLayout: {} }}
     />
   );
 }

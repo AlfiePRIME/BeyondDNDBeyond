@@ -1,0 +1,35 @@
+-- Phase B of the UI overhaul: per-user Game Room panel layout (position +
+-- collapsed state), persisted so a player's dragged/collapsed panels
+-- follow them everywhere — the action_economy_strict/live_map precedent of
+-- "a plain column on an existing table, governed by the existing RLS",
+-- applied to profiles instead of campaigns.
+--
+-- Deliberately on profiles, NOT campaigns: layout is a personal UI
+-- preference, not campaign state, and it must persist across EVERY
+-- campaign and session a user is in (an explicit, confirmed project-owner
+-- requirement) — namespacing it per-campaign would be the campaigns.live_map
+-- shape, which is exactly wrong here.
+--
+-- Shape: { panelLayout: { [panelId: string]: { x, y, collapsed } } },
+-- keyed by the stable panel ids DraggablePanel/GameRoom use (see
+-- src/app/campaigns/[id]/room/DraggablePanel.tsx). Schemaless jsonb rather
+-- than dedicated columns — the same behavior_config/roll_log.breakdown
+-- convention: the app layer (data-access/profiles.ts) owns the only real
+-- schema, and new panel ids (Phase C/D) need no migration to add.
+alter table public.profiles
+  add column if not exists ui_preferences jsonb not null default '{}';
+
+-- No new RLS policy: profiles' existing UPDATE policy (0001,
+-- "a user can update only their own profile") is a blanket
+-- USING (id = auth.uid()) WITH CHECK (id = auth.uid()) with no column-level
+-- restriction — confirmed by reading pg_policies directly against the
+-- running database rather than assumed — so it already covers writing this
+-- new column for the owning user, and nobody else's, exactly like every
+-- other profiles column. The existing "readable by any authenticated user"
+-- SELECT policy also already covers it; a player's UI layout isn't
+-- sensitive data for this small private-group app, matching profiles'
+-- existing display_name/avatar posture.
+--
+-- profiles already rides the supabase_realtime publication (0012), so
+-- subscribeToUiPreferencesChanges (data-access/profiles.ts) needs no
+-- further publication change either.
