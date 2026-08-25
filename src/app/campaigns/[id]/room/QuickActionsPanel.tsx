@@ -264,6 +264,9 @@ export function QuickActionsPanel({
         damageNotation: action.damageNotation,
         targetAc,
         targetCharacterId: target.character_id ?? null,
+        // The token itself (PC or NPC) so the server can find the target's
+        // position for its perception check (Prompt 59).
+        targetTokenId: target.id,
         targetName: tokenLabel(target),
         mode,
       });

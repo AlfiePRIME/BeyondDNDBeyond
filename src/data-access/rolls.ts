@@ -45,6 +45,17 @@ export interface AttackResolution {
   /** Failures added to the already-0-HP target's tally by this hit: 0
    * (nothing happened), 1 (ordinary damage), or 2 (a critical hit). */
   deathSaveFailureAdded: number;
+  /** WHY the rolled mode was what it was (Prompt 59): every advantage
+   * source and every disadvantage source the route collected —
+   * human-readable strings ("manually selected", "target not perceived",
+   * "target has Blinded (advantage against)"). The breakdown's `mode` is
+   * their `combineAdvantageSources` resolution: both sides non-empty means
+   * they canceled to a flat roll, which the log states explicitly. Optional
+   * (like `instantDeath` before Prompt 49) so pre-59 stored rolls, where
+   * the fields are simply absent, still parse; new attack rolls always
+   * carry both, empty or not. */
+  advantageSources?: string[];
+  disadvantageSources?: string[];
 }
 
 /** Death-save resolution detail, nested in a d20 breakdown (Prompt 49) —

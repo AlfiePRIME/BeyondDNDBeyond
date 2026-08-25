@@ -27,6 +27,15 @@ export type RollRequest =
       /** Set when the target is a tracked PC, so the server can apply the
        * damage to its HP. */
       targetCharacterId?: string | null;
+      /** The target's map token (Prompt 59), PC or NPC alike — how the
+       * server locates the target's position for the freshly-computed,
+       * server-side can-the-attacker-perceive-them check (and, via the
+       * combatant seeded from this token, the target's active conditions).
+       * Optional and advisory-only: absent (or no longer on the live map)
+       * means no visibility-based auto-disadvantage can be computed, never
+       * an error — the roll still resolves with the manual mode and any
+       * condition flags reachable through targetCharacterId. */
+      targetTokenId?: string | null;
       targetName?: string | null;
       mode?: AdvantageMode;
     }

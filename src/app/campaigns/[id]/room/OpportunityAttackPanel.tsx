@@ -231,6 +231,9 @@ export function OpportunityAttackPanel({
         damageNotation: weapon.damageNotation,
         targetAc,
         targetCharacterId: mover.character_id,
+        // The mover's seeded token id (PC or NPC) so the server can find
+        // their position for its perception check (Prompt 59).
+        targetTokenId: mover.token_id,
         targetName: combatantLabel(mover),
         mode,
       });

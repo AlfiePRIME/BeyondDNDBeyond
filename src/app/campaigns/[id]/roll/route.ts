@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
+  getActiveCombatEncounter,
   getCharacter,
+  listCombatCombatants,
+  listCombatantConditions,
+  listLightSources,
+  listMapCells,
+  listMapObjects,
+  listMapTokens,
   resolveAttackDamage,
   rollConcentrationSave,
   rollDeathSave,
@@ -18,10 +25,13 @@ import {
 } from "@/data-access";
 import {
   CLASSES,
+  CONDITION_BY_KEY,
   SKILLS,
   SKILL_ABILITY,
   abilityModifier,
   attackBonus,
+  combineAdvantageSources,
+  computeVisibilityTier,
   doubleDiceExpression,
   parseDiceNotation,
   proficiencyBonus,
@@ -35,8 +45,10 @@ import {
   type AbilityScores,
   type AdvantageMode,
   type AttackKind,
+  type ConditionKey,
   type SkillName,
 } from "@/rules-engine";
+import { resolveLightSourcePositions, visionBlockedForCharacter } from "../room/vision";
 import type { RollRequest } from "./api";
 
 // Every die result in the app is generated HERE, in a Node server process —
@@ -189,10 +201,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // RLS hides campaigns you're not a member of — same 404 reasoning as the
   // generate-draft route.
   // action_economy_strict rides along for the attack branch's economy
-  // gate below — one read either way.
+  // gate below, and live_map for its perception check (Prompt 59) — one
+  // read either way.
   const { data: campaign, error: campaignError } = await supabase
     .from("campaigns")
-    .select("id, action_economy_strict")
+    .select("id, action_economy_strict, live_map")
     .eq("id", campaignId)
     .maybeSingle();
   if (campaignError) throw campaignError;
@@ -517,8 +530,112 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
   }
 
+  // Vision/condition-driven advantage and disadvantage (Prompt 59), attacks
+  // ONLY — checks/saves/skills keep the caller's manual mode untouched
+  // (automating those is explicitly out of scope, same as the death-save/
+  // concentration comments above). Everything here is computed server-side
+  // from freshly-read rows — like the die itself, never client-reported —
+  // then combined with the player's manual toggle under the SRD rule
+  // (sources never stack; any advantage plus any disadvantage cancels to a
+  // flat roll) by the rules engine's combineAdvantageSources.
+  let rolledMode: AdvantageMode = mode;
+  const advantageSources: string[] = [];
+  const disadvantageSources: string[] = [];
+  if (attackContext) {
+    if (mode === "advantage") advantageSources.push("manually selected");
+    if (mode === "disadvantage") disadvantageSources.push("manually selected");
+
+    const requestTargetTokenId =
+      typeof roll.targetTokenId === "string" ? roll.targetTokenId : null;
+    const requestTargetCharacterId =
+      typeof roll.targetCharacterId === "string" ? roll.targetCharacterId : null;
+
+    // Conditions only exist for active combatants (the
+    // visionBlockedForCharacter reasoning) — one encounter-wide load
+    // covers BOTH sides: the attacker's blocksVision-derived
+    // vision-blocked state and the target's attacks-against flags.
+    const encounter = await getActiveCombatEncounter(supabase, campaignId);
+    const combatants = encounter ? await listCombatCombatants(supabase, encounter.id) : [];
+    const conditions =
+      combatants.length > 0
+        ? await listCombatantConditions(
+            supabase,
+            combatants.map((combatant) => combatant.id)
+          )
+        : [];
+
+    // The target's condition flags — matched by their token when the
+    // client sent one (covers NPC targets), else by character id. Checked
+    // via the GENERIC catalog flags, both directions independently: any
+    // condition that carries (or ever gains) attacksAgainstHaveAdvantage/
+    // attacksAgainstHaveDisadvantage reports itself here for free, under
+    // its own display name — the blocksVision arrangement exactly.
+    const targetCombatant =
+      combatants.find(
+        (combatant) =>
+          (requestTargetTokenId !== null && combatant.token_id === requestTargetTokenId) ||
+          (requestTargetCharacterId !== null &&
+            combatant.character_id === requestTargetCharacterId)
+      ) ?? null;
+    if (targetCombatant) {
+      for (const condition of conditions) {
+        if (condition.combatant_id !== targetCombatant.id) continue;
+        const definition = CONDITION_BY_KEY.get(condition.condition_key as ConditionKey);
+        if (!definition) continue;
+        if (definition.effects.attacksAgainstHaveAdvantage) {
+          advantageSources.push(`target has ${definition.name} (advantage against)`);
+        }
+        if (definition.effects.attacksAgainstHaveDisadvantage) {
+          disadvantageSources.push(`target has ${definition.name} (disadvantage against)`);
+        }
+      }
+    }
+
+    // The perception check: disadvantage when the attacker cannot SEE the
+    // target at all — computeVisibilityTier === "none" for the target's
+    // cell, evaluated from the attacker's position/vision/blocked state
+    // ("dim" deliberately does NOT qualify: RAW disadvantage is for an
+    // unseen target, not a dimly-lit one). Needs a live map with both
+    // tokens on it; anything missing means there is nothing to compute
+    // perception FROM, so no visibility source is added — a graceful
+    // fallback, never an error or a forced disadvantage. A blinded
+    // ATTACKER needs no special case: their vision-blocked tier is "none"
+    // for every cell, so this same check already lands the disadvantage.
+    if (campaign.live_map && requestTargetTokenId) {
+      const tokens = await listMapTokens(supabase, campaign.live_map);
+      const attackerToken =
+        tokens.find((token) => token.character_id === character.id) ?? null;
+      const targetToken =
+        tokens.find((token) => token.id === requestTargetTokenId) ?? null;
+      if (attackerToken && targetToken) {
+        const [cells, lightSources, objects] = await Promise.all([
+          listMapCells(supabase, campaign.live_map),
+          listLightSources(supabase, campaign.live_map),
+          listMapObjects(supabase, campaign.live_map),
+        ]);
+        const targetCell = cells.find(
+          (cell) => cell.x === targetToken.x && cell.y === targetToken.y
+        );
+        const tier = computeVisibilityTier({
+          observerPosition: { x: attackerToken.x, y: attackerToken.y },
+          vision: {
+            darkvisionFeet: character.darkvision_feet,
+            visionBlocked: visionBlockedForCharacter(combatants, conditions, character.id),
+          },
+          cellPosition: { x: targetToken.x, y: targetToken.y },
+          // Sparse storage: a cell with no row is the bright default.
+          cellAmbientLight: targetCell?.light_level ?? "bright",
+          lightSources: resolveLightSourcePositions(lightSources, objects, tokens),
+        });
+        if (tier === "none") disadvantageSources.push("target not perceived");
+      }
+    }
+
+    rolledMode = combineAdvantageSources(advantageSources, disadvantageSources).mode;
+  }
+
   let attack: AttackResolution | undefined;
-  const d20 = rollD20(mode);
+  const d20 = rollD20(rolledMode);
   const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
 
   if (attackContext) {
@@ -570,11 +687,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           // outcome, exactly like `applied`.
           instantDeath: false,
           deathSaveFailureAdded: 0,
+          advantageSources,
+          disadvantageSources,
         };
         const breakdown: D20RollBreakdown = {
           type: "d20",
           label,
-          mode,
+          mode: rolledMode,
           d20Rolls: d20.rolls,
           d20Result: d20.result,
           modifiers,
@@ -631,6 +750,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       // Nothing landed on a tracked 0-HP target on this path.
       instantDeath: false,
       deathSaveFailureAdded: 0,
+      advantageSources,
+      disadvantageSources,
     };
   }
 
@@ -650,7 +771,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     breakdown: {
       type: "d20",
       label,
-      mode,
+      // rolledMode === mode for every non-attack kind — only the attack
+      // branch above ever recomputes it.
+      mode: rolledMode,
       d20Rolls: d20.rolls,
       d20Result: d20.result,
       modifiers,

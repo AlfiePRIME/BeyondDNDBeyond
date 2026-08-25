@@ -619,3 +619,23 @@ design bar). Both files' "nothing calls this yet" notes are updated accordingly.
 masking rendered from this data is client-side presentation by explicit owner preference —
 the RLS posture here (every member reads the full live map; seen-cells rows private to
 their owner) is deliberately unchanged.
+
+As of Prompt 59: no new tables or CRUD — `rolls.ts`'s `AttackResolution` gains
+`advantageSources?: string[]` and `disadvantageSources?: string[]`, the stored record of
+WHY an attack rolled with the mode it did: every advantage source and every disadvantage
+source the roll route collected server-side ("manually selected", "target not perceived",
+"target has Blinded (advantage against)" — condition sources named via the catalog's
+display name, never hardcoded), whose `combineAdvantageSources` resolution IS the
+breakdown's `mode` (both sides non-empty means they canceled to a flat roll, which the
+log states rather than letting it look unmodified). Optional exactly like Prompt 49's
+`instantDeath`/`deathSaveFailureAdded`: pre-59 stored rolls simply lack the fields and
+still parse; every new attack roll carries both, empty or not. The perception inputs are
+all existing reads (`campaigns.live_map`, `listMapTokens`/`listMapCells`/
+`listLightSources`/`listMapObjects`, `getActiveCombatEncounter`/`listCombatCombatants`/
+`listCombatantConditions`) made by the roll Route Handler with the caller's own
+RLS-scoped client — a campaign member can already read the live map and the encounter's
+conditions, so no policy changed. The roll request's attack variant gains
+`targetTokenId?: string | null` (see `src/app/campaigns/[id]/roll/api.ts`) so the server
+can locate ANY target's position — an NPC target was previously unresolvable, having no
+character row — advisory-only: absent or unresolvable means no visibility-based
+auto-mode, never an error.

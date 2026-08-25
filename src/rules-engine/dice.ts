@@ -145,6 +145,40 @@ export function rollD20(
   return { mode, rolls, result };
 }
 
+/** The settled advantage/disadvantage decision for one d20 roll — the mode
+ * to actually pass `rollD20`, plus whether opposing sources canceled. */
+export interface CombinedAdvantage {
+  mode: AdvantageMode;
+  /** True exactly when at least one advantage source AND at least one
+   * disadvantage source were present, so the roll fell back to flat —
+   * callers surface this ("canceled to a flat roll") rather than letting a
+   * both-sided roll look identical to a plain unmodified one. */
+  canceled: boolean;
+}
+
+/**
+ * The SRD combine rule for advantage/disadvantage sources (Prompt 59),
+ * implemented once as a pure decision function: collect EVERY advantage
+ * source (a manual toggle, a target-condition flag, ...) and every
+ * disadvantage source (manual, "target not perceived", ...) as
+ * human-readable strings, then — per SRD — multiple sources on one side
+ * never stack, and ANY advantage plus ANY disadvantage cancels to a flat
+ * roll. Otherwise the non-empty side wins; both empty is a plain normal
+ * roll. The strings' contents are opaque here (only presence counts) —
+ * they exist so the caller can store/show WHY the mode was applied.
+ */
+export function combineAdvantageSources(
+  advantageSources: readonly string[],
+  disadvantageSources: readonly string[]
+): CombinedAdvantage {
+  const hasAdvantage = advantageSources.length > 0;
+  const hasDisadvantage = disadvantageSources.length > 0;
+  if (hasAdvantage && hasDisadvantage) return { mode: "normal", canceled: true };
+  if (hasAdvantage) return { mode: "advantage", canceled: false };
+  if (hasDisadvantage) return { mode: "disadvantage", canceled: false };
+  return { mode: "normal", canceled: false };
+}
+
 export interface AttackOutcome {
   natural20: boolean;
   natural1: boolean;

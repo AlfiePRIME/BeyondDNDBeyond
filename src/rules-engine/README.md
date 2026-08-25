@@ -179,5 +179,27 @@ otherwise-bright, easy-darkvision-range cell; and a made-up, non-"blinded" condi
 flag producing identical behavior, proving the mechanism is genuinely generic (a source-level
 check confirms no condition-key string appears anywhere in `perception.ts`).
 
-Still future work: advantage/disadvantage enforcement from conditions/vision (Prompt 59) —
-Prompt 48 provides the manual toggle and the two-d20 mechanics it will drive.
+As of Prompt 59: the promised advantage/disadvantage enforcement landed, and this module's
+one new piece is deliberately tiny — `combineAdvantageSources(advantageSources,
+disadvantageSources)` in `dice.ts`, the SRD combine rule as a pure decision function.
+Callers collect every advantage source and every disadvantage source for a roll as
+human-readable strings (a manual toggle, "target not perceived", a target-condition flag —
+the strings are opaque here, only presence counts; they exist so the caller can store and
+show WHY), and this returns the `AdvantageMode` to actually pass `rollD20` plus a
+`canceled` flag: per SRD, multiple sources on one side never stack, and ANY advantage plus
+ANY disadvantage cancels to a flat roll — otherwise the non-empty side wins, and both-empty
+is plain normal. Everything else the mechanic needs already existed and is consumed, not
+duplicated, by the roll Route Handler (the attack kind only): `computeVisibilityTier`
+gains its first SERVER-side caller — the attacker's freshly-computed perception of the
+target's cell, where `"none"` (and ONLY `"none"` — `"dim"` deliberately does not qualify;
+RAW disadvantage is for an unseen target, not a dimly-lit one) contributes "target not
+perceived", and a blinded ATTACKER needs no special case since a vision-blocked observer's
+tier is `"none"` everywhere — and the Prompt 47 catalog's generic
+`attacksAgainstHaveAdvantage`/`attacksAgainstHaveDisadvantage` flags on the TARGET's
+active conditions contribute sources named via `CONDITION_BY_KEY`'s display name, so any
+condition carrying (or ever gaining) either flag reports itself correctly for free.
+Automating the remaining flags (`ownAttacksHave*`, `abilityChecksHaveDisadvantage`,
+`savingThrowsHaveDisadvantage`, `autoFailStrDexSaves`) stays future work — checks/saves/
+skills still take only the manual toggle. Unit-tested the resolveDeathSave way: both-empty,
+each side alone, both-present canceling (including one-vs-many on either side),
+never-stacking, and content-opacity.

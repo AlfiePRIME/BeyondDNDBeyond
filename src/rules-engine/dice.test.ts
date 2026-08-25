@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  combineAdvantageSources,
   doubleDiceExpression,
   parseDiceNotation,
   resolveAttackOutcome,
@@ -243,5 +244,59 @@ describe("resolveDeathSave", () => {
       ].filter(Boolean).length;
       expect(kinds).toBe(1);
     }
+  });
+});
+
+describe("combineAdvantageSources", () => {
+  it("no sources on either side is a plain normal roll, not a cancellation", () => {
+    expect(combineAdvantageSources([], [])).toEqual({ mode: "normal", canceled: false });
+  });
+
+  it("advantage sources alone yield advantage", () => {
+    expect(combineAdvantageSources(["manually selected"], [])).toEqual({
+      mode: "advantage",
+      canceled: false,
+    });
+  });
+
+  it("disadvantage sources alone yield disadvantage", () => {
+    expect(combineAdvantageSources([], ["target not perceived"])).toEqual({
+      mode: "disadvantage",
+      canceled: false,
+    });
+  });
+
+  it("any advantage plus any disadvantage cancels to a flat roll (SRD)", () => {
+    expect(
+      combineAdvantageSources(["target has Blinded (advantage against)"], ["target not perceived"])
+    ).toEqual({ mode: "normal", canceled: true });
+  });
+
+  it("multiple sources on one side never stack — still a single advantage", () => {
+    expect(
+      combineAdvantageSources(
+        ["manually selected", "target has Paralyzed (advantage against)"],
+        []
+      )
+    ).toEqual({ mode: "advantage", canceled: false });
+  });
+
+  it("one advantage cancels MANY disadvantages (and vice versa) — cancellation is not per-source", () => {
+    expect(
+      combineAdvantageSources(
+        ["manually selected"],
+        ["target not perceived", "target has Invisible (disadvantage against)"]
+      )
+    ).toEqual({ mode: "normal", canceled: true });
+    expect(
+      combineAdvantageSources(
+        ["manually selected", "target has Stunned (advantage against)"],
+        ["target not perceived"]
+      )
+    ).toEqual({ mode: "normal", canceled: true });
+  });
+
+  it("source strings are opaque — only presence counts, never content", () => {
+    expect(combineAdvantageSources([""], [])).toEqual({ mode: "advantage", canceled: false });
   });
 });

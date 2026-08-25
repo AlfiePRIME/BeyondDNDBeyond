@@ -40,6 +40,27 @@ export function attackOutcomeText(attack: AttackResolution): string {
   return attack.hit ? "Hit" : "Miss";
 }
 
+/** WHY the attack rolled with the mode it did (Prompt 59): every collected
+ * advantage/disadvantage source, spelled out — "Advantage — target has
+ * Blinded (advantage against)", "Disadvantage — target not perceived" —
+ * and, when sources on BOTH sides existed, the cancellation stated plainly
+ * rather than the roll silently looking unmodified. Null when nothing
+ * contributed at all (a plain normal attack, or any pre-59 logged roll,
+ * where the fields are simply absent — the damageText falsy-check
+ * convention). */
+export function advantageReasonText(attack: AttackResolution): string | null {
+  const advantage = attack.advantageSources ?? [];
+  const disadvantage = attack.disadvantageSources ?? [];
+  if (advantage.length === 0 && disadvantage.length === 0) return null;
+  if (advantage.length > 0 && disadvantage.length > 0) {
+    return `Advantage and disadvantage canceled to a flat roll — advantage: ${advantage.join(
+      ", "
+    )}; disadvantage: ${disadvantage.join(", ")}`;
+  }
+  if (advantage.length > 0) return `Advantage — ${advantage.join(", ")}`;
+  return `Disadvantage — ${disadvantage.join(", ")}`;
+}
+
 export function damageText(attack: AttackResolution): string | null {
   if (!attack.damage) return null;
   const dice = groupsText(attack.damage.groups, attack.damage.modifier);

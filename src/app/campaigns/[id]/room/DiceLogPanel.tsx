@@ -14,7 +14,7 @@ import {
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { CLASSES, type AdvantageMode, type AttackKind } from "@/rules-engine";
 import { postRoll } from "../roll/api";
-import { damageText, rollDetail, rollHeadline } from "../roll/format";
+import { advantageReasonText, damageText, rollDetail, rollHeadline } from "../roll/format";
 import type { RoomMember } from "./avatar-url";
 import styles from "./room.module.css";
 
@@ -357,6 +357,10 @@ export function DiceLogPanel({
                     damageNotation: damageNotation.trim(),
                     targetAc: parsedAc,
                     targetCharacterId: targetToken?.character_id ?? null,
+                    // The token itself (PC or NPC) so the server can find
+                    // the target's position for its perception check
+                    // (Prompt 59).
+                    targetTokenId: targetToken?.id ?? null,
                     targetName: targetToken ? tokenLabel(targetToken) : null,
                     mode,
                   })
@@ -403,6 +407,13 @@ export function DiceLogPanel({
               roll.breakdown.type === "d20" && roll.breakdown.attack
                 ? damageText(roll.breakdown.attack)
                 : null;
+            // WHY an attack rolled with advantage/disadvantage (or why
+            // opposing sources canceled to flat) — shown, not just stored
+            // in the breakdown (Prompt 59).
+            const advantageLine =
+              roll.breakdown.type === "d20" && roll.breakdown.attack
+                ? advantageReasonText(roll.breakdown.attack)
+                : null;
             return (
               <div key={roll.id} className={styles.rollEntry} data-testid={`roll-entry-${roll.id}`}>
                 <span className={styles.rollMeta}>
@@ -412,6 +423,14 @@ export function DiceLogPanel({
                 <span className={styles.rollDetail} data-testid={`roll-detail-${roll.id}`}>
                   {rollDetail(roll)}
                 </span>
+                {advantageLine ? (
+                  <span
+                    className={styles.rollDetail}
+                    data-testid={`roll-advantage-${roll.id}`}
+                  >
+                    {advantageLine}
+                  </span>
+                ) : null}
                 {damageLine ? (
                   <span className={styles.rollDetail} data-testid={`roll-damage-${roll.id}`}>
                     {damageLine}
