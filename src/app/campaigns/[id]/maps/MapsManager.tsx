@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Badge, Button, SectionHeader, Select, TextInput } from "@/ui-components";
+import { Badge, Button, ChoiceCard, SectionHeader, Select, TextInput } from "@/ui-components";
 import {
-  createMap,
   createMapFolder,
+  createPopulatedMap,
   deleteMapFolder,
+  duplicateMap,
   getMapThumbnailSignedUrl,
   renameMapFolder,
   setMapFolder,
@@ -15,7 +16,9 @@ import {
   type MapFolder,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
+import { overlayFromRows } from "./[mapId]/edit/lib/cellGrid";
 import { captureMapThumbnail } from "./lib/thumbnail";
+import { MAP_TEMPLATES } from "./lib/templates";
 import styles from "./maps.module.css";
 
 // 40x40 (1600 cells) keeps the editor comfortably inside the render3d
@@ -33,6 +36,7 @@ function MapCard({
   thumbnailUrl,
   busy,
   onAssign,
+  onDuplicate,
 }: {
   campaignId: string;
   map: CampaignMap;
@@ -40,6 +44,7 @@ function MapCard({
   thumbnailUrl: string | null;
   busy: boolean;
   onAssign: (map: CampaignMap, folderId: string | null) => void;
+  onDuplicate: (map: CampaignMap) => void;
 }) {
   const editHref = `/campaigns/${campaignId}/maps/${map.id}/edit`;
   return (
@@ -81,6 +86,15 @@ function MapCard({
           </option>
         ))}
       </Select>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={busy}
+        onClick={() => onDuplicate(map)}
+        data-testid={`duplicate-map-${map.id}`}
+      >
+        Duplicate
+      </Button>
     </li>
   );
 }
@@ -109,6 +123,7 @@ export function MapsManager({
   const [name, setName] = useState("");
   const [width, setWidth] = useState("20");
   const [height, setHeight] = useState("20");
+  const [templateId, setTemplateId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -207,6 +222,30 @@ export function MapsManager({
     }
   }
 
+  function handleDuplicate(source: CampaignMap) {
+    if (pendingMapId) return;
+    setPendingMapId(source.id);
+    setOrganizeError(null);
+    void (async () => {
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const { map, cells } = await duplicateMap(supabase, source.id);
+        let copy = map;
+        try {
+          const path = await captureMapThumbnail(supabase, map, overlayFromRows(cells));
+          copy = { ...map, thumbnail_ref: path };
+        } catch {
+          // Cosmetic — the copy's first editor save recaptures.
+        }
+        setMaps((prev) => [...prev, copy]);
+      } catch {
+        setOrganizeError("Couldn't duplicate the map — try again.");
+      } finally {
+        setPendingMapId(null);
+      }
+    })();
+  }
+
   function parseDimension(value: string): number | null {
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed < MIN_GRID || parsed > MAX_GRID) return null;
@@ -214,22 +253,34 @@ export function MapsManager({
   }
 
   async function handleCreate() {
-    const gridWidth = parseDimension(width);
-    const gridHeight = parseDimension(height);
+    const template = MAP_TEMPLATES.find((candidate) => candidate.id === templateId) ?? null;
+    const gridWidth = template ? template.gridWidth : parseDimension(width);
+    const gridHeight = template ? template.gridHeight : parseDimension(height);
     if (!name.trim() || gridWidth === null || gridHeight === null) {
-      setError(`Give the map a name and grid dimensions between ${MIN_GRID} and ${MAX_GRID}.`);
+      setError(
+        template
+          ? "Give the map a name."
+          : `Give the map a name and grid dimensions between ${MIN_GRID} and ${MAX_GRID}.`
+      );
       return;
     }
     setBusy(true);
     setError(null);
     try {
       const supabase = createBrowserSupabaseClient();
-      const map = await createMap(supabase, { campaignId, name, gridWidth, gridHeight });
+      const { map, cells } = await createPopulatedMap(supabase, {
+        campaignId,
+        name,
+        gridWidth,
+        gridHeight,
+        cells: template?.cells ?? [],
+        objects: template?.objects ?? [],
+      });
       try {
-        await captureMapThumbnail(supabase, map, new Map());
+        await captureMapThumbnail(supabase, map, overlayFromRows(cells));
       } catch {
-        // A fresh map's all-flat snapshot is cosmetic — the editor's first
-        // save recaptures, so creation must not fail over it.
+        // A fresh map's snapshot is cosmetic — the editor's first save
+        // recaptures, so creation must not fail over it.
       }
       router.push(`/campaigns/${campaignId}/maps/${map.id}/edit`);
     } catch {
@@ -257,6 +308,7 @@ export function MapsManager({
             thumbnailUrl={thumbnails[map.id] ?? null}
             busy={pendingMapId !== null}
             onAssign={handleAssign}
+            onDuplicate={handleDuplicate}
           />
         ))}
       </ul>
@@ -377,6 +429,31 @@ export function MapsManager({
 
       <div className={styles.createSection}>
         <SectionHeader eyebrow="DM tools" title="Create a new map" />
+        <div className={styles.templateGrid} data-testid="template-picker">
+          <ChoiceCard
+            selected={templateId === null}
+            disabled={busy}
+            onClick={() => setTemplateId(null)}
+            title="Blank grid"
+            meta="Custom size"
+            data-testid="template-blank"
+          >
+            An empty flat grid at whatever size you set.
+          </ChoiceCard>
+          {MAP_TEMPLATES.map((template) => (
+            <ChoiceCard
+              key={template.id}
+              selected={templateId === template.id}
+              disabled={busy}
+              onClick={() => setTemplateId(template.id)}
+              title={template.name}
+              meta={`${template.gridWidth}×${template.gridHeight}`}
+              data-testid={`template-${template.id}`}
+            >
+              {template.description}
+            </ChoiceCard>
+          ))}
+        </div>
         <div className={styles.createForm}>
           <TextInput
             label="Map name"
@@ -386,26 +463,30 @@ export function MapsManager({
             disabled={busy}
             className={styles.nameField}
           />
-          <TextInput
-            label="Width"
-            type="number"
-            min={MIN_GRID}
-            max={MAX_GRID}
-            value={width}
-            onChange={(event) => setWidth(event.target.value)}
-            disabled={busy}
-            className={styles.dimensionField}
-          />
-          <TextInput
-            label="Height"
-            type="number"
-            min={MIN_GRID}
-            max={MAX_GRID}
-            value={height}
-            onChange={(event) => setHeight(event.target.value)}
-            disabled={busy}
-            className={styles.dimensionField}
-          />
+          {templateId === null ? (
+            <>
+              <TextInput
+                label="Width"
+                type="number"
+                min={MIN_GRID}
+                max={MAX_GRID}
+                value={width}
+                onChange={(event) => setWidth(event.target.value)}
+                disabled={busy}
+                className={styles.dimensionField}
+              />
+              <TextInput
+                label="Height"
+                type="number"
+                min={MIN_GRID}
+                max={MAX_GRID}
+                value={height}
+                onChange={(event) => setHeight(event.target.value)}
+                disabled={busy}
+                className={styles.dimensionField}
+              />
+            </>
+          ) : null}
           <Button
             variant="teal"
             disabled={busy}
@@ -416,7 +497,9 @@ export function MapsManager({
           </Button>
         </div>
         <p className={styles.createHint}>
-          Cells: {MIN_GRID}–{MAX_GRID} per side, 5 ft each.
+          {templateId === null
+            ? `Cells: ${MIN_GRID}–${MAX_GRID} per side, 5 ft each.`
+            : "Starts from the template's pre-built layout — everything stays editable."}
         </p>
         {error ? (
           <p role="alert" className={styles.errorText}>

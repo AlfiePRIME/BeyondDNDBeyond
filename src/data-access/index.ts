@@ -73,6 +73,8 @@ export {
 } from "./assets";
 export {
   createMap,
+  createPopulatedMap,
+  duplicateMap,
   listMapsForCampaign,
   getMap,
   listMapCells,
@@ -90,6 +92,8 @@ export {
   type CampaignMap,
   type MapCell,
   type MapFolder,
+  type NewMapCell,
+  type NewMapObjectSeed,
 } from "./maps";
 export {
   listMapObjects,

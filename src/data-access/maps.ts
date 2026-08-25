@@ -56,6 +56,128 @@ export async function createMap(
   return data;
 }
 
+export interface NewMapCell {
+  x: number;
+  y: number;
+  elevation: number;
+  terrain_type: TerrainType;
+}
+
+export interface NewMapObjectSeed {
+  asset_id: string;
+  x: number;
+  y: number;
+  elevation: number;
+  rotation: number;
+  behavior_config?: Record<string, unknown>;
+}
+
+/**
+ * createMap plus pre-populated content in one call: inserts the
+ * campaign_maps row (optionally straight into a folder), then batch-inserts
+ * the given cells and objects under the new map's id. The single creation
+ * pathway for anything born non-blank — duplication and starter templates
+ * both go through here. Not atomic (three statements, no RPC): a failure
+ * mid-way can strand a partially-populated map, which the DM can simply see
+ * and delete — not worth a SECURITY DEFINER function to prevent.
+ *
+ * Returns the stored cell rows alongside the map so callers can render a
+ * thumbnail from the known-upfront terrain without re-fetching.
+ */
+export async function createPopulatedMap(
+  supabase: SupabaseClient,
+  params: {
+    campaignId: string;
+    name: string;
+    gridWidth: number;
+    gridHeight: number;
+    folderId?: string | null;
+    cells: NewMapCell[];
+    objects: NewMapObjectSeed[];
+  }
+): Promise<{ map: CampaignMap; cells: MapCell[] }> {
+  const { data: map, error } = await supabase
+    .from("campaign_maps")
+    .insert({
+      campaign_id: params.campaignId,
+      name: params.name.trim(),
+      grid_width: params.gridWidth,
+      grid_height: params.gridHeight,
+      folder_id: params.folderId ?? null,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+
+  const cells: MapCell[] = params.cells.map((cell) => ({
+    map_id: map.id,
+    x: cell.x,
+    y: cell.y,
+    elevation: cell.elevation,
+    terrain_type: cell.terrain_type,
+  }));
+  await upsertMapCells(supabase, cells);
+
+  if (params.objects.length > 0) {
+    const { error: objectsError } = await supabase.from("map_objects").insert(
+      params.objects.map((object) => ({
+        map_id: map.id,
+        asset_id: object.asset_id,
+        x: object.x,
+        y: object.y,
+        elevation: object.elevation,
+        rotation: object.rotation,
+        ...(object.behavior_config !== undefined
+          ? { behavior_config: object.behavior_config }
+          : {}),
+      }))
+    );
+    if (objectsError) throw objectsError;
+  }
+
+  return { map, cells };
+}
+
+/**
+ * Clones a map — terrain, elevation, and objects — as a new independent map
+ * in the same campaign and folder. Objects keep their authored behavior
+ * (action/content/playerTriggerable) but `triggered` resets to false: the
+ * copy is a fresh authoring artifact that hasn't been played through, so a
+ * sprung trap or opened chest on the source starts un-triggered here.
+ */
+export async function duplicateMap(
+  supabase: SupabaseClient,
+  sourceMapId: string
+): Promise<{ map: CampaignMap; cells: MapCell[] }> {
+  const source = await getMap(supabase, sourceMapId);
+  if (!source) throw new Error("Map not found.");
+
+  const [cells, objectsResult] = await Promise.all([
+    listMapCells(supabase, sourceMapId),
+    supabase
+      .from("map_objects")
+      .select("asset_id, x, y, elevation, rotation, behavior_config")
+      .eq("map_id", sourceMapId),
+  ]);
+  if (objectsResult.error) throw objectsResult.error;
+
+  return createPopulatedMap(supabase, {
+    campaignId: source.campaign_id,
+    name: `${source.name} (Copy)`,
+    gridWidth: source.grid_width,
+    gridHeight: source.grid_height,
+    folderId: source.folder_id,
+    cells,
+    objects: (objectsResult.data ?? []).map((object) => ({
+      ...object,
+      behavior_config:
+        "triggered" in object.behavior_config
+          ? { ...object.behavior_config, triggered: false }
+          : object.behavior_config,
+    })),
+  });
+}
+
 /**
  * Every map RLS lets the caller see: all of them for the campaign's DM,
  * only the live one (if any) for other members.

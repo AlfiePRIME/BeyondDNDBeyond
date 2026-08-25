@@ -88,6 +88,21 @@ palette and linear-space lerp exactly; the editor recaptures on every cell save 
 AI-draft accept, and map creation captures an initial all-flat snapshot. The folder-grouped
 picker UI replaces the flat list at `src/app/campaigns/[id]/maps/`.
 
+As of Prompt 40, `maps.ts` gains the two map-cloning/pre-population functions:
+`createPopulatedMap(supabase, { campaignId, name, gridWidth, gridHeight, folderId?, cells,
+objects })` — createMap plus batch-inserted `map_cells` and `map_objects` in one call, the
+single creation pathway for any map born non-blank (returns the stored cell rows alongside
+the map so callers can thumbnail the known-upfront terrain without a re-fetch) — and
+`duplicateMap(supabase, sourceMapId)`, which reads the source map's row/cells/objects and
+funnels them through `createPopulatedMap` as "`{name}` (Copy)" in the same folder. Cloned
+objects keep their authored behavior config but reset `triggered` to false: a copy is a
+fresh authoring artifact that hasn't been played through. No new RLS anywhere — both are
+pure orchestration over the existing DM-only insert policies. Neither is atomic (no RPC): a
+mid-way failure strands a visible, deletable partial map, not worth a SECURITY DEFINER
+function. Consumers: the map picker's per-card Duplicate button and the starter-template
+create flow (`src/app/campaigns/[id]/maps/lib/templates.ts` defines the static Empty Room /
+Corridor / Tavern layouts over the 0016 preset asset ids).
+
 This is a schema/RLS/data-access-only prompt (UI for these tables is deferred: NPC roster
 in 33, lore pages in 34, and further prompts for quests/session log/handouts/notes/house
 rules). Every write function is DM-gated purely by the table's own RLS (0020) — no RPC

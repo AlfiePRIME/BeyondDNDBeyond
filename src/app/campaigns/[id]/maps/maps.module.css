@@ -164,6 +164,12 @@
   align-items: flex-start;
 }
 
+.templateGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
 .folderForm {
   display: flex;
   gap: 10px;
