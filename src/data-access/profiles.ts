@@ -132,9 +132,16 @@ export async function uploadAvatarFile(
   file: File
 ): Promise<string> {
   const path = `${userId}/avatar.glb`;
+  // Re-wrapped as a Blob with the type we actually want — see
+  // uploadMapAssetFile's identical comment in assets.ts: many OSes don't
+  // register .glb, so the browser reports the raw File's own `.type` as
+  // "application/octet-stream", and storage-js sends THAT rather than the
+  // `contentType` option below, which the avatars bucket's MIME allowlist
+  // then rejects.
+  const glbBlob = new Blob([file], { type: "model/gltf-binary" });
   const { error } = await supabase.storage
     .from("avatars")
-    .upload(path, file, { contentType: "model/gltf-binary", upsert: true });
+    .upload(path, glbBlob, { contentType: "model/gltf-binary", upsert: true });
 
   if (error) throw error;
   return path;

@@ -50,9 +50,18 @@ export async function uploadMapAssetFile(
   file: File
 ): Promise<string> {
   const path = `${campaignId}/${crypto.randomUUID()}.glb`;
+  // Re-wrapped as a Blob with the type we actually want: many OSes (Windows
+  // especially) don't have .glb registered, so the browser reports the raw
+  // File's own `.type` as "application/octet-stream" — and storage-js sends
+  // THAT, not the `contentType` upload option, as the request's real MIME
+  // type. The bucket only allows "model/gltf-binary" (0017), so an
+  // unmodified File upload gets rejected with InvalidMimeType regardless of
+  // the option below. Forcing the Blob's own type is what actually reaches
+  // Storage.
+  const glbBlob = new Blob([file], { type: "model/gltf-binary" });
   const { error } = await supabase.storage
     .from("map-assets")
-    .upload(path, file, { contentType: "model/gltf-binary" });
+    .upload(path, glbBlob, { contentType: "model/gltf-binary" });
 
   if (error) throw error;
   return path;
