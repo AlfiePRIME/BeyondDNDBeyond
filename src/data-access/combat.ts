@@ -25,6 +25,13 @@ export interface CombatCombatant {
   token_id: string;
   character_id: string | null;
   npc_name: string | null;
+  /** Snapshotted from the token when the combatant is added (Prompt 61) —
+   * the character_id/npc_name arrangement. Null for PCs and bare NPCs. */
+  monster_stat_block_id: string | null;
+  /** Instance HP for a stat-blocked NPC combatant, initialized from the
+   * template's max_hp when added; null for PCs (HP lives on characters)
+   * and bare unstatted NPCs (no HP anywhere, as before Prompt 61). */
+  npc_current_hp: number | null;
   initiative: number | null;
   action_used: boolean;
   bonus_action_used: boolean;
@@ -134,6 +141,8 @@ export async function getActiveCombatantForCharacter(
     token_id: row.token_id,
     character_id: row.character_id,
     npc_name: row.npc_name,
+    monster_stat_block_id: row.monster_stat_block_id,
+    npc_current_hp: row.npc_current_hp,
     initiative: row.initiative,
     action_used: row.action_used,
     bonus_action_used: row.bonus_action_used,
@@ -142,6 +151,53 @@ export async function getActiveCombatantForCharacter(
     disengaged: row.disengaged,
     created_at: row.created_at,
   };
+}
+
+/**
+ * Adds ONE combatant to an ALREADY-ACTIVE encounter via the add_combatant
+ * RPC (0038) — the quick-add flow's insertion, a capability start_combat
+ * (seed-everyone-once) never had. DM-only (the RPC checks is_campaign_dm);
+ * throws with the RPC's specific message if the encounter has ended, the
+ * token belongs to another campaign, or the token is already in the fight.
+ * character_id/npc_name/monster_stat_block_id are snapshotted from the
+ * token and npc_current_hp initialized from the linked stat block's max_hp,
+ * exactly like start_combat's seed; the given initiative sorts the row
+ * into the canonical turn order at read time — no list splicing.
+ */
+export async function addCombatant(
+  supabase: SupabaseClient,
+  encounterId: string,
+  tokenId: string,
+  initiative: number
+): Promise<CombatCombatant> {
+  const { data, error } = await supabase.rpc("add_combatant", {
+    p_encounter_id: encounterId,
+    p_token_id: tokenId,
+    p_initiative: initiative,
+  });
+  if (error) throw error;
+  return data as CombatCombatant;
+}
+
+/**
+ * Signed HP delta for a stat-blocked NPC combatant via apply_npc_hp_delta
+ * (0038) — applyHpDelta's clamp shape applied to npc_current_hp, with the
+ * upper bound joined from the linked stat block's max_hp. SECURITY INVOKER
+ * through can_write_combatant, which for an NPC combatant (no owning
+ * player) is DM-only by construction. Throws for a PC or bare-NPC
+ * combatant (no npc_current_hp to move) or an unauthorized caller.
+ */
+export async function applyNpcHpDelta(
+  supabase: SupabaseClient,
+  combatantId: string,
+  delta: number
+): Promise<CombatCombatant> {
+  const { data, error } = await supabase.rpc("apply_npc_hp_delta", {
+    p_combatant_id: combatantId,
+    p_delta: delta,
+  });
+  if (error) throw error;
+  return data as CombatCombatant;
 }
 
 /**

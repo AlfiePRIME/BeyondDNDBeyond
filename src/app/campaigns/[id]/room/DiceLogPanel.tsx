@@ -9,11 +9,13 @@ import {
   type ActionOverride,
   type Character,
   type MapToken,
+  type MonsterStatBlock,
   type RollLogEntry,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { CLASSES, type AdvantageMode, type AttackKind } from "@/rules-engine";
 import { postRoll } from "../roll/api";
+import type { CombatState } from "./CombatPanel";
 import {
   advantageReasonText,
   damageText,
@@ -79,9 +81,16 @@ export function AdvantageToggle({
  * The Game Room's shared dice panel: the campaign roll log (live via a
  * postgres_changes subscription on roll_log — NOT the room's campaign
  * broadcast channel, so rolls made from the character sheet page arrive
- * here too), a free-form roller, and the attack flow. Target AC is entered
- * manually — NPCs have no stored AC anywhere yet — with a convenience
- * auto-fill when the target is a PC whose row the roller can read.
+ * here too), a free-form roller, and the attack flow. Target AC
+ * auto-fills for a readable PC target and — as of Prompt 61, closing the
+ * long-deferred gap — for a stat-blocked NPC target (its stat block's
+ * armor_class); manual entry remains the fallback only for a genuinely
+ * bare, unstatted NPC. As of Prompt 61 the attacker select also offers
+ * the DM (and only the DM) every stat-blocked NPC combatant in the active
+ * encounter: choosing one swaps the attack-kind/damage inputs for the
+ * stat block's stored attack list, and firing posts the
+ * attackerCombatantId/attackName roll request — the server uses the
+ * stored bonus and damage directly, nothing rules-engine-derived.
  *
  * As of Prompt 52 the log ALSO subscribes to action_overrides and renders
  * DM approvals/denials of flagged actions interleaved with the rolls by
@@ -96,6 +105,8 @@ export function DiceLogPanel({
   currentUserId,
   isDM,
   characters,
+  statBlocks,
+  combat,
   tokens,
   members,
   initialRolls,
@@ -106,6 +117,12 @@ export function DiceLogPanel({
   isDM: boolean;
   /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
   characters: Character[];
+  /** Member-readable (0038): AC auto-fill for stat-blocked NPC targets,
+   * and the DM's monster-attacker options. */
+  statBlocks: MonsterStatBlock[];
+  /** The active encounter, for the DM's monster-attacker options — an NPC
+   * attack needs a combatant to swing as. */
+  combat: CombatState | null;
   tokens: MapToken[];
   members: RoomMember[];
   initialRolls: RollLogEntry[];
@@ -124,9 +141,12 @@ export function DiceLogPanel({
     () => characters.filter((character) => isDM || character.owner_id === currentUserId),
     [characters, isDM, currentUserId]
   );
+  // A monster attacker option's value is "combatant:<id>" so PC options
+  // keep their bare character-id values (which callers/tests select by).
   const [attackerId, setAttackerId] = useState("");
   const attacker = attackers.find((candidate) => candidate.id === attackerId) ?? null;
   const [attackKind, setAttackKind] = useState<AttackKind>("melee");
+  const [attackName, setAttackName] = useState("");
   const [damageNotation, setDamageNotation] = useState("1d6");
   const [targetTokenId, setTargetTokenId] = useState("");
   const [acDraft, setAcDraft] = useState("");
@@ -136,6 +156,39 @@ export function DiceLogPanel({
     () => new Map(characters.map((character) => [character.id, character])),
     [characters]
   );
+
+  const statBlockById = useMemo(
+    () => new Map(statBlocks.map((statBlock) => [statBlock.id, statBlock])),
+    [statBlocks]
+  );
+
+  // The DM's monster attackers (Prompt 61): every stat-blocked NPC
+  // combatant in the active encounter. Players never see these — an NPC
+  // attack is DM-only, enforced again server-side.
+  const monsterAttackers = useMemo(
+    () =>
+      isDM && combat
+        ? combat.combatants.filter(
+            (combatant) =>
+              combatant.character_id === null && combatant.monster_stat_block_id !== null
+          )
+        : [],
+    [isDM, combat]
+  );
+  const monsterAttacker =
+    attackerId.startsWith("combatant:")
+      ? (monsterAttackers.find(
+          (candidate) => candidate.id === attackerId.slice("combatant:".length)
+        ) ?? null)
+      : null;
+  const monsterStatBlock = monsterAttacker?.monster_stat_block_id
+    ? (statBlockById.get(monsterAttacker.monster_stat_block_id) ?? null)
+    : null;
+  const monsterAttacks = monsterStatBlock?.attacks ?? [];
+  const chosenMonsterAttack =
+    monsterAttacks.find((candidate) => candidate.name === attackName) ??
+    monsterAttacks[0] ??
+    null;
 
   const memberNameById = useMemo(
     () => new Map(members.map((member) => [member.user_id, member.display_name])),
@@ -214,9 +267,14 @@ export function DiceLogPanel({
     const targetCharacter = token?.character_id
       ? (characterById.get(token.character_id) ?? null)
       : null;
-    // Convenience only — an unreadable PC or any NPC still needs the AC
-    // typed in by hand.
-    if (targetCharacter) setAcDraft(String(targetCharacter.armor_class));
+    // Convenience only — a readable PC's armor_class, or (Prompt 61) a
+    // stat-blocked NPC's stat block armor_class; an unreadable PC or a
+    // genuinely bare NPC still needs the AC typed in by hand.
+    const statBlockAc = token?.monster_stat_block_id
+      ? (statBlockById.get(token.monster_stat_block_id)?.armor_class ?? null)
+      : null;
+    const knownAc = targetCharacter?.armor_class ?? statBlockAc;
+    if (knownAc !== null && knownAc !== undefined) setAcDraft(String(knownAc));
   }
 
   async function run(action: () => Promise<RollLogEntry>) {
@@ -244,7 +302,11 @@ export function DiceLogPanel({
   })();
 
   const canAttack =
-    attacker !== null && parsedAc !== null && damageNotation.trim() !== "" && !busy;
+    parsedAc !== null &&
+    !busy &&
+    (monsterAttacker !== null
+      ? chosenMonsterAttack !== null
+      : attacker !== null && damageNotation.trim() !== "");
 
   return (
     <aside className={styles.dicePanel} data-testid="dice-log-panel">
@@ -277,16 +339,17 @@ export function DiceLogPanel({
         </Button>
       </form>
 
-      {attackers.length > 0 ? (
+      {attackers.length > 0 || monsterAttackers.length > 0 ? (
         <div className={styles.attackForm} data-testid="attack-form">
           <span className={styles.diceSectionLabel}>Attack</span>
           <div className={styles.attackRow}>
             <select
               className={styles.diceSelect}
-              aria-label="Attacking character"
+              aria-label="Attacker"
               value={attackerId}
               onChange={(event) => {
                 setAttackerId(event.target.value);
+                setAttackName("");
                 if (attackKind === "spell") setAttackKind("melee");
               }}
               data-testid="attack-attacker-select"
@@ -297,20 +360,50 @@ export function DiceLogPanel({
                   {candidate.name}
                 </option>
               ))}
-            </select>
-            <select
-              className={styles.diceSelect}
-              aria-label="Attack kind"
-              value={attackKind}
-              onChange={(event) => setAttackKind(event.target.value as AttackKind)}
-              data-testid="attack-kind-select"
-            >
-              {(Object.keys(ATTACK_KIND_LABEL) as AttackKind[]).map((kind) => (
-                <option key={kind} value={kind} disabled={kind === "spell" && !spellCapable}>
-                  {ATTACK_KIND_LABEL[kind]}
+              {/* DM-only monster attackers (Prompt 61): value-prefixed so
+                  PC options keep their bare character-id values. */}
+              {monsterAttackers.map((candidate) => (
+                <option key={candidate.id} value={`combatant:${candidate.id}`}>
+                  {candidate.npc_name ?? "Monster"} (monster)
                 </option>
               ))}
             </select>
+            {monsterAttacker ? (
+              // The stat block's stored attacks replace the kind/damage
+              // inputs — the server uses the stored bonus/damageNotation,
+              // so there is nothing else to type.
+              <select
+                className={styles.diceSelect}
+                aria-label="Stat block attack"
+                value={chosenMonsterAttack?.name ?? ""}
+                onChange={(event) => setAttackName(event.target.value)}
+                data-testid="attack-monster-attack-select"
+              >
+                {monsterAttacks.length === 0 ? (
+                  <option value="">No attacks on this stat block</option>
+                ) : null}
+                {monsterAttacks.map((candidate) => (
+                  <option key={candidate.name} value={candidate.name}>
+                    {candidate.name} ({candidate.bonus >= 0 ? "+" : ""}
+                    {candidate.bonus}, {candidate.damageNotation})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select
+                className={styles.diceSelect}
+                aria-label="Attack kind"
+                value={attackKind}
+                onChange={(event) => setAttackKind(event.target.value as AttackKind)}
+                data-testid="attack-kind-select"
+              >
+                {(Object.keys(ATTACK_KIND_LABEL) as AttackKind[]).map((kind) => (
+                  <option key={kind} value={kind} disabled={kind === "spell" && !spellCapable}>
+                    {ATTACK_KIND_LABEL[kind]}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div className={styles.attackRow}>
             <select
@@ -338,14 +431,16 @@ export function DiceLogPanel({
               onChange={(event) => setAcDraft(event.target.value)}
               data-testid="attack-target-ac-input"
             />
-            <input
-              className={styles.initiativeInput}
-              placeholder="1d6"
-              aria-label="Damage dice"
-              value={damageNotation}
-              onChange={(event) => setDamageNotation(event.target.value)}
-              data-testid="attack-damage-input"
-            />
+            {monsterAttacker ? null : (
+              <input
+                className={styles.initiativeInput}
+                placeholder="1d6"
+                aria-label="Damage dice"
+                value={damageNotation}
+                onChange={(event) => setDamageNotation(event.target.value)}
+                data-testid="attack-damage-input"
+              />
+            )}
           </div>
           <div className={styles.attackRow}>
             <AdvantageToggle mode={mode} onChange={setMode} disabled={busy} testIdPrefix="attack" />
@@ -354,7 +449,26 @@ export function DiceLogPanel({
               variant="accent"
               disabled={!canAttack}
               onClick={() => {
-                if (!attacker || parsedAc === null) return;
+                if (parsedAc === null) return;
+                if (monsterAttacker && chosenMonsterAttack) {
+                  // The Prompt 61 NPC-attacker request: the server looks
+                  // the named attack up on the SNAPSHOTTED stat block and
+                  // uses its stored bonus/damage — nothing else is sent.
+                  void run(() =>
+                    postRoll(campaignId, {
+                      kind: "attack",
+                      attackerCombatantId: monsterAttacker.id,
+                      attackName: chosenMonsterAttack.name,
+                      targetAc: parsedAc,
+                      targetCharacterId: targetToken?.character_id ?? null,
+                      targetTokenId: targetToken?.id ?? null,
+                      targetName: targetToken ? tokenLabel(targetToken) : null,
+                      mode,
+                    })
+                  );
+                  return;
+                }
+                if (!attacker) return;
                 void run(() =>
                   postRoll(campaignId, {
                     kind: "attack",

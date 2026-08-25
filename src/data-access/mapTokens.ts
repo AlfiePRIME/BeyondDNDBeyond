@@ -8,13 +8,18 @@ export type TokenAllegiance = (typeof TOKEN_ALLEGIANCES)[number];
  * A token placed on a map — a PC token (character_id set) or a DM-created
  * NPC placeholder (npc_name set), never both (CHECK constraint in 0019).
  * Rows exist only for placed tokens: "every character has a token
- * available" is the UI offering placement, not a pre-created row.
+ * available" is the UI offering placement, not a pre-created row. As of
+ * Prompt 61 an NPC token may ALSO link a monster stat block
+ * (monster_stat_block_id) — still an ordinary npc_name token to every
+ * existing display path (npc_name is populated from the stat block's name
+ * at creation), the link just makes its AC/HP/passive Perception real.
  */
 export interface MapToken {
   id: string;
   map_id: string;
   character_id: string | null;
   npc_name: string | null;
+  monster_stat_block_id: string | null;
   x: number;
   y: number;
   elevation: number;
@@ -56,16 +61,27 @@ export async function placeCharacterToken(
 }
 
 /** DM-only by construction: with no character_id, only the can_write_map
- * branch of the RLS predicate can pass. */
+ * branch of the RLS predicate can pass. As of Prompt 61 an optional
+ * monsterStatBlockId links the token to a stat block (the quick-add flow
+ * passes the block's own name as npcName, keeping every npc_name display
+ * path unchanged); omitted, this is the bare placeholder it always was. */
 export async function placeNpcToken(
   supabase: SupabaseClient,
-  params: { mapId: string; npcName: string; x: number; y: number; elevation: number }
+  params: {
+    mapId: string;
+    npcName: string;
+    x: number;
+    y: number;
+    elevation: number;
+    monsterStatBlockId?: string | null;
+  }
 ): Promise<MapToken> {
   const { data, error } = await supabase
     .from("map_tokens")
     .insert({
       map_id: params.mapId,
       npc_name: params.npcName.trim(),
+      monster_stat_block_id: params.monsterStatBlockId ?? null,
       x: params.x,
       y: params.y,
       elevation: params.elevation,

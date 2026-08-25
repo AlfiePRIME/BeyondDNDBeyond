@@ -16,6 +16,8 @@ import {
   listMapObjects,
   listMapsForCampaign,
   listMapTokens,
+  listMonsterStatBlocks,
+  listNpcs,
   listRollLog,
 } from "@/data-access";
 import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
@@ -63,21 +65,28 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   // The DB read here (not any broadcast) is what makes fresh joins and
   // reloads land on the currently-live map — a client that wasn't connected
   // when the DM switched never saw the live-map-changed event.
-  const [assets, availableMaps, characters, handoutRows, initialRolls] = await Promise.all([
-    listAssetsForCampaign(supabase, campaignId),
-    // Non-DM RLS only exposes the live map anyway, and only the DM gets the
-    // picker — no point fetching a list for players.
-    currentUserIsDM ? listMapsForCampaign(supabase, campaignId) : Promise.resolve([]),
-    // Characters RLS trims this per viewer: a player gets only their own,
-    // the DM gets every campaign character — exactly who each may place.
-    listCharactersForCampaign(supabase, campaignId),
-    // Handouts RLS trims per viewer too: every row for the DM, revealed
-    // rows only for a player.
-    listHandouts(supabase, campaignId),
-    // Same DB-read reasoning as the live map: fresh joins see recent rolls
-    // without having been subscribed when they landed.
-    listRollLog(supabase, campaignId),
-  ]);
+  const [assets, availableMaps, characters, handoutRows, initialRolls, initialStatBlocks, rosterNpcs] =
+    await Promise.all([
+      listAssetsForCampaign(supabase, campaignId),
+      // Non-DM RLS only exposes the live map anyway, and only the DM gets the
+      // picker — no point fetching a list for players.
+      currentUserIsDM ? listMapsForCampaign(supabase, campaignId) : Promise.resolve([]),
+      // Characters RLS trims this per viewer: a player gets only their own,
+      // the DM gets every campaign character — exactly who each may place.
+      listCharactersForCampaign(supabase, campaignId),
+      // Handouts RLS trims per viewer too: every row for the DM, revealed
+      // rows only for a player.
+      listHandouts(supabase, campaignId),
+      // Same DB-read reasoning as the live map: fresh joins see recent rolls
+      // without having been subscribed when they landed.
+      listRollLog(supabase, campaignId),
+      // Monster stat blocks (Prompt 61), member-readable — AC auto-fill
+      // for stat-blocked NPC targets needs them on every client.
+      listMonsterStatBlocks(supabase, campaignId),
+      // The narrative roster, only for the DM's MonsterPanel name
+      // pre-fill; players never see the panel, so no point fetching.
+      currentUserIsDM ? listNpcs(supabase, campaignId) : Promise.resolve([]),
+    ]);
   const initialHandouts = await Promise.all(
     handoutRows.map((handout) => resolveHandout(supabase, handout))
   );
@@ -127,6 +136,8 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       availableMaps={availableMaps}
       assets={paletteAssets}
       characters={characters}
+      initialStatBlocks={initialStatBlocks}
+      rosterNpcs={rosterNpcs}
       initialHandouts={initialHandouts}
       initialCombat={initialCombat}
       initialRolls={initialRolls}

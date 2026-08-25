@@ -14,7 +14,7 @@ A remote-play 3D virtual tabletop for Dungeons & Dragons 5e — built for a smal
 
 ## Status
 
-Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-60 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, the avatar library/upload, D&D Beyond PDF character import, the Account page, the real-time campaign channel, reconnection/session resilience, the Lobby screen, the 3D table scene foundation, player seating/camera, rendering seated avatars, the session start/DM assignment flow, the map/asset data model, the built-in preset asset library, the custom asset upload pipeline, the map editor's terrain/elevation tool, object/POI placement, interactive POI behavior, live map rendering/switching on the tabletop, the grid overlay/token placement system, elevation/terrain-aware drag-to-move for tokens, the campaign narrative data model, the NPC roster, the world/lore page wiki, the session log/live handout reveal system, the private DM notes/house rules editors, AI-assisted NPC/lore drafting, AI-assisted procedural map area generation, map folders/thumbnails, map duplication/starter templates, map editor undo/redo, multi-floor map transitions, the measuring/ruler tool, the editor-only reference image underlay, the combat initiative tracker, in-combat HP/damage tracking, status condition tracking, the integrated server-side dice roller, death saving throws with instant death, concentration tracking, the contextual quick-actions panel, the DM rule-override control, action economy tracking with the DM strictness toggle, opportunity attacks with the Disengage action, the character-vision/map-lighting data model, the perception/vision rules engine, the map editor's lighting authoring mode, per-player vision rendering with seen-cell fog-of-war memory, vision-driven automatic advantage/disadvantage on attack rolls, and Hide/Stealth with per-observer hidden state for players and NPCs alike) are complete and verified end to end against a running local Supabase stack.
+Implementation is underway, prompt by prompt, so the app can be reviewed and adjusted as it forms rather than built all at once. Prompts 1-61 (scaffolding, module boundaries, design system, database schema, email/password auth, campaign creation/join, DM role handoff, the character data model, the 5e rules engine, the character creation flow, the full character sheet, the rest mechanic, the avatar library/upload, D&D Beyond PDF character import, the Account page, the real-time campaign channel, reconnection/session resilience, the Lobby screen, the 3D table scene foundation, player seating/camera, rendering seated avatars, the session start/DM assignment flow, the map/asset data model, the built-in preset asset library, the custom asset upload pipeline, the map editor's terrain/elevation tool, object/POI placement, interactive POI behavior, live map rendering/switching on the tabletop, the grid overlay/token placement system, elevation/terrain-aware drag-to-move for tokens, the campaign narrative data model, the NPC roster, the world/lore page wiki, the session log/live handout reveal system, the private DM notes/house rules editors, AI-assisted NPC/lore drafting, AI-assisted procedural map area generation, map folders/thumbnails, map duplication/starter templates, map editor undo/redo, multi-floor map transitions, the measuring/ruler tool, the editor-only reference image underlay, the combat initiative tracker, in-combat HP/damage tracking, status condition tracking, the integrated server-side dice roller, death saving throws with instant death, concentration tracking, the contextual quick-actions panel, the DM rule-override control, action economy tracking with the DM strictness toggle, opportunity attacks with the Disengage action, the character-vision/map-lighting data model, the perception/vision rules engine, the map editor's lighting authoring mode, per-player vision rendering with seen-cell fog-of-war memory, vision-driven automatic advantage/disadvantage on attack rolls, Hide/Stealth with per-observer hidden state for players and NPCs alike, and the DM's NPC/monster stat-block tools with mid-combat quick-add) are complete and verified end to end against a running local Supabase stack.
 
 Prompt 58's vision masking is deliberately client-side presentation, not a security boundary: the server already sends every campaign member the full live map (the Prompt 55 RLS posture, unchanged), and each player's own browser masks what their active character can't currently perceive. A technically-savvy player could inspect network traffic or app state and see everything — the project owner's explicit preference for a trusted friend group, chosen over server-side filtering on purpose.
 
@@ -165,33 +165,37 @@ node scripts/db/verify-vision-data-model.mjs # verify the vision data model: dar
 node scripts/db/verify-vision-rendering.mjs # verify per-player vision rendering: DM never masked, most-recent-token resolution, live re-masking on moves/carried lights/blinding, remembered seen-cells (Prompt 58)
 node scripts/db/verify-vision-advantage.mjs # verify vision-driven advantage/disadvantage on attack rolls: auto-disadvantage on an unperceived target, condition-flag advantage/disadvantage, SRD cancellation to a flat roll with both reasons stated, graceful no-map/no-token fallback (Prompt 59)
 node scripts/db/verify-hide-stealth.mjs # verify Hide/Stealth: per-observer passive-Perception resolution (NPC default 10), perception-eligibility skips, replace-not-accumulate, hidden-token rendering live in a real browser, reveal-on-attack with "attacking from hiding" advantage, manual reveal, hider-side RLS (Prompt 60)
+node scripts/db/verify-npc-stat-blocks.mjs # verify DM monster stat blocks: DM-only CRUD, quick-add before/mid-combat via add_combatant into the canonical turn order, stored-bonus/damage attacks through the roll route with the full death-save/instant-death/concentration bookkeeping, Strict economy gating, NPC HP clamps, stat-block AC auto-fill in a real browser, real passive Perception in Hide resolution (Prompt 61)
 ```
 
 The first two connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`)
 using the tenant-qualified username `postgres.$POOLER_TENANT_ID` — plain `postgres` fails with
 "no tenant identifier provided" against a pooled connection. `verify-conditions.mjs`,
 `verify-dice-rolls.mjs`, `verify-death-saves.mjs`, `verify-concentration.mjs`,
-`verify-vision-data-model.mjs`, `verify-vision-advantage.mjs`, and `verify-hide-stealth.mjs`
+`verify-vision-data-model.mjs`, `verify-vision-advantage.mjs`, `verify-hide-stealth.mjs`,
+and `verify-npc-stat-blocks.mjs`
 instead go
 through `@supabase/supabase-js` (service-role client for setup, real signed-in clients for the
 actual RLS/RPC checks) — equally valid for exercising policies end to end, and closer to how
 the app itself talks to Supabase; the dice-rolls/death-saves/concentration/vision-advantage/
-hide-stealth
+hide-stealth/npc-stat-blocks
 scripts also drive the roll Route Handler over real
 HTTP with signed-in session cookies (needs `yarn dev` running — `verify-concentration.mjs`,
-`verify-vision-advantage.mjs`, and `verify-hide-stealth.mjs`
+`verify-vision-advantage.mjs`, `verify-hide-stealth.mjs`, and `verify-npc-stat-blocks.mjs`
 start one themselves, polling `/api/health`, if `:3000` isn't already serving).
 `verify-dice-ui.mjs`, `verify-quick-actions.mjs`, `verify-action-overrides.mjs`,
 `verify-action-economy.mjs`, `verify-opportunity-attacks.mjs`,
-`verify-vision-rendering.mjs`, and `verify-hide-stealth.mjs` go one step further and
+`verify-vision-rendering.mjs`, `verify-hide-stealth.mjs`, and
+`verify-npc-stat-blocks.mjs` go one step further and
 drive real Playwright browsers against the dev server, for the parts only a live UI can
 exercise (the sheet's advantage toggle, the combat panel's Roll-initiative buttons, live
 sync landing in an actually-open Game Room, the quick-actions panel's
 surfacing/one-click-fire behavior, the flag → DM-approve → use-anyway override cycle, the
 action-economy readout's manual marks and live mode flips, the opportunity-attack
 prompt's live landing and take/decline flow, per-player vision masking recomputing
-live in an open room, and a hidden token vanishing from one specific observer's open room
-the moment its hidden-from row lands — the latter six scripts also start
+live in an open room, a hidden token vanishing from one specific observer's open room
+the moment its hidden-from row lands, and the attack form's stat-block AC auto-fill in
+both a DM's and a player's room — the latter seven scripts also start
 `yarn dev` themselves if needed, like `verify-concentration.mjs`).
 
 **A real RLS gotcha worth knowing if you add more policies:** `INSERT ... RETURNING` (what

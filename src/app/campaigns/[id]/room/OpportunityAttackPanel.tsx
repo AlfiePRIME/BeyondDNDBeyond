@@ -9,6 +9,7 @@ import {
   subscribeToOpportunityAttacks,
   type Character,
   type CombatCombatant,
+  type MonsterStatBlock,
   type OpportunityAttack,
   type RollLogEntry,
 } from "@/data-access";
@@ -63,6 +64,7 @@ export function OpportunityAttackPanel({
   currentUserId,
   isDM,
   characters,
+  statBlocks,
   combat,
   onRollLanded,
   onReactionSpent,
@@ -72,6 +74,8 @@ export function OpportunityAttackPanel({
   isDM: boolean;
   /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
   characters: Character[];
+  /** Member-readable (0038): AC auto-fill for a stat-blocked NPC mover. */
+  statBlocks: MonsterStatBlock[];
   combat: CombatState | null;
   /** The room's post-roll hook (refresh HP + combat poke after the attack). */
   onRollLanded: (roll: RollLogEntry) => void;
@@ -132,6 +136,10 @@ export function OpportunityAttackPanel({
   const characterById = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
     [characters]
+  );
+  const statBlockById = useMemo(
+    () => new Map(statBlocks.map((statBlock) => [statBlock.id, statBlock])),
+    [statBlocks]
   );
   const combatantById = useMemo(
     () => new Map((combat?.combatants ?? []).map((combatant) => [combatant.id, combatant])),
@@ -273,9 +281,14 @@ export function OpportunityAttackPanel({
         const moverCharacter = mover.character_id
           ? (characterById.get(mover.character_id) ?? null)
           : null;
-        // The established AC convention: auto-filled only for a readable
-        // PC target; an NPC (or unreadable PC) mover takes a typed AC.
-        const knownAc = moverCharacter?.armor_class ?? null;
+        // The established AC convention: auto-filled for a readable PC
+        // mover or (Prompt 61) a stat-blocked NPC mover; only an
+        // unreadable PC or a genuinely bare NPC takes a typed AC.
+        const knownAc =
+          moverCharacter?.armor_class ??
+          (mover.monster_stat_block_id
+            ? (statBlockById.get(mover.monster_stat_block_id)?.armor_class ?? null)
+            : null);
         const draftAc = (() => {
           const value = Number((acDrafts[row.id] ?? "").trim());
           return Number.isInteger(value) && value >= 1 && value <= 99 ? value : null;

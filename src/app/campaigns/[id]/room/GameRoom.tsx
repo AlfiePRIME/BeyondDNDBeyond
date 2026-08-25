@@ -5,12 +5,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import {
+  addCombatant,
   advanceTurn,
   applyCondition,
   applyExhaustionDelta,
   applyHpDelta,
+  applyNpcHpDelta,
   clearHiddenAsHider,
   createHandout,
+  createMonsterStatBlock,
+  deleteMonsterStatBlock,
   createOpportunityAttacks,
   declareDisengage,
   deleteHandout,
@@ -29,6 +33,7 @@ import {
   listMapObjects,
   listMapTokens,
   listMapTransitions,
+  listMonsterStatBlocks,
   listSeenCells,
   moveCombatToken,
   moveMapToken,
@@ -51,6 +56,7 @@ import {
   subscribeToProfileChanges,
   transitionMapToken,
   triggerMapObject,
+  updateMonsterStatBlock,
   uploadHandoutFile,
   type CampaignMap,
   type Character,
@@ -62,6 +68,9 @@ import {
   type MapObject,
   type MapToken,
   type MapTransition,
+  type MonsterAttack,
+  type MonsterStatBlock,
+  type Npc,
   type RollLogEntry,
   type SeenCellSnapshot,
   type SupabaseClient,
@@ -109,6 +118,7 @@ import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
+import { MonsterPanel } from "./MonsterPanel";
 import { TokenPanel, type TokenArm } from "./TokenPanel";
 import styles from "./room.module.css";
 
@@ -236,6 +246,8 @@ export function GameRoom({
   availableMaps,
   assets,
   characters,
+  initialStatBlocks,
+  rosterNpcs,
   initialHandouts,
   initialCombat,
   initialRolls,
@@ -252,6 +264,13 @@ export function GameRoom({
   assets: PaletteAsset[];
   /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
   characters: Character[];
+  /** Member-readable (0038): the campaign's monster stat blocks at load
+   * time — kept fresh alongside combat refreshes below. */
+  initialStatBlocks: MonsterStatBlock[];
+  /** The Prompt 33 narrative roster, for the MonsterPanel's name
+   * pre-fill; loaded only for the DM (empty for players, who never see
+   * the panel). */
+  rosterNpcs: Npc[];
   /** RLS-filtered per viewer: every handout for the DM, revealed only for players. */
   initialHandouts: RoomHandout[];
   initialCombat: CombatState | null;
@@ -336,6 +355,18 @@ export function GameRoom({
     setPrevCharacters(characters);
     setCharacterRows(characters);
   }
+  // Monster stat blocks (Prompt 61): member-readable rows every panel's
+  // AC/HP lookups ride. Kept fresh by the combat refresh below — a
+  // quick-added monster's stat block reaches other clients on the same
+  // combat-changed poke that carries its combatant; a stat block created
+  // OUTSIDE combat reaches them at the next combat event or reload (AC
+  // auto-fill degrades to the manual field until then, never an error).
+  const [statBlocks, setStatBlocks] = useState<MonsterStatBlock[]>(initialStatBlocks);
+  const [prevStatBlocks, setPrevStatBlocks] = useState(initialStatBlocks);
+  if (prevStatBlocks !== initialStatBlocks) {
+    setPrevStatBlocks(initialStatBlocks);
+    setStatBlocks(initialStatBlocks);
+  }
   // Same latest-wins sequencing as refreshLiveMap: two combat refreshes
   // racing must resolve to the most recently requested one.
   const combatSeqRef = useRef(0);
@@ -345,9 +376,12 @@ export function GameRoom({
       // Characters re-read alongside the encounter: the combat-changed poke
       // is also how an HP change reaches every open room, and the rows come
       // back RLS-filtered per viewer exactly like the initial server load.
-      const [encounter, rows] = await Promise.all([
+      // Stat blocks ride the same read (Prompt 61) so a quick-added
+      // monster's AC/HP data lands with its combatant.
+      const [encounter, rows, blocks] = await Promise.all([
         getActiveCombatEncounter(supabase, campaignId),
         listCharactersForCampaign(supabase, campaignId),
+        listMonsterStatBlocks(supabase, campaignId),
       ]);
       const combatants = encounter ? await listCombatCombatants(supabase, encounter.id) : [];
       const combatantIds = combatants.map((combatant) => combatant.id);
@@ -360,6 +394,7 @@ export function GameRoom({
       if (seq !== combatSeqRef.current) return;
       setCombat(encounter ? { encounter, combatants, conditions, hiddenFrom } : null);
       setCharacterRows(rows);
+      setStatBlocks(blocks);
     },
     [campaignId]
   );
@@ -704,6 +739,14 @@ export function GameRoom({
     await campaignChannelRef.current?.publish<TokenPayload>(TOKEN_EVENT, { tokenId, token });
   }, []);
 
+  // The quick-add initiative prompt (Prompt 61): set after a
+  // place-monster click lands while combat is active; cleared on add or
+  // dismiss. Declared before handleCellClick, which sets it.
+  const [monsterJoin, setMonsterJoin] = useState<{ token: MapToken; name: string } | null>(null);
+  const [monsterInitiativeDraft, setMonsterInitiativeDraft] = useState("");
+  const [monsterJoinBusy, setMonsterJoinBusy] = useState(false);
+  const [monsterJoinError, setMonsterJoinError] = useState<string | null>(null);
+
   const handleCellClick = useCallback(
     async (x: number, y: number) => {
       const current = liveMapRef.current;
@@ -725,19 +768,84 @@ export function GameRoom({
               })
             : armedToken.kind === "place-npc"
               ? await placeNpcToken(supabase, { mapId, npcName: armedToken.npcName, x, y, elevation })
-              : await moveMapToken(supabase, armedToken.tokenId, { x, y, elevation });
+              : armedToken.kind === "place-monster"
+                ? // Quick add (Prompt 61): an ordinary NPC placement whose
+                  // token links the stat block; npc_name carries the
+                  // block's name so every existing display path is
+                  // untouched.
+                  await placeNpcToken(supabase, {
+                    mapId,
+                    npcName: armedToken.npcName,
+                    x,
+                    y,
+                    elevation,
+                    monsterStatBlockId: armedToken.statBlockId,
+                  })
+                : await moveMapToken(supabase, armedToken.tokenId, { x, y, elevation });
         applyTokenChange(token.id, token);
         setArmedToken(null);
         await publishTokenChange(token.id, token);
         if (armedToken.kind === "move") maybeOfferTransition(token);
+        // The quick-add flow's second half: with combat ACTIVE, the same
+        // gesture continues into the initiative prompt so the monster is
+        // seated in the current turn order via add_combatant — one
+        // coherent action, not three manual steps. With no combat running
+        // there is nothing to join; placement alone completes the action.
+        if (armedToken.kind === "place-monster" && combat && combat.encounter.ended_at === null) {
+          setMonsterInitiativeDraft("");
+          setMonsterJoinError(null);
+          setMonsterJoin({ token, name: armedToken.npcName });
+        }
       } catch (err) {
         setTokenError(errorMessage(err) ?? "Could not place that token.");
       } finally {
         setTokenBusy(false);
       }
     },
-    [armedToken, tokenBusy, applyTokenChange, publishTokenChange, maybeOfferTransition]
+    [armedToken, tokenBusy, combat, applyTokenChange, publishTokenChange, maybeOfferTransition]
   );
+
+  // The Roll button is a server-rolled plain d20 through the freeform
+  // roll route (the established NPC-initiative precedent — no modifier,
+  // and every die in the app is server-generated), whose total fills the
+  // manual field for the DM to accept or overtype.
+  const handleMonsterJoinRoll = useCallback(async () => {
+    if (monsterJoinBusy) return;
+    setMonsterJoinBusy(true);
+    setMonsterJoinError(null);
+    try {
+      const roll = await postRoll(campaignId, { kind: "freeform", notation: "1d20" });
+      setMonsterInitiativeDraft(String(roll.total));
+    } catch (err) {
+      setMonsterJoinError(errorMessage(err) ?? "Could not roll initiative.");
+    } finally {
+      setMonsterJoinBusy(false);
+    }
+  }, [campaignId, monsterJoinBusy]);
+
+  const handleMonsterJoinConfirm = useCallback(async () => {
+    const join = monsterJoin;
+    const encounterId = combat?.encounter.id ?? null;
+    const value = Number(monsterInitiativeDraft.trim());
+    if (!join || !encounterId || !Number.isInteger(value) || monsterJoinBusy) return;
+    setMonsterJoinBusy(true);
+    setMonsterJoinError(null);
+    try {
+      const supabase = createBrowserSupabaseClient();
+      // add_combatant (0038) snapshots the token's identity/stat block and
+      // seeds npc_current_hp; the canonical turn order places the fresh
+      // row correctly at read time. Then the usual refresh-and-poke.
+      await addCombatant(supabase, encounterId, join.token.id, value);
+      setMonsterJoin(null);
+      setMonsterInitiativeDraft("");
+      await refreshCombat(supabase);
+      await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+    } catch (err) {
+      setMonsterJoinError(errorMessage(err) ?? "Could not add the monster to combat.");
+    } finally {
+      setMonsterJoinBusy(false);
+    }
+  }, [monsterJoin, combat, monsterInitiativeDraft, monsterJoinBusy, campaignId, refreshCombat]);
 
   const handleTokenDragStart = useCallback(
     (tokenId: string) => {
@@ -1033,16 +1141,96 @@ export function GameRoom({
     [campaignId, refreshCombat]
   );
 
+  // PC combatants ride apply_hp_delta on their character; a stat-blocked
+  // NPC combatant (Prompt 61) rides apply_npc_hp_delta on its own
+  // npc_current_hp — DM-only by construction. A bare NPC has neither and
+  // the panel never offers the control.
   const handleApplyHp = useCallback(
     (combatant: CombatCombatant, delta: number) => {
       const characterId = combatant.character_id;
-      if (!characterId) return;
+      if (!characterId && combatant.npc_current_hp === null) return;
       void runCombatAction(async (supabase) => {
-        await applyHpDelta(supabase, characterId, delta);
+        if (characterId) {
+          await applyHpDelta(supabase, characterId, delta);
+        } else {
+          await applyNpcHpDelta(supabase, combatant.id, delta);
+        }
       }, "Could not update that combatant's HP.");
     },
     [runCombatAction]
   );
+
+  // Monster stat-block management (Prompt 61) — DM-only surface; 0038's
+  // RLS is the real gate underneath. Each mutation refetches the list (the
+  // ordering lives server-side) rather than hand-splicing sorted state.
+  const [monsterBusy, setMonsterBusy] = useState(false);
+  const [monsterError, setMonsterError] = useState<string | null>(null);
+  const runMonsterAction = useCallback(
+    async (action: (supabase: SupabaseClient) => Promise<void>, fallback: string) => {
+      if (monsterBusy) return;
+      setMonsterBusy(true);
+      setMonsterError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        await action(supabase);
+        setStatBlocks(await listMonsterStatBlocks(supabase, campaignId));
+      } catch (err) {
+        setMonsterError(errorMessage(err) ?? fallback);
+      } finally {
+        setMonsterBusy(false);
+      }
+    },
+    [campaignId, monsterBusy]
+  );
+
+  const handleCreateStatBlock = useCallback(
+    (params: {
+      name: string;
+      maxHp: number;
+      armorClass: number;
+      passivePerception: number;
+      attacks: MonsterAttack[];
+    }) => {
+      void runMonsterAction(async (supabase) => {
+        await createMonsterStatBlock(supabase, { campaignId, ...params });
+      }, "Could not create that stat block.");
+    },
+    [campaignId, runMonsterAction]
+  );
+
+  const handleUpdateStatBlock = useCallback(
+    (
+      statBlockId: string,
+      patch: {
+        name: string;
+        max_hp: number;
+        armor_class: number;
+        passive_perception: number;
+        attacks: MonsterAttack[];
+      }
+    ) => {
+      void runMonsterAction(async (supabase) => {
+        await updateMonsterStatBlock(supabase, statBlockId, patch);
+      }, "Could not update that stat block.");
+    },
+    [runMonsterAction]
+  );
+
+  const handleDeleteStatBlock = useCallback(
+    (statBlock: MonsterStatBlock) => {
+      void runMonsterAction(async (supabase) => {
+        await deleteMonsterStatBlock(supabase, statBlock.id);
+      }, "Could not delete that stat block.");
+    },
+    [runMonsterAction]
+  );
+
+  // Quick add, step one: arm the ordinary grid-click placement (the
+  // place-npc interaction) with the stat block linked and its name as the
+  // token's npc_name; handleCellClick finishes the flow.
+  const handleQuickAddMonster = useCallback((statBlock: MonsterStatBlock) => {
+    setArmedToken({ kind: "place-monster", statBlockId: statBlock.id, npcName: statBlock.name });
+  }, []);
 
   const handleToggleCondition = useCallback(
     (combatant: CombatCombatant, key: ConditionKey, active: boolean) => {
@@ -1950,10 +2138,27 @@ export function GameRoom({
           onSetAllegiance={handleSetAllegiance}
         />
       ) : null}
+      {/* The DM's monster tooling (Prompt 61): stat block create/edit/
+          list plus the quick-add flow. DM-only in the UI; 0038's RLS
+          rejects a non-DM hitting the table directly regardless. */}
+      {currentUserIsDM && liveMap ? (
+        <MonsterPanel
+          statBlocks={statBlocks}
+          rosterNpcs={rosterNpcs}
+          combatActive={combat !== null}
+          busy={monsterBusy || tokenBusy}
+          error={monsterError}
+          onCreate={handleCreateStatBlock}
+          onUpdate={handleUpdateStatBlock}
+          onDelete={handleDeleteStatBlock}
+          onQuickAdd={handleQuickAddMonster}
+        />
+      ) : null}
       <CombatPanel
         isDM={currentUserIsDM}
         currentUserId={currentUserId}
         characters={characterRows}
+        statBlocks={statBlocks}
         combat={combat}
         busy={combatBusy}
         error={combatError}
@@ -1982,6 +2187,7 @@ export function GameRoom({
         currentUserId={currentUserId}
         isDM={currentUserIsDM}
         characters={characterRows}
+        statBlocks={statBlocks}
         combat={combat}
         onRollLanded={handleRollLanded}
         onReactionSpent={handleReactionSpent}
@@ -1994,6 +2200,7 @@ export function GameRoom({
         currentUserId={currentUserId}
         isDM={currentUserIsDM}
         characters={characterRows}
+        statBlocks={statBlocks}
         combat={combat}
         tokens={liveMap?.tokens ?? []}
         onRollLanded={handleRollLanded}
@@ -2018,6 +2225,8 @@ export function GameRoom({
         currentUserId={currentUserId}
         isDM={currentUserIsDM}
         characters={characterRows}
+        statBlocks={statBlocks}
+        combat={combat}
         tokens={liveMap?.tokens ?? []}
         members={roster}
         initialRolls={initialRolls}
@@ -2098,6 +2307,81 @@ export function GameRoom({
             {transitionError ? (
               <p role="alert" className={styles.errorText} data-testid="transition-offer-error">
                 {transitionError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
+      {/* The quick-add initiative prompt (Prompt 61): the same gesture
+          that placed the monster's token continues here while combat is
+          active — roll (a server-rolled plain d20, the NPC-initiative
+          precedent) or type a value, then add_combatant seats it in the
+          current turn order. Dismissing leaves the token placed but out
+          of the fight (the DM can still add it later by re-quick-adding
+          — the token itself is already down). */}
+      <Modal
+        open={monsterJoin !== null}
+        onClose={() => {
+          if (!monsterJoinBusy) setMonsterJoin(null);
+        }}
+        title="Join the fight"
+        footer={
+          monsterJoin ? (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={monsterJoinBusy}
+                onClick={() => setMonsterJoin(null)}
+                data-testid="monster-join-dismiss"
+              >
+                Not now
+              </Button>
+              <Button
+                size="sm"
+                variant="accent"
+                disabled={
+                  monsterJoinBusy || !Number.isInteger(Number(monsterInitiativeDraft.trim()))
+                    || monsterInitiativeDraft.trim() === ""
+                }
+                onClick={() => void handleMonsterJoinConfirm()}
+                data-testid="monster-join-confirm"
+              >
+                {monsterJoinBusy ? "Adding…" : "Add to combat"}
+              </Button>
+            </>
+          ) : null
+        }
+      >
+        {monsterJoin ? (
+          <div data-testid="monster-join-modal">
+            <p>
+              <span className={styles.objectName}>{monsterJoin.name}</span> is placed — enter or
+              roll its initiative to join the current turn order.
+            </p>
+            <div className={styles.objectHeader}>
+              <input
+                type="number"
+                className={styles.initiativeInput}
+                aria-label={`Initiative for ${monsterJoin.name}`}
+                placeholder="Initiative"
+                value={monsterInitiativeDraft}
+                onChange={(event) => setMonsterInitiativeDraft(event.target.value)}
+                data-testid="monster-join-initiative-input"
+              />
+              <Button
+                size="sm"
+                variant="teal"
+                disabled={monsterJoinBusy}
+                onClick={() => void handleMonsterJoinRoll()}
+                data-testid="monster-join-roll"
+              >
+                Roll
+              </Button>
+            </div>
+            {monsterJoinError ? (
+              <p role="alert" className={styles.errorText} data-testid="monster-join-error">
+                {monsterJoinError}
               </p>
             ) : null}
           </div>

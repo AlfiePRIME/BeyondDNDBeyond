@@ -6,10 +6,14 @@ import { TOKEN_ALLEGIANCES, type Character, type MapToken, type TokenAllegiance 
 import styles from "./room.module.css";
 
 /** A pending "click a cell to finish this" token action — the Game Room
- * passes it to the scene as the signal to turn on cell raycasting. */
+ * passes it to the scene as the signal to turn on cell raycasting.
+ * "place-monster" is the Prompt 61 quick-add: an NPC placement whose token
+ * links the stat block (npcName carries the block's name, keeping every
+ * npc_name display path unchanged), armed from the MonsterPanel. */
 export type TokenArm =
   | { kind: "place-character"; characterId: string; label: string }
   | { kind: "place-npc"; npcName: string }
+  | { kind: "place-monster"; statBlockId: string; npcName: string }
   | { kind: "move"; tokenId: string; label: string };
 
 const ALLEGIANCE_TONE: Record<TokenAllegiance, BadgeTone> = {
@@ -23,6 +27,7 @@ function armedLabel(armed: TokenArm): string {
     case "place-character":
       return `Click a map cell to place ${armed.label}`;
     case "place-npc":
+    case "place-monster":
       return `Click a map cell to place ${armed.npcName}`;
     case "move":
       return `Click a map cell to move ${armed.label}`;

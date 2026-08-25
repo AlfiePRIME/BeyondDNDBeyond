@@ -14,8 +14,10 @@ import {
   listMapCells,
   listMapObjects,
   listMapTokens,
+  listMonsterStatBlocks,
   replaceHiddenAsHider,
   resolveAttackDamage,
+  resolveNpcAttackDamage,
   rollConcentrationSave,
   rollDeathSave,
   setCombatantEconomyFlag,
@@ -527,7 +529,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // SQL. Map data and conditions are already member-readable, so those
     // reads are the caller's ordinary RLS-scoped ones.
     const combatants = await listCombatCombatants(supabase, combatant.encounter_id);
-    const [conditions, visionStats, readableCharacters] = await Promise.all([
+    const [conditions, visionStats, readableCharacters, campaignStatBlocks] = await Promise.all([
       listCombatantConditions(
         supabase,
         combatants.map((candidate) => candidate.id)
@@ -537,9 +539,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       // caller's own characters (or all, for the DM) — an unreadable PC
       // observer falls back to the combat panel's "Party member" label.
       listCharactersForCampaign(supabase, campaignId),
+      // Stat blocks (Prompt 61), member-readable: a stat-blocked NPC
+      // observer resolves against its REAL passive_perception below — the
+      // flat default of 10 now applies only to a truly bare NPC with no
+      // linked block at all.
+      listMonsterStatBlocks(supabase, campaignId),
     ]);
     const statsByCharacterId = new Map(visionStats.map((row) => [row.character_id, row]));
     const nameByCharacterId = new Map(readableCharacters.map((row) => [row.id, row.name]));
+    const statBlockById = new Map(campaignStatBlocks.map((row) => [row.id, row]));
 
     // The hider's position and the live map's lighting, for the "could
     // this observer perceive the hider AT ALL" check — exactly the attack
@@ -629,6 +637,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         continue;
       }
 
+      // A PC observer's computed passive Perception; a stat-blocked NPC's
+      // stored passive_perception (Prompt 61 — snapshotted stat block via
+      // the combatant's monster_stat_block_id); the flat default of 10
+      // only for a genuinely bare NPC with neither.
       const passivePerception = observerStats
         ? passiveScore(
             "Perception",
@@ -643,7 +655,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
             observerStats.level,
             observerStats.proficiencies.includes("Perception")
           )
-        : 10;
+        : (observer.monster_stat_block_id
+            ? statBlockById.get(observer.monster_stat_block_id)?.passive_perception
+            : undefined) ?? 10;
       // Meets-it-beats-it: a tie or better means they notice — only a
       // strict loss against their passive Perception hides.
       if (total < passivePerception) {
@@ -685,6 +699,329 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         d20Result: d20.result,
         modifiers,
         hide: { hiddenFrom, noticedBy, couldNotPerceive },
+      },
+      total,
+    });
+    return NextResponse.json({ ok: true, roll: entry });
+  }
+
+  // The NPC stat-block attacker path (Prompt 61) — the SECOND attacker
+  // shape alongside the PC path below, never a modification of it: the
+  // attacker is a combatant whose snapshotted stat block stores the named
+  // attack, and the stored bonus and damageNotation are used DIRECTLY in
+  // place of every rules-engine-derived value (no attackBonus() call, no
+  // ability-based damage). Authorization is is_campaign_dm, NOT
+  // can_write_combatant: an NPC attacker has no owning-player concept at
+  // all. The Prompt 59 advantage/disadvantage computation, the Prompt 60
+  // hidden-attacker advantage and reveal-on-attack, and the Prompt 53
+  // action-economy gate all thread through exactly like the PC path — an
+  // asymmetry between the two attacker kinds would just confuse the table.
+  if (roll.kind === "attack" && typeof roll.attackerCombatantId === "string") {
+    const { data: attackerCombatant, error: attackerError } = await supabase
+      .from("combat_combatants")
+      .select(
+        "id, encounter_id, token_id, character_id, npc_name, monster_stat_block_id, action_used, encounter:combat_encounters!inner(campaign_id, ended_at, current_turn_index)"
+      )
+      .eq("id", roll.attackerCombatantId)
+      .maybeSingle();
+    if (attackerError) throw attackerError;
+    const encounter = (attackerCombatant?.encounter ?? null) as {
+      campaign_id: string;
+      ended_at: string | null;
+      current_turn_index: number;
+    } | null;
+    if (!attackerCombatant || encounter?.campaign_id !== campaignId) {
+      return NextResponse.json({ ok: false, message: "Combatant not found." }, { status: 404 });
+    }
+    if (encounter.ended_at !== null) {
+      return badRequest("That encounter has already ended.");
+    }
+    if (attackerCombatant.character_id !== null || !attackerCombatant.monster_stat_block_id) {
+      return badRequest("That combatant has no stat block to attack with.");
+    }
+
+    // DM-only, checked BEFORE any die is rolled — the hide branch's
+    // refuse-up-front arrangement, with the stricter gate: there is no
+    // owning player to fall back to for an NPC attacker.
+    const callerIsDM = await isDM(supabase, campaignId, user.id);
+    if (!callerIsDM) {
+      return NextResponse.json(
+        { ok: false, message: "Only the DM can attack with a monster." },
+        { status: 403 }
+      );
+    }
+
+    const { data: statBlock, error: statBlockError } = await supabase
+      .from("monster_stat_blocks")
+      .select()
+      .eq("id", attackerCombatant.monster_stat_block_id)
+      .maybeSingle();
+    if (statBlockError) throw statBlockError;
+    if (!statBlock) {
+      return badRequest("That combatant's stat block no longer exists.");
+    }
+    const attacks = (statBlock.attacks ?? []) as {
+      name?: unknown;
+      bonus?: unknown;
+      damageNotation?: unknown;
+    }[];
+    const statAttack = attacks.find(
+      (candidate) =>
+        typeof candidate.name === "string" &&
+        typeof roll.attackName === "string" &&
+        candidate.name === roll.attackName &&
+        typeof candidate.bonus === "number" &&
+        typeof candidate.damageNotation === "string"
+    ) as { name: string; bonus: number; damageNotation: string } | undefined;
+    if (!statAttack) {
+      return badRequest("That stat block has no such attack.");
+    }
+    const damageExpression = parseDiceNotation(statAttack.damageNotation);
+    if (!damageExpression) {
+      return badRequest("That attack's stored damage dice aren't valid.");
+    }
+    if (
+      typeof roll.targetAc !== "number" ||
+      !Number.isInteger(roll.targetAc) ||
+      roll.targetAc < 1 ||
+      roll.targetAc > 99
+    ) {
+      return badRequest("Enter the target's AC (1-99).");
+    }
+    const targetAc = roll.targetAc;
+    const targetCharacterId =
+      typeof roll.targetCharacterId === "string" ? roll.targetCharacterId : null;
+    const requestTargetTokenId =
+      typeof roll.targetTokenId === "string" ? roll.targetTokenId : null;
+    const targetName =
+      typeof roll.targetName === "string" && roll.targetName.trim() !== ""
+        ? roll.targetName.trim().slice(0, 80)
+        : null;
+
+    // One encounter-wide load covers the economy gate, the target's
+    // condition flags, the attacker's vision-blocked state, and the
+    // hidden-attacker lookup — the PC path's arrangement, minus the extra
+    // getActiveCombatEncounter read (the attacker's own encounter IS the
+    // active one, validated above).
+    const combatants = await listCombatCombatants(supabase, attackerCombatant.encounter_id);
+    const conditions =
+      combatants.length > 0
+        ? await listCombatantConditions(
+            supabase,
+            combatants.map((candidate) => candidate.id)
+          )
+        : [];
+
+    // Action economy (Prompt 53), gated exactly like a PC attack for
+    // consistency: applies only when the monster IS the current combatant
+    // — in Strict mode a spent action rejects here BEFORE any die is
+    // rolled; Freeform never rejects but still marks usage below.
+    let economyCombatantId: string | null = null;
+    if (combatants.length > 0) {
+      const turnIndex = Math.min(encounter.current_turn_index, combatants.length - 1);
+      const current = combatants[turnIndex];
+      if (current && current.id === attackerCombatant.id) {
+        if (campaign.action_economy_strict && current.action_used) {
+          return badRequest("This monster has already used its action this turn.");
+        }
+        economyCombatantId = current.id;
+      }
+    }
+
+    // Vision/condition-driven advantage and disadvantage (Prompt 59) —
+    // the PC path's computation with the Prompt 59-anticipated NPC
+    // attacker defaults: normal vision, no darkvision (the lightweight
+    // stat block carries no vision field; the DM's manual toggle covers a
+    // monster whose actual vision differs).
+    const advantageSources: string[] = [];
+    const disadvantageSources: string[] = [];
+    if (mode === "advantage") advantageSources.push("manually selected");
+    if (mode === "disadvantage") disadvantageSources.push("manually selected");
+
+    const targetCombatant =
+      combatants.find(
+        (candidate) =>
+          (requestTargetTokenId !== null && candidate.token_id === requestTargetTokenId) ||
+          (targetCharacterId !== null && candidate.character_id === targetCharacterId)
+      ) ?? null;
+    if (targetCombatant) {
+      for (const condition of conditions) {
+        if (condition.combatant_id !== targetCombatant.id) continue;
+        const definition = CONDITION_BY_KEY.get(condition.condition_key as ConditionKey);
+        if (!definition) continue;
+        if (definition.effects.attacksAgainstHaveAdvantage) {
+          advantageSources.push(`target has ${definition.name} (advantage against)`);
+        }
+        if (definition.effects.attacksAgainstHaveDisadvantage) {
+          disadvantageSources.push(`target has ${definition.name} (disadvantage against)`);
+        }
+      }
+    }
+
+    // Attacking from hiding (Prompt 60): a hidden NPC attacker gets the
+    // advantage and the reveal-on-attack exactly like a PC.
+    let hiddenAttackerCombatantId: string | null = null;
+    const hiddenRows = await listCombatantHiddenFrom(supabase, [attackerCombatant.id]);
+    if (hiddenRows.length > 0) {
+      hiddenAttackerCombatantId = attackerCombatant.id;
+      if (
+        targetCombatant &&
+        hiddenRows.some((row) => row.observer_combatant_id === targetCombatant.id)
+      ) {
+        advantageSources.push("attacking from hiding");
+      }
+    }
+
+    // The perception check — the PC path's exact computation with the NPC
+    // defaults, the attacker's position resolved through its own token.
+    if (campaign.live_map && requestTargetTokenId) {
+      const tokens = await listMapTokens(supabase, campaign.live_map);
+      const attackerToken =
+        tokens.find((token) => token.id === attackerCombatant.token_id) ?? null;
+      const targetToken =
+        tokens.find((token) => token.id === requestTargetTokenId) ?? null;
+      if (attackerToken && targetToken) {
+        const [cells, lightSources, objects] = await Promise.all([
+          listMapCells(supabase, campaign.live_map),
+          listLightSources(supabase, campaign.live_map),
+          listMapObjects(supabase, campaign.live_map),
+        ]);
+        const targetCell = cells.find(
+          (cell) => cell.x === targetToken.x && cell.y === targetToken.y
+        );
+        const tier = computeVisibilityTier({
+          observerPosition: { x: attackerToken.x, y: attackerToken.y },
+          vision: {
+            darkvisionFeet: null,
+            visionBlocked: visionBlockedForCombatant(conditions, attackerCombatant.id),
+          },
+          cellPosition: { x: targetToken.x, y: targetToken.y },
+          // Sparse storage: a cell with no row is the bright default.
+          cellAmbientLight: targetCell?.light_level ?? "bright",
+          lightSources: resolveLightSourcePositions(lightSources, objects, tokens),
+        });
+        if (tier === "none") disadvantageSources.push("target not perceived");
+      }
+    }
+
+    const rolledMode = combineAdvantageSources(advantageSources, disadvantageSources).mode;
+    const d20 = rollD20(rolledMode);
+    // The stat block's stored number IS the whole bonus — no ability
+    // modifier, no proficiency, nothing derived.
+    const modifiers: RollModifierPart[] = [{ label: "Attack bonus", value: statAttack.bonus }];
+    const total = d20.result + statAttack.bonus;
+    const outcome = resolveAttackOutcome(d20.result, statAttack.bonus, targetAc);
+    const monsterName = attackerCombatant.npc_name ?? statBlock.name;
+    const label = `${monsterName} — ${statAttack.name}`;
+
+    let damage: AttackResolution["damage"] = null;
+    if (outcome.hit) {
+      const rolled = rollExpression(
+        outcome.critical ? doubleDiceExpression(damageExpression) : damageExpression
+      );
+      damage = {
+        notation: statAttack.damageNotation.trim(),
+        doubled: outcome.critical,
+        groups: rolled.groups,
+        modifier: rolled.modifier,
+        total: Math.max(0, rolled.total),
+      };
+      if (targetCharacterId && damage.total > 0) {
+        const attack: AttackResolution = {
+          attackKind: "stat_block",
+          targetAc,
+          targetName,
+          targetCharacterId,
+          ...outcome,
+          damage,
+          applied: null,
+          attackerCombatantId: attackerCombatant.id,
+          attackName: statAttack.name,
+          // Placeholders — resolveNpcAttackDamage splices in the RPC's
+          // real outcome, exactly like the PC path.
+          instantDeath: false,
+          deathSaveFailureAdded: 0,
+          advantageSources,
+          disadvantageSources,
+        };
+        const breakdown: D20RollBreakdown = {
+          type: "d20",
+          label,
+          mode: rolledMode,
+          d20Rolls: d20.rolls,
+          d20Result: d20.result,
+          modifiers,
+          attack,
+        };
+        // resolve_npc_attack_damage (0038): DM-only attacker-side
+        // authorization, the target-side clamp/death-save/instant-death/
+        // concentration bookkeeping and the atomic roll_log insert all
+        // mirroring resolve_attack_damage — a failure logs nothing.
+        try {
+          const entry = await resolveNpcAttackDamage(
+            supabase,
+            campaignId,
+            user.id,
+            attackerCombatant.id,
+            targetCharacterId,
+            damage.total,
+            outcome.critical,
+            breakdown,
+            total
+          );
+          if (economyCombatantId) {
+            await setCombatantEconomyFlag(supabase, economyCombatantId, "action_used", true);
+          }
+          if (hiddenAttackerCombatantId) {
+            await clearHiddenAsHider(supabase, hiddenAttackerCombatantId);
+          }
+          return NextResponse.json({ ok: true, roll: entry });
+        } catch (err) {
+          const message =
+            err && typeof err === "object" && "message" in err && typeof err.message === "string"
+              ? err.message
+              : "Could not apply the damage.";
+          return NextResponse.json({ ok: false, message }, { status: 403 });
+        }
+      }
+    }
+
+    // The miss/untargeted path: the roll proceeded, so the action is
+    // spent and a hidden attacker is revealed — the PC path's
+    // miss-still-costs reasoning, both sides.
+    if (economyCombatantId) {
+      await setCombatantEconomyFlag(supabase, economyCombatantId, "action_used", true);
+    }
+    if (hiddenAttackerCombatantId) {
+      await clearHiddenAsHider(supabase, hiddenAttackerCombatantId);
+    }
+    const entry = await insertRoll(supabase, {
+      campaign_id: campaignId,
+      roller_user_id: user.id,
+      character_id: null,
+      kind: "attack",
+      breakdown: {
+        type: "d20",
+        label,
+        mode: rolledMode,
+        d20Rolls: d20.rolls,
+        d20Result: d20.result,
+        modifiers,
+        attack: {
+          attackKind: "stat_block",
+          targetAc,
+          targetName,
+          targetCharacterId,
+          ...outcome,
+          damage,
+          applied: null,
+          attackerCombatantId: attackerCombatant.id,
+          attackName: statAttack.name,
+          instantDeath: false,
+          deathSaveFailureAdded: 0,
+          advantageSources,
+          disadvantageSources,
+        },
       },
       total,
     });

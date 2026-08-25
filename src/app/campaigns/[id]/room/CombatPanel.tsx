@@ -9,6 +9,7 @@ import type {
   CombatantCondition,
   CombatantEconomyFlag,
   CombatantHiddenFrom,
+  MonsterStatBlock,
 } from "@/data-access";
 import {
   CONDITIONS,
@@ -89,12 +90,20 @@ export interface CombatState {
  * table-wide "Hidden from N" badge (public state like conditions — only
  * the RENDERING hides the token, and only from the specific observers it
  * beat). Deliberately not turn-gated, like every other roll here: the
- * table self-polices whose turn it is.
+ * table self-polices whose turn it is. As of Prompt 61 a stat-blocked NPC
+ * combatant finally gets its OWN HP: the row shows npc_current_hp against
+ * the linked stat block's max_hp, and the selected-row damage/heal control
+ * — previously PC-only per Prompt 46's explicit scoping — now also covers
+ * such an NPC (DM-only by construction: an NPC has no owning player),
+ * writing npc_current_hp via apply_npc_hp_delta instead of a character's
+ * current_hp. A bare unstatted NPC still has no HP anywhere and gets no
+ * control, exactly as before.
  */
 export function CombatPanel({
   isDM,
   currentUserId,
   characters,
+  statBlocks,
   combat,
   busy,
   error,
@@ -118,6 +127,9 @@ export function CombatPanel({
   currentUserId: string;
   /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
   characters: Character[];
+  /** Member-readable (0038): the campaign's monster stat blocks, for a
+   * stat-blocked NPC combatant's HP ceiling display. */
+  statBlocks: MonsterStatBlock[];
   combat: CombatState | null;
   busy: boolean;
   error: string | null;
@@ -130,7 +142,9 @@ export function CombatPanel({
   /** Server-side d20 + DEX via the Prompt 48 dice roller; mode carries the
    * panel's advantage toggle. */
   onRollInitiative: (combatant: CombatCombatant, mode: AdvantageMode) => void;
-  /** Negative = damage, positive = heal (see applyHpDelta). */
+  /** Negative = damage, positive = heal — applyHpDelta for a PC
+   * combatant, applyNpcHpDelta for a stat-blocked NPC (the GameRoom
+   * handler branches on character_id). */
   onApplyHp: (combatant: CombatCombatant, delta: number) => void;
   /** active true applies the condition, false removes it. */
   onToggleCondition: (combatant: CombatCombatant, key: ConditionKey, active: boolean) => void;
@@ -172,6 +186,11 @@ export function CombatPanel({
     [characters]
   );
 
+  const statBlockById = useMemo(
+    () => new Map(statBlocks.map((statBlock) => [statBlock.id, statBlock])),
+    [statBlocks]
+  );
+
   const conditionsByCombatant = useMemo(() => {
     const grouped = new Map<string, CombatantCondition[]>();
     for (const condition of combat?.conditions ?? []) {
@@ -211,15 +230,30 @@ export function CombatPanel({
   }
 
   // Same DM-or-owner rule as initiative (it's also exactly 0008's
-  // characters UPDATE policy, which authorizes apply_hp_delta), plus the
-  // PC-only restriction: an NPC combatant has no HP field to change.
+  // characters UPDATE policy, which authorizes apply_hp_delta) for a PC;
+  // as of Prompt 61 a stat-blocked NPC combatant (npc_current_hp tracked)
+  // is writable too — DM-only by construction, matching apply_npc_hp_delta
+  // riding can_write_combatant with no owning player. A bare unstatted NPC
+  // still has no HP field to change.
   function canApplyHp(combatant: CombatCombatant): boolean {
-    return combatant.character_id !== null && (isDM || ownsCombatant(combatant));
+    if (combatant.character_id !== null) return isDM || ownsCombatant(combatant);
+    return isDM && combatant.npc_current_hp !== null && combatantHp(combatant) !== null;
   }
 
   function combatantHp(combatant: CombatCombatant): { current: number; max: number } | null {
-    const character = combatant.character_id ? characterById.get(combatant.character_id) : null;
-    return character ? { current: character.current_hp, max: character.max_hp } : null;
+    if (combatant.character_id) {
+      const character = characterById.get(combatant.character_id);
+      return character ? { current: character.current_hp, max: character.max_hp } : null;
+    }
+    // A stat-blocked NPC (Prompt 61): instance HP on the combatant, the
+    // ceiling from the linked template. A deleted template (FK set null)
+    // leaves nothing to clamp against, so no display and no control —
+    // apply_npc_hp_delta's join would reject the write anyway.
+    if (combatant.npc_current_hp !== null && combatant.monster_stat_block_id) {
+      const statBlock = statBlockById.get(combatant.monster_stat_block_id);
+      return statBlock ? { current: combatant.npc_current_hp, max: statBlock.max_hp } : null;
+    }
+    return null;
   }
 
   // The linked character row, when the viewer can read it under RLS —

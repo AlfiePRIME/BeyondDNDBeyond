@@ -22,13 +22,32 @@ export type RollRequest =
    * plain d20 + CON save bonus — advantage/disadvantage is Prompt 59's
    * territory, the death-save reasoning. */
   | { kind: "concentration_save"; characterId: string }
+  /** An NPC stat-block attack (Prompt 61) — the SECOND attacker path,
+   * mutually exclusive with the PC variant below: the attacker is a
+   * DM-controlled combatant whose snapshotted stat block stores the named
+   * attack, and the server uses the stored bonus and damageNotation
+   * directly in place of every rules-engine-derived value (no attackKind,
+   * no damage input — nothing client-sent beyond the attack's name is
+   * trusted). Target fields carry the same meanings as the PC variant's. */
+  | {
+      kind: "attack";
+      attackerCombatantId: string;
+      /** Which of the stat block's stored attacks to swing with. */
+      attackName: string;
+      targetAc: number;
+      targetCharacterId?: string | null;
+      targetTokenId?: string | null;
+      targetName?: string | null;
+      mode?: AdvantageMode;
+    }
   | {
       kind: "attack";
       characterId: string;
       attackKind: AttackKind;
       damageNotation: string;
-      /** Entered manually at roll time — NPCs have no stored AC anywhere
-       * yet (stat blocks are later work), so there is nothing to look up. */
+      /** Entered manually at roll time, or auto-filled from a readable PC
+       * target — or, as of Prompt 61, from a stat-blocked NPC target's
+       * armor_class; only a genuinely bare NPC still needs it typed in. */
       targetAc: number;
       /** Set when the target is a tracked PC, so the server can apply the
        * damage to its HP. */

@@ -20,7 +20,10 @@ export interface RollModifierPart {
 
 /** Attack-specific resolution detail, nested in a d20 breakdown. */
 export interface AttackResolution {
-  attackKind: AttackKind;
+  /** A PC attack's rules-engine kind, or "stat_block" for an NPC
+   * stat-block attack (Prompt 61), whose bonus and damage are the stored
+   * numbers rather than anything ability-derived. */
+  attackKind: AttackKind | "stat_block";
   targetAc: number;
   targetName: string | null;
   targetCharacterId: string | null;
@@ -38,6 +41,12 @@ export interface AttackResolution {
   } | null;
   /** Set when the damage actually landed on a tracked PC's HP. */
   applied: { characterId: string; newHp: number } | null;
+  /** The attacking combatant and stored attack name for a stat-block
+   * attack (Prompt 61) — the NPC attacker has no character_id, so the
+   * breakdown itself carries who swung. Absent on PC attacks and every
+   * pre-61 stored roll (the instantDeath optionality precedent). */
+  attackerCombatantId?: string | null;
+  attackName?: string | null;
   /** Death-save fallout of damage landing on an already-0-HP target
    * (Prompt 49): true when it equalled or exceeded the target's max HP and
    * killed outright. false when nothing of the sort happened (including
@@ -98,9 +107,10 @@ export interface HideObserverOutcome {
   combatantId: string;
   name: string;
   /** The passive Perception the Stealth total was compared against —
-   * rules-engine passiveScore for a PC observer, the flat default of 10
-   * for an NPC placeholder with no character row. Absent for observers
-   * who couldn't perceive the hider at all (no comparison happened). */
+   * rules-engine passiveScore for a PC observer, a stat-blocked NPC's
+   * stored passive_perception (Prompt 61), or the flat default of 10 for
+   * a bare NPC placeholder with neither. Absent for observers who
+   * couldn't perceive the hider at all (no comparison happened). */
   passivePerception?: number;
 }
 
@@ -301,6 +311,75 @@ export async function resolveAttackDamage(
     campaign_id: campaignId,
     roller_user_id: rollerUserId,
     character_id: attackerCharacterId,
+    kind: "attack",
+    breakdown: breakdownWithApplied,
+    total,
+    created_at: row.out_roll_created_at,
+  };
+}
+
+/**
+ * The NPC-attacker counterpart of resolveAttackDamage (Prompt 61): applies
+ * a stat-block attack's resolved damage to a tracked PC target AND logs
+ * the roll atomically via the resolve_npc_attack_damage RPC (0038) — a
+ * NEW, PARALLEL function beside resolve_attack_damage, never a
+ * modification of it (the apply_hp_delta-vs-resolve_attack_damage
+ * different-authorization precedent). Authorization is DM-only on the
+ * attacking COMBATANT's campaign — an NPC attacker is always
+ * DM-controlled; there is no owning player. Target-side behavior (clamp,
+ * death saves with crit doubling, instant death, concentration, the folded
+ * log write) mirrors resolveAttackDamage exactly, and the same
+ * splice-and-return shape applies. character_id in the returned entry is
+ * null: the attacker has no character row; the breakdown's
+ * attackerCombatantId/attackName carry who swung.
+ */
+export async function resolveNpcAttackDamage(
+  supabase: SupabaseClient,
+  campaignId: string,
+  rollerUserId: string,
+  attackerCombatantId: string,
+  targetCharacterId: string,
+  damage: number,
+  critical: boolean,
+  breakdown: D20RollBreakdown,
+  total: number
+): Promise<RollLogEntry> {
+  const { data, error } = await supabase
+    .rpc("resolve_npc_attack_damage", {
+      p_attacker_combatant_id: attackerCombatantId,
+      p_target_character_id: targetCharacterId,
+      p_damage: damage,
+      p_critical: critical,
+      p_breakdown: breakdown,
+      p_total: total,
+    })
+    .single();
+
+  if (error) throw error;
+  const row = data as {
+    out_target_id: string;
+    out_target_current_hp: number;
+    out_roll_id: string;
+    out_roll_created_at: string;
+    out_instant_death: boolean;
+    out_failure_added: number;
+  };
+
+  const breakdownWithApplied: D20RollBreakdown = {
+    ...breakdown,
+    attack: breakdown.attack && {
+      ...breakdown.attack,
+      applied: { characterId: row.out_target_id, newHp: row.out_target_current_hp },
+      instantDeath: row.out_instant_death,
+      deathSaveFailureAdded: row.out_failure_added,
+    },
+  };
+
+  return {
+    id: row.out_roll_id,
+    campaign_id: campaignId,
+    roller_user_id: rollerUserId,
+    character_id: null,
     kind: "attack",
     breakdown: breakdownWithApplied,
     total,

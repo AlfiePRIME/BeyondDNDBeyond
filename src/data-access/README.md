@@ -680,3 +680,43 @@ observer's outcome (hidden-from / noticed-by / could-not-perceive) with the pass
 Perception compared against and a best-effort name (npc_name, a readable character's
 name, or the combat panel's "Party member" fallback), so the shared log states the
 whole verdict, not a bare number.
+
+As of Prompt 61, DM NPC/monster stat blocks (migration `0038_npc_stat_blocks.sql`) — new
+`monsterStatBlocks.ts` (the `hiddenFrom.ts` small-feature precedent): a campaign-scoped
+`monster_stat_blocks` template table (name, `max_hp`, `armor_class`, `passive_perception`,
+and an `attacks` jsonb list of `{name, bonus, damageNotation}` — the
+characters.inventory/spells "small structured jsonb list, no child table" convention,
+`MonsterAttack`/`MonsterStatBlock` its only schema) under the npcs/0020 RLS posture:
+members read (the AC auto-fill and Hide passive-Perception lookups need them on every
+client), DM-only writes. CRUD is `listMonsterStatBlocks`/`createMonsterStatBlock`/
+`updateMonsterStatBlock`/`deleteMonsterStatBlock` (delete leaves placed tokens/combatants
+as ordinary bare NPCs — both link FKs are ON DELETE SET NULL). `map_tokens` gains a
+nullable `monster_stat_block_id` alongside the UNCHANGED 0019 character_id/npc_name XOR
+(`placeNpcToken` takes an optional `monsterStatBlockId`; the quick-add flow passes the
+block's own name as `npcName`, so every existing npc_name display path is untouched), and
+`combat_combatants` gains `monster_stat_block_id` (snapshotted from the token when the
+combatant is added, the character_id/npc_name arrangement — `start_combat`'s seed now
+carries it too) plus `npc_current_hp` (instance HP, initialized from the template's
+`max_hp`; null for PCs and bare NPCs — the upper clamp joins to the template at write
+time rather than snapshotting max_hp twice). Three new RPCs: `add_combatant(p_encounter_id,
+p_token_id, p_initiative)` (`addCombatant`) — SECURITY DEFINER, DM-only, the first way to
+add ONE combatant to an ALREADY-ACTIVE encounter (start_combat only ever seeds everyone
+at once): validates the encounter is active and same-campaign, rejects a duplicate token
+cleanly, snapshots identity/stat block/npc_current_hp exactly like the seed, and lets the
+canonical `initiative desc nulls last, created_at, id` order place the row at read time —
+no list splicing. `apply_npc_hp_delta(p_combatant_id, p_delta)` (`applyNpcHpDelta`) —
+SECURITY INVOKER through `can_write_combatant` (DM-only for an NPC by construction, no
+owning player exists), the 0028 single-UPDATE clamp shape against [0, template max_hp];
+deliberately no death-save/concentration bookkeeping — those state machines live on
+characters only. `resolve_npc_attack_damage(p_attacker_combatant_id, p_target_character_id,
+p_damage, p_critical, p_breakdown, p_total)` (`resolveNpcAttackDamage`) — a NEW, PARALLEL
+sibling of `resolve_attack_damage`, NOT a modification of it (the accepted
+apply_hp_delta-vs-resolve_attack_damage different-authorization duplication): SECURITY
+DEFINER, authorized by `is_campaign_dm` on the attacking COMBATANT's campaign (an NPC
+attacker is always DM-controlled), with the target-side clamp/death-save/instant-death/
+concentration branches and the atomic same-transaction roll_log INSERT mirrored verbatim
+— logged with `character_id` null, the breakdown's new optional
+`attackerCombatantId`/`attackName` carrying who swung. `rolls.ts`'s `AttackResolution.attackKind`
+widens to `AttackKind | "stat_block"` for that path (stored bonus and damage used directly;
+nothing rules-engine-derived, by design — which is also why the rules engine itself is
+untouched by this prompt).

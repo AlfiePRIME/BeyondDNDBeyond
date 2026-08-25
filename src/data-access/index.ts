@@ -168,10 +168,21 @@ export {
   setCombatantInitiative,
   setCombatantEconomyFlag,
   declareDisengage,
+  addCombatant,
+  applyNpcHpDelta,
   type CombatEncounter,
   type CombatCombatant,
   type CombatantEconomyFlag,
 } from "./combat";
+export {
+  listMonsterStatBlocks,
+  createMonsterStatBlock,
+  updateMonsterStatBlock,
+  deleteMonsterStatBlock,
+  type MonsterAttack,
+  type MonsterStatBlock,
+  type UpdateMonsterStatBlockPatch,
+} from "./monsterStatBlocks";
 export {
   createOpportunityAttacks,
   listOpportunityAttacks,
@@ -211,6 +222,7 @@ export {
   listRollLog,
   subscribeToRollLog,
   resolveAttackDamage,
+  resolveNpcAttackDamage,
   rollDeathSave,
   rollConcentrationSave,
   type RollKind,

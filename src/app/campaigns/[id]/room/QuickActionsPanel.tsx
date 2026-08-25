@@ -13,6 +13,7 @@ import {
   type Character,
   type CharacterResource,
   type MapToken,
+  type MonsterStatBlock,
   type RollLogEntry,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
@@ -66,6 +67,7 @@ export function QuickActionsPanel({
   currentUserId,
   isDM,
   characters,
+  statBlocks,
   combat,
   tokens,
   onRollLanded,
@@ -75,6 +77,8 @@ export function QuickActionsPanel({
   isDM: boolean;
   /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
   characters: Character[];
+  /** Member-readable (0038): AC auto-fill for stat-blocked NPC targets. */
+  statBlocks: MonsterStatBlock[];
   combat: CombatState | null;
   tokens: MapToken[];
   /** The room's post-roll hook (refresh HP + combat poke on applied damage). */
@@ -102,6 +106,11 @@ export function QuickActionsPanel({
   const characterById = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
     [characters]
+  );
+
+  const statBlockById = useMemo(
+    () => new Map(statBlocks.map((statBlock) => [statBlock.id, statBlock])),
+    [statBlocks]
   );
 
   // Same current-turn derivation as CombatPanel: current_turn_index
@@ -353,10 +362,15 @@ export function QuickActionsPanel({
             const targetCharacter = target.character_id
               ? (characterById.get(target.character_id) ?? null)
               : null;
-            // The DiceLogPanel convention: auto-fill AC only for a
-            // readable PC target; an NPC (or unreadable PC) needs it typed
-            // in — inline, right here.
-            const knownAc = targetCharacter?.armor_class ?? null;
+            // The DiceLogPanel convention: auto-fill AC for a readable PC
+            // target or (Prompt 61) a stat-blocked NPC target; only an
+            // unreadable PC or a genuinely bare NPC needs it typed in —
+            // inline, right here.
+            const knownAc =
+              targetCharacter?.armor_class ??
+              (target.monster_stat_block_id
+                ? (statBlockById.get(target.monster_stat_block_id)?.armor_class ?? null)
+                : null);
             const draftAc = (() => {
               const value = Number((acDrafts[key] ?? "").trim());
               return Number.isInteger(value) && value >= 1 && value <= 99 ? value : null;
