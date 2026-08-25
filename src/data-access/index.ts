@@ -98,6 +98,7 @@ export {
 export {
   listMapObjects,
   createMapObject,
+  restoreMapObject,
   updateMapObject,
   deleteMapObject,
   setMapObjectBehavior,

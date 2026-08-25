@@ -7,6 +7,7 @@ import { Button, ChoiceCard, TextInput } from "@/ui-components";
 import {
   createMapObject,
   deleteMapObject,
+  restoreMapObject,
   setMapObjectBehavior,
   updateMapObject,
   upsertMapCells,
@@ -30,6 +31,16 @@ import {
   type CellState,
   type EditorTool,
 } from "./lib/cellGrid";
+import {
+  completeRedo,
+  completeUndo,
+  EMPTY_HISTORY,
+  peekRedo,
+  peekUndo,
+  pushEntry,
+  type HistoryEntry,
+  type HistoryStacks,
+} from "./lib/history";
 import type { PaletteAsset } from "./lib/assetUrl";
 import { captureMapThumbnail } from "../../lib/thumbnail";
 import { BehaviorEditor } from "./BehaviorEditor";
@@ -135,6 +146,62 @@ export function MapEditor({
     regionRef.current = region;
   }, [tool, brush, selectedAssetId, selectedObjectId, moveArmed, region]);
 
+  // The last PERSISTED cell state: initialCells at mount, advanced whenever
+  // cells actually reach the database (Save, AI-draft accept). Undo/redo
+  // recomputes dirty-ness against this — see applyCellStates.
+  const [sessionBaseline] = useState<ReadonlyMap<string, CellState>>(() =>
+    overlayFromRows(initialCells)
+  );
+  const baselineRef = useRef(sessionBaseline);
+
+  const historyRef = useRef<HistoryStacks>(EMPTY_HISTORY);
+  const historyBusyRef = useRef(false);
+  const [historyBusy, setHistoryBusy] = useState<"undo" | "redo" | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const syncHistoryFlags = useCallback(() => {
+    setCanUndo(historyRef.current.past.length > 0);
+    setCanRedo(historyRef.current.future.length > 0);
+  }, []);
+
+  const pushHistory = useCallback(
+    (entry: HistoryEntry) => {
+      historyRef.current = pushEntry(historyRef.current, entry);
+      syncHistoryFlags();
+    },
+    [syncHistoryFlags]
+  );
+
+  // Undo/redo must recompute whether each touched cell still differs from
+  // the persisted baseline, not toggle dirty flags by direction: raise a
+  // cell twice then undo once and it STILL differs from what the database
+  // holds, so it must stay dirty.
+  const applyCellStates = useCallback((states: ReadonlyMap<string, CellState>) => {
+    const updated = new Map(overlayRef.current);
+    for (const [key, state] of states) updated.set(key, state);
+    overlayRef.current = updated;
+    setOverlay(updated);
+    setDirty((prev) => {
+      const next = new Set(prev);
+      for (const [key, state] of states) {
+        const base = baselineRef.current.get(key) ?? DEFAULT_CELL;
+        if (state.elevation === base.elevation && state.terrain === base.terrain) next.delete(key);
+        else next.add(key);
+      }
+      return next;
+    });
+    setSaved(false);
+  }, []);
+
+  // The live-cell changes of the in-progress paint stroke, keyed by cell:
+  // one whole drag gesture becomes ONE history entry at stroke end, not an
+  // entry per cell.
+  const strokeChangesRef = useRef<Map<string, { before: CellState; after: CellState }> | null>(
+    null
+  );
+
   // Tracks the latest persisted snapshot across successive captures so each
   // replaces its predecessor's object. Best-effort by design: a thumbnail is
   // cosmetic, so a failed capture must never surface as a failed save.
@@ -185,6 +252,7 @@ export function MapEditor({
     (x: number, y: number) => {
       const tool = toolRef.current;
       if (tool === "object") return;
+      if (historyBusyRef.current) return;
 
       if (tool === "generate") {
         if (previewRef.current) return;
@@ -228,6 +296,10 @@ export function MapEditor({
       const current = overlayRef.current.get(key) ?? DEFAULT_CELL;
       const next = applyTool(current, tool, brushRef.current);
       if (next === current) return;
+      const changes = (strokeChangesRef.current ??= new Map());
+      const touched = changes.get(key);
+      if (touched) touched.after = next;
+      else changes.set(key, { before: current, after: next });
       const updated = new Map(overlayRef.current);
       updated.set(key, next);
       overlayRef.current = updated;
@@ -240,7 +312,19 @@ export function MapEditor({
 
   const handleStrokeEnd = useCallback(() => {
     regionDragRef.current = null;
-  }, []);
+    const changes = strokeChangesRef.current;
+    strokeChangesRef.current = null;
+    // A stroke released while an async undo/redo is still in flight can't be
+    // reconciled against the stack snapshot that reversal captured — the
+    // paint guard already froze it at its pre-click cells, so drop it.
+    if (!changes || changes.size === 0 || historyBusyRef.current) return;
+    const before = new Map([...changes].map(([key, change]) => [key, change.before]));
+    const after = new Map([...changes].map(([key, change]) => [key, change.after]));
+    pushHistory({
+      apply: () => applyCellStates(after),
+      revert: () => applyCellStates(before),
+    });
+  }, [pushHistory, applyCellStates]);
 
   // Object edits persist immediately per action, unlike the batched cell
   // save: placing/rotating/moving/removing are discrete deliberate acts (one
@@ -269,6 +353,119 @@ export function MapEditor({
     );
     setObjects(objectsRef.current);
   }, []);
+
+  const addObjectLocal = useCallback((created: MapObject) => {
+    objectsRef.current = [...objectsRef.current, created];
+    setObjects(objectsRef.current);
+  }, []);
+
+  const removeObjectLocal = useCallback((id: string) => {
+    objectsRef.current = objectsRef.current.filter((object) => object.id !== id);
+    setObjects(objectsRef.current);
+    if (selectedObjectIdRef.current === id) {
+      setSelectedObjectId(null);
+      setMoveArmed(false);
+    }
+  }, []);
+
+  // Reversing a placement (and re-applying it after an undo) round-trips the
+  // SAME row via restoreMapObject — a fresh id from createMapObject would
+  // strand any later history entries (moves, rotates) that captured this
+  // object's id against a row that no longer exists. `row` is re-read from
+  // local state before each delete so behavior edits made in between (which
+  // are outside undo's scope) survive the round trip.
+  const makePlacementEntry = useCallback(
+    (created: MapObject): HistoryEntry => {
+      let row = created;
+      return {
+        apply: async () => {
+          row = await restoreMapObject(createBrowserSupabaseClient(), row);
+          addObjectLocal(row);
+        },
+        revert: async () => {
+          row = objectsRef.current.find((object) => object.id === row.id) ?? row;
+          await deleteMapObject(createBrowserSupabaseClient(), row.id);
+          removeObjectLocal(row.id);
+        },
+      };
+    },
+    [addObjectLocal, removeObjectLocal]
+  );
+
+  const makeRemovalEntry = useCallback(
+    (removed: MapObject): HistoryEntry => {
+      const placement = makePlacementEntry(removed);
+      return { apply: placement.revert, revert: placement.apply };
+    },
+    [makePlacementEntry]
+  );
+
+  const makeObjectPatchEntry = useCallback(
+    (
+      objectId: string,
+      before: { x?: number; y?: number; elevation?: number; rotation?: number },
+      after: { x?: number; y?: number; elevation?: number; rotation?: number }
+    ): HistoryEntry => ({
+      apply: async () => {
+        replaceObject(await updateMapObject(createBrowserSupabaseClient(), objectId, after));
+      },
+      revert: async () => {
+        replaceObject(await updateMapObject(createBrowserSupabaseClient(), objectId, before));
+      },
+    }),
+    [replaceObject]
+  );
+
+  const runHistoryStep = useCallback(
+    async (direction: "undo" | "redo") => {
+      // Serialized with itself AND with normal object mutations through the
+      // shared mutatingRef gate: an object-edit reversal is a real database
+      // write, so rapid clicks must not race each other into out-of-order
+      // writes. History remains inert while an AI draft is under review —
+      // the preview has its own accept/discard lifecycle.
+      if (historyBusyRef.current || mutatingRef.current || previewRef.current) return;
+      const stacks = historyRef.current;
+      const entry = direction === "undo" ? peekUndo(stacks) : peekRedo(stacks);
+      if (!entry) return;
+      historyBusyRef.current = true;
+      mutatingRef.current = true;
+      setHistoryBusy(direction);
+      setHistoryError(null);
+      try {
+        if (direction === "undo") await entry.revert();
+        else await entry.apply();
+        historyRef.current = direction === "undo" ? completeUndo(stacks) : completeRedo(stacks);
+      } catch (err) {
+        setHistoryError(
+          errorMessage(err) ?? `Could not ${direction === "undo" ? "undo" : "redo"} — try again.`
+        );
+      } finally {
+        historyBusyRef.current = false;
+        mutatingRef.current = false;
+        setHistoryBusy(null);
+        syncHistoryFlags();
+      }
+    },
+    [syncHistoryFlags]
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable]")) return;
+      const key = event.key.toLowerCase();
+      if (key === "z") {
+        event.preventDefault();
+        void runHistoryStep(event.shiftKey ? "redo" : "undo");
+      } else if (key === "y") {
+        event.preventDefault();
+        void runHistoryStep("redo");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [runHistoryStep]);
 
   const handleSelectObject = useCallback((id: string) => {
     setSelectedObjectId(id);
@@ -310,8 +507,18 @@ export function MapEditor({
           return;
         }
         const elevation = (overlayRef.current.get(cellKey(x, y)) ?? DEFAULT_CELL).elevation;
+        const previous = objectsRef.current.find((object) => object.id === selectedId);
         void runObjectMutation(async (supabase) => {
           replaceObject(await updateMapObject(supabase, selectedId, { x, y, elevation }));
+          if (previous) {
+            pushHistory(
+              makeObjectPatchEntry(
+                selectedId,
+                { x: previous.x, y: previous.y, elevation: previous.elevation },
+                { x, y, elevation }
+              )
+            );
+          }
           setMoveArmed(false);
         });
         return;
@@ -354,12 +561,23 @@ export function MapEditor({
           elevation,
           rotation: 0,
         });
-        objectsRef.current = [...objectsRef.current, created];
-        setObjects(objectsRef.current);
+        addObjectLocal(created);
         setSelectedObjectId(created.id);
+        pushHistory(makePlacementEntry(created));
       });
     },
-    [map.id, inRegion, runObjectMutation, replaceObject, handleSelectObject, setPreviewState]
+    [
+      map.id,
+      inRegion,
+      runObjectMutation,
+      replaceObject,
+      handleSelectObject,
+      setPreviewState,
+      addObjectLocal,
+      pushHistory,
+      makePlacementEntry,
+      makeObjectPatchEntry,
+    ]
   );
 
   const selectedLiveObject = objects.find((object) => object.id === selectedObjectId) ?? null;
@@ -381,12 +599,12 @@ export function MapEditor({
       return;
     }
     if (!selectedLiveObject) return;
+    const objectId = selectedLiveObject.id;
+    const before = selectedLiveObject.rotation;
+    const after = (before + 90) % 360;
     void runObjectMutation(async (supabase) => {
-      replaceObject(
-        await updateMapObject(supabase, selectedLiveObject.id, {
-          rotation: (selectedLiveObject.rotation + 90) % 360,
-        })
-      );
+      replaceObject(await updateMapObject(supabase, objectId, { rotation: after }));
+      pushHistory(makeObjectPatchEntry(objectId, { rotation: before }, { rotation: after }));
     });
   }
 
@@ -409,13 +627,13 @@ export function MapEditor({
       return;
     }
     if (!selectedLiveObject) return;
-    const removedId = selectedLiveObject.id;
+    const removed = selectedLiveObject;
     void runObjectMutation(async (supabase) => {
-      await deleteMapObject(supabase, removedId);
-      objectsRef.current = objectsRef.current.filter((object) => object.id !== removedId);
-      setObjects(objectsRef.current);
+      await deleteMapObject(supabase, removed.id);
+      removeObjectLocal(removed.id);
       setSelectedObjectId(null);
       setMoveArmed(false);
+      pushHistory(makeRemovalEntry(removed));
     });
   }
 
@@ -528,6 +746,9 @@ export function MapEditor({
       await refreshThumbnail(supabase);
       // Accepting IS the commit for these cells — any manual edits the DM
       // had pending on the same cells were just overwritten and persisted.
+      const nextBaseline = new Map(baselineRef.current);
+      for (const [key, state] of current.cells) nextBaseline.set(key, state);
+      baselineRef.current = nextBaseline;
       setDirty((prev) => {
         const next = new Set(prev);
         for (const key of current.cells.keys()) next.delete(key);
@@ -598,6 +819,9 @@ export function MapEditor({
       const supabase = createBrowserSupabaseClient();
       await upsertMapCells(supabase, rowsForSave(map.id, overlayRef.current, dirty));
       await refreshThumbnail(supabase);
+      // The persisted baseline moves forward: an undo past this point makes
+      // cells dirty again relative to what was just saved.
+      baselineRef.current = overlayRef.current;
       setDirty(new Set());
       setSaved(true);
     } catch (err) {
@@ -644,6 +868,24 @@ export function MapEditor({
               {dirty.size} unsaved {dirty.size === 1 ? "cell" : "cells"}
             </span>
           ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!canUndo || historyBusy !== null || Boolean(preview)}
+            onClick={() => void runHistoryStep("undo")}
+            data-testid="undo-button"
+          >
+            {historyBusy === "undo" ? "Undoing…" : "Undo"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!canRedo || historyBusy !== null || Boolean(preview)}
+            onClick={() => void runHistoryStep("redo")}
+            data-testid="redo-button"
+          >
+            {historyBusy === "redo" ? "Redoing…" : "Redo"}
+          </Button>
           <Button
             size="sm"
             variant="teal"
@@ -898,6 +1140,11 @@ export function MapEditor({
         <p className={styles.hint}>
           Left click or drag applies the tool · right-drag orbits · scroll zooms · middle-drag pans
         </p>
+        {historyError ? (
+          <p role="alert" className={styles.errorText} data-testid="history-error">
+            {historyError}
+          </p>
+        ) : null}
         {error ? (
           <p role="alert" className={styles.errorText} data-testid="save-error">
             {error}

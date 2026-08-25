@@ -109,6 +109,37 @@ export async function createMapObject(
   return data;
 }
 
+/**
+ * Undo-path re-insert: recreates a deleted placement as the SAME row —
+ * explicit id/created_at/behavior_config instead of the insert defaults —
+ * so any captured reference to the object (later undo-history entries that
+ * hold its id) stays valid after a delete is reversed. Goes through the
+ * same DM-only INSERT policy as createMapObject.
+ */
+export async function restoreMapObject(
+  supabase: SupabaseClient,
+  object: MapObject
+): Promise<MapObject> {
+  const { data, error } = await supabase
+    .from("map_objects")
+    .insert({
+      id: object.id,
+      map_id: object.map_id,
+      asset_id: object.asset_id,
+      x: object.x,
+      y: object.y,
+      elevation: object.elevation,
+      rotation: object.rotation,
+      behavior_config: object.behavior_config,
+      created_at: object.created_at,
+    })
+    .select(OBJECT_COLUMNS)
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 /** Repositions and/or rotates one placed object. */
 export async function updateMapObject(
   supabase: SupabaseClient,

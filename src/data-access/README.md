@@ -17,6 +17,11 @@ DEFINER RPC — not a loosened table policy — since a player triggering a `pla
 object needs a narrower carve-out than the blanket DM-only write rule without opening up
 move/rotate/reconfigure to non-DMs.
 
+Prompt 41 adds `restoreMapObject`: the map editor's undo/redo re-insert path, recreating a
+deleted placement as the same row (explicit `id`/`created_at`/`behavior_config` rather than
+the insert defaults) so history entries that captured the object's id survive a delete being
+reversed. Same DM-only INSERT policy as `createMapObject`.
+
 `mapTokens.ts` (Prompt 30): CRUD for `map_tokens` (a PC token via `character_id`, an NPC
 placeholder via `npc_name`, never both). Unlike `map_objects`, writes here go through a
 plain RLS policy rather than an RPC — a player placing/moving/removing exactly the token
