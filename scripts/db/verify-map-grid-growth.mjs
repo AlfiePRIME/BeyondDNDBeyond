@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Map grid growth verification (Prompt 10, Map Editor Extensions plan —
-// migration 0046).
+// migration 0046, column-drift/concealed_pits fix — migration 0057).
 //
 // Confirms a DM can grow an existing map's grid in any of the four
 // directions from the real editor, mid-session, on a map that already has
@@ -22,6 +22,17 @@
 //   - A live combat encounter (round/turn state, per-combatant initiative,
 //     token_id references) survives every resize completely untouched —
 //     combat is keyed by token id, never by coordinate.
+//   - 0057 regression: a west/north-shifted cell's ground_type and
+//     water_flow_direction (0047/0051, added well after grow_map_grid
+//     originally shipped) survive the shift intact instead of silently
+//     resetting to their defaults — the map_cells delete-then-reinsert used
+//     to name an explicit, stale column list that predated both columns.
+//   - 0057 regression: a concealed_pits row (0050 — a DM-only hidden-pit
+//     shadow table keyed exactly like map_cells, added after grow_map_grid
+//     shipped) shifts by the same dx/dy as every other per-cell table on a
+//     west/north grow, so a hidden trap stays pinned to the same visible
+//     cell instead of drifting onto the wrong one relative to the
+//     now-larger grid.
 //
 // Hybrid shape per verify-void-terrain.mjs: service-role client for setup
 // and admin-side assertions, real signed-in clients for the RLS/RPC checks,
@@ -139,11 +150,18 @@ async function makeTestUser(label) {
  * script's exact-match comparisons. */
 async function snapshotMap(mapId) {
   const { data: map } = await admin.from("campaign_maps").select().eq("id", mapId).single();
-  const [{ data: cells }, { data: objects }, { data: tokens }, { data: encounters }] = await Promise.all([
+  const [{ data: cells }, { data: objects }, { data: tokens }, { data: encounters }, { data: pits }] = await Promise.all([
     admin.from("map_cells").select().eq("map_id", mapId).order("x").order("y"),
     admin.from("map_objects").select().eq("map_id", mapId).order("x").order("y"),
     admin.from("map_tokens").select().eq("map_id", mapId).order("x").order("y"),
     admin.from("combat_encounters").select().eq("campaign_id", map.campaign_id),
+    // concealed_pits (0050) — DM-only, but the service-role admin client
+    // bypasses RLS the same way it already does for every other table here.
+    // Included in the snapshot (not a separate ad-hoc query) so it rides
+    // along for free in the existing "every rejected call left everything
+    // untouched" whole-snapshot equality check below, exactly like cells/
+    // objects/tokens already do.
+    admin.from("concealed_pits").select().eq("map_id", mapId).order("x").order("y"),
   ]);
   const encounterIds = (encounters ?? []).map((e) => e.id);
   const { data: combatants } =
@@ -157,6 +175,7 @@ async function snapshotMap(mapId) {
     tokens: tokens ?? [],
     encounters: encounters ?? [],
     combatants: combatants ?? [],
+    pits: pits ?? [],
   };
 }
 
@@ -205,9 +224,26 @@ try {
     grid_height: 5,
   });
 
+  // Cell A carries ground_type AND water_flow_direction (0047/0051 — both
+  // added well after grow_map_grid (0046) originally shipped, and the
+  // exact two columns 0057 confirmed the old hardcoded shift column list
+  // was silently dropping on every west/north grow). Cell B carries only
+  // ground_type, no flow direction (a water cell with no authored arrow is
+  // itself a legitimate, common state per 0051's own comment) — between
+  // the two, every non-key map_cells column gets a non-default value
+  // exercised through the shift.
   await admin.from("map_cells").insert([
-    { map_id: mapId, x: 1, y: 1, elevation: 1, terrain_type: "difficult", light_level: "dim" },
-    { map_id: mapId, x: 3, y: 3, elevation: 2, terrain_type: "difficult", light_level: "bright" },
+    {
+      map_id: mapId,
+      x: 1,
+      y: 1,
+      elevation: 1,
+      terrain_type: "difficult",
+      light_level: "dim",
+      ground_type: "water",
+      water_flow_direction: "north",
+    },
+    { map_id: mapId, x: 3, y: 3, elevation: 2, terrain_type: "difficult", light_level: "bright", ground_type: "swamp" },
   ]);
 
   const assetId = crypto.randomUUID();
@@ -236,6 +272,14 @@ try {
     { id: tokenBId, map_id: mapId, npc_name: "Goblin B", x: 4, y: 4, elevation: 0, allegiance: "hostile" },
   ]);
 
+  // A hidden pit trap (0050) at (4,0) — the grid's one remaining unused
+  // corner, so it can never collide with a cell/object/token coordinate
+  // above. Keyed exactly like map_cells (map_id, x, y) and, per 0057,
+  // shifted the same way on a west/north grow. save_dc deliberately NOT
+  // the 15 default, so a passthrough of every non-key column (not just
+  // bottom_elevation_steps) is actually exercised end to end.
+  await admin.from("concealed_pits").insert({ map_id: mapId, x: 4, y: 0, bottom_elevation_steps: 3, save_dc: 12 });
+
   // A live game in progress, mid-combat: a real encounter with non-default
   // round/turn state and two combatants, keyed by token_id (never by
   // coordinate) — this is what should come through every resize completely
@@ -262,6 +306,18 @@ try {
       seedSnapshot.encounters.length === 1 &&
       seedSnapshot.combatants.length === 2,
     JSON.stringify(seedSnapshot.map)
+  );
+  check(
+    "seed data also landed the ground_type/water_flow_direction paint and the one concealed pit (0057 fixtures)",
+    cellPoint(seedSnapshot.cells, 1, "difficult")?.ground_type === "water" &&
+      cellPoint(seedSnapshot.cells, 1, "difficult")?.water_flow_direction === "north" &&
+      cellPoint(seedSnapshot.cells, 2, "difficult")?.ground_type === "swamp" &&
+      seedSnapshot.pits.length === 1 &&
+      seedSnapshot.pits[0].x === 4 &&
+      seedSnapshot.pits[0].y === 0 &&
+      seedSnapshot.pits[0].bottom_elevation_steps === 3 &&
+      seedSnapshot.pits[0].save_dc === 12,
+    JSON.stringify({ cells: seedSnapshot.cells, pits: seedSnapshot.pits })
   );
 
   // ── 1. Atomicity/authorization: every rejected call leaves EVERYTHING
@@ -309,7 +365,21 @@ try {
   );
 
   // ── 2. The real editor UI, DM session. ──
-  const dmContext = await browser.newContext();
+  // Explicit taller viewport (Playwright's own default is 1280×720):
+  // editor.module.css's `.toolbar` is bottom-anchored (`position: absolute;
+  // bottom: 24px`) with no max-height/scroll of its own, so it grows
+  // upward as the editor accumulates more controls across features (asset
+  // palette, terrain/ground-type painting, generate-area, grow-grid, wall
+  // presets, …) — confirmed directly (not guessed) that at the 720px
+  // default this panel is now tall enough to push `grow-grid-button`
+  // entirely above the top of the viewport (a negative bounding-box y),
+  // which Playwright's own auto-scroll can't fix since nothing here is a
+  // scrolling container — `.editor` fills the viewport with `position:
+  // fixed; inset: 0` and never scrolls. 1600 gives the current toolbar
+  // comfortable headroom; bumping this is the right fix if a future
+  // feature adds enough toolbar height to need more, rather than this
+  // script's real editor-driving checks silently timing out again.
+  const dmContext = await browser.newContext({ viewport: { width: 1280, height: 1600 } });
   await dmContext.addCookies(sessionCookies(dm.session));
   const page = await dmContext.newPage();
   await page.goto(`${APP_URL}/campaigns/${campaignId}/maps/${mapId}/edit`);
@@ -344,6 +414,18 @@ try {
   );
   const { data: newEastColumnRows } = await admin.from("map_cells").select().eq("map_id", mapId).gte("x", 5);
   check("the two new east columns have no stored rows — they're sparse-default normal ground, not void", (newEastColumnRows ?? []).length === 0, JSON.stringify(newEastColumnRows));
+  check(
+    "growing east left ground_type/water_flow_direction untouched on both painted cells (0057 no-regression)",
+    cellPoint(afterEast.cells, 1, "difficult")?.ground_type === "water" &&
+      cellPoint(afterEast.cells, 1, "difficult")?.water_flow_direction === "north" &&
+      afterEast.cells.find((c) => c.x === 3 && c.y === 3)?.ground_type === "swamp",
+    JSON.stringify(afterEast.cells)
+  );
+  check(
+    "growing east left the concealed pit at its exact original coordinates (0057 no-regression)",
+    afterEast.pits.length === 1 && afterEast.pits[0].x === 4 && afterEast.pits[0].y === 0 && afterEast.pits[0].bottom_elevation_steps === 3,
+    JSON.stringify(afterEast.pits)
+  );
 
   // ── 4. Grow SOUTH by 3 — pure height bump, nothing moves. ──
   await page.selectOption('[data-testid="grow-edge"]', "south");
@@ -361,6 +443,11 @@ try {
       JSON.stringify(afterSouth.objects) === JSON.stringify(afterEast.objects) &&
       JSON.stringify(afterSouth.tokens) === JSON.stringify(afterEast.tokens),
     "coordinates changed when they should not have"
+  );
+  check(
+    "growing south left the concealed pit exactly where east already left it (0057 no-regression)",
+    JSON.stringify(afterSouth.pits) === JSON.stringify(afterEast.pits),
+    JSON.stringify({ afterEast: afterEast.pits, afterSouth: afterSouth.pits })
   );
 
   // ── 5. Grow WEST by 4 — THE risky case: every x shifts by +4. ──
@@ -412,6 +499,27 @@ try {
       afterWest.combatants.find((c) => c.token_id === tokenBId)?.initiative === 5,
     JSON.stringify(afterWest.combatants)
   );
+  // 0057 regression checks: this is the exact case that used to silently
+  // corrupt/desync — a west grow shifting a cell whose ground_type/
+  // water_flow_direction predate grow_map_grid's original column list, and
+  // a concealed pit that predates grow_map_grid ever knowing about it.
+  check(
+    "growing west preserved cell A's ground_type/water_flow_direction through the shift (0057 fix — previously silently reset to defaults)",
+    westCellA?.ground_type === "water" && westCellA?.water_flow_direction === "north",
+    JSON.stringify(westCellA)
+  );
+  check(
+    "growing west preserved cell B's ground_type through the shift (0057 fix)",
+    westCellB?.ground_type === "swamp",
+    JSON.stringify(westCellB)
+  );
+  const westPit = afterWest.pits.find((p) => p.map_id === mapId);
+  check(
+    "growing west shifted the concealed pit's x by exactly +4 (4→8), y untouched, bottom_elevation_steps/save_dc preserved (0057 fix — previously never shifted at all)",
+    westPit?.x === 8 && westPit?.y === 0 && westPit?.bottom_elevation_steps === 3 && westPit?.save_dc === 12,
+    JSON.stringify(westPit)
+  );
+  check("growing west left exactly one concealed pit row (no duplicate left behind by the delete-then-reinsert)", afterWest.pits.length === 1, JSON.stringify(afterWest.pits));
 
   // ── 6. Grow NORTH by 2 — every y shifts by +2, on top of the west shift. ──
   await page.selectOption('[data-testid="grow-edge"]', "north");
@@ -454,6 +562,28 @@ try {
       afterNorth.combatants.find((c) => c.token_id === tokenBId)?.initiative === 5,
     JSON.stringify(afterNorth.combatants)
   );
+  // 0057 regression checks, compounded across BOTH risky shifts (west then
+  // north) — the acceptance bar this bug report actually sets: painted
+  // ground_type/water_flow_direction and a hidden pit's coordinates must
+  // both still be correct after two consecutive west/north grows, not just
+  // one.
+  check(
+    "growing north (on top of west) still preserved cell A's ground_type/water_flow_direction (0057 fix)",
+    northCellA?.ground_type === "water" && northCellA?.water_flow_direction === "north",
+    JSON.stringify(northCellA)
+  );
+  check(
+    "growing north (on top of west) still preserved cell B's ground_type (0057 fix)",
+    northCellB?.ground_type === "swamp",
+    JSON.stringify(northCellB)
+  );
+  const northPit = afterNorth.pits.find((p) => p.map_id === mapId);
+  check(
+    "growing north shifted the concealed pit's y by exactly +2 (0→2) on top of west's x shift (4→8), bottom_elevation_steps/save_dc still preserved (0057 fix)",
+    northPit?.x === 8 && northPit?.y === 2 && northPit?.bottom_elevation_steps === 3 && northPit?.save_dc === 12,
+    JSON.stringify(northPit)
+  );
+  check("growing north left exactly one concealed pit row", afterNorth.pits.length === 1, JSON.stringify(afterNorth.pits));
 
   // ── 7. The live Game Room table still renders this map cleanly post-resize
   //       (no void cells introduced, no crash) — the "live game in progress"
