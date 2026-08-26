@@ -39,6 +39,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
+import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // A fixed, non-default port: this machine runs several concurrent agent
@@ -333,15 +334,7 @@ await ensureDevServer();
 
 const dm = await makeTestUser("dm");
 const alice = await makeTestUser("alice");
-// GPU acceleration (user-authorized): headless Chromium otherwise falls
-// back to SwiftShader software rendering, dramatically slower for these
-// WebGL-heavy scenes on a shared/loaded host. Deliberately NOT including
-// --ignore-gpu-blocklist/--disable-gpu-sandbox — those weaken Chromium's own
-// sandboxing and were never specifically named by the user (only "GPU
-// acceleration" in general), so this sticks to the rendering-path flags.
-const browser = await chromium.launch({
-  args: ["--use-gl=angle", "--use-angle=gl-egl", "--enable-gpu-rasterization"],
-});
+const browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
 
 try {
   const campaignId = crypto.randomUUID();

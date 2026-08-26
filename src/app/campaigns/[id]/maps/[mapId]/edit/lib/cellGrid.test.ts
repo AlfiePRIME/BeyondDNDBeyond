@@ -95,29 +95,44 @@ describe("applyTool", () => {
   // untouched floor-at-0 clamp above.
   describe("pit", () => {
     it("marks the terrain pit and drops elevation by one step from a flat start", () => {
-      const dug = applyTool(DEFAULT_CELL, "pit", "normal", "bright");
-      expect(dug).toEqual({ elevation: -1, terrain: "pit", light: "bright" });
+      const dug = applyTool(DEFAULT_CELL, "pit", "normal", "bright", "default");
+      expect(dug).toEqual({ elevation: -1, terrain: "pit", light: "bright", ground: "default" });
     });
 
     it("keeps decrementing (and re-marking pit) on repeated application", () => {
       let cell = DEFAULT_CELL;
-      for (let i = 0; i < 3; i++) cell = applyTool(cell, "pit", "normal", "bright");
-      expect(cell).toEqual({ elevation: -3, terrain: "pit", light: "bright" });
+      for (let i = 0; i < 3; i++) cell = applyTool(cell, "pit", "normal", "bright", "default");
+      expect(cell).toEqual({ elevation: -3, terrain: "pit", light: "bright", ground: "default" });
     });
 
     it("digs downward from a raised plateau too, unaffected by MAX_ELEVATION", () => {
-      const plateau: CellState = { elevation: MAX_ELEVATION, terrain: "normal", light: "bright" };
-      const dug = applyTool(plateau, "pit", "normal", "bright");
-      expect(dug).toEqual({ elevation: MAX_ELEVATION - 1, terrain: "pit", light: "bright" });
+      const plateau: CellState = {
+        elevation: MAX_ELEVATION,
+        terrain: "normal",
+        light: "bright",
+        ground: "default",
+      };
+      const dug = applyTool(plateau, "pit", "normal", "bright", "default");
+      expect(dug).toEqual({
+        elevation: MAX_ELEVATION - 1,
+        terrain: "pit",
+        light: "bright",
+        ground: "default",
+      });
     });
 
     it("floors at MIN_PIT_ELEVATION_STEPS and returns the same reference", () => {
-      const atFloor: CellState = { elevation: MIN_PIT_ELEVATION_STEPS, terrain: "pit", light: "bright" };
-      expect(applyTool(atFloor, "pit", "normal", "bright")).toBe(atFloor);
+      const atFloor: CellState = {
+        elevation: MIN_PIT_ELEVATION_STEPS,
+        terrain: "pit",
+        light: "bright",
+        ground: "default",
+      };
+      expect(applyTool(atFloor, "pit", "normal", "bright", "default")).toBe(atFloor);
     });
 
     it("the brush argument is ignored — pit is the sculpt tool's own concern, not the terrain brush's", () => {
-      const dug = applyTool(DEFAULT_CELL, "pit", "difficult", "bright");
+      const dug = applyTool(DEFAULT_CELL, "pit", "difficult", "bright", "default");
       expect(dug.terrain).toBe("pit");
     });
   });
@@ -128,28 +143,30 @@ describe("applyTool", () => {
   // module's negative-elevation guard exists to prevent.
   describe("un-pitting through the terrain brush", () => {
     it("resets elevation to 0 when painting a negative-elevation pit to another terrain", () => {
-      const pit: CellState = { elevation: -4, terrain: "pit", light: "bright" };
-      expect(applyTool(pit, "terrain", "normal", "bright")).toEqual({
+      const pit: CellState = { elevation: -4, terrain: "pit", light: "bright", ground: "default" };
+      expect(applyTool(pit, "terrain", "normal", "bright", "default")).toEqual({
         elevation: 0,
         terrain: "normal",
         light: "bright",
+        ground: "default",
       });
     });
 
     it("leaves elevation untouched when repainting a pit to pit (still negative)", () => {
-      const pit: CellState = { elevation: -4, terrain: "pit", light: "bright" };
+      const pit: CellState = { elevation: -4, terrain: "pit", light: "bright", ground: "default" };
       // Same terrain value is already a no-op per the existing guard above,
       // so exercise the reset guard's OWN terrain !== "pit" condition via a
       // brush that is technically "pit" again — nothing changes.
-      expect(applyTool(pit, "terrain", "pit", "bright")).toBe(pit);
+      expect(applyTool(pit, "terrain", "pit", "bright", "default")).toBe(pit);
     });
 
     it("does not disturb a non-negative pit's elevation when un-pitting", () => {
-      const shallow: CellState = { elevation: 0, terrain: "pit", light: "bright" };
-      expect(applyTool(shallow, "terrain", "difficult", "bright")).toEqual({
+      const shallow: CellState = { elevation: 0, terrain: "pit", light: "bright", ground: "default" };
+      expect(applyTool(shallow, "terrain", "difficult", "bright", "default")).toEqual({
         elevation: 0,
         terrain: "difficult",
         light: "bright",
+        ground: "default",
       });
     });
   });

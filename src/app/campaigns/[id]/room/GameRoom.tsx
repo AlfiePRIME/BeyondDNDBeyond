@@ -1538,6 +1538,13 @@ export function GameRoom({
                 elevation: concealed.bottom_elevation_steps,
                 terrain_type: "pit",
                 light_level: destCell?.light_level ?? "bright",
+                // Revealing the trap changes terrain/elevation only — the
+                // cell's cosmetic ground type (grass/rock/etc., if the DM
+                // painted one over the trap to help disguise it) is
+                // preserved exactly as it was, not silently reset to
+                // "default" (see ground-types' own terrain/ground
+                // independence guarantee).
+                ground_type: destCell?.ground_type ?? "default",
               };
               await upsertMapCells(supabase, [revealedCell]);
               await deleteConcealedPit(supabase, token.map_id, token.x, token.y);
