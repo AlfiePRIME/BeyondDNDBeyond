@@ -140,6 +140,92 @@ function computeTurnCameraPosition(
 }
 
 // ---------------------------------------------------------------------------
+// Seated look-around: a seated viewer can nudge where their own camera
+// LOOKS — "turning their head" — using the arrow keys, independent of
+// wherever `cameraPosition` currently is (plain seat default, the turn
+// camera's improved angle, or a live in-progress chair drag). This is
+// PURELY a rotation of the lookAt direction; it never touches camera
+// position, which stays entirely owned by the seat/turn-camera/chair-drag
+// logic elsewhere in this file (computeTurnCameraPosition above,
+// applySeatOffset, the chair-drag session).
+//
+// Composition with the turn camera (the explicit judgment call the brief
+// asked for): look-around stays available, unmodified, while the turn
+// camera's improved angle is active. computeTurnCameraPosition only ever
+// changes WHERE the camera sits, never LOOK_TARGET — the turn camera is
+// still fundamentally a seat-mode view looking at the same table center,
+// just from a repositioned vantage — so the exact same "rotate away from
+// the straight-at-LOOK_TARGET direction" offset applies unmodified whether
+// `cameraPosition` currently holds the plain seat default or the improved
+// turn-camera position. There's also a practical case for it: surveying the
+// battlefield by looking around is exactly the kind of thing a player wants
+// to do on their OWN turn, so suppressing it right when the turn camera
+// activates would be actively unhelpful. It's disabled only where the brief
+// explicitly calls for it — orbit mode (OrbitControls already provides free
+// look there via mouse drag) and whenever this viewer has no seat of their
+// own to look around from (the fallback camera).
+// ---------------------------------------------------------------------------
+const LOOK_AROUND_YAW_SPEED = 1.4; // rad/s of yaw while an arrow key is held
+const LOOK_AROUND_PITCH_SPEED = 0.9; // rad/s of pitch while an arrow key is held
+// Bounded well short of a full turn — "a player can't spin all the way
+// around" — and the pitch bound is deliberately modest: every seat's own
+// base look angle (LOOK_TARGET vs. CAMERA_EYE_HEIGHT/CAMERA_SETBACK,
+// seating.ts) is already tilted down toward the table, so even this
+// generous-feeling head-tilt range never reaches far enough to look through
+// the floor, and never tilts up far enough to leave the room's own ceiling-
+// less skybox looking like a mistake.
+const LOOK_AROUND_MAX_YAW = (65 * Math.PI) / 180;
+const LOOK_AROUND_MAX_PITCH = (18 * Math.PI) / 180;
+// No further arrow-key input for this long smoothly eases the look
+// direction back to dead-center on LOOK_TARGET.
+const LOOK_AROUND_IDLE_MS = 30_000;
+// Exponential-ease time constant for the recenter itself (frame-rate
+// independent via useFrame's own `delta`) — chosen so the ease is clearly
+// gradual (a couple of seconds to visually settle), never an instant snap,
+// matching the same "smooth, not a snap" requirement the held-key rotation
+// itself already satisfies by directly integrating a fixed angular rate.
+const LOOK_AROUND_RECENTER_TAU = 0.9;
+// Arbitrary distance for the lookAt point projected along the rotated
+// look direction — only the DIRECTION this produces matters for orienting
+// the camera; three.js's Object3D.lookAt has no notion of "how far away"
+// beyond that.
+const LOOK_AROUND_TARGET_DISTANCE = 10;
+
+/** Same "don't hijack a keypress meant for a text field" guard MapEditor.tsx's
+ * own undo/redo shortcut already uses (`event.target`, not
+ * document.activeElement — for a window-level listener, a KeyboardEvent's
+ * target IS whatever element currently has real focus) — reused verbatim
+ * here for consistency rather than a second, differently-shaped check. The
+ * concrete bug this exists for: a naive keydown listener bound straight to
+ * the arrow keys also fires while the user is typing in the DM's notes, a
+ * chat box, or any dropdown elsewhere on the page — hijacking a keypress
+ * that should move a text cursor instead of rotating the camera. `.closest`
+ * (rather than checking `target` itself) also catches a contenteditable
+ * region's own descendant nodes, not just its own root element. */
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]") !== null;
+}
+
+type ArrowDirection = "up" | "down" | "left" | "right";
+
+function arrowKeyDirection(key: string): ArrowDirection | null {
+  if (key === "ArrowUp") return "up";
+  if (key === "ArrowDown") return "down";
+  if (key === "ArrowLeft") return "left";
+  if (key === "ArrowRight") return "right";
+  return null;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+// Scratch vectors for the look-around useFrame below, reused per frame —
+// same convention as the chairDrag*/ownChair* scratch objects just below.
+const lookAroundBaseDir = new Vector3();
+const lookAroundTarget = new Vector3();
+
+// ---------------------------------------------------------------------------
 // Movable chairs (drag gesture): a player may grab and drag their OWN chair
 // (never another member's, never the DM's throne — see draggableUserId
 // below) anywhere near the table arrangement, with their own seated camera
@@ -587,6 +673,14 @@ export interface GameTableSceneProps {
    * else can ever be mid-drag on this client (draggableUserId's own doc
    * comment). */
   onLiveChairOffset?: (override: { userId: string; offset: SeatOffset } | null) => void;
+  /** Verification-only: this client's own look-around yaw/pitch offset (see
+   * the "Seated look-around" block comment above), in radians, fired
+   * whenever it genuinely changes — the same "WebGL has no DOM of its own
+   * for a test to inspect a camera's orientation directly" reasoning as
+   * onOwnCameraDebug, generalized from position to look direction. Not read
+   * by GameTableScene itself; changes nothing about how anything renders or
+   * rotates. */
+  onLookAroundDebug?: (state: { yaw: number; pitch: number }) => void;
 }
 
 // Stable empty-Map default for GameTableSceneProps.seatOffsets — a fresh
@@ -643,6 +737,7 @@ export function GameTableScene({
   onChairDraggingChange,
   turnCameraActive = false,
   onLiveChairOffset,
+  onLookAroundDebug,
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
   const { camera, gl, size } = useThree();
@@ -817,6 +912,192 @@ export function GameTableScene({
   // single frame.
   const turnCameraApplied = turnCameraActive && cameraMode === "seat" && mySeat !== undefined && !isDraggingChair;
   const cameraPosition = turnCameraApplied ? computeTurnCameraPosition(seatCameraPosition) : seatCameraPosition;
+
+  // Seated look-around: eligible whenever this viewer is actually seated in
+  // seat mode — deliberately NOT further gated on turnCameraApplied/
+  // isDraggingChair (see the "Seated look-around" block comment above for
+  // why composing with the turn camera is the right call; a chair drag is a
+  // MOUSE gesture and this is a KEYBOARD one, so the two simply don't
+  // conflict either way).
+  const lookAroundEligible = cameraMode === "seat" && mySeat !== undefined;
+
+  // Which arrow key(s) are CURRENTLY held — read every frame inside
+  // useFrame below, never itself driving a re-render (a naive React state
+  // flag flipped 60x/sec while a key is held would be a lot of needless
+  // renders for a value nothing in this component's own render output
+  // depends on).
+  const lookAroundKeysRef = useRef<Record<ArrowDirection, boolean>>({
+    up: false,
+    down: false,
+    left: false,
+    right: false,
+  });
+  // The look-around's own accumulated offset (radians) from the seat's
+  // straight-at-LOOK_TARGET direction — refs, not state, mutated once per
+  // frame inside useFrame rather than driving a render every frame.
+  const lookAroundYawRef = useRef(0);
+  const lookAroundPitchRef = useRef(0);
+  // performance.now() of the most recent frame where an arrow key was
+  // genuinely acted on — null means "already at rest", which never needs
+  // recentering since there's nothing left to recenter.
+  const lookAroundLastInputRef = useRef<number | null>(null);
+  // Verification-only debug mirror — see onLookAroundDebug's own doc
+  // comment on GameTableSceneProps.
+  const lastLookAroundDebug = useRef<{ yaw: number; pitch: number } | null>(null);
+
+  // Arrow-key listeners for the look-around gesture. Registered on
+  // `window` (same as the chair-drag/ruler pointer listeners above) rather
+  // than on the canvas, since a KeyboardEvent only ever reaches whatever
+  // element currently has DOM focus — the canvas itself is rarely, if
+  // ever, the focused element in this app. `isTypingTarget` (above) is the
+  // explicit guard against the concrete bug the brief calls out: a naive
+  // listener bound straight to these keys would also fire while the user
+  // is typing in the DM's notes, a chat box, or any dropdown elsewhere on
+  // the page, hijacking a keypress that should move a text cursor instead
+  // of rotating the camera. That guard is re-checked on EVERY keydown
+  // (including OS auto-repeat while a key stays held — each repeat is
+  // dispatched to whatever element currently has focus, not frozen to
+  // whatever had focus at the initial press), so focus moving into a text
+  // field mid-hold immediately stops the rotation too, not just a fresh
+  // press starting one.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const direction = arrowKeyDirection(event.key);
+      if (!direction) return;
+      if (isTypingTarget(event.target)) {
+        // Let the field's own normal text-cursor behavior proceed
+        // completely unimpeded (no preventDefault) — and if this key was
+        // already held from before focus moved into the field, stop
+        // treating it as held so a stray, still-physically-down key can't
+        // keep rotating the camera behind a field the user is now typing
+        // into.
+        lookAroundKeysRef.current[direction] = false;
+        return;
+      }
+      if (!lookAroundEligible) return;
+      // Prevents the page itself from scrolling on an unmodified arrow
+      // key — the same reason a naive listener would otherwise be a
+      // problem, just from the other direction (this key genuinely IS for
+      // the camera right now).
+      event.preventDefault();
+      lookAroundKeysRef.current[direction] = true;
+    }
+    function handleKeyUp(event: KeyboardEvent) {
+      const direction = arrowKeyDirection(event.key);
+      if (!direction) return;
+      lookAroundKeysRef.current[direction] = false;
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [lookAroundEligible]);
+
+  // The look-around rotation itself — a separate useFrame from the
+  // debug-reporting one below since the two are unrelated concerns (this
+  // one actually drives the camera's orientation every frame; the other
+  // only ever reports state outward for verification).
+  useFrame((_, delta) => {
+    if (!lookAroundEligible) {
+      // Not eligible right now (orbit mode, or this viewer has no seat of
+      // their own) — reset to centered so a LATER re-entry into seat mode
+      // always starts from a known, non-stale look direction rather than
+      // wherever an earlier session happened to leave it. OrbitControls
+      // owns the camera's rotation entirely while in orbit mode (via its
+      // own `target`), so this deliberately touches nothing about the
+      // camera itself here.
+      lookAroundYawRef.current = 0;
+      lookAroundPitchRef.current = 0;
+      lookAroundLastInputRef.current = null;
+      if (onLookAroundDebug && lastLookAroundDebug.current !== null) {
+        lastLookAroundDebug.current = null;
+        onLookAroundDebug({ yaw: 0, pitch: 0 });
+      }
+      return;
+    }
+
+    const keys = lookAroundKeysRef.current;
+    const yawInput = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+    const pitchInput = (keys.up ? 1 : 0) - (keys.down ? 1 : 0);
+    const hasInput = yawInput !== 0 || pitchInput !== 0;
+
+    if (hasInput) {
+      lookAroundLastInputRef.current = performance.now();
+      lookAroundYawRef.current = clampNumber(
+        lookAroundYawRef.current + yawInput * LOOK_AROUND_YAW_SPEED * delta,
+        -LOOK_AROUND_MAX_YAW,
+        LOOK_AROUND_MAX_YAW
+      );
+      lookAroundPitchRef.current = clampNumber(
+        lookAroundPitchRef.current + pitchInput * LOOK_AROUND_PITCH_SPEED * delta,
+        -LOOK_AROUND_MAX_PITCH,
+        LOOK_AROUND_MAX_PITCH
+      );
+    } else if (
+      lookAroundLastInputRef.current !== null &&
+      performance.now() - lookAroundLastInputRef.current >= LOOK_AROUND_IDLE_MS &&
+      (lookAroundYawRef.current !== 0 || lookAroundPitchRef.current !== 0)
+    ) {
+      // 30 continuous seconds with no arrow-key input: smoothly ease back
+      // to the default table-center look direction. An exponential ease
+      // (frame-rate independent via `delta`), not an instant snap — the
+      // same "smooth, not a snap" requirement the held-key rotation above
+      // already satisfies by directly integrating a fixed angular rate
+      // frame over frame rather than jumping to an end value.
+      const eased = 1 - Math.exp(-delta / LOOK_AROUND_RECENTER_TAU);
+      lookAroundYawRef.current *= 1 - eased;
+      lookAroundPitchRef.current *= 1 - eased;
+      if (Math.abs(lookAroundYawRef.current) < 1e-4) lookAroundYawRef.current = 0;
+      if (Math.abs(lookAroundPitchRef.current) < 1e-4) lookAroundPitchRef.current = 0;
+    }
+
+    if (onLookAroundDebug) {
+      const last = lastLookAroundDebug.current;
+      const changed =
+        !last ||
+        Math.abs(last.yaw - lookAroundYawRef.current) > 1e-4 ||
+        Math.abs(last.pitch - lookAroundPitchRef.current) > 1e-4;
+      if (changed) {
+        const next = { yaw: lookAroundYawRef.current, pitch: lookAroundPitchRef.current };
+        lastLookAroundDebug.current = next;
+        onLookAroundDebug(next);
+      }
+    }
+
+    if (lookAroundYawRef.current === 0 && lookAroundPitchRef.current === 0) {
+      // Already centered — plain lookAt(LOOK_TARGET), byte-for-byte the
+      // pre-look-around behavior (and skips a wasted normalize/spherical
+      // round-trip every single frame for the — by far — most common
+      // case: nobody currently touching the arrow keys).
+      camera.lookAt(...LOOK_TARGET);
+      return;
+    }
+
+    // Rotate the look direction AWAY from LOOK_TARGET by the accumulated
+    // yaw/pitch offset, entirely in spherical terms relative to the
+    // camera's own CURRENT position (whichever of seat/turn-camera/
+    // chair-drag positioning currently owns it) — never moving that
+    // position itself.
+    lookAroundBaseDir.set(
+      LOOK_TARGET[0] - camera.position.x,
+      LOOK_TARGET[1] - camera.position.y,
+      LOOK_TARGET[2] - camera.position.z
+    );
+    const horizontal = Math.hypot(lookAroundBaseDir.x, lookAroundBaseDir.z);
+    const baseYaw = Math.atan2(lookAroundBaseDir.x, lookAroundBaseDir.z);
+    const basePitch = Math.atan2(lookAroundBaseDir.y, horizontal);
+    const yaw = baseYaw + lookAroundYawRef.current;
+    const pitch = basePitch + lookAroundPitchRef.current;
+    const cosPitch = Math.cos(pitch);
+    lookAroundTarget.set(
+      camera.position.x + LOOK_AROUND_TARGET_DISTANCE * cosPitch * Math.sin(yaw),
+      camera.position.y + LOOK_AROUND_TARGET_DISTANCE * Math.sin(pitch),
+      camera.position.z + LOOK_AROUND_TARGET_DISTANCE * cosPitch * Math.cos(yaw)
+    );
+    camera.lookAt(lookAroundTarget);
+  });
 
   // Verification-only: this client's own seated camera position, reported
   // whenever it genuinely changes value (not every frame regardless — a
