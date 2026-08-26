@@ -51,6 +51,7 @@ import {
   rowsForSave,
   type CellState,
   type EditorTool,
+  type ElevationDirection,
 } from "./lib/cellGrid";
 import {
   completeRedo,
@@ -152,7 +153,7 @@ export function MapEditor({
 }) {
   const [overlay, setOverlay] = useState(() => overlayFromRows(initialCells));
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
-  const [tool, setTool] = useState<EditorTool>("raise");
+  const [tool, setTool] = useState<EditorTool>("elevation");
   const [brush, setBrush] = useState<TerrainType>("difficult");
   const [lightBrush, setLightBrush] = useState<LightLevel>("dim");
   const [saving, setSaving] = useState(false);
@@ -352,10 +353,16 @@ export function MapEditor({
   }, []);
 
   const handlePaintCell = useCallback(
-    (x: number, y: number) => {
+    (x: number, y: number, button: number) => {
       const tool = toolRef.current;
       if (tool === "object" || tool === "transition" || tool === "light-source") return;
       if (historyBusyRef.current) return;
+
+      // The right button only means anything for the elevation tool
+      // (lower instead of raise) — every other paintable tool ignores it
+      // exactly like before this button ever reached here, leaving
+      // right-drag free for camera orbit everywhere else.
+      if (button !== 0 && tool !== "elevation") return;
 
       if (tool === "generate") {
         if (previewRef.current) return;
@@ -383,12 +390,19 @@ export function MapEditor({
 
       const key = cellKey(x, y);
 
+      // The former separate raise/lower tools, folded into one: left
+      // raises, right lowers, chosen per click instead of per tool
+      // selection. applyTool's raise/lower branches are byte-for-byte
+      // unchanged — only how a caller reaches them is new.
+      const direction: ElevationDirection = button === 2 ? "lower" : "raise";
+      const sculptAction = tool === "elevation" ? direction : tool;
+
       // Sculpting inside an active preview adjusts the draft, not the live
       // map — the DM is tweaking what accept will commit.
       const preview = previewRef.current;
       if (preview && inRegion(x, y)) {
         const current = preview.cells.get(key) ?? DEFAULT_CELL;
-        const next = applyTool(current, tool, brushRef.current, lightBrushRef.current);
+        const next = applyTool(current, sculptAction, brushRef.current, lightBrushRef.current);
         if (next === current) return;
         const cells = new Map(preview.cells);
         cells.set(key, next);
@@ -397,7 +411,7 @@ export function MapEditor({
       }
 
       const current = overlayRef.current.get(key) ?? DEFAULT_CELL;
-      const next = applyTool(current, tool, brushRef.current, lightBrushRef.current);
+      const next = applyTool(current, sculptAction, brushRef.current, lightBrushRef.current);
       if (next === current) return;
       const changes = (strokeChangesRef.current ??= new Map());
       const touched = changes.get(key);
@@ -1335,7 +1349,12 @@ export function MapEditor({
 
   return (
     <div className={styles.editor}>
-      <Canvas dpr={[1, 2]}>
+      {/* Scoped to the canvas itself (not the whole editor page) — the
+          overlay/toolbar panels are separate siblings below and keep their
+          normal browser context menu. Suppressing it here is what lets a
+          right-click on a cell reach the elevation tool's handler instead
+          of popping up the browser's menu. */}
+      <Canvas dpr={[1, 2]} onContextMenu={(event) => event.preventDefault()}>
         <MapEditorScene
           gridWidth={map.grid_width}
           gridHeight={map.grid_height}
@@ -1465,21 +1484,18 @@ export function MapEditor({
         <div className={styles.toolRow}>
           <Button
             size="sm"
-            variant={tool === "raise" ? "primary" : "ghost"}
-            onClick={() => switchTool("raise")}
-            data-testid="tool-raise"
+            variant={tool === "elevation" ? "primary" : "ghost"}
+            onClick={() => switchTool("elevation")}
+            data-testid="tool-elevation"
           >
-            Raise +1
-          </Button>
-          <Button
-            size="sm"
-            variant={tool === "lower" ? "primary" : "ghost"}
-            onClick={() => switchTool("lower")}
-            data-testid="tool-lower"
-          >
-            Lower −1
+            Raise / lower
           </Button>
         </div>
+        {tool === "elevation" ? (
+          <p className={styles.hint}>
+            Left-click (or drag) a cell to raise it one step · right-click to lower it one step.
+          </p>
+        ) : null}
         <span className={styles.toolbarLabel}>Terrain</span>
         <div className={styles.toolRow}>
           <Button

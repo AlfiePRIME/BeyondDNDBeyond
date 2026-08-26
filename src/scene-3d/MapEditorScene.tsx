@@ -142,11 +142,15 @@ export interface MapEditorSceneProps {
    * storage onto defaults before passing it in (scene-3d can't fetch). */
   cells: readonly MapSurfaceCell[];
   /**
-   * Fired at most once per cell per left-button stroke (a click, or a drag
-   * sweeping across cells). What "painting" means — raise, lower, terrain —
-   * is the caller's tool state, not the scene's.
+   * Fired at most once per cell per stroke: for the left button (0), a
+   * click or a drag sweeping across cells; for the right button (2), a
+   * single click only — right-drag stays reserved for camera orbit, so it
+   * never starts a paint stroke. `button` is the triggering
+   * PointerEvent.button (0 or 2); what it means — raise vs. lower, or
+   * nothing at all for tools that ignore the right button — is entirely
+   * the caller's tool state, not the scene's.
    */
-  onPaintCell?: (x: number, y: number) => void;
+  onPaintCell?: (x: number, y: number, button: number) => void;
   /**
    * Fired when a left-button stroke ends (pointer released anywhere) — lets
    * the caller finalize stroke-scoped state, e.g. turning the cells touched
@@ -204,20 +208,40 @@ export function MapEditorScene({
   // a cell (or crossing it twice) would raise it repeatedly.
   const strokeRef = useRef<Set<string>>(new Set());
 
-  const paint = useCallback((x: number, y: number) => {
+  const paint = useCallback((x: number, y: number, button: number) => {
     const key = `${x},${y}`;
     if (strokeRef.current.has(key)) return;
     strokeRef.current.add(key);
-    onPaintCellRef.current?.(x, y);
+    onPaintCellRef.current?.(x, y, button);
   }, []);
 
   const handleDown = useCallback(
     (x: number, y: number, event: ThreeEvent<PointerEvent>) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 && event.button !== 2) return;
       event.stopPropagation();
+      if (event.button === 2) {
+        // Ignore a right button that lands while a left-button stroke is
+        // already in flight — sharing strokeRef/strokeChangesRef with an
+        // in-progress drag would either let it repaint an already-touched
+        // cell or prematurely close its history entry. Simultaneous
+        // left+right buttons is a rare enough gesture that "ignored" is the
+        // right answer, not "reconciled".
+        if (paintingRef.current) return;
+        // The right button never arms the drag-stroke below — that
+        // gesture is OrbitControls' RIGHT: MOUSE.ROTATE (camera orbit), so
+        // paintingRef must stay false and the window "pointerup" listener
+        // (gated on it) will never fire onStrokeEnd for this click. Finalize
+        // it here instead, synchronously, so a right click still becomes
+        // its own one-cell undo/redo entry exactly like a left click/drag
+        // does — same per-stroke dedupe too.
+        strokeRef.current = new Set();
+        paint(x, y, event.button);
+        onStrokeEndRef.current?.();
+        return;
+      }
       paintingRef.current = true;
       strokeRef.current = new Set();
-      paint(x, y);
+      paint(x, y, event.button);
       onCellClickRef.current?.(x, y);
     },
     [paint]
@@ -231,7 +255,9 @@ export function MapEditorScene({
     (x: number, y: number, event: ThreeEvent<PointerEvent>) => {
       event.stopPropagation();
       if (!paintingRef.current) return;
-      paint(x, y);
+      // paintingRef is only ever armed by a left-button down (above), so a
+      // continued stroke is always the left-button action.
+      paint(x, y, 0);
     },
     [paint]
   );

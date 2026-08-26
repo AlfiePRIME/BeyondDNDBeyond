@@ -16,8 +16,7 @@ export const DEFAULT_CELL: CellState = { elevation: 0, terrain: "normal", light:
 export const MAX_ELEVATION = 10;
 
 export type EditorTool =
-  | "raise"
-  | "lower"
+  | "elevation"
   | "terrain"
   | "light"
   | "object"
@@ -31,6 +30,13 @@ export type EditorTool =
  * "transition" and "light-source" because their clicks pick a cell for a
  * form (a link origin / a fixed light anchor), editing nothing. */
 export type SculptTool = Exclude<EditorTool, "object" | "generate" | "transition" | "light-source">;
+
+/** applyTool's two elevation branches. Formerly two separate EditorTool
+ * values ("raise"/"lower") the DM switched between; now the single
+ * "elevation" EditorTool covers both, and the caller (MapEditor.tsx's
+ * handlePaintCell) picks the direction per click from the mouse button
+ * (left raises, right lowers) instead of from which tool is selected. */
+export type ElevationDirection = "raise" | "lower";
 
 export function cellKey(x: number, y: number): string {
   return `${x},${y}`;
@@ -55,10 +61,14 @@ export function overlayFromRows(rows: readonly MapCell[]): Map<string, CellState
 }
 
 /** Returns `current` (same reference) when the tool would change nothing,
- * so callers can skip dirty-marking no-op paints. */
+ * so callers can skip dirty-marking no-op paints.
+ *
+ * `tool` is `ElevationDirection` in place of the old "raise"/"lower"
+ * EditorTool values — same two branches, same clamping, just no longer
+ * required to equal the currently-selected tool. */
 export function applyTool(
   current: CellState,
-  tool: SculptTool,
+  tool: ElevationDirection | Exclude<SculptTool, "elevation">,
   brush: TerrainType,
   lightBrush: LightLevel
 ): CellState {
