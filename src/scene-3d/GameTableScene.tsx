@@ -5,8 +5,14 @@ import { Clone, OrbitControls, PerspectiveCamera, RoundedBox, useGLTF } from "@r
 import type { ThreeEvent } from "@react-three/fiber";
 import { Box3, Vector3 } from "three";
 import type { Object3D } from "three";
-import { LEG, TABLE_TOP, TABLE_SURFACE_Y } from "./table";
-import { computeSeatLayout, seatEllipseSemiAxes, type CameraMode, type Seat, type SeatMember } from "./seating";
+import { LEG, TABLE_TOP, TABLE_SURFACE_Y, TABLE_TOP_JOIN_DEPTH } from "./table";
+import {
+  computeCampaignSeatLayout,
+  seatEllipseSemiAxes,
+  type CameraMode,
+  type Seat,
+  type SeatMember,
+} from "./seating";
 import { SeatAvatar } from "./SeatAvatar";
 import { Chair, SEAT_TOP_Y } from "./Chair";
 import {
@@ -200,12 +206,24 @@ useGLTF.preload(TABLE_URL);
 /**
  * The full physical surface the project owner asked for: two independent
  * copies of the same table (model, fallback, and legs alike — Table above),
- * offset along Z by exactly half a table's own depth each way so their long
- * (width) edges meet precisely at the world-origin seam — no gap (each
- * table's near edge sits exactly at z=0) and no overlap (their footprints
- * don't intersect). table.ts's COMBINED_TABLE_TOP is the resulting combined
- * footprint (width unchanged at 4.36, depth doubled to 4.2) that
- * seating.ts's ellipse now fits around by default.
+ * offset along Z by exactly half of TABLE_TOP_JOIN_DEPTH each way so their
+ * long (width) edges — the TOP SURFACES specifically, not the wider leg
+ * stance — meet precisely at the world-origin seam with no gap. table.ts's
+ * TABLE_TOP_JOIN_DEPTH's own doc comment has the full story: table.glb's
+ * leg feet splay out wider than the tabletop slab itself, so offsetting by
+ * half of TABLE_TOP.depth (this file's original approach) flushed the WIDE
+ * leg feet while leaving a visible gap between the NARROWER tabletop
+ * surfaces — the actual bug a real deployed look caught. Using
+ * TABLE_TOP_JOIN_DEPTH instead means the two tables' leg geometry now
+ * clips through each other underneath (explicitly fine per the project
+ * owner — nobody sees under the table) in exchange for a genuinely
+ * continuous, gap-free playing surface on top, which is what actually
+ * matters. table.ts's COMBINED_TABLE_TOP (used for the seating ellipse
+ * fit, unchanged) deliberately still uses the wider TABLE_TOP.depth-based
+ * footprint — chairs need to clear the full leg stance, not just the
+ * visible top, so that generous number remains the right one for seating/
+ * clearance purposes even though the tables now sit slightly closer
+ * together than COMBINED_TABLE_TOP's own depth would suggest.
  *
  * Nothing here depends on which instance renders "first" — every position
  * anchored to a specific spot on this combined surface (the live map's
@@ -218,13 +236,13 @@ useGLTF.preload(TABLE_URL);
  * completely untouched).
  */
 function CombinedTable() {
-  const halfDepth = TABLE_TOP.depth / 2;
+  const halfJoinDepth = TABLE_TOP_JOIN_DEPTH / 2;
   return (
     <>
-      <group position={[0, 0, -halfDepth]}>
+      <group position={[0, 0, -halfJoinDepth]}>
         <Table />
       </group>
-      <group position={[0, 0, halfDepth]}>
+      <group position={[0, 0, halfJoinDepth]}>
         <Table />
       </group>
     </>
@@ -347,7 +365,7 @@ export function GameTableScene({
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
 
-  const seats = useMemo(() => computeSeatLayout(members), [members]);
+  const { seats, appendedTables } = useMemo(() => computeCampaignSeatLayout(members), [members]);
   const mapMetrics = useMemo(
     () => (liveMap ? computeTableMapMetrics(liveMap.gridWidth, liveMap.gridHeight) : null),
     [liveMap]
@@ -479,6 +497,20 @@ export function GameTableScene({
       </mesh>
 
       <CombinedTable />
+
+      {/* Extra plain single tables (never the head square's own two-table
+          model), appended one per exceeded HEAD_SQUARE_SEAT_CAPACITY/
+          SINGLE_TABLE_SEAT_CAPACITY threshold (seating.ts's
+          computeCampaignSeatLayout) and lined up beside the fixed head
+          square along table.ts's singleTableOffsetZ row — purely extra
+          seating, so only bare <Table />, never <CombinedTable /> and never
+          the live map (liveMap only ever renders on the head square,
+          below). */}
+      {appendedTables.map((table) => (
+        <group key={table.index} position={[0, 0, table.offsetZ]}>
+          <Table />
+        </group>
+      ))}
 
       {liveMap && mapMetrics ? (
         // Nudged just above the tabletop so the map's base slab never
