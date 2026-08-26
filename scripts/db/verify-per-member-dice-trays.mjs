@@ -318,6 +318,82 @@ try {
   check("every connected member's tray lands on the real tabletop surface", onTable, JSON.stringify(dmTrays.trays));
 
   // -------------------------------------------------------------------
+  // 3. Live chair drag moves THAT member's own tray live (before release),
+  //    and nobody else's tray moves at all. Deliberately run BEFORE any
+  //    rolls happen (matching verify-chair-drag.mjs's own established
+  //    order): the Dice panel's own roll-history list legitimately grows
+  //    taller once real rolls land in it (more detail lines per entry than
+  //    the empty "No rolls yet" placeholder), which — for SOME seat
+  //    angles/party sizes — can push it over a chair's own on-screen grab
+  //    point; a real, pre-existing, general "a draggable panel can end up
+  //    over the 3D scene" possibility (not something this feature
+  //    introduced, and not this prompt's own scope — every panel already
+  //    carries that same risk, mitigated by DraggablePanel's own drag-to-
+  //    reposition escape hatch), confirmed independently of this feature
+  //    by reproducing it against an UNMODIFIED verify-chair-drag.mjs run
+  //    too. Testing the drag on a pristine, roll-free room sidesteps that
+  //    unrelated risk entirely for this script's own purposes.
+  // -------------------------------------------------------------------
+  async function ownChairScreen(page, timeoutMs = 20000) {
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    while (Date.now() < deadline) {
+      const text = await page.textContent('[data-testid="chair-drag-state"]');
+      last = JSON.parse(text ?? "{}");
+      if (last.ownChairScreen) return last;
+      await sleep(200);
+    }
+    throw new Error(`chair-drag-state never reported an own chair screen position — last: ${JSON.stringify(last)}`);
+  }
+
+  const beforeDragState = await trayLayoutState(alicePage);
+  const aliceBefore = beforeDragState.trays.find((t) => t.userId === alice.id).position;
+  const bobBefore = beforeDragState.trays.find((t) => t.userId === bob.id).position;
+  const carolBefore = beforeDragState.trays.find((t) => t.userId === carol.id).position;
+
+  const aliceCanvasBox = await alicePage.locator("canvas").boundingBox();
+  const aliceChair = await ownChairScreen(alicePage);
+  await alicePage.mouse.move(aliceCanvasBox.x + aliceChair.ownChairScreen[0], aliceCanvasBox.y + aliceChair.ownChairScreen[1]);
+  await alicePage.mouse.down();
+  await sleep(150);
+  // A deliberately crude, largish on-screen drag — no precision targeting
+  // needed for a "does the tray follow live" proof, only "did it move a
+  // meaningful amount before release".
+  await alicePage.mouse.move(
+    aliceCanvasBox.x + aliceChair.ownChairScreen[0] + 90,
+    aliceCanvasBox.y + aliceChair.ownChairScreen[1] + 40,
+    { steps: 8 }
+  );
+  await sleep(250);
+
+  const midDragState = await trayLayoutState(alicePage);
+  const aliceMidDrag = midDragState.trays.find((t) => t.userId === alice.id)?.position;
+  const movedLive = aliceMidDrag && dist2(aliceMidDrag, aliceBefore) > 0.05;
+  check(
+    "dragging alice's chair moves HER OWN tray live, DURING the drag, before release",
+    movedLive,
+    JSON.stringify({ aliceBefore, aliceMidDrag })
+  );
+  const bobMidDrag = midDragState.trays.find((t) => t.userId === bob.id)?.position;
+  const carolMidDrag = midDragState.trays.find((t) => t.userId === carol.id)?.position;
+  check(
+    "nobody else's tray moves while ONLY alice is dragging (bob/carol stay put)",
+    dist2(bobMidDrag, bobBefore) < 0.01 && dist2(carolMidDrag, carolBefore) < 0.01,
+    JSON.stringify({ bobBefore, bobMidDrag, carolBefore, carolMidDrag })
+  );
+
+  await alicePage.mouse.up();
+  await sleep(500);
+  // Persistence: alice's real seat_offset row exists after the drop.
+  let aliceRow = null;
+  for (let i = 0; i < 20 && !aliceRow?.seat_offset; i++) {
+    const { data } = await admin.from("campaign_members").select("seat_offset").eq("campaign_id", campaignId).eq("user_id", alice.id).maybeSingle();
+    aliceRow = data;
+    if (!aliceRow?.seat_offset) await sleep(300);
+  }
+  check("the drag's final position was actually persisted (seat_offset written)", aliceRow?.seat_offset != null, JSON.stringify(aliceRow));
+
+  // -------------------------------------------------------------------
   // 1 (continued). A public roll animates ONLY at the roller's own tray,
   // on every connected client, never a shared spot.
   // -------------------------------------------------------------------
@@ -404,69 +480,6 @@ try {
     await waitForTrayField(dmPage, dm.id, (t) => !t.queue.includes(privateRollId), 8000);
   }
   await dmPage.click('[data-testid="private-roll-toggle"]'); // back OFF, tidy for the rest of the run
-
-  // -------------------------------------------------------------------
-  // 3. Live chair drag moves THAT member's own tray live (before release),
-  //    and nobody else's tray moves at all.
-  // -------------------------------------------------------------------
-  async function ownChairScreen(page, timeoutMs = 20000) {
-    const deadline = Date.now() + timeoutMs;
-    let last = null;
-    while (Date.now() < deadline) {
-      const text = await page.textContent('[data-testid="chair-drag-state"]');
-      last = JSON.parse(text ?? "{}");
-      if (last.ownChairScreen) return last;
-      await sleep(200);
-    }
-    throw new Error(`chair-drag-state never reported an own chair screen position — last: ${JSON.stringify(last)}`);
-  }
-
-  const beforeDragState = await trayLayoutState(alicePage);
-  const aliceBefore = beforeDragState.trays.find((t) => t.userId === alice.id).position;
-  const bobBefore = beforeDragState.trays.find((t) => t.userId === bob.id).position;
-  const carolBefore = beforeDragState.trays.find((t) => t.userId === carol.id).position;
-
-  const aliceCanvasBox = await alicePage.locator("canvas").boundingBox();
-  const aliceChair = await ownChairScreen(alicePage);
-  await alicePage.mouse.move(aliceCanvasBox.x + aliceChair.ownChairScreen[0], aliceCanvasBox.y + aliceChair.ownChairScreen[1]);
-  await alicePage.mouse.down();
-  await sleep(150);
-  // A deliberately crude, largish on-screen drag — no precision targeting
-  // needed for a "does the tray follow live" proof, only "did it move a
-  // meaningful amount before release".
-  await alicePage.mouse.move(
-    aliceCanvasBox.x + aliceChair.ownChairScreen[0] + 90,
-    aliceCanvasBox.y + aliceChair.ownChairScreen[1] + 40,
-    { steps: 8 }
-  );
-  await sleep(250);
-
-  const midDragState = await trayLayoutState(alicePage);
-  const aliceMidDrag = midDragState.trays.find((t) => t.userId === alice.id)?.position;
-  const movedLive = aliceMidDrag && dist2(aliceMidDrag, aliceBefore) > 0.05;
-  check(
-    "dragging alice's chair moves HER OWN tray live, DURING the drag, before release",
-    movedLive,
-    JSON.stringify({ aliceBefore, aliceMidDrag })
-  );
-  const bobMidDrag = midDragState.trays.find((t) => t.userId === bob.id)?.position;
-  const carolMidDrag = midDragState.trays.find((t) => t.userId === carol.id)?.position;
-  check(
-    "nobody else's tray moves while ONLY alice is dragging (bob/carol stay put)",
-    dist2(bobMidDrag, bobBefore) < 0.01 && dist2(carolMidDrag, carolBefore) < 0.01,
-    JSON.stringify({ bobBefore, bobMidDrag, carolBefore, carolMidDrag })
-  );
-
-  await alicePage.mouse.up();
-  await sleep(500);
-  // Persistence: alice's real seat_offset row exists after the drop.
-  let aliceRow = null;
-  for (let i = 0; i < 20 && !aliceRow?.seat_offset; i++) {
-    const { data } = await admin.from("campaign_members").select("seat_offset").eq("campaign_id", campaignId).eq("user_id", alice.id).maybeSingle();
-    aliceRow = data;
-    if (!aliceRow?.seat_offset) await sleep(300);
-  }
-  check("the drag's final position was actually persisted (seat_offset written)", aliceRow?.seat_offset != null, JSON.stringify(aliceRow));
 
   // -------------------------------------------------------------------
   // 4. A DM-uploaded custom tray model can be selected, and every
