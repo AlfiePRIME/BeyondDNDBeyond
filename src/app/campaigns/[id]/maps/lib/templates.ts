@@ -5,6 +5,10 @@ import type { TerrainType } from "@/rules-engine";
 // fixed global UUIDs, present in every campaign's palette. Templates may
 // reference ONLY these (a custom asset id would be campaign-specific).
 export const PRESET_TORCH = "a55e7001-0000-4000-8000-000000000001";
+// Chest (0016) — the reward object the treasure-room templates below stage
+// (on a plinth, behind a guarded chokepoint, or in a sunken recess). Not
+// referenced by any P11 template, but a real seeded preset all along.
+export const PRESET_CHEST = "a55e7002-0000-4000-8000-000000000002";
 export const PRESET_DOOR = "a55e7003-0000-4000-8000-000000000003";
 export const PRESET_TABLE = "a55e7004-0000-4000-8000-000000000004";
 export const PRESET_TREE = "a55e7005-0000-4000-8000-000000000005";
@@ -288,14 +292,66 @@ function multiDoorRoom(
   return { cells, objects };
 }
 
+/** Looks up a cell's elevation by coordinate — used when placing foliage or
+ * other props onto terrain painted earlier in the same function, so an
+ * object's elevation always matches its cell's real elevation (the
+ * invariant templates.test.ts enforces) without re-deriving the terrain
+ * rule (which ring, which band, which raised dais) by hand again at every
+ * placement site. Falls back to 0 for a coordinate with no painted cell —
+ * shouldn't happen for anything paintedGrid produced, since it fills every
+ * cell in its own rectangle. */
+function elevationAt(cells: NewMapCell[], x: number, y: number): number {
+  return cells.find((cell) => cell.x === x && cell.y === y)?.elevation ?? 0;
+}
+
+/** Evenly-spaced points along a rectangle's own outer edge (all 4 sides),
+ * skipping the corners — a deterministic scatter for a treeline/rockline
+ * that rings a whole map, so an enlarged template's perimeter reads as
+ * genuinely populated (many trunks) rather than the same handful of
+ * corner-only props stretched across more space. `step` controls density;
+ * `inset` shifts the ring inward (0 = the map's own true edge cells). By
+ * construction (each side's loop starts one `step` past the shared corner)
+ * no two returned points ever coincide. */
+function perimeterSpots(width: number, height: number, inset: number, step: number): Array<{ x: number; y: number }> {
+  const spots: Array<{ x: number; y: number }> = [];
+  const x0 = inset;
+  const x1 = width - 1 - inset;
+  const y0 = inset;
+  const y1 = height - 1 - inset;
+  for (let x = x0 + step; x < x1; x += step) {
+    spots.push({ x, y: y0 });
+    spots.push({ x, y: y1 });
+  }
+  for (let y = y0 + step; y < y1; y += step) {
+    spots.push({ x: x0, y });
+    spots.push({ x: x1, y });
+  }
+  return spots;
+}
+
+/** Evenly-spaced points along a single horizontal run [x0, x1] at a fixed
+ * row — for a treeline/rockline that runs along ONE edge of the map, a
+ * shape perimeterSpots' all-4-sides ring doesn't fit. */
+function rowSpots(x0: number, x1: number, y: number, step: number): Array<{ x: number; y: number }> {
+  const spots: Array<{ x: number; y: number }> = [];
+  for (let x = x0; x <= x1; x += step) spots.push({ x, y });
+  return spots;
+}
+
 // ─── Forest (3): forest / dense_forest / grass, varied elevation, no water ──
+//
+// Enlarged from P11's original 12x10/14x10 footprints and given a genuinely
+// populated treeline (perimeterSpots/rowSpots scatter many trunks across the
+// wider ring/band, rather than the same 3-4 corner trees stretched across
+// more space) per the project owner's "make the outdoor ones larger and add
+// foliage" request.
 
 /** A grass clearing ringed by a forest band and a dense outer treeline —
  * concentric rings by distance to the map edge, raised slightly at the rim
  * so the treeline reads as higher ground around a sunken-feeling clearing. */
 function forestClearingTemplate(): MapTemplate {
-  const width = 12;
-  const height = 10;
+  const width = 18;
+  const height = 14;
   const cells: NewMapCell[] = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -305,62 +361,118 @@ function forestClearingTemplate(): MapTemplate {
       cells.push({ x, y, elevation, terrain_type: "normal", ground_type });
     }
   }
-  // A few gentle mounds scattered across the clearing floor, so the open
-  // ground doesn't read as perfectly flat.
+  // Gentle mounds scattered across the wider clearing floor, so the open
+  // ground doesn't read as perfectly flat even far from the treeline.
   for (const { x, y } of [
-    { x: 5, y: 4 },
-    { x: 7, y: 6 },
-    { x: 4, y: 6 },
+    { x: 5, y: 5 },
+    { x: 12, y: 5 },
+    { x: 8, y: 8 },
+    { x: 13, y: 9 },
+    { x: 5, y: 9 },
+    { x: 9, y: 4 },
   ]) {
     const cell = cells.find((c) => c.x === x && c.y === y);
     if (cell) cell.elevation = 1;
   }
+  // A dense ring of trees around the WHOLE outer treeline (not just 4
+  // corners) — the enlarged clearing needs a genuinely populated border —
+  // plus a few rocks accenting the inner forest band.
+  const treeSpots = perimeterSpots(width, height, 0, 3);
+  const rockSpots = [
+    { x: 1, y: 4 },
+    { x: width - 2, y: 9 },
+    { x: 4, y: height - 2 },
+  ];
+  const objects: NewMapObjectSeed[] = [
+    ...treeSpots.map((spot) => ({
+      asset_id: PRESET_TREE,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+    ...rockSpots.map((spot) => ({
+      asset_id: PRESET_ROCK,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+  ];
   return {
     id: "forest-clearing",
     name: "Woodland Clearing",
-    description: "A sunlit grass clearing ringed by forest, with a dense outer treeline.",
+    description: "A sunlit grass clearing ringed by forest, with a dense outer treeline thick with trees.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [
-      { asset_id: PRESET_TREE, x: 1, y: 1, elevation: 1, rotation: 0 },
-      { asset_id: PRESET_TREE, x: 10, y: 1, elevation: 1, rotation: 0 },
-      { asset_id: PRESET_TREE, x: 1, y: 8, elevation: 1, rotation: 0 },
-      { asset_id: PRESET_TREE, x: 10, y: 8, elevation: 1, rotation: 0 },
-    ],
+    objects,
   };
 }
 
 /** An open grass field running up to a raised, dense treeline along the
  * north edge — cover for an ambush, per the DM's own framing. */
 function treelineAmbushTemplate(): MapTemplate {
-  const width = 14;
-  const height = 10;
+  const width = 20;
+  const height = 14;
   const cells = paintedGrid(width, height, { ground_type: "grass" }, [
     ...rect(0, 0, width - 1, 1, { ground_type: "dense_forest", elevation: 2 }),
     ...rect(0, 2, width - 1, 3, { ground_type: "forest", elevation: 1 }),
   ]);
-  // A couple of low grassy rises out in the open field, away from the treeline.
+  // Low grassy rises scattered through the now-larger open field, well away
+  // from the treeline.
   for (const { x, y } of [
-    { x: 3, y: 7 },
-    { x: 10, y: 8 },
-    { x: 6, y: 6 },
+    { x: 3, y: 9 },
+    { x: 15, y: 11 },
+    { x: 8, y: 8 },
+    { x: 12, y: 6 },
+    { x: 5, y: 12 },
+    { x: 17, y: 7 },
   ]) {
     const cell = cells.find((c) => c.x === x && c.y === y);
     if (cell) cell.elevation = 1;
   }
+  // A genuinely thick treeline — two staggered rows of trunks across the
+  // whole dense_forest band, not the same 3 trees stretched across a wider
+  // edge — plus a couple of rocks out in the open field as scattered cover.
+  const frontRow = rowSpots(1, width - 2, 0, 3);
+  const backRow = rowSpots(2, width - 2, 1, 3);
+  const rockSpots = [
+    { x: 9, y: 9 },
+    { x: 14, y: 5 },
+  ];
+  const objects: NewMapObjectSeed[] = [
+    ...frontRow.map((spot) => ({
+      asset_id: PRESET_TREE,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+    ...backRow.map((spot) => ({
+      asset_id: PRESET_TREE,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+    ...rockSpots.map((spot) => ({
+      asset_id: PRESET_ROCK,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+  ];
   return {
     id: "forest-treeline-ambush",
     name: "Treeline Ambush",
-    description: "An open grass field runs up to a raised, dense treeline along one edge — cover for an ambush.",
+    description:
+      "An open grass field runs up to a raised, dense treeline thick with trees along one edge — cover for an ambush.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [
-      { asset_id: PRESET_TREE, x: 2, y: 0, elevation: 2, rotation: 0 },
-      { asset_id: PRESET_TREE, x: 6, y: 1, elevation: 2, rotation: 0 },
-      { asset_id: PRESET_TREE, x: 11, y: 0, elevation: 2, rotation: 0 },
-    ],
+    objects,
   };
 }
 
@@ -368,9 +480,9 @@ function treelineAmbushTemplate(): MapTemplate {
  * grass hollow tucked off-center — a different composition from the
  * clearing's centered rings and the ambush's half-split field. */
 function forestHollowTemplate(): MapTemplate {
-  const width = 12;
-  const height = 10;
-  const hollow = { x: 8, y: 7 };
+  const width = 18;
+  const height = 14;
+  const hollow = { x: 13, y: 10 };
   const cells: NewMapCell[] = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -390,42 +502,81 @@ function forestHollowTemplate(): MapTemplate {
       cells.push({ x, y, elevation, terrain_type: "normal", ground_type });
     }
   }
+  // A genuinely thick outer treeline (the densest of the three forest
+  // templates, per its own "deep dense woods" framing) — a tight ring of
+  // trunks around almost the whole map, since the dense_forest band alone
+  // now covers most of the enlarged grid — plus one accent rock tucked into
+  // the sheltered hollow itself.
+  const treeSpots = perimeterSpots(width, height, 0, 2);
+  const objects: NewMapObjectSeed[] = [
+    ...treeSpots.map((spot) => ({
+      asset_id: PRESET_TREE,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+    { asset_id: PRESET_ROCK, x: hollow.x - 1, y: hollow.y, elevation: elevationAt(cells, hollow.x - 1, hollow.y), rotation: 0 },
+  ];
   return {
     id: "forest-hollow",
     name: "Forest Hollow",
-    description: "Deep woods slope down into a sheltered grass hollow tucked in one corner.",
+    description: "Deep, densely wooded terrain slopes down into a sheltered grass hollow tucked in one corner.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [
-      { asset_id: PRESET_TREE, x: 1, y: 1, elevation: 2, rotation: 0 },
-      { asset_id: PRESET_TREE, x: 4, y: 1, elevation: 2, rotation: 0 },
-      { asset_id: PRESET_TREE, x: 1, y: 5, elevation: 2, rotation: 0 },
-    ],
+    objects,
   };
 }
 
 // ─── Sand + water (3): a coastal/beach mix ───────────────────────────────
+//
+// Enlarged from P11's 12x10/14x10 footprints, with more dune/reef foliage
+// (dune trees, offshore rocks) so the wider coastline reads as populated.
 
 /** A calm sandy beach meeting shallow open water — a scenic coastline, no
  * crossing hazard intended (the shallows are normal terrain throughout). */
 function tidalShallowsTemplate(): MapTemplate {
-  const width = 14;
-  const height = 10;
-  const cells = paintedGrid(width, height, { ground_type: "water" }, [
-    ...rect(0, 0, width - 1, 3, { ground_type: "sand" }),
-    { x: 3, y: 1, ground_type: "sand", elevation: 1 },
-    { x: 10, y: 2, ground_type: "sand", elevation: 1 },
-    { x: 7, y: 5, ground_type: "rock" },
-  ]);
+  const width = 20;
+  const height = 14;
+  const dunes = [
+    { x: 3, y: 1 },
+    { x: 10, y: 2 },
+    { x: 16, y: 1 },
+    { x: 6, y: 3 },
+  ];
+  const rockSpots = [
+    { x: 7, y: 6 },
+    { x: 13, y: 8 },
+    { x: 17, y: 10 },
+    { x: 4, y: 9 },
+  ];
+  const overrides: CellOverride[] = [
+    ...rect(0, 0, width - 1, 4, { ground_type: "sand" }),
+    ...dunes.map((dune) => ({ x: dune.x, y: dune.y, ground_type: "sand" as GroundType, elevation: 1 })),
+    ...rockSpots.map((spot) => ({ x: spot.x, y: spot.y, ground_type: "rock" as GroundType })),
+  ];
+  const cells = paintedGrid(width, height, { ground_type: "water" }, overrides);
+  const objects: NewMapObjectSeed[] = [
+    ...rockSpots.map((spot) => ({
+      asset_id: PRESET_ROCK,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+    { asset_id: PRESET_TREE, x: dunes[0].x, y: dunes[0].y, elevation: elevationAt(cells, dunes[0].x, dunes[0].y), rotation: 0 },
+    { asset_id: PRESET_TREE, x: dunes[2].x, y: dunes[2].y, elevation: elevationAt(cells, dunes[2].x, dunes[2].y), rotation: 0 },
+  ];
   return {
     id: "coast-tidal-shallows",
     name: "Tidal Shallows",
-    description: "A gentle sandy beach gives way to calm shallow water, with one rock breaking the surface offshore.",
+    description:
+      "A gentle sandy beach lined with dune trees gives way to calm shallow water, with rocks breaking the surface offshore.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [{ asset_id: PRESET_ROCK, x: 7, y: 5, elevation: 0, rotation: 0 }],
+    objects,
   };
 }
 
@@ -434,22 +585,41 @@ function tidalShallowsTemplate(): MapTemplate {
  * the bridge-free crossing point, since Prompt 8's bridges may not exist
  * yet. */
 function sandbarCrossingTemplate(): MapTemplate {
-  const width = 14;
-  const height = 10;
+  const width = 20;
+  const height = 14;
+  const dunes = [
+    { x: 2, y: 1 },
+    { x: 15, y: 10 },
+    { x: 4, y: 11 },
+    { x: 17, y: 2 },
+  ];
   const cells = paintedGrid(width, height, { ground_type: "sand" }, [
     ...rect(0, 4, width - 1, 5, { ground_type: "water", terrain_type: "difficult" }),
     ...rect(6, 4, 7, 5, { ground_type: "sand", terrain_type: "normal" }),
-    { x: 2, y: 1, elevation: 1 },
-    { x: 11, y: 8, elevation: 1 },
+    ...dunes.map((dune) => ({ x: dune.x, y: dune.y, elevation: 1 })),
+    { x: 6, y: 3, ground_type: "rock" as GroundType },
+    { x: 7, y: 6, ground_type: "rock" as GroundType },
   ]);
+  const objects: NewMapObjectSeed[] = [
+    ...dunes.map((dune) => ({
+      asset_id: PRESET_TREE,
+      x: dune.x,
+      y: dune.y,
+      elevation: elevationAt(cells, dune.x, dune.y),
+      rotation: 0,
+    })),
+    { asset_id: PRESET_ROCK, x: 6, y: 3, elevation: elevationAt(cells, 6, 3), rotation: 0 },
+    { asset_id: PRESET_ROCK, x: 7, y: 6, elevation: elevationAt(cells, 7, 6), rotation: 0 },
+  ];
   return {
     id: "coast-sandbar-crossing",
     name: "Sandbar Crossing",
-    description: "Two sandy banks are split by a deep tidal channel — a narrow exposed sandbar is the only dry way across.",
+    description:
+      "Two tree-dotted sandy banks are split by a deep tidal channel — a narrow exposed sandbar is the only dry way across.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [],
+    objects,
   };
 }
 
@@ -457,9 +627,9 @@ function sandbarCrossingTemplate(): MapTemplate {
  * its mouth — per-row water-start columns table a symmetric curve inward
  * around the vertical center rather than straight coastal bands. */
 function coveInletTemplate(): MapTemplate {
-  const width = 12;
-  const height = 10;
-  const waterStart = [12, 9, 7, 5, 4, 4, 5, 7, 9, 12];
+  const width = 18;
+  const height = 14;
+  const waterStart = [18, 14, 11, 9, 7, 6, 5, 5, 6, 7, 9, 11, 14, 18];
   const cells: NewMapCell[] = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -467,55 +637,118 @@ function coveInletTemplate(): MapTemplate {
       cells.push({ x, y, elevation: 0, terrain_type: "normal", ground_type });
     }
   }
-  for (const y of [4, 5]) {
+  for (const y of [6, 7]) {
     const point = cells.find((c) => c.x === width - 1 && c.y === y);
     if (point) point.ground_type = "rock";
   }
-  for (const { x, y } of [
+  const dunes = [
     { x: 1, y: 1 },
-    { x: 2, y: 8 },
-  ]) {
-    const cell = cells.find((c) => c.x === x && c.y === y);
+    { x: 2, y: 12 },
+    { x: 3, y: 3 },
+    { x: 2, y: 10 },
+  ];
+  for (const dune of dunes) {
+    const cell = cells.find((c) => c.x === dune.x && c.y === dune.y);
     if (cell) cell.elevation = 1;
   }
+  const rockSpots = [
+    { x: 6, y: 0 },
+    { x: 8, y: 13 },
+  ];
+  for (const spot of rockSpots) {
+    const cell = cells.find((c) => c.x === spot.x && c.y === spot.y);
+    if (cell) cell.ground_type = "rock";
+  }
+  const objects: NewMapObjectSeed[] = [
+    { asset_id: PRESET_ROCK, x: width - 1, y: 6, elevation: elevationAt(cells, width - 1, 6), rotation: 0 },
+    ...rockSpots.map((spot) => ({
+      asset_id: PRESET_ROCK,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+    ...dunes.map((dune) => ({
+      asset_id: PRESET_TREE,
+      x: dune.x,
+      y: dune.y,
+      elevation: elevationAt(cells, dune.x, dune.y),
+      rotation: 0,
+    })),
+  ];
   return {
     id: "coast-cove-inlet",
     name: "Cove Inlet",
-    description: "A curved sandy cove wraps around a quiet water inlet, with a rocky point at its mouth.",
+    description: "A curved, tree-dotted sandy cove wraps around a quiet water inlet, with a rocky point at its mouth.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [{ asset_id: PRESET_ROCK, x: width - 1, y: 4, elevation: 0, rotation: 0 }],
+    objects,
   };
 }
 
 // ─── Water-only (3): a lake or river feel ────────────────────────────────
+//
+// Enlarged from P11's 10x14/12x12/14x10 footprints, with more tree/rock
+// islands so the wider water reads as populated rather than emptier.
 
 /** A wide river bending from an east flow to a south flow, small islands
  * scattered near the bend, and a couple of eddy accents (opposite-direction
  * flow cells) near the inside of the turn for visual variety. */
 function riverBendTemplate(): MapTemplate {
-  const width = 14;
-  const height = 10;
-  const overrides: CellOverride[] = [
-    ...rect(0, 0, 7, height - 1, { water_flow_direction: "east" }),
-    ...rect(8, 0, width - 1, height - 1, { water_flow_direction: "south" }),
-    { x: 7, y: 2, water_flow_direction: "north" },
-    { x: 8, y: 8, water_flow_direction: "west" },
-    { x: 3, y: 3, ground_type: "sand", elevation: 1, water_flow_direction: null },
-    { x: 4, y: 3, ground_type: "sand", elevation: 1, water_flow_direction: null },
-    { x: 9, y: 6, ground_type: "rock", elevation: 1, water_flow_direction: null },
-    { x: 6, y: 7, ground_type: "grass", elevation: 1, water_flow_direction: null },
+  const width = 20;
+  const height = 14;
+  const islands: Array<{ x: number; y: number; ground_type: GroundType }> = [
+    { x: 3, y: 3, ground_type: "sand" },
+    { x: 5, y: 9, ground_type: "grass" },
+    { x: 9, y: 4, ground_type: "rock" },
+    { x: 8, y: 10, ground_type: "sand" },
+    { x: 13, y: 3, ground_type: "rock" },
+    { x: 15, y: 9, ground_type: "grass" },
+    { x: 17, y: 5, ground_type: "sand" },
   ];
+  const extraRocks = [
+    { x: 6, y: 7 },
+    { x: 14, y: 7 },
+  ];
+  const overrides: CellOverride[] = [
+    ...rect(0, 0, 10, height - 1, { water_flow_direction: "east" }),
+    ...rect(11, 0, width - 1, height - 1, { water_flow_direction: "south" }),
+    { x: 10, y: 2, water_flow_direction: "north" },
+    { x: 11, y: 11, water_flow_direction: "west" },
+    ...extraRocks.map((spot) => ({ x: spot.x, y: spot.y, ground_type: "rock" as GroundType })),
+  ];
+  for (const island of islands) {
+    overrides.push({ x: island.x, y: island.y, ground_type: island.ground_type, elevation: 1, water_flow_direction: null });
+  }
   const cells = paintedGrid(width, height, { ground_type: "water" }, overrides);
+  const objects: NewMapObjectSeed[] = [
+    ...islands
+      .filter((island) => island.ground_type === "rock" || island.ground_type === "grass")
+      .map((island) => ({
+        asset_id: island.ground_type === "rock" ? PRESET_ROCK : PRESET_TREE,
+        x: island.x,
+        y: island.y,
+        elevation: elevationAt(cells, island.x, island.y),
+        rotation: 0,
+      })),
+    ...extraRocks.map((spot) => ({
+      asset_id: PRESET_ROCK,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+  ];
   return {
     id: "water-river-bend",
     name: "River Bend",
-    description: "A wide river bends from flowing east to flowing south, with a scatter of small islands mid-current.",
+    description:
+      "A wide river bends from flowing east to flowing south, with a scatter of small tree- and rock-studded islands mid-current.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [{ asset_id: PRESET_ROCK, x: 9, y: 6, elevation: 1, rotation: 0 }],
+    objects,
   };
 }
 
@@ -523,14 +756,17 @@ function riverBendTemplate(): MapTemplate {
  * corner and an outflow draining the opposite one, plus a line of small
  * islands strung across it as natural stepping stones for a crossing. */
 function lakeCrossingTemplate(): MapTemplate {
-  const width = 12;
-  const height = 12;
+  const width = 18;
+  const height = 16;
   const islands: Array<{ x: number; y: number; ground_type: GroundType }> = [
     { x: 2, y: 2, ground_type: "grass" },
     { x: 4, y: 4, ground_type: "sand" },
     { x: 6, y: 6, ground_type: "rock" },
     { x: 8, y: 8, ground_type: "sand" },
     { x: 10, y: 9, ground_type: "grass" },
+    { x: 12, y: 10, ground_type: "rock" },
+    { x: 14, y: 12, ground_type: "sand" },
+    { x: 15, y: 14, ground_type: "grass" },
   ];
   const overrides: CellOverride[] = [
     ...rect(0, 0, 2, 2, { water_flow_direction: "east" }),
@@ -540,32 +776,46 @@ function lakeCrossingTemplate(): MapTemplate {
     overrides.push({ x: island.x, y: island.y, ground_type: island.ground_type, elevation: 1, water_flow_direction: null });
   }
   const cells = paintedGrid(width, height, { ground_type: "water" }, overrides);
+  const objects: NewMapObjectSeed[] = islands
+    .filter((island) => island.ground_type !== "sand")
+    .map((island) => ({
+      asset_id: island.ground_type === "rock" ? PRESET_ROCK : PRESET_TREE,
+      x: island.x,
+      y: island.y,
+      elevation: elevationAt(cells, island.x, island.y),
+      rotation: 0,
+    }));
   return {
     id: "water-lake-crossing",
     name: "Lake Crossing",
-    description: "An open lake with a line of small islands strung across it — natural stepping stones for a crossing.",
+    description:
+      "An open lake with a long line of small tree- and rock-topped islands strung across it — natural stepping stones for a crossing.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [{ asset_id: PRESET_ROCK, x: 6, y: 6, elevation: 1, rotation: 0 }],
+    objects,
   };
 }
 
 /** A fast, mostly-difficult river channel flowing south, boulders breaking
  * the current, and a calmer entry pool before the rapids begin in earnest. */
 function rapidsTemplate(): MapTemplate {
-  const width = 10;
-  const height = 14;
+  const width = 14;
+  const height = 20;
   const boulderSpots = [
     { x: 2, y: 3 },
-    { x: 7, y: 5 },
-    { x: 4, y: 8 },
-    { x: 8, y: 10 },
-    { x: 3, y: 12 },
+    { x: 9, y: 4 },
+    { x: 5, y: 6 },
+    { x: 11, y: 8 },
+    { x: 3, y: 10 },
+    { x: 8, y: 12 },
+    { x: 2, y: 15 },
+    { x: 10, y: 16 },
+    { x: 5, y: 18 },
   ];
   const overrides: CellOverride[] = [...rect(0, 0, width - 1, 1, { terrain_type: "normal" })];
-  overrides.push({ x: 6, y: 5, water_flow_direction: "east" });
-  overrides.push({ x: 8, y: 9, water_flow_direction: "west" });
+  overrides.push({ x: 6, y: 6, water_flow_direction: "east" });
+  overrides.push({ x: 9, y: 13, water_flow_direction: "west" });
   for (const spot of boulderSpots) {
     overrides.push({
       x: spot.x,
@@ -702,75 +952,124 @@ function sunkenVaultTemplate(): MapTemplate {
 }
 
 // ─── Swamp (3): swamp mixed with water, uneven elevation, murky/bog feel ─
+//
+// Enlarged from P11's 12x12/14x10/16x10 footprints. These 3 previously
+// carried zero objects at all — the enlargement adds gnarled trees on the
+// firmer hummocks/rises and a few rocks in the shallows, so "add foliage"
+// applies here too, not just to forest/coast/water.
 
 /** A wide bog dotted with stagnant pools and several difficult, boggy
  * patches — pre-painted difficult terrain so the DM doesn't have to, per
  * the SRD-flavored "swamp is hard to traverse" convention. */
 function murkyBogTemplate(): MapTemplate {
-  const width = 14;
-  const height = 10;
+  const width = 20;
+  const height = 14;
   const overrides: CellOverride[] = [
     ...rect(3, 2, 4, 3, { ground_type: "water" }),
-    ...rect(9, 6, 10, 7, { ground_type: "water" }),
-    ...rect(6, 4, 6, 5, { ground_type: "water" }),
+    ...rect(14, 8, 15, 9, { ground_type: "water" }),
+    ...rect(9, 5, 9, 6, { ground_type: "water" }),
+    ...rect(17, 3, 18, 4, { ground_type: "water" }),
     ...rect(1, 5, 2, 6, { terrain_type: "difficult" }),
     ...rect(10, 1, 12, 2, { terrain_type: "difficult" }),
     ...rect(6, 7, 8, 8, { terrain_type: "difficult" }),
+    ...rect(15, 11, 17, 12, { terrain_type: "difficult" }),
   ];
   const hummocks = [
     { x: 2, y: 2 },
-    { x: 11, y: 5 },
+    { x: 16, y: 5 },
     { x: 5, y: 8 },
-    { x: 12, y: 8 },
+    { x: 18, y: 8 },
+    { x: 9, y: 11 },
+    { x: 12, y: 9 },
   ];
   for (const hummock of hummocks) overrides.push({ x: hummock.x, y: hummock.y, elevation: 1 });
   const cells = paintedGrid(width, height, { ground_type: "swamp" }, overrides);
+  // Gnarled trees on the firmer hummocks and a couple of rocks in the
+  // shallows — the bog reads as overgrown, not just wet.
+  const objects: NewMapObjectSeed[] = [
+    ...hummocks.map((hummock) => ({
+      asset_id: PRESET_TREE,
+      x: hummock.x,
+      y: hummock.y,
+      elevation: elevationAt(cells, hummock.x, hummock.y),
+      rotation: 0,
+    })),
+    { asset_id: PRESET_ROCK, x: 7, y: 3, elevation: elevationAt(cells, 7, 3), rotation: 0 },
+    { asset_id: PRESET_ROCK, x: 13, y: 6, elevation: elevationAt(cells, 13, 6), rotation: 0 },
+  ];
   return {
     id: "swamp-murky-bog",
     name: "Murky Bog",
-    description: "A wide bog dotted with stagnant pools; soft ground bogs down movement in several patches.",
+    description:
+      "A wide bog dotted with stagnant pools and gnarled trees on the firmer hummocks; soft ground bogs down movement in several patches.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [],
+    objects,
   };
 }
 
 /** A mire that's difficult terrain almost everywhere, with a single winding
  * line of firmer, raised hummocks as the only easy way through. */
 function fetidMireTemplate(): MapTemplate {
-  const width = 12;
-  const height = 12;
+  const width = 18;
+  const height = 16;
   const waterPools: CellOverride[] = [
     ...rect(1, 1, 3, 3, { ground_type: "water" }),
-    ...rect(7, 8, 9, 10, { ground_type: "water" }),
-    ...rect(8, 2, 9, 3, { ground_type: "water" }),
+    ...rect(13, 12, 15, 14, { ground_type: "water" }),
+    ...rect(14, 2, 15, 3, { ground_type: "water" }),
+    ...rect(2, 12, 3, 13, { ground_type: "water" }),
   ];
   const hummockPath = [
-    { x: 1, y: 6 },
-    { x: 2, y: 6 },
-    { x: 3, y: 7 },
-    { x: 4, y: 7 },
-    { x: 5, y: 6 },
-    { x: 6, y: 6 },
-    { x: 7, y: 5 },
-    { x: 8, y: 5 },
-    { x: 9, y: 6 },
-    { x: 10, y: 6 },
+    { x: 1, y: 9 },
+    { x: 2, y: 9 },
+    { x: 3, y: 10 },
+    { x: 4, y: 10 },
+    { x: 5, y: 9 },
+    { x: 6, y: 9 },
+    { x: 7, y: 8 },
+    { x: 8, y: 8 },
+    { x: 9, y: 7 },
+    { x: 10, y: 7 },
+    { x: 11, y: 8 },
+    { x: 12, y: 8 },
+    { x: 13, y: 7 },
+    { x: 14, y: 7 },
+    { x: 15, y: 8 },
+    { x: 16, y: 8 },
   ];
   const overrides: CellOverride[] = [...waterPools];
   for (const step of hummockPath) {
     overrides.push({ x: step.x, y: step.y, ground_type: "swamp", terrain_type: "normal", elevation: 1 });
   }
   const cells = paintedGrid(width, height, { ground_type: "swamp", terrain_type: "difficult" }, overrides);
+  // Gnarled trees and rot-slick boulders out in the difficult mire itself —
+  // never on the safe hummock path — so straying off the line reads as
+  // genuinely overgrown, not just empty bog.
+  const mireProps: Array<{ x: number; y: number; asset: string }> = [
+    { x: 3, y: 4, asset: PRESET_TREE },
+    { x: 14, y: 10, asset: PRESET_TREE },
+    { x: 7, y: 13, asset: PRESET_TREE },
+    { x: 12, y: 3, asset: PRESET_TREE },
+    { x: 2, y: 14, asset: PRESET_ROCK },
+    { x: 15, y: 4, asset: PRESET_ROCK },
+  ];
+  const objects: NewMapObjectSeed[] = mireProps.map((prop) => ({
+    asset_id: prop.asset,
+    x: prop.x,
+    y: prop.y,
+    elevation: elevationAt(cells, prop.x, prop.y),
+    rotation: 0,
+  }));
   return {
     id: "swamp-fetid-mire",
     name: "Fetid Mire",
-    description: "A stagnant mire choked with difficult bog and pools — a single line of firm hummocks offers the only easy crossing.",
+    description:
+      "A stagnant mire choked with difficult bog, pools, and gnarled trees — a single line of firm hummocks offers the only easy crossing.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [],
+    objects,
   };
 }
 
@@ -778,29 +1077,59 @@ function fetidMireTemplate(): MapTemplate {
  * a handful of firmer rises to stand on. The most water-dominant, and the
  * hardest to cross, of the three swamp templates. */
 function sunkenMarshTemplate(): MapTemplate {
-  const width = 16;
-  const height = 10;
-  const cells = paintedGrid(width, height, { ground_type: "swamp", terrain_type: "difficult" }, [
+  const width = 22;
+  const height = 14;
+  const rises = [
+    { x: 2, y: 4 },
+    { x: 19, y: 4 },
+    { x: 10, y: 10 },
+    { x: 17, y: 9 },
+    { x: 5, y: 9 },
+    { x: 13, y: 3 },
+  ];
+  const overrides: CellOverride[] = [
     ...rect(0, 0, width - 1, 1, { ground_type: "water", terrain_type: "difficult" }),
-    ...rect(5, 4, 10, 6, { ground_type: "water", terrain_type: "difficult" }),
-    ...rect(0, 8, width - 1, 9, { ground_type: "water", terrain_type: "difficult" }),
-    { x: 2, y: 3, ground_type: "swamp", terrain_type: "normal", elevation: 1 },
-    { x: 13, y: 3, ground_type: "swamp", terrain_type: "normal", elevation: 1 },
-    { x: 7, y: 7, ground_type: "swamp", terrain_type: "normal", elevation: 1 },
-    { x: 12, y: 6, ground_type: "swamp", terrain_type: "normal", elevation: 1 },
-  ]);
+    ...rect(7, 5, 14, 8, { ground_type: "water", terrain_type: "difficult" }),
+    ...rect(0, 12, width - 1, 13, { ground_type: "water", terrain_type: "difficult" }),
+    ...rises.map((rise) => ({
+      x: rise.x,
+      y: rise.y,
+      ground_type: "swamp" as GroundType,
+      terrain_type: "normal" as TerrainType,
+      elevation: 1,
+    })),
+  ];
+  const cells = paintedGrid(width, height, { ground_type: "swamp", terrain_type: "difficult" }, overrides);
+  // A handful of the firmer rises carry a gnarled tree or a mossy boulder —
+  // the only solid ground in the whole marsh shouldn't be completely bare.
+  const objects: NewMapObjectSeed[] = [
+    { asset_id: PRESET_TREE, x: 2, y: 4, elevation: elevationAt(cells, 2, 4), rotation: 0 },
+    { asset_id: PRESET_TREE, x: 19, y: 4, elevation: elevationAt(cells, 19, 4), rotation: 0 },
+    { asset_id: PRESET_TREE, x: 13, y: 3, elevation: elevationAt(cells, 13, 3), rotation: 0 },
+    { asset_id: PRESET_ROCK, x: 10, y: 10, elevation: elevationAt(cells, 10, 10), rotation: 0 },
+    { asset_id: PRESET_ROCK, x: 17, y: 9, elevation: elevationAt(cells, 17, 9), rotation: 0 },
+  ];
   return {
     id: "swamp-sunken-marsh",
     name: "Sunken Marsh",
-    description: "A vast waterlogged marsh — nearly all of it difficult going, with only a few firmer rises to stand on.",
+    description:
+      "A vast waterlogged marsh — nearly all of it difficult going, with only a few tree- and boulder-topped rises to stand on.",
     gridWidth: width,
     gridHeight: height,
     cells,
-    objects: [],
+    objects,
   };
 }
 
 // ─── Town (3): a structured settlement — streets, plazas, building outlines ─
+//
+// Towns are more architectural than the other 5 themes, so these are NOT
+// enlarged — but two of the three DO have real outdoor ground (the plaza's
+// garden plots, the hamlet's grassy commons), so each gets a light touch of
+// ornamental trees per the project owner's own framing ("a light touch of
+// trees in a market square is reasonable, a dense treeline is not").
+// Tradesman's Row is left untouched: it's entirely path/stone, with no
+// outdoor ground to plant anything in.
 
 /** Four shopfronts (building outlines, not one enclosing room) face a paved
  * central plaza across a web of streets, closest in spirit to walledRoom
@@ -828,11 +1157,16 @@ function marketSquareTemplate(): MapTemplate {
     ...buildings.flatMap((building) => building.objects),
     { asset_id: PRESET_TABLE, x: 7, y: 6, elevation: 0, rotation: 0 },
     { asset_id: PRESET_TABLE, x: 8, y: 7, elevation: 0, rotation: 0 },
+    // A light touch of shade trees at two corners of the stone plaza — an
+    // ornamental pair, not a treeline; the square is still mostly paved.
+    { asset_id: PRESET_TREE, x: 6, y: 5, elevation: elevationAt(cells, 6, 5), rotation: 0 },
+    { asset_id: PRESET_TREE, x: 9, y: 8, elevation: elevationAt(cells, 9, 8), rotation: 0 },
   ];
   return {
     id: "town-market-square",
     name: "Market Square",
-    description: "Four shopfronts face a paved central plaza across a web of streets — ready for stalls and townsfolk.",
+    description:
+      "Four shopfronts face a paved central plaza across a web of streets, a pair of shade trees softening the stone — ready for stalls and townsfolk.",
     gridWidth: width,
     gridHeight: height,
     cells,
@@ -859,11 +1193,16 @@ function crossroadsHamletTemplate(): MapTemplate {
   const objects: NewMapObjectSeed[] = [
     ...buildings.flatMap((building) => building.objects),
     { asset_id: PRESET_TORCH, x: 6, y: 5, elevation: 0, rotation: 0 },
+    // A couple of trees on the grassy commons, clear of buildings and
+    // roads — the hamlet's outdoor character, kept light.
+    { asset_id: PRESET_TREE, x: 10, y: 8, elevation: elevationAt(cells, 10, 8), rotation: 0 },
+    { asset_id: PRESET_TREE, x: 12, y: 9, elevation: elevationAt(cells, 12, 9), rotation: 0 },
   ];
   return {
     id: "town-crossroads-hamlet",
     name: "Crossroads Hamlet",
-    description: "A handful of houses cluster where two dirt roads cross, grassy commons filling the gaps between them.",
+    description:
+      "A handful of houses cluster where two dirt roads cross, a couple of trees dotting the grassy commons between them.",
     gridWidth: width,
     gridHeight: height,
     cells,
@@ -901,6 +1240,406 @@ function tradesmansRowTemplate(): MapTemplate {
     gridHeight: height,
     cells,
     objects,
+  };
+}
+
+// ─── Battleground (3): open, tactical combat arenas ──────────────────────
+//
+// The project owner's own framing: "a battleground one" — distinct from the
+// themed exploration maps above. No walls, no doors, no furniture: these
+// are built purely for a fight, not a place to explore. Each variant
+// supplies genuine tactical terrain variety (elevation for high ground,
+// difficult terrain or obstacles for cover, or a real hazard) while staying
+// open enough for several combatants to maneuver.
+
+/** A grass field with two raised plateaus facing off across open ground —
+ * high ground worth fighting for, boulders scattered mid-field for cover,
+ * nothing walled or roomed. */
+function openFieldBattlegroundTemplate(): MapTemplate {
+  const width = 18;
+  const height = 16;
+  const cells = paintedGrid(width, height, { ground_type: "grass" }, [
+    ...rect(1, 1, 6, 3, { elevation: 2 }),
+    ...rect(1, 4, 6, 4, { elevation: 1 }),
+    ...rect(11, 12, 16, 14, { elevation: 2 }),
+    ...rect(11, 11, 16, 11, { elevation: 1 }),
+  ]);
+  const coverSpots = [
+    { x: 8, y: 7 },
+    { x: 10, y: 9 },
+    { x: 6, y: 10 },
+    { x: 12, y: 6 },
+  ];
+  for (const spot of coverSpots) {
+    const cell = cells.find((c) => c.x === spot.x && c.y === spot.y);
+    if (cell) cell.ground_type = "rock";
+  }
+  const objects: NewMapObjectSeed[] = [
+    ...coverSpots.map((spot) => ({
+      asset_id: PRESET_ROCK,
+      x: spot.x,
+      y: spot.y,
+      elevation: elevationAt(cells, spot.x, spot.y),
+      rotation: 0,
+    })),
+    { asset_id: PRESET_TREE, x: 1, y: 14, elevation: elevationAt(cells, 1, 14), rotation: 0 },
+    { asset_id: PRESET_TREE, x: 16, y: 1, elevation: elevationAt(cells, 16, 1), rotation: 0 },
+  ];
+  return {
+    id: "battleground-open-field",
+    name: "Open Field Battleground",
+    description:
+      "A wide grass field with two raised plateaus facing off across open ground — high ground worth fighting for, and boulders for cover in between.",
+    gridWidth: width,
+    gridHeight: height,
+    cells,
+    objects,
+  };
+}
+
+/** Broken, rubble-strewn ground — jagged elevation changes and difficult
+ * footing throughout, several boulders for hard cover. Rockier and more
+ * chaotic underfoot than the open field, the same "built for a fight"
+ * openness with no walls or rooms. */
+function brokenGroundBattlegroundTemplate(): MapTemplate {
+  const width = 18;
+  const height = 16;
+  const boulders = [
+    { x: 7, y: 4 },
+    { x: 10, y: 6 },
+    { x: 4, y: 11 },
+    { x: 13, y: 3 },
+    { x: 8, y: 13 },
+  ];
+  const overrides: CellOverride[] = [
+    ...rect(2, 2, 5, 5, { ground_type: "rock", elevation: 2 }),
+    ...rect(12, 10, 15, 13, { ground_type: "rock", elevation: 2 }),
+    ...rect(6, 6, 9, 8, { terrain_type: "difficult" }),
+    ...rect(9, 9, 12, 11, { terrain_type: "difficult" }),
+    ...boulders.map((boulder) => ({ x: boulder.x, y: boulder.y, ground_type: "rock" as GroundType, elevation: 1 })),
+  ];
+  const cells = paintedGrid(width, height, { ground_type: "stone" }, overrides);
+  const objects: NewMapObjectSeed[] = boulders.map((boulder) => ({
+    asset_id: PRESET_ROCK,
+    x: boulder.x,
+    y: boulder.y,
+    elevation: elevationAt(cells, boulder.x, boulder.y),
+    rotation: 0,
+  }));
+  return {
+    id: "battleground-broken-ground",
+    name: "Broken Ground Battleground",
+    description:
+      "Jagged, rubble-strewn terrain with two rocky rises and difficult footing throughout — hard cover everywhere, nowhere flat for long.",
+    gridWidth: width,
+    gridHeight: height,
+    cells,
+    objects,
+  };
+}
+
+/** An arena built around a genuine hazard: a deep central pit ringed by
+ * solid ground, with two elevated ledges overlooking it — the tactical
+ * question here is who controls the high ground around the drop, not just
+ * who has cover. */
+function sinkholeArenaBattlegroundTemplate(): MapTemplate {
+  const width = 16;
+  const height = 16;
+  const coverSpots = [
+    { x: 3, y: 8 },
+    { x: 12, y: 6 },
+    { x: 8, y: 12 },
+  ];
+  const overrides: CellOverride[] = [
+    ...rect(6, 6, 9, 9, { terrain_type: "pit", elevation: -2 }),
+    ...rect(1, 1, 4, 2, { elevation: 2 }),
+    ...rect(11, 13, 14, 14, { elevation: 2 }),
+    ...coverSpots.map((spot) => ({ x: spot.x, y: spot.y, ground_type: "rock" as GroundType })),
+  ];
+  const cells = paintedGrid(width, height, { ground_type: "grass" }, overrides);
+  const objects: NewMapObjectSeed[] = coverSpots.map((spot) => ({
+    asset_id: PRESET_ROCK,
+    x: spot.x,
+    y: spot.y,
+    elevation: elevationAt(cells, spot.x, spot.y),
+    rotation: 0,
+  }));
+  return {
+    id: "battleground-sinkhole-arena",
+    name: "Sinkhole Arena Battleground",
+    description:
+      "A grassy arena built around a genuine hazard — a deep central pit ringed by open ground, with two raised ledges overlooking the drop.",
+    gridWidth: width,
+    gridHeight: height,
+    cells,
+    objects,
+  };
+}
+
+// ─── Cave / corridor (3): natural, UNBUILT passages carved from void ─────
+//
+// The project owner asked for "generic corridors/cave walkways for
+// adventuring" — deliberately distinct from P11's stone-corridor-junction,
+// which is a WORKED stone chamber (walls, four doors, pillars). These carve
+// an organic, non-rectangular tunnel shape directly out of void terrain
+// (0039_void_terrain.sql's own stated purpose: "the DM paints [void] to
+// carve caves/winding corridors out of the rectangular grid") instead of
+// building a room: no walls, no doors — nobody built these, water and time
+// did. Ground is rock throughout; a little elevation variation (a bump, a
+// ledge) keeps the floor from reading as a paved room with the walls
+// removed.
+
+const VOID_BASE: CellSpec = { terrain_type: "void", ground_type: "default" };
+
+/** Reverts a single cell back to void — used to round off a rectangular
+ * floor blob's sharp corner into a more organic outline after the blob
+ * itself has already been painted as floor (a later override in the same
+ * paintedGrid call always wins on a repeated coordinate). */
+function voidCorner(x: number, y: number): CellOverride {
+  return { x, y, terrain_type: "void", ground_type: "default", elevation: 0 };
+}
+
+/** A single, mostly-straight passage between two rock chambers — the
+ * simplest of the three: one winding but unbranching route, corners
+ * softened so it doesn't read as a rectangular room with the walls
+ * stripped out. */
+function naturalCavePassageTemplate(): MapTemplate {
+  const width = 14;
+  const height = 10;
+  const cells = paintedGrid(width, height, VOID_BASE, [
+    ...rect(1, 4, 4, 5, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(3, 3, 9, 6, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(8, 4, 12, 5, { terrain_type: "normal", ground_type: "rock" }),
+    voidCorner(3, 3),
+    voidCorner(9, 3),
+    voidCorner(3, 6),
+    voidCorner(9, 6),
+  ]);
+  const bumps = [
+    { x: 5, y: 4 },
+    { x: 7, y: 5 },
+  ];
+  for (const bump of bumps) {
+    const cell = cells.find((c) => c.x === bump.x && c.y === bump.y);
+    if (cell) cell.elevation = 1;
+  }
+  const boulders = [
+    { x: 2, y: 4 },
+    { x: 6, y: 3 },
+    { x: 10, y: 5 },
+  ];
+  const objects: NewMapObjectSeed[] = boulders.map((boulder) => ({
+    asset_id: PRESET_ROCK,
+    x: boulder.x,
+    y: boulder.y,
+    elevation: elevationAt(cells, boulder.x, boulder.y),
+    rotation: 0,
+  }));
+  return {
+    id: "cave-natural-passage",
+    name: "Natural Cave Passage",
+    description:
+      "A rough-hewn natural tunnel winds through solid rock — an unbuilt, organic passage carved by water and time, not by hands.",
+    gridWidth: width,
+    gridHeight: height,
+    cells,
+    objects,
+  };
+}
+
+/** A passage that opens into a rough chamber and splits — one branch
+ * climbing away in each direction. The differentiator from
+ * stone-corridor-junction's four-doored crossing: no doors, no walls, and
+ * an organic staggered outline instead of a rectangular room. */
+function branchingCaveJunctionTemplate(): MapTemplate {
+  const width = 16;
+  const height = 14;
+  const cells = paintedGrid(width, height, VOID_BASE, [
+    ...rect(1, 6, 6, 7, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(6, 5, 9, 8, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(9, 4, 10, 5, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(10, 2, 11, 4, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(11, 1, 13, 2, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(9, 8, 10, 9, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(10, 9, 11, 11, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(11, 11, 13, 12, { terrain_type: "normal", ground_type: "rock" }),
+    voidCorner(6, 5),
+    voidCorner(6, 8),
+  ]);
+  const bumps = [
+    { x: 7, y: 6 },
+    { x: 8, y: 6 },
+    { x: 7, y: 7 },
+    { x: 12, y: 1 },
+    { x: 12, y: 12 },
+  ];
+  for (const bump of bumps) {
+    const cell = cells.find((c) => c.x === bump.x && c.y === bump.y);
+    if (cell) cell.elevation = 1;
+  }
+  const boulders = [
+    { x: 3, y: 6 },
+    { x: 10, y: 3 },
+    { x: 10, y: 10 },
+  ];
+  const objects: NewMapObjectSeed[] = boulders.map((boulder) => ({
+    asset_id: PRESET_ROCK,
+    x: boulder.x,
+    y: boulder.y,
+    elevation: elevationAt(cells, boulder.x, boulder.y),
+    rotation: 0,
+  }));
+  return {
+    id: "cave-branching-junction",
+    name: "Branching Cave Junction",
+    description:
+      "A natural tunnel opens into a rough stone chamber where the passage splits — one unbuilt branch climbing away in each direction.",
+    gridWidth: width,
+    gridHeight: height,
+    cells,
+    objects,
+  };
+}
+
+/** A long, sinuous tunnel that switches back on itself repeatedly, its
+ * floor rising and falling more than the other two — the most organic and
+ * least room-like of the three, reading as a real cave passage rather than
+ * a corridor with rounded corners. */
+function windingCaveTunnelTemplate(): MapTemplate {
+  const width = 18;
+  const height = 12;
+  const cells = paintedGrid(width, height, VOID_BASE, [
+    ...rect(0, 2, 3, 4, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(3, 4, 6, 6, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(5, 6, 8, 8, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(7, 7, 10, 9, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(9, 5, 12, 7, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(11, 3, 14, 5, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(13, 1, 16, 3, { terrain_type: "normal", ground_type: "rock" }),
+    ...rect(15, 3, 17, 5, { terrain_type: "normal", ground_type: "rock" }),
+    voidCorner(0, 2),
+    voidCorner(3, 2),
+    voidCorner(8, 8),
+    voidCorner(16, 1),
+    voidCorner(17, 5),
+  ]);
+  const bumps = [
+    { x: 1, y: 3 },
+    { x: 6, y: 7 },
+    { x: 10, y: 6 },
+    { x: 14, y: 2 },
+  ];
+  for (const bump of bumps) {
+    const cell = cells.find((c) => c.x === bump.x && c.y === bump.y);
+    if (cell) cell.elevation = 1;
+  }
+  const boulders = [
+    { x: 4, y: 5 },
+    { x: 9, y: 7 },
+    { x: 13, y: 4 },
+  ];
+  const objects: NewMapObjectSeed[] = boulders.map((boulder) => ({
+    asset_id: PRESET_ROCK,
+    x: boulder.x,
+    y: boulder.y,
+    elevation: elevationAt(cells, boulder.x, boulder.y),
+    rotation: 0,
+  }));
+  return {
+    id: "cave-winding-tunnel",
+    name: "Winding Cave Tunnel",
+    description:
+      "A long, sinuous natural tunnel snakes back and forth through the rock, its floor rising and dipping with no two stretches quite level.",
+    gridWidth: width,
+    gridHeight: height,
+    cells,
+    objects,
+  };
+}
+
+// ─── Treasure room (3): small, defensible reward rooms ───────────────────
+//
+// The project owner asked for "treasure rooms etc." — small, walled,
+// single-door vaults built around the Chest preset (a55e7002, seeded since
+// 0016 but never referenced by any earlier template), each staging the
+// chest a little differently so the reward reads as a deliberate
+// destination rather than a prop dropped in an ordinary room.
+
+/** A small stone vault: a raised central plinth (a step up, then the chest
+ * itself higher still) at the heart of an otherwise plain walled room. */
+function vaultPlinthTreasureRoomTemplate(): MapTemplate {
+  const width = 8;
+  const height = 8;
+  const { cells: wallCells, objects: wallObjects } = walledRoom(width, height, { x: 4, y: 7 });
+  const floor = paintedGrid(width, height, { ground_type: "stone" }, [
+    ...rect(2, 2, 5, 5, { elevation: 1 }),
+    ...rect(3, 3, 4, 4, { elevation: 2 }),
+  ]);
+  const cells = mergeCells(floor, wallCells);
+  return {
+    id: "treasure-vault-plinth",
+    name: "Vault Plinth",
+    description: "A small stone vault with a single door — its treasure sits raised on a plinth at the very center of the room.",
+    gridWidth: width,
+    gridHeight: height,
+    cells,
+    objects: [...wallObjects, { asset_id: PRESET_CHEST, x: 3, y: 3, elevation: elevationAt(cells, 3, 3), rotation: 0 }],
+  };
+}
+
+/** A small strongroom with torches flanking its single door like a guard
+ * post — the chest sits opposite the entrance, raised on a low dais, so
+ * reaching it means crossing the whole watched room. */
+function guardedStrongroomTreasureRoomTemplate(): MapTemplate {
+  const width = 9;
+  const height = 7;
+  const { cells: wallCells, objects: wallObjectsRaw } = walledRoom(width, height, { x: 4, y: 6 });
+  const wallObjects = [...wallObjectsRaw];
+  for (const torch of [
+    { x: 2, y: 6 },
+    { x: 6, y: 6 },
+  ]) {
+    const index = wallObjects.findIndex((object) => object.x === torch.x && object.y === torch.y);
+    if (index !== -1) {
+      wallObjects[index] = { asset_id: PRESET_TORCH, x: torch.x, y: torch.y, elevation: WALL_ELEVATION, rotation: 0 };
+    }
+  }
+  const floor = paintedGrid(width, height, { ground_type: "stone" }, [...rect(3, 1, 5, 1, { elevation: 1 })]);
+  const cells = mergeCells(floor, wallCells);
+  return {
+    id: "treasure-strongroom",
+    name: "Guarded Strongroom",
+    description:
+      "A small stone strongroom with a single guarded door, torches flanking the entrance — the chest sits opposite, raised on a low dais.",
+    gridWidth: width,
+    gridHeight: height,
+    cells,
+    objects: [...wallObjects, { asset_id: PRESET_CHEST, x: 4, y: 1, elevation: elevationAt(cells, 4, 1), rotation: 0 }],
+  };
+}
+
+/** A small chamber built up on a raised floor, except for one recessed
+ * hollow at its heart where the chest is tucked away — "sunken" expressed
+ * as a relative dip below the surrounding raised floor (never a negative
+ * elevation on ordinary terrain, which this codebase reserves for pit
+ * cells only). */
+function sunkenCacheTreasureRoomTemplate(): MapTemplate {
+  const width = 9;
+  const height = 9;
+  const { cells: wallCells, objects: wallObjects } = walledRoom(width, height, { x: 4, y: 8 });
+  const floor = paintedGrid(width, height, { ground_type: "stone", elevation: 1 }, [
+    ...rect(3, 3, 5, 5, { elevation: 0 }),
+  ]);
+  const cells = mergeCells(floor, wallCells);
+  return {
+    id: "treasure-sunken-cache",
+    name: "Sunken Cache",
+    description:
+      "A small stone chamber built up on a raised floor, except for one recessed hollow at its heart where the chest is tucked away.",
+    gridWidth: width,
+    gridHeight: height,
+    cells,
+    objects: [...wallObjects, { asset_id: PRESET_CHEST, x: 4, y: 4, elevation: elevationAt(cells, 4, 4), rotation: 0 }],
   };
 }
 
@@ -1009,4 +1748,16 @@ export const MAP_TEMPLATES: readonly MapTemplate[] = [
   marketSquareTemplate(),
   crossroadsHamletTemplate(),
   tradesmansRowTemplate(),
+  // Battleground
+  openFieldBattlegroundTemplate(),
+  brokenGroundBattlegroundTemplate(),
+  sinkholeArenaBattlegroundTemplate(),
+  // Cave / corridor
+  naturalCavePassageTemplate(),
+  branchingCaveJunctionTemplate(),
+  windingCaveTunnelTemplate(),
+  // Treasure room
+  vaultPlinthTreasureRoomTemplate(),
+  guardedStrongroomTreasureRoomTemplate(),
+  sunkenCacheTreasureRoomTemplate(),
 ];

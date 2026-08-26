@@ -4,6 +4,7 @@ import type { MapTemplate } from "./templates";
 import {
   classifyWallCell,
   MAP_TEMPLATES,
+  PRESET_CHEST,
   PRESET_DOOR,
   PRESET_ROCK,
   PRESET_TABLE,
@@ -48,7 +49,7 @@ function usesOnlyGroundTypes(template: MapTemplate, allowed: GroundType[]): bool
 }
 
 describe("MAP_TEMPLATES structural invariants", () => {
-  it("includes the three original starter layouts plus 18 new themed templates", () => {
+  it("includes the three original starter layouts, 18 P11 themed templates, and 9 new battleground/cave/treasure-room templates", () => {
     expect(MAP_TEMPLATES.map((template) => template.id)).toEqual([
       "empty-room",
       "corridor",
@@ -71,6 +72,15 @@ describe("MAP_TEMPLATES structural invariants", () => {
       "town-market-square",
       "town-crossroads-hamlet",
       "town-tradesmans-row",
+      "battleground-open-field",
+      "battleground-broken-ground",
+      "battleground-sinkhole-arena",
+      "cave-natural-passage",
+      "cave-branching-junction",
+      "cave-winding-tunnel",
+      "treasure-vault-plinth",
+      "treasure-strongroom",
+      "treasure-sunken-cache",
     ]);
   });
 
@@ -314,6 +324,194 @@ describe("MAP_TEMPLATES structural invariants", () => {
       const allThemedObjects = themedIds.flatMap((id) => findTemplate(id).objects);
       expect(allThemedObjects.some((object) => object.asset_id === PRESET_TREE)).toBe(true);
       expect(allThemedObjects.some((object) => object.asset_id === PRESET_ROCK)).toBe(true);
+    });
+  });
+
+  describe("enlarged outdoor templates carry noticeably more foliage than P11 shipped", () => {
+    // Regression guard for the "make the outdoor ones larger and add
+    // foliage" request: every forest/coast/water/swamp template must have
+    // grown past its original P11 footprint, and must place more Tree/Rock
+    // props than P11's original counts (swamp templates originally placed
+    // NONE at all).
+    const ORIGINAL_AREA: Record<string, number> = {
+      "forest-clearing": 12 * 10,
+      "forest-treeline-ambush": 14 * 10,
+      "forest-hollow": 12 * 10,
+      "coast-tidal-shallows": 14 * 10,
+      "coast-sandbar-crossing": 14 * 10,
+      "coast-cove-inlet": 12 * 10,
+      "water-river-bend": 14 * 10,
+      "water-lake-crossing": 12 * 12,
+      "water-rapids": 10 * 14,
+      "swamp-murky-bog": 14 * 10,
+      "swamp-fetid-mire": 12 * 12,
+      "swamp-sunken-marsh": 16 * 10,
+    };
+
+    it("every outdoor template's grid area grew past its original P11 size", () => {
+      for (const [id, originalArea] of Object.entries(ORIGINAL_AREA)) {
+        const template = findTemplate(id);
+        expect(template.gridWidth * template.gridHeight).toBeGreaterThan(originalArea);
+      }
+    });
+
+    it("every outdoor template places at least one foliage prop (Tree or Rock)", () => {
+      for (const id of Object.keys(ORIGINAL_AREA)) {
+        const template = findTemplate(id);
+        const foliageCount = template.objects.filter(
+          (object) => object.asset_id === PRESET_TREE || object.asset_id === PRESET_ROCK
+        ).length;
+        expect(foliageCount).toBeGreaterThan(0);
+      }
+    });
+
+    it("stays within the app's own practical grid-size ceiling (MapsManager.tsx's MAX_GRID = 40 per side)", () => {
+      for (const id of Object.keys(ORIGINAL_AREA)) {
+        const template = findTemplate(id);
+        expect(template.gridWidth).toBeLessThanOrEqual(40);
+        expect(template.gridHeight).toBeLessThanOrEqual(40);
+      }
+    });
+  });
+
+  describe("battleground templates (open, tactical combat arenas)", () => {
+    const BATTLEGROUND_IDS = ["battleground-open-field", "battleground-broken-ground", "battleground-sinkhole-arena"];
+
+    it("are open arenas with no walls, doors, or furniture — built for a fight, not a room to explore", () => {
+      for (const id of BATTLEGROUND_IDS) {
+        const template = findTemplate(id);
+        const forbidden = new Set([PRESET_WALL, PRESET_WALL_CORNER, PRESET_DOOR, PRESET_TABLE, PRESET_CHEST]);
+        expect(template.objects.every((object) => !forbidden.has(object.asset_id))).toBe(true);
+      }
+    });
+
+    it("carry real elevation variety (high ground) somewhere across the set", () => {
+      const allCells = BATTLEGROUND_IDS.flatMap((id) => findTemplate(id).cells);
+      expect(allCells.some((cell) => cell.elevation >= 2)).toBe(true);
+    });
+
+    it("the broken-ground variant pre-paints difficult terrain for cover/footing variety", () => {
+      const template = findTemplate("battleground-broken-ground");
+      expect(template.cells.some((cell) => cell.terrain_type === "difficult")).toBe(true);
+    });
+
+    it("the sinkhole-arena variant incorporates a real hazard: a deep pit at negative elevation", () => {
+      const template = findTemplate("battleground-sinkhole-arena");
+      const pitCells = template.cells.filter((cell) => cell.terrain_type === "pit");
+      expect(pitCells.length).toBeGreaterThan(0);
+      expect(pitCells.every((cell) => cell.elevation < 0)).toBe(true);
+    });
+
+    it("every variant places at least one cover/prop object (Rock or Tree)", () => {
+      for (const id of BATTLEGROUND_IDS) {
+        const template = findTemplate(id);
+        expect(
+          template.objects.some((object) => object.asset_id === PRESET_ROCK || object.asset_id === PRESET_TREE)
+        ).toBe(true);
+      }
+    });
+  });
+
+  describe("cave / corridor templates (natural, carved passages)", () => {
+    const CAVE_IDS = ["cave-natural-passage", "cave-branching-junction", "cave-winding-tunnel"];
+
+    it("use only rock ground for their floor (plus 'default' on void cells)", () => {
+      for (const id of CAVE_IDS) {
+        const template = findTemplate(id);
+        expect(usesOnlyGroundTypes(template, ["rock"])).toBe(true);
+      }
+    });
+
+    it("carve an irregular, non-rectangular shape out of void terrain — never a full rectangular floor", () => {
+      // The key differentiator from stone-corridor-junction (a WORKED,
+      // walled, four-doored chamber): these are natural and unbuilt, so the
+      // grid is mostly void terrain (no floor) with only an organic path
+      // actually walkable, per 0039_void_terrain.sql's own stated purpose.
+      for (const id of CAVE_IDS) {
+        const template = findTemplate(id);
+        const voidCells = template.cells.filter((cell) => cell.terrain_type === "void");
+        const floorCells = template.cells.filter((cell) => cell.terrain_type === "normal");
+        expect(voidCells.length).toBeGreaterThan(0);
+        expect(floorCells.length).toBeGreaterThan(0);
+        expect(floorCells.length).toBeLessThan(template.gridWidth * template.gridHeight);
+      }
+    });
+
+    it("have no walls or doors at all — natural passages, not a built structure", () => {
+      for (const id of CAVE_IDS) {
+        const template = findTemplate(id);
+        const forbidden = new Set([PRESET_WALL, PRESET_WALL_CORNER, PRESET_DOOR]);
+        expect(template.objects.every((object) => !forbidden.has(object.asset_id))).toBe(true);
+      }
+    });
+
+    it("have some elevation variation for a natural, uneven cave floor", () => {
+      for (const id of CAVE_IDS) {
+        const template = findTemplate(id);
+        expect(template.cells.some((cell) => cell.elevation > 0)).toBe(true);
+      }
+    });
+
+    it("no object is ever placed on a void cell (there is no floor to stand on)", () => {
+      for (const id of CAVE_IDS) {
+        const template = findTemplate(id);
+        const voidKeys = new Set(
+          template.cells.filter((cell) => cell.terrain_type === "void").map((cell) => `${cell.x},${cell.y}`)
+        );
+        expect(template.objects.every((object) => !voidKeys.has(`${object.x},${object.y}`))).toBe(true);
+      }
+    });
+  });
+
+  describe("treasure room templates (small, defensible reward rooms)", () => {
+    const TREASURE_IDS = ["treasure-vault-plinth", "treasure-strongroom", "treasure-sunken-cache"];
+
+    it("are small, walled, single-door rooms built around exactly one Chest", () => {
+      for (const id of TREASURE_IDS) {
+        const template = findTemplate(id);
+        expect(template.gridWidth * template.gridHeight).toBeLessThanOrEqual(100);
+        const doors = template.objects.filter((object) => object.asset_id === PRESET_DOOR);
+        const walls = template.objects.filter(
+          (object) => object.asset_id === PRESET_WALL || object.asset_id === PRESET_WALL_CORNER
+        );
+        const chests = template.objects.filter((object) => object.asset_id === PRESET_CHEST);
+        expect(doors).toHaveLength(1);
+        expect(walls.length).toBeGreaterThan(0);
+        expect(chests).toHaveLength(1);
+      }
+    });
+
+    it("use only stone ground", () => {
+      for (const id of TREASURE_IDS) {
+        const template = findTemplate(id);
+        expect(usesOnlyGroundTypes(template, ["stone"])).toBe(true);
+      }
+    });
+
+    it("stage the chest deliberately — a raised plinth, a raised dais, or a sunken recess — never just flush on the room's default floor", () => {
+      // Each variant treats "deliberate destination" differently, so each
+      // gets its own precise expectation rather than one generic rule:
+      // vault-plinth raises the chest highest (a 2-step plinth), the
+      // strongroom raises it onto a 1-step dais, and the sunken cache
+      // keeps the chest at the room's original ground level while raising
+      // the floor AROUND it instead — "sunken" relative to its surroundings.
+      const expectedElevation: Record<string, number> = {
+        "treasure-vault-plinth": 2,
+        "treasure-strongroom": 1,
+        "treasure-sunken-cache": 0,
+      };
+      for (const id of TREASURE_IDS) {
+        const template = findTemplate(id);
+        const chest = template.objects.find((object) => object.asset_id === PRESET_CHEST)!;
+        expect(chest.elevation).toBe(expectedElevation[id]);
+      }
+      // The sunken cache's distinguishing feature: the floor surrounding
+      // the chest recess is raised a full step above it and above the
+      // door, so the chest reads as sunken relative to the room, not just
+      // sitting at the default ground level like an ordinary floor cell.
+      const sunkenCache = findTemplate("treasure-sunken-cache");
+      const raisedFloorCell = sunkenCache.cells.find((cell) => cell.x === 1 && cell.y === 1);
+      expect(raisedFloorCell?.elevation).toBe(1);
     });
   });
 });
