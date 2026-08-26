@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyWallCell,
   MAP_TEMPLATES,
   PRESET_DOOR,
   PRESET_TABLE,
   PRESET_TORCH,
   PRESET_WALL,
+  PRESET_WALL_CORNER,
 } from "./templates";
 
-// The exact ids seeded by 0016_asset_library_presets.sql — templates may
-// only reference these, since they're the assets guaranteed to exist in
-// every campaign.
+// The exact ids seeded by 0016_asset_library_presets.sql, plus the two new
+// wall-variant presets seeded by their own later migration (see
+// scripts/assets/generate-wall-variants-presets.mjs) — templates may only
+// reference these, since they're the assets guaranteed to exist in every
+// campaign.
 const SEEDED_PRESET_IDS = new Set([
   "a55e7001-0000-4000-8000-000000000001",
   "a55e7002-0000-4000-8000-000000000002",
@@ -19,6 +23,9 @@ const SEEDED_PRESET_IDS = new Set([
   "a55e7006-0000-4000-8000-000000000006",
   "a55e7007-0000-4000-8000-000000000007",
   "a55e7008-0000-4000-8000-000000000008",
+  "a55e7009-0000-4000-8000-000000000009",
+  "a55e7010-0000-4000-8000-000000000010",
+  "a55e7011-0000-4000-8000-000000000011",
 ]);
 
 describe("MAP_TEMPLATES structural invariants", () => {
@@ -74,14 +81,21 @@ describe("MAP_TEMPLATES structural invariants", () => {
     });
   }
 
-  it("shapes the empty room as a walled perimeter with exactly one door", () => {
+  it("shapes the empty room as a walled perimeter with exactly one door and 4 real corners", () => {
     const room = MAP_TEMPLATES.find((template) => template.id === "empty-room")!;
     const walls = room.objects.filter((object) => object.asset_id === PRESET_WALL);
+    const corners = room.objects.filter((object) => object.asset_id === PRESET_WALL_CORNER);
     const doors = room.objects.filter((object) => object.asset_id === PRESET_DOOR);
-    // 10x8 perimeter = 32 cells; one of them is the door.
-    expect(walls).toHaveLength(31);
+    // 10x8 perimeter = 32 cells: one door, 4 real 90°-turn corners (each of
+    // a rectangle's own corners), the rest straight runs.
+    expect(walls).toHaveLength(27);
+    expect(corners).toHaveLength(4);
     expect(doors).toHaveLength(1);
     expect(room.objects).toHaveLength(32);
+    // The 4 corners are exactly the room's own 4 geometric corners.
+    expect(new Set(corners.map((c) => `${c.x},${c.y}`))).toEqual(
+      new Set(["0,0", "9,0", "0,7", "9,7"])
+    );
   });
 
   it("shapes the corridor as two full-length wall lines with torches between", () => {
@@ -100,8 +114,10 @@ describe("MAP_TEMPLATES structural invariants", () => {
     for (const object of tavern.objects) {
       counts.set(object.asset_id, (counts.get(object.asset_id) ?? 0) + 1);
     }
-    // 14x12 perimeter = 48 cells: 45 walls + 1 door + 2 torch sconces.
-    expect(counts.get(PRESET_WALL)).toBe(45);
+    // 14x12 perimeter = 48 cells: 41 straight walls + 4 real corners + 1
+    // door + 2 torch sconces.
+    expect(counts.get(PRESET_WALL)).toBe(41);
+    expect(counts.get(PRESET_WALL_CORNER)).toBe(4);
     expect(counts.get(PRESET_DOOR)).toBe(1);
     expect(counts.get(PRESET_TORCH)).toBe(2);
     expect(counts.get(PRESET_TABLE)).toBe(6);
@@ -113,5 +129,61 @@ describe("MAP_TEMPLATES structural invariants", () => {
           table.x > 0 && table.x < tavern.gridWidth - 1 && table.y > 0 && table.y < tavern.gridHeight - 1
       )
     ).toBe(true);
+  });
+
+  it("corridor's walls stay straight runs — no false corners at its open ends", () => {
+    // Regression guard: a corridor's end cells have exactly one wall
+    // neighbor (the rest of their own column), never a perpendicular one —
+    // classifyWallCell must not mistake an open-ended dead end for a
+    // corner. corridorTemplate doesn't run through classifyWallCell at all
+    // (it hardcodes rotation 90 directly), so this instead exercises the
+    // classifier itself against the corridor's own wall-cell shape.
+    const corridor = MAP_TEMPLATES.find((template) => template.id === "corridor")!;
+    const isWall = (x: number, y: number) =>
+      x >= 0 && x < corridor.gridWidth && y >= 0 && y < corridor.gridHeight && (x === 0 || x === corridor.gridWidth - 1);
+    for (let y = 0; y < corridor.gridHeight; y++) {
+      for (const x of [0, corridor.gridWidth - 1]) {
+        expect(classifyWallCell(x, y, isWall).assetId).toBe(PRESET_WALL);
+      }
+    }
+  });
+
+  describe("classifyWallCell", () => {
+    // A 3x3 room's own isWall lookup: only its 8 perimeter cells are walls.
+    const size = 3;
+    const isWall = (x: number, y: number) =>
+      x >= 0 && x < size && y >= 0 && y < size && (x === 0 || y === 0 || x === size - 1 || y === size - 1);
+
+    it("classifies all 4 corners of a real room as PRESET_WALL_CORNER", () => {
+      for (const [x, y] of [
+        [0, 0],
+        [2, 0],
+        [0, 2],
+        [2, 2],
+      ]) {
+        const placement = classifyWallCell(x, y, isWall);
+        expect(placement.assetId).toBe(PRESET_WALL_CORNER);
+        // Corners are a rotationally-symmetric piece — every corner uses
+        // the same rotation, unlike a straight run.
+        expect(placement.rotation).toBe(0);
+      }
+    });
+
+    it("classifies a horizontal-run midpoint as an unrotated straight wall", () => {
+      // (1,0) has wall neighbors east+west (0,0) and (2,0) — both on the
+      // SAME axis — not a corner.
+      expect(classifyWallCell(1, 0, isWall)).toEqual({ assetId: PRESET_WALL, rotation: 0 });
+    });
+
+    it("classifies a vertical-run midpoint as a 90°-rotated straight wall", () => {
+      // (0,1) has wall neighbors north+south (0,0) and (0,2) — same axis —
+      // not a corner.
+      expect(classifyWallCell(0, 1, isWall)).toEqual({ assetId: PRESET_WALL, rotation: 90 });
+    });
+
+    it("classifies an isolated wall cell (no wall neighbors at all) as a straight wall", () => {
+      const noNeighbors = () => false;
+      expect(classifyWallCell(5, 5, noNeighbors)).toEqual({ assetId: PRESET_WALL, rotation: 0 });
+    });
   });
 });

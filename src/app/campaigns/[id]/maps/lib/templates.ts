@@ -7,6 +7,17 @@ export const PRESET_TORCH = "a55e7001-0000-4000-8000-000000000001";
 export const PRESET_DOOR = "a55e7003-0000-4000-8000-000000000003";
 export const PRESET_TABLE = "a55e7004-0000-4000-8000-000000000004";
 export const PRESET_WALL = "a55e7007-0000-4000-8000-000000000007";
+// Procedural-wall gap/corner/diagonal fix: a proper 90°-turn piece (a
+// rotationally-symmetric "plus" of two full-cell-length arms — see
+// scripts/assets/generate-wall-variants-presets.mjs — so it connects flush
+// with a straight run on ANY of its 4 sides, needing no per-corner rotation)
+// and a 45°-orientation piece spanning a cell's own diagonal corner-to-corner
+// (for octagonal/organic room shapes, or the void-terrain-carved organic
+// shapes this app already supports). Neither existed before this fix —
+// every perimeter cell used to get PRESET_WALL, including actual room
+// corners, with no distinct corner geometry at all (this fix's root cause).
+export const PRESET_WALL_CORNER = "a55e7010-0000-4000-8000-000000000010";
+export const PRESET_WALL_DIAGONAL = "a55e7011-0000-4000-8000-000000000011";
 
 /**
  * A starter layout a DM can begin a new map from instead of a blank grid.
@@ -34,15 +45,46 @@ function isPerimeter(x: number, y: number, width: number, height: number): boole
   return x === 0 || y === 0 || x === width - 1 || y === height - 1;
 }
 
-// Side walls rotate 90° so the segment runs along the vertical edge;
-// corners keep the horizontal run's orientation.
-function wallRotation(x: number, y: number, width: number, height: number): number {
-  if (y === 0 || y === height - 1) return 0;
-  return x === 0 || x === width - 1 ? 90 : 0;
+interface WallPlacement {
+  assetId: string;
+  rotation: number;
 }
 
-/** A rectangular walled room: raised perimeter cells with a Wall Segment on
- * each, one ground-level Door cell as the entrance, flat interior. */
+/**
+ * Classifies a single wall cell as a straight run or a 90° corner PURELY by
+ * looking at which of its four orthogonal neighbors are also wall cells —
+ * not by its (x, y) position against the grid's own bounds, so this works
+ * for any wall footprint (a perfect rectangle's perimeter today; an organic
+ * or void-terrain-carved outline tomorrow), not just walledRoom's rectangle.
+ *
+ * A corner is any cell with wall neighbors on exactly one vertical side
+ * (north or south) AND one horizontal side (east or west) — its run bends
+ * here. PRESET_WALL_CORNER's own geometry is a rotationally-symmetric
+ * "plus" (see generate-wall-variants-presets.mjs), so every corner uses the
+ * SAME rotation (0) regardless of which two sides actually have neighbors —
+ * unlike a straight run, there's no orientation to get right or wrong.
+ *
+ * A straight cell (0 or 1 wall neighbor, or neighbors on both opposite
+ * sides of one axis) keeps today's convention: a vertical run (neighbors
+ * north and/or south) rotates 90° so PRESET_WALL's length axis runs along
+ * the vertical edge; everything else (a horizontal run, or an isolated
+ * single-cell segment with no wall neighbors at all) uses the unrotated
+ * horizontal orientation.
+ */
+export function classifyWallCell(x: number, y: number, isWall: (x: number, y: number) => boolean): WallPlacement {
+  const north = isWall(x, y - 1);
+  const south = isWall(x, y + 1);
+  const west = isWall(x - 1, y);
+  const east = isWall(x + 1, y);
+  const hasVertical = north || south;
+  const hasHorizontal = east || west;
+  if (hasVertical && hasHorizontal) return { assetId: PRESET_WALL_CORNER, rotation: 0 };
+  return { assetId: PRESET_WALL, rotation: hasVertical ? 90 : 0 };
+}
+
+/** A rectangular walled room: raised perimeter cells with a Wall Segment (or
+ * a Wall Corner at each of the room's 4 real 90° turns) on each, one
+ * ground-level Door cell as the entrance, flat interior. */
 function walledRoom(
   width: number,
   height: number,
@@ -50,17 +92,20 @@ function walledRoom(
 ): { cells: NewMapCell[]; objects: NewMapObjectSeed[] } {
   const cells: NewMapCell[] = [];
   const objects: NewMapObjectSeed[] = [];
+  const isWall = (x: number, y: number) =>
+    x >= 0 && x < width && y >= 0 && y < height && isPerimeter(x, y, width, height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       if (!isPerimeter(x, y, width, height)) continue;
       const isDoor = x === door.x && y === door.y;
       cells.push({ x, y, elevation: isDoor ? 0 : WALL_ELEVATION, terrain_type: "normal" });
+      const placement = classifyWallCell(x, y, isWall);
       objects.push({
-        asset_id: isDoor ? PRESET_DOOR : PRESET_WALL,
+        asset_id: isDoor ? PRESET_DOOR : placement.assetId,
         x,
         y,
         elevation: isDoor ? 0 : WALL_ELEVATION,
-        rotation: wallRotation(x, y, width, height),
+        rotation: isDoor ? 0 : placement.rotation,
       });
     }
   }

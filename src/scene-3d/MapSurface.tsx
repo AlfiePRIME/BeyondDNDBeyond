@@ -489,6 +489,8 @@ interface ObjectMarkerProps {
   onSelect: (id: string, event: ThreeEvent<PointerEvent>) => void;
   /** Verification-only: see MapSurfaceProps.onObjectPoseDebug's doc comment. */
   onPoseDebug?: (id: string, compatible: boolean) => void;
+  /** Verification-only: see MapSurfaceProps.onObjectMeasureDebug's doc comment. */
+  onMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
 }
 
 // The invisible hit box exists because raycasting against the glTF's own
@@ -522,6 +524,7 @@ const ObjectMarker = memo(function ObjectMarker({
   dimmed,
   onSelect,
   onPoseDebug,
+  onMeasureDebug,
 }: ObjectMarkerProps) {
   const [hovered, setHovered] = useState(false);
   return (
@@ -540,6 +543,7 @@ const ObjectMarker = memo(function ObjectMarker({
           url={url}
           forwardOffsetDeg={forwardOffsetDeg}
           onPoseDebug={onPoseDebug ? (compatible) => onPoseDebug(id, compatible) : undefined}
+          onMeasureDebug={onMeasureDebug ? (measurement) => onMeasureDebug(id, measurement) : undefined}
         />
       )}
       {dimmed ? (
@@ -1093,6 +1097,12 @@ export interface MapSurfaceProps {
    * directly). Omit it (as every real caller does today) and nothing
    * changes about how objects render or pose. */
   onObjectPoseDebug?: (id: string, compatible: boolean) => void;
+  /** Verification-only: fires with a placed object's own measured bounding-
+   * box maxDim and derived scale — see PlacedObject.tsx's PropModel
+   * onMeasureDebug doc comment (the procedural-wall gap/corner/diagonal
+   * fix's own real-measurement verification path). Omit it (as every real
+   * caller does today) and nothing changes about how objects render. */
+  onObjectMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
 }
 
 /**
@@ -1116,6 +1126,7 @@ export function MapSurface({
   onTokenPointerDown,
   onTokenSlideDebug,
   onObjectPoseDebug,
+  onObjectMeasureDebug,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
   const offsetX = ((gridWidth - 1) / 2) * cellSize;
@@ -1224,6 +1235,7 @@ export function MapSurface({
           dimmed={object.dimmed ?? false}
           onSelect={onSelectObject ?? NOOP_SELECT}
           onPoseDebug={onObjectPoseDebug}
+          onMeasureDebug={onObjectMeasureDebug}
         />
       ))}
 

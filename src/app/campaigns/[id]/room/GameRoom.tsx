@@ -842,6 +842,18 @@ export function GameRoom({
   const handleObjectPoseDebug = useCallback((id: string, compatible: boolean) => {
     setObjectPoseDebug((current) => (current[id] === compatible ? current : { ...current, [id]: compatible }));
   }, []);
+  // Real-measurement verification for the procedural-wall gap/corner/
+  // diagonal fix (this task's own investigation): mirrors each rendered map
+  // object's own measured bounding-box maxDim and derived scale factor —
+  // same reasoning as avatarMeasureDebug below, applied to PlacedObject
+  // instead of SeatAvatar.
+  const [objectMeasureDebug, setObjectMeasureDebug] = useState<Record<string, { maxDim: number; scale: number }>>({});
+  const handleObjectMeasureDebug = useCallback(
+    (id: string, measurement: { maxDim: number; scale: number }) => {
+      setObjectMeasureDebug((current) => ({ ...current, [id]: measurement }));
+    },
+    []
+  );
   // Investigation-only (teleport/mis-scale bug hunt): mirrors each seated
   // member's own loaded avatar model's measured bounding-box height and
   // derived scale factor — same reasoning as avatarPoseDebug above.
@@ -4007,6 +4019,7 @@ export function GameRoom({
           onAvatarPoseDebug={handleAvatarPoseDebug}
           onAvatarMeasureDebug={handleAvatarMeasureDebug}
           onObjectPoseDebug={handleObjectPoseDebug}
+          onObjectMeasureDebug={handleObjectMeasureDebug}
           seatOffsets={seatOffsets}
           onChairDragEnd={handleChairDragEnd}
           onOwnChairProjectedPosition={setOwnChairScreenPosition}
@@ -4221,6 +4234,19 @@ export function GameRoom({
           member's avatar hasn't finished loading yet. */}
       <div data-testid="avatar-measure-state" hidden>
         {JSON.stringify(avatarMeasureDebug)}
+      </div>
+      {/* Real-measurement verification mirror for the procedural-wall
+          gap/corner/diagonal fix — see handleObjectMeasureDebug's own doc
+          comment. Keyed by map_objects.id; maxDim/scale are the SAME
+          Box3.setFromObject(realLoadedGltf) measurement PropModel performs
+          to size the model, not a re-derived formula — so a real
+          verify-*.mjs script can confirm two adjacent wall segments'
+          rendered spans actually touch (or a corner/diagonal's own span
+          lands where its geometry was authored to) in the live scene, not
+          just in isolation. A key absent entirely means that object hasn't
+          finished loading yet. */}
+      <div data-testid="object-measure-state" hidden>
+        {JSON.stringify(objectMeasureDebug)}
       </div>
       {/* Hidden render-state mirror for verify-token-click-select.mjs —
           see the selectionDebug memo. */}

@@ -607,6 +607,9 @@ export interface GameTableSceneProps {
   /** Verification-only pass-through to MapSurface's onObjectPoseDebug —
    * see its own doc comment. */
   onObjectPoseDebug?: (id: string, compatible: boolean) => void;
+  /** Verification-only pass-through to MapSurface's onObjectMeasureDebug —
+   * see its own doc comment. */
+  onObjectMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
   /** This viewer's own visible chair offsets, keyed by user_id — scene-3d's
    * own SeatOffset (seating.ts), not data-access's structurally-identical
    * twin (the SeatMember/module-boundary convention already documented on
@@ -745,6 +748,7 @@ export function GameTableScene({
   onAvatarPoseDebug,
   onAvatarMeasureDebug,
   onObjectPoseDebug,
+  onObjectMeasureDebug,
   seatOffsets = EMPTY_SEAT_OFFSETS,
   onChairDragEnd,
   onOwnChairProjectedPosition,
@@ -1352,6 +1356,7 @@ export function GameTableScene({
             }
             onTokenSlideDebug={onTokenSlideDebug}
             onObjectPoseDebug={onObjectPoseDebug}
+            onObjectMeasureDebug={onObjectMeasureDebug}
           />
         </group>
       ) : null}
