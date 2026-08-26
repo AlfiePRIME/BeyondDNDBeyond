@@ -28,6 +28,35 @@ export interface OcrResult {
   confidence: number;
 }
 
+// extractSheetData makes 15+ of these calls sequentially per import (one
+// per labeled region across up to 4 pages) with no bound of its own on any
+// single one — a single stalled recognize() (a WASM/worker-communication
+// stall, or just a heavily CPU-contended host, observed directly) would
+// otherwise hang the entire import indefinitely with no way for the route's
+// own try/catch (runImport.ts) to ever see it. This doesn't stop the
+// underlying tesseract work (the worker keeps running until its own
+// terminate() call in extractSheetData's finally block) — it just stops
+// making the caller wait past a reasonable bound, so a genuinely stuck
+// recognize() surfaces as the normal SERVER_ERROR_MESSAGE instead of an
+// unbounded "reading your character sheet."
+const RECOGNIZE_TIMEOUT_MS = 30000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 export async function recognizeRegion(
   worker: Worker,
   pagePath: string,
@@ -35,7 +64,11 @@ export async function recognizeRegion(
   psm: PSM
 ): Promise<OcrResult> {
   await worker.setParameters({ tessedit_pageseg_mode: psm });
-  const { data } = await worker.recognize(pagePath, { rectangle: ptBoxToPixelRect(box) });
+  const { data } = await withTimeout(
+    worker.recognize(pagePath, { rectangle: ptBoxToPixelRect(box) }),
+    RECOGNIZE_TIMEOUT_MS,
+    "OCR recognize()"
+  );
   return { text: data.text, confidence: data.confidence };
 }
 

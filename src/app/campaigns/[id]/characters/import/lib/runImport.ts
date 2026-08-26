@@ -30,14 +30,21 @@ export async function importCharacterSheet(bytes: Buffer): Promise<ImportResult>
     return { ok: false, reason: "unrecognized-sheet", message: UNRECOGNIZED_SHEET_MESSAGE };
   }
 
-  const pdf = await rasterizePdf(bytes, Math.min(MAX_PAGES, inspection.pageCount));
+  // rasterizePdf itself can now reject (its own execFile timeout, guarding
+  // against a hung/starved system pdftoppm process — see its own doc
+  // comment) — that rejection needs the same typed server-error result as
+  // an extractSheetData failure, so it has to be inside this same
+  // try/catch rather than awaited before it, or it would escape as an
+  // unhandled exception instead of a normal ImportResult.
+  let pdf: Awaited<ReturnType<typeof rasterizePdf>> | null = null;
   try {
+    pdf = await rasterizePdf(bytes, Math.min(MAX_PAGES, inspection.pageCount));
     const raw = await extractSheetData(pdf, inspection.pageCount);
     const draft = mapToDraft(raw);
     return { ok: true, draft };
   } catch {
     return { ok: false, reason: "server-error", message: SERVER_ERROR_MESSAGE };
   } finally {
-    await pdf.cleanup();
+    await pdf?.cleanup();
   }
 }

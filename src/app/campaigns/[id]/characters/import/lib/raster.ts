@@ -36,17 +36,22 @@ export async function rasterizePdf(pdfBytes: Buffer, lastPage: number): Promise<
   const prefix = `${dir}/page`;
 
   try {
-    await execFileAsync("pdftoppm", [
-      "-png",
-      "-r",
-      String(RENDER_DPI),
-      "-f",
-      "1",
-      "-l",
-      String(lastPage),
-      inputPath,
-      prefix,
-    ]);
+    // A bare CPU/font-rendering timeout, not a correctness concern: this
+    // shells out to a real system process with no built-in limit of its
+    // own, so a genuinely pathological PDF (or, observed directly, this
+    // whole machine under heavy concurrent load from unrelated processes)
+    // can leave the caller awaiting a promise that never settles — the
+    // route's own try/catch has nothing to catch, so the user sees an
+    // indefinite "reading your character sheet" with no path to an error
+    // message. execFile's own `timeout` option kills the process and
+    // rejects instead. 90s is generous for a single real page at this
+    // DPI even on a loaded machine — a genuine hang, not just slowness,
+    // is the failure mode this actually guards against.
+    await execFileAsync(
+      "pdftoppm",
+      ["-png", "-r", String(RENDER_DPI), "-f", "1", "-l", String(lastPage), inputPath, prefix],
+      { timeout: 90000 }
+    );
   } catch (err) {
     await rm(dir, { recursive: true, force: true });
     throw new Error("pdftoppm could not rasterize this file", { cause: err });

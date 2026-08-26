@@ -27,6 +27,31 @@ const nextConfig: NextConfig = {
   // `next build` copies into a deployable output directory) — verified
   // by actually building afterward, not just assumed.
   output: "standalone",
+
+  // The standalone trace above is static analysis (@vercel/nft): it can
+  // only see literal import/require calls, not a package's own INTERNAL
+  // runtime-dynamic file resolution. Both pdfjs-dist and tesseract.js do
+  // exactly that (see serverExternalPackages' own comment above) — pdf.js
+  // resolves its worker script, character maps (cmaps/), and non-embedded
+  // font substitutes (standard_fonts/) by constructing a path/URL at
+  // runtime rather than importing them, and tesseract.js's actual OCR
+  // engine lives in the separate tesseract.js-core package, loaded the
+  // same dynamic way. The tracer silently drops all of it — confirmed
+  // directly: a built .next/standalone/node_modules/pdfjs-dist contained
+  // only legacy/build/pdf.mjs (no worker, no cmaps, no fonts, not even a
+  // package.json), and tesseract.js-core was entirely absent. This
+  // produces no build error and no obvious symptom until a real PDF
+  // exercises the missing code path at runtime (a non-embedded/unusual
+  // font or encoding for pdf.js; any OCR pass at all for tesseract.js),
+  // at which point the failure gets caught by this route's own broad
+  // try/catch and surfaces as a generic "not a valid PDF" — the actual
+  // cause is a missing runtime file, not the uploaded PDF.
+  outputFileTracingIncludes: {
+    "/campaigns/\\[id\\]/characters/import/parse": [
+      "./node_modules/pdfjs-dist/**/*",
+      "./node_modules/tesseract.js-core/**/*",
+    ],
+  },
 };
 
 export default nextConfig;
