@@ -95,9 +95,31 @@ export interface MapCell {
 }
 
 /**
- * DM-only, enforced by campaign_maps' INSERT RLS policy (0015). Unlike
- * createCampaign, .insert().select() is safe here: the SELECT policy only
- * needs is_campaign_dm, which is already true before the insert runs.
+ * DM-only, enforced by campaign_maps' INSERT RLS policy (0015).
+ *
+ * CORRECTION as of 0048 (per-viewer map visibility) — the claim below that
+ * .insert().select() is "safe here" is no longer true, and this function
+ * currently fails for every caller: 0048 rewrote campaign_maps' SELECT
+ * policy to `using (can_read_map(id))`, and can_read_map's body does its
+ * own separate by-id lookup of campaign_maps — a fresh scan of the very
+ * table this INSERT is writing to, executed mid-command via a SECURITY
+ * DEFINER function call. Postgres hasn't advanced its command counter past
+ * this row's own insertion yet at that point, so that lookup can't see the
+ * row: the RETURNING projection gets rejected as an RLS violation
+ * ("new row violates row-level security policy for table campaign_maps"),
+ * confirmed by hand against the live instance and unrelated to which DM is
+ * calling this. Root-caused and reproduced while adding the themed map
+ * templates (see scripts/db/verify-map-templates.mjs's header comment); a
+ * candidate fix sits as an unapplied, unverified draft at
+ * supabase/migrations/0054_campaign_maps_returning_fix.sql pending explicit
+ * review/authorization (it changes shared RLS policy on the live
+ * instance) — until that lands, treat .insert().select() on campaign_maps
+ * as broken and use a bare insert plus a separate select instead (see
+ * verify-map-templates.mjs's createTemplateMapForReal for the pattern).
+ *
+ * [Original comment, now stale — left for context:] Unlike createCampaign,
+ * .insert().select() is safe here: the SELECT policy only needs
+ * is_campaign_dm, which is already true before the insert runs.
  *
  * Cells are deliberately NOT pre-populated: map_cells storage is sparse. A
  * cell with no row is the default (elevation 0, normal terrain), so a fresh
@@ -165,6 +187,14 @@ export interface NewMapObjectSeed {
  *
  * Returns the stored cell rows alongside the map so callers can render a
  * thumbnail from the known-upfront terrain without re-fetching.
+ *
+ * CURRENTLY BROKEN for every caller (this is MapsManager.tsx's "Create &
+ * edit" button, for a blank map or any template): this function's first
+ * statement below is the exact same `.insert(campaign_maps).select().single()`
+ * shape whose "is safe" claim createMap's own doc comment above corrects —
+ * see that comment for the full root cause (a 0048 regression, unrelated to
+ * which map/template is being created) and the unapplied draft fix at
+ * supabase/migrations/0054_campaign_maps_returning_fix.sql.
  */
 export async function createPopulatedMap(
   supabase: SupabaseClient,
