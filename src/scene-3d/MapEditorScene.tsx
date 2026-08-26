@@ -157,8 +157,11 @@ export interface MapEditorSceneProps {
    * Parallel to onPaintCell but fired only on the initial press, never while
    * dragging across cells — object placement/move are discrete deliberate
    * actions, not strokes, so a drag must not scatter or relocate objects.
+   * The native pointer event is forwarded so callers can read modifier keys
+   * (e.g. the object tool's Ctrl+click quick-place) without the scene
+   * needing to know what any modifier means.
    */
-  onCellClick?: (x: number, y: number) => void;
+  onCellClick?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
   /** A selected rectangle of cells to highlight (the generate-area region);
    * null/absent renders no marker. */
   region?: EditorRegion | null;
@@ -218,7 +221,7 @@ export function MapEditorScene({
       paintingRef.current = true;
       strokeRef.current = new Set();
       paint(x, y);
-      onCellClickRef.current?.(x, y);
+      onCellClickRef.current?.(x, y, event);
     },
     [paint]
   );
