@@ -50,6 +50,8 @@ export {
   seatEllipseSemiAxes,
   applySeatOffset,
   getEffectiveSeat,
+  computeMemberTrayPosition,
+  MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
   HEAD_SQUARE_SEAT_CAPACITY,
   SINGLE_TABLE_SEAT_CAPACITY,
   type CameraMode,
