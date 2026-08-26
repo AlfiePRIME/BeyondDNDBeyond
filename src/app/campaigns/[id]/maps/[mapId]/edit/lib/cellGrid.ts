@@ -1,5 +1,5 @@
 import type { TerrainType } from "@/rules-engine";
-import type { GroundType, LightLevel, MapCell } from "@/data-access";
+import type { GroundType, LightLevel, MapCell, WaterFlowDirection } from "@/data-access";
 import type { MapSurfaceCell } from "@/scene-3d";
 
 export interface CellState {
@@ -11,6 +11,15 @@ export interface CellState {
    * sparse-storage default. Independent of `terrain`: painting one never
    * touches the other. */
   ground: GroundType;
+  /** Flow direction authored on a water cell (the water-terrain addition) —
+   * meaningful only when `ground === "water"`; null on every other cell,
+   * including a water cell nobody ever picked a direction for. Reset to
+   * null automatically whenever a cell is repainted to any OTHER ground
+   * type (see applyTool's "ground" branch) — the same "a stale value
+   * doesn't linger once its precondition no longer holds" reasoning the
+   * pit tool's un-pit-resets-elevation branch already established below.
+   * Purely decorative: nothing here or in the rules engine ever reads it. */
+  waterFlow: WaterFlowDirection | null;
 }
 
 export const DEFAULT_CELL: CellState = {
@@ -18,6 +27,7 @@ export const DEFAULT_CELL: CellState = {
   terrain: "normal",
   light: "bright",
   ground: "default",
+  waterFlow: null,
 };
 
 // Editor-side sculpting bounds, not a schema constraint: negative elevation
@@ -81,6 +91,7 @@ export function overlayFromRows(rows: readonly MapCell[]): Map<string, CellState
       terrain: row.terrain_type,
       light: row.light_level,
       ground: row.ground_type,
+      waterFlow: row.water_flow_direction,
     });
   }
   return overlay;
@@ -91,13 +102,19 @@ export function overlayFromRows(rows: readonly MapCell[]): Map<string, CellState
  *
  * `tool` is `ElevationDirection` in place of the old "raise"/"lower"
  * EditorTool values — same two branches, same clamping, just no longer
- * required to equal the currently-selected tool. */
+ * required to equal the currently-selected tool.
+ *
+ * `waterFlowBrush` defaults to "south" so every pre-water call site
+ * (including this module's own tests) keeps compiling and behaving
+ * unchanged without passing a sixth argument — it only ever matters when
+ * `groundBrush === "water"`, the one case that actually reads it. */
 export function applyTool(
   current: CellState,
   tool: ElevationDirection | Exclude<SculptTool, "elevation">,
   brush: TerrainType,
   lightBrush: LightLevel,
-  groundBrush: GroundType
+  groundBrush: GroundType,
+  waterFlowBrush: WaterFlowDirection = "south"
 ): CellState {
   if (tool === "raise") {
     if (current.elevation >= MAX_ELEVATION) return current;
@@ -122,8 +139,20 @@ export function applyTool(
     return { ...current, light: lightBrush };
   }
   if (tool === "ground") {
-    if (current.ground === groundBrush) return current;
-    return { ...current, ground: groundBrush };
+    // Water is the one ground brush that carries a second value along with
+    // it — the currently-picked flow direction — so painting (or
+    // re-painting, to change the direction of an already-water cell) water
+    // sets both together in the same click, the pit tool's own
+    // "one click authors two related fields" precedent. Painting any OTHER
+    // ground brush clears a stale flow direction rather than leaving it
+    // behind on a cell that's no longer water (this CellState's own doc
+    // comment).
+    if (groundBrush === "water") {
+      if (current.ground === "water" && current.waterFlow === waterFlowBrush) return current;
+      return { ...current, ground: "water", waterFlow: waterFlowBrush };
+    }
+    if (current.ground === groundBrush && current.waterFlow === null) return current;
+    return { ...current, ground: groundBrush, waterFlow: null };
   }
   if (current.terrain === brush) return current;
   // Repainting a pit cell to any other terrain (the "un-pit" path — there is
@@ -149,7 +178,14 @@ export function applyTool(
  * "default", the same "only set truthy/non-default optional fields" style
  * `preview` already uses, so a plain unpainted cell produces the exact same
  * object shape it always has (nothing about a pre-ground-types map's
- * rendering changes, down to the object shape, not just the pixel). */
+ * rendering changes, down to the object shape, not just the pixel).
+ * `waterFlowDirection` follows the identical "carried unconditionally, only
+ * when set" rule, further gated on `ground === "water"` — a flow direction
+ * authored, then the cell repainted to a different ground type WITHOUT
+ * going through applyTool's own clearing branch (a hand-built CellState,
+ * e.g. in a test) still renders no arrow, matching the "meaningful only
+ * alongside water" contract at the render layer too, not just the sculpt
+ * layer. */
 export function buildDenseCells(
   width: number,
   height: number,
@@ -170,6 +206,9 @@ export function buildDenseCells(
         terrain: state.terrain,
         ...(includeLight ? { light: state.light } : {}),
         ...(state.ground !== "default" ? { ground: state.ground } : {}),
+        ...(state.ground === "water" && state.waterFlow
+          ? { waterFlowDirection: state.waterFlow }
+          : {}),
         ...(previewState ? { preview: true } : {}),
       });
     }
@@ -194,6 +233,7 @@ export function rowsForSave(
       terrain_type: state.terrain,
       light_level: state.light,
       ground_type: state.ground,
+      water_flow_direction: state.waterFlow,
     };
   });
 }

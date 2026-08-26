@@ -88,6 +88,19 @@ describe("thumbnailCellColor", () => {
     expect(thumbnailCellColor("normal", 0, "swamp")).toBe("#414a2c");
     expect(thumbnailCellColor("normal", 3, "swamp")).toBe("#616c40");
     expect(thumbnailCellColor("normal", 10, "swamp")).toBe("#78854e");
+
+    // Water (the water-terrain addition) — values independently computed
+    // from three.js's real Color.lerp against the same base/high pair
+    // MapSurface's GROUND_COLORS.water uses, the identical cross-check
+    // method every other entry above already relies on.
+    expect(thumbnailCellColor("normal", 0, "water")).toBe("#155377");
+    expect(thumbnailCellColor("normal", 1, "water")).toBe("#306f8b");
+    expect(thumbnailCellColor("normal", 3, "water")).toBe("#4d96ac");
+    expect(thumbnailCellColor("normal", 10, "water")).toBe("#69bfd1");
+    // Ground type wins over terrain's own palette here too — a DIFFICULT
+    // water cell (the exact combination water's own movement-cost design
+    // relies on) still renders water, not the amber difficult pair.
+    expect(thumbnailCellColor("difficult", 0, "water")).toBe("#155377");
   });
 
   it("a void cell paints as the backdrop regardless of ground type — no floor, no color", () => {

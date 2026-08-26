@@ -31,6 +31,7 @@ const GROUND_COLORS: Record<Exclude<GroundType, "default">, readonly [string, st
   path: ["#7a5c3a", "#d9b988"],
   sand: ["#c8b06a", "#f3e7bd"],
   swamp: ["#414a2c", "#8b995a"],
+  water: ["#155377", "#7fe0f0"],
 };
 
 // tokens.css --surface, the app's darkest backdrop — reads as the void

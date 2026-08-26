@@ -22,6 +22,7 @@ export {
   type MapSurfaceLightLevel,
   type MapSurfaceVisibility,
   type MapSurfaceGroundType,
+  type MapSurfaceWaterFlowDirection,
   type MapSurfaceObject,
   type MapSurfaceToken,
   type MapTokenAllegiance,
