@@ -104,6 +104,7 @@ export {
   FEET_PER_CELL,
   FEET_PER_ELEVATION_STEP,
   type TerrainType,
+  type CrossingType,
   type CellMovementParams,
   type GridPoint,
   type PathCell,

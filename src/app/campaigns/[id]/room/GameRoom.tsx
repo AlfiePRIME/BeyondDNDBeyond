@@ -75,6 +75,7 @@ import {
   type CombatCombatant,
   type CombatantEconomyFlag,
   type ConcealedPit,
+  type CrossingType,
   type DayNightMode,
   type DiceTrayModelPreference,
   type DmNote,
@@ -415,10 +416,28 @@ function cellIsVoid(cells: MapCell[], x: number, y: number): boolean {
 // error — a void cell is not expensive, it does not exist as a floor.
 const VOID_CELL_MESSAGE = "There's no floor there — that cell is void, outside the walkable map.";
 
+// Bridges and stairs (crossing structures — a placed OBJECT, not a terrain
+// type; see @/data-access's CrossingType doc comment for the full design):
+// the one place that answers "does cell (x,y) have one", read directly off
+// the map's own objects array — the same small-array `.find()` shape
+// cellElevation/cellIsVoid above already use for their own sparse per-cell
+// lookups, rather than building a Map for what's typically a handful of
+// placed objects per map. The editor only ever lets one object occupy a
+// cell (handleCellClick's occupant check selects rather than stacking), so
+// the first match is the only one there could be.
+function crossingAt(objects: readonly MapObject[], x: number, y: number): CrossingType | null {
+  return objects.find((object) => object.x === x && object.y === y)?.crossing_type ?? null;
+}
+
 /** Cost of the straight walk from the drag's origin to the hovered cell,
- * charged against the same overlay the table renders from. */
+ * charged against the same overlay the table renders from — and, since a
+ * bridge/stairs object never appears in that overlay (objects and
+ * map_cells are separate tables), against `objects` too, so a crossing
+ * structure suppresses the same terrain/climb cost here as it does in
+ * `commitTokenMove`'s own real commit. */
 function dragPathCost(
   overlay: ReadonlyMap<string, CellState>,
+  objects: readonly MapObject[],
   origin: GridPoint,
   current: GridPoint
 ): number {
@@ -427,7 +446,11 @@ function dragPathCost(
     stateAt(origin).elevation,
     straightCellPath(origin, current).map((point) => {
       const state = stateAt(point);
-      return { terrain: state.terrain, elevationSteps: state.elevation };
+      return {
+        terrain: state.terrain,
+        elevationSteps: state.elevation,
+        crossing: crossingAt(objects, point.x, point.y),
+      };
     })
   );
 }
@@ -495,6 +518,10 @@ function reachableCellSetForToken(params: {
     position: { x: cell.x, y: cell.y },
     terrain: cell.terrain,
     elevationSteps: cell.elevation,
+    // liveMap.objects — see dragPathCost's own doc comment: the same
+    // crossing-structure lookup, so the highlighted set can never disagree
+    // with what a committed move actually costs.
+    crossing: crossingAt(liveMap.objects, cell.x, cell.y),
   }));
   // Every OTHER token's current cell — never this one's own, which
   // computeReachableCells always exempts as the zero-cost origin anyway.
@@ -1482,6 +1509,12 @@ export function GameRoom({
    * concealed save or an ordinary visible pit; the last safe cell on a
    * passed concealed save) — the design's required sequencing: fall
    * damage/prone lands, THEN (if a link exists) the transition offer.
+   *
+   * Bridges (a post-roadmap addition, see @/data-access's CrossingType):
+   * a bridge object on the landed cell short-circuits BOTH branches below
+   * before either ever runs — no concealed-pit save is even rolled, no
+   * visible-pit fall is resolved. See `bridgeHere`'s own comment for why
+   * this applies uniformly to visible and concealed pits alike.
    */
   const handleTokenLanded = useCallback(
     async (token: MapToken, fromElevationSteps: number, fromPosition: GridPoint) => {
@@ -1492,9 +1525,20 @@ export function GameRoom({
           const current = liveMapRef.current;
           const destCell =
             current?.cells.find((cell) => cell.x === token.x && cell.y === token.y) ?? null;
-          const concealed = concealedPitsRef.current.find(
-            (pit) => pit.x === token.x && pit.y === token.y
-          );
+          // Bridges and stairs: a bridge on the landed cell suppresses the
+          // fall-trigger entirely — visible OR concealed alike. A DM who
+          // places a visible bridge span over a hidden pit has, by that act,
+          // made the pit safe to cross on the bridge; there is no reading of
+          // "you can walk across without falling into what's still there"
+          // that stops at "unless the pit was also secret". crossingAt reads
+          // the SAME map_objects rows dragPathCost/reachableCellSetForToken
+          // already consult for cost, off the live ref (not the possibly-
+          // stale render-cycle `liveMap` state) for the same freshness
+          // reason commitTokenMove's own overlay is built off the ref.
+          const bridgeHere = current ? crossingAt(current.objects, token.x, token.y) === "bridge" : false;
+          const concealed = bridgeHere
+            ? undefined
+            : concealedPitsRef.current.find((pit) => pit.x === token.x && pit.y === token.y);
           // Fall damage/prone change character HP and combatant conditions —
           // the same combat-mutation shape runCombatAction already pairs
           // with a refresh-then-poke everywhere else in this file (manual
@@ -1575,7 +1619,7 @@ export function GameRoom({
               });
               await resolveVisiblePitFall(concealed.bottom_elevation_steps);
             }
-          } else if (destCell?.terrain_type === "pit") {
+          } else if (!bridgeHere && destCell?.terrain_type === "pit") {
             await resolveVisiblePitFall(destCell.elevation);
           }
           if (combatChanged) {
@@ -2271,13 +2315,19 @@ export function GameRoom({
         // (its public terrain looks like ordinary floor) — handleTokenLanded
         // below only ever checks the ACTUAL landed cell for those, the same
         // destination-only shape maybeOfferTransition already has.
+        //
+        // A bridge on the pit cell (crossingAt(...) === "bridge") suppresses
+        // this truncation exactly like it suppresses the fall itself in
+        // handleTokenLanded below — "you can walk across without falling
+        // into what's still there" means the drag doesn't even stop early,
+        // let alone fall.
         let landedAt = destination;
         let fallFromElevationSteps = originElevationSteps;
         {
           let previousElevationSteps = originElevationSteps;
           for (const point of straightCellPath(origin, destination)) {
             const state = stateAt(point);
-            if (state.terrain === "pit") {
+            if (state.terrain === "pit" && crossingAt(current.objects, point.x, point.y) !== "bridge") {
               landedAt = point;
               fallFromElevationSteps = previousElevationSteps;
               break;
@@ -2309,7 +2359,7 @@ export function GameRoom({
         // moves stay free-form and uncharged, exactly as before: outside a
         // tracked turn nothing walks the path, so only the destination-void
         // guard the caller already ran applies.
-        const cost = tracked ? dragPathCost(overlay, origin, landedAt) : null;
+        const cost = tracked ? dragPathCost(overlay, current.objects, origin, landedAt) : null;
         if (cost !== null && !Number.isFinite(cost)) {
           setTokenError("That walk would cross the void — there's no floor along the way.");
           return;
@@ -3778,6 +3828,7 @@ export function GameRoom({
         groundByCell: {},
         waterFlowByCell: {},
         pitCells: [],
+        crossingByCell: {},
       });
     }
     const groundByCell: Record<string, string> = {};
@@ -3790,6 +3841,15 @@ export function GameRoom({
     for (const cell of tableMap.cells) {
       if (cell.ground) groundByCell[cellKey(cell.x, cell.y)] = cell.ground;
       if (cell.waterFlowDirection) waterFlowByCell[cellKey(cell.x, cell.y)] = cell.waterFlowDirection;
+    }
+    // Bridges and stairs (a post-roadmap addition): the same
+    // crossingAt-derived data dragPathCost/reachableCellSetForToken/
+    // handleTokenLanded already consult for real move resolution, mirrored
+    // here purely for verification — a WebGL canvas has no DOM of its own
+    // to inspect which placed object is tagged as a crossing structure.
+    const crossingByCell: Record<string, string> = {};
+    for (const object of liveMap.objects) {
+      if (object.crossing_type) crossingByCell[cellKey(object.x, object.y)] = object.crossing_type;
     }
     return JSON.stringify({
       mapId: liveMap.map.id,
@@ -3806,6 +3866,7 @@ export function GameRoom({
       pitCells: liveMap.cells
         .filter((cell) => cell.terrain_type === "pit")
         .map((cell) => ({ key: cellKey(cell.x, cell.y), elevation: cell.elevation })),
+      crossingByCell,
     });
   }, [liveMap, tableMap]);
 
@@ -3878,8 +3939,11 @@ export function GameRoom({
   // pointer's literal trail — mouse wobble must not inflate the cost.
   // Ruler mode's own drag gesture is untouched by this prompt.
   const rulerReadout = useMemo(
-    () => (rulerDrag && cellOverlay ? dragPathCost(cellOverlay, rulerDrag.origin, rulerDrag.current) : null),
-    [rulerDrag, cellOverlay]
+    () =>
+      rulerDrag && cellOverlay && liveMap
+        ? dragPathCost(cellOverlay, liveMap.objects, rulerDrag.origin, rulerDrag.current)
+        : null,
+    [rulerDrag, cellOverlay, liveMap]
   );
 
   const transitionOfferView = useMemo(() => {
