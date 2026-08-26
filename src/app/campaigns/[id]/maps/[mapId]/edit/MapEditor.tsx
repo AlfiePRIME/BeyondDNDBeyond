@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Canvas } from "@react-three/fiber";
+import type { ThreeEvent } from "@react-three/fiber";
 import { Button, ChoiceCard, Select, TextInput } from "@/ui-components";
 import {
   clearMapReferenceImage,
@@ -592,8 +593,21 @@ export function MapEditor({
     [inRegion]
   );
 
+  // The built-in Chest preset (seeded by 0016_asset_library_presets.sql),
+  // resolved from the palette the same way the DM would pick it manually —
+  // looked up by name/source rather than the seed's fixed UUID so a
+  // reseeded environment with a different id still resolves correctly.
+  // Powers the object tool's Ctrl+click quick-place below; null only if a
+  // campaign's palette is somehow missing the preset entirely, in which
+  // case the shortcut is inert rather than throwing.
+  const chestAssetId = useMemo(
+    () =>
+      assets.find((asset) => asset.source_type === "preset" && asset.name === "Chest")?.id ?? null,
+    [assets]
+  );
+
   const handleCellClick = useCallback(
-    (x: number, y: number) => {
+    (x: number, y: number, event?: ThreeEvent<PointerEvent>) => {
       if (toolRef.current !== "object") return;
       const preview = previewRef.current;
       const previewOccupant = preview?.objects.find((object) => object.x === x && object.y === y);
@@ -661,7 +675,15 @@ export function MapEditor({
         return;
       }
 
-      const assetId = selectedAssetIdRef.current;
+      // Ctrl (or Cmd, matching this file's existing undo/redo modifier
+      // handling) + click quick-places the built-in Chest without touching
+      // the palette selection — bypasses setSelectedAssetId entirely so the
+      // DM's actual pick is exactly what it was before this click, for
+      // every click after it. A plain click keeps using whatever's selected
+      // in the palette, same as always.
+      const wantsQuickChest = Boolean(event?.ctrlKey || event?.metaKey);
+      const assetId =
+        wantsQuickChest && chestAssetId ? chestAssetId : selectedAssetIdRef.current;
       if (!assetId) return;
 
       // No floor, no placement — checked after occupant selection so a click
@@ -703,6 +725,7 @@ export function MapEditor({
     },
     [
       map.id,
+      chestAssetId,
       inRegion,
       displayedTerrainAt,
       runObjectMutation,
