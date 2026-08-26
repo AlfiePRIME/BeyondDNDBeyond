@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { GroundType } from "@/data-access";
+import type { MapTemplate } from "./templates";
 import {
   MAP_TEMPLATES,
   PRESET_DOOR,
+  PRESET_ROCK,
   PRESET_TABLE,
   PRESET_TORCH,
+  PRESET_TREE,
   PRESET_WALL,
 } from "./templates";
 
@@ -21,12 +25,45 @@ const SEEDED_PRESET_IDS = new Set([
   "a55e7008-0000-4000-8000-000000000008",
 ]);
 
+function findTemplate(id: string): MapTemplate {
+  const template = MAP_TEMPLATES.find((candidate) => candidate.id === id);
+  if (!template) throw new Error(`no template with id ${id}`);
+  return template;
+}
+
+/** Every cell's ground_type is one of `allowed` (defaulting 'default' in,
+ * since an unpainted cell is a legitimate part of any theme). Used to prove
+ * each themed template's palette stays "predominantly" its theme rather than
+ * wandering into unrelated ground types. */
+function usesOnlyGroundTypes(template: MapTemplate, allowed: GroundType[]): boolean {
+  const allowedSet = new Set<GroundType>(["default", ...allowed]);
+  return template.cells.every((cell) => allowedSet.has(cell.ground_type ?? "default"));
+}
+
 describe("MAP_TEMPLATES structural invariants", () => {
-  it("includes the three named starter layouts", () => {
+  it("includes the three original starter layouts plus 18 new themed templates", () => {
     expect(MAP_TEMPLATES.map((template) => template.id)).toEqual([
       "empty-room",
       "corridor",
       "tavern",
+      "forest-clearing",
+      "forest-treeline-ambush",
+      "forest-hollow",
+      "coast-tidal-shallows",
+      "coast-sandbar-crossing",
+      "coast-cove-inlet",
+      "water-river-bend",
+      "water-lake-crossing",
+      "water-rapids",
+      "stone-corridor-junction",
+      "stone-cavern-chamber",
+      "stone-sunken-vault",
+      "swamp-murky-bog",
+      "swamp-fetid-mire",
+      "swamp-sunken-marsh",
+      "town-market-square",
+      "town-crossroads-hamlet",
+      "town-tradesmans-row",
     ]);
   });
 
@@ -113,5 +150,98 @@ describe("MAP_TEMPLATES structural invariants", () => {
           table.x > 0 && table.x < tavern.gridWidth - 1 && table.y > 0 && table.y < tavern.gridHeight - 1
       )
     ).toBe(true);
+  });
+
+  describe("themed templates (forest / sand+water / water-only / stone / swamp / town)", () => {
+    it("forest templates use only forest/dense_forest/grass ground, no water", () => {
+      for (const id of ["forest-clearing", "forest-treeline-ambush", "forest-hollow"]) {
+        const template = findTemplate(id);
+        expect(usesOnlyGroundTypes(template, ["forest", "dense_forest", "grass"])).toBe(true);
+      }
+    });
+
+    it("sand+water templates use only sand/water/rock ground", () => {
+      for (const id of ["coast-tidal-shallows", "coast-sandbar-crossing", "coast-cove-inlet"]) {
+        const template = findTemplate(id);
+        expect(usesOnlyGroundTypes(template, ["sand", "water", "rock"])).toBe(true);
+      }
+    });
+
+    it("the sandbar crossing has a difficult-terrain water channel with a normal-terrain gap across it", () => {
+      const template = findTemplate("coast-sandbar-crossing");
+      const byKey = new Map(template.cells.map((cell) => [`${cell.x},${cell.y}`, cell]));
+      const channelCell = byKey.get("0,4");
+      const gapCell = byKey.get("6,4");
+      expect(channelCell?.ground_type).toBe("water");
+      expect(channelCell?.terrain_type).toBe("difficult");
+      expect(gapCell?.ground_type).toBe("sand");
+      expect(gapCell?.terrain_type).toBe("normal");
+    });
+
+    it("water-only templates are predominantly water, with only sand/grass/rock islands", () => {
+      for (const id of ["water-river-bend", "water-lake-crossing", "water-rapids"]) {
+        const template = findTemplate(id);
+        expect(usesOnlyGroundTypes(template, ["water", "sand", "grass", "rock"])).toBe(true);
+        const waterCells = template.cells.filter((cell) => cell.ground_type === "water").length;
+        expect(waterCells).toBeGreaterThan(template.cells.length / 2);
+      }
+    });
+
+    it("water-only templates carry more than one flow direction across the theme", () => {
+      const directions = new Set(
+        ["water-river-bend", "water-lake-crossing", "water-rapids"]
+          .flatMap((id) => findTemplate(id).cells)
+          .map((cell) => cell.water_flow_direction)
+          .filter((direction): direction is NonNullable<typeof direction> => direction !== null && direction !== undefined)
+      );
+      expect(directions.size).toBeGreaterThan(1);
+    });
+
+    it("stone templates use only stone/rock ground and reuse wall/door placement", () => {
+      for (const id of ["stone-corridor-junction", "stone-cavern-chamber", "stone-sunken-vault"]) {
+        const template = findTemplate(id);
+        expect(usesOnlyGroundTypes(template, ["stone", "rock"])).toBe(true);
+        expect(template.objects.some((object) => object.asset_id === PRESET_WALL)).toBe(true);
+      }
+    });
+
+    it("the corridor junction chamber has a door on all four sides", () => {
+      const template = findTemplate("stone-corridor-junction");
+      const doors = template.objects.filter((object) => object.asset_id === PRESET_DOOR);
+      expect(doors).toHaveLength(4);
+    });
+
+    it("swamp templates use only swamp/water ground, and pre-paint some difficult bog", () => {
+      for (const id of ["swamp-murky-bog", "swamp-fetid-mire", "swamp-sunken-marsh"]) {
+        const template = findTemplate(id);
+        expect(usesOnlyGroundTypes(template, ["swamp", "water"])).toBe(true);
+        expect(template.cells.some((cell) => cell.terrain_type === "difficult")).toBe(true);
+      }
+    });
+
+    it("town templates use only path/stone/grass streets and plots, and use building outlines, not one room", () => {
+      for (const id of ["town-market-square", "town-crossroads-hamlet", "town-tradesmans-row"]) {
+        const template = findTemplate(id);
+        expect(usesOnlyGroundTypes(template, ["path", "stone", "grass"])).toBe(true);
+        const doors = template.objects.filter((object) => object.asset_id === PRESET_DOOR);
+        // Several small structures, not a single enclosing room: more than
+        // one door, one per building rather than one for the whole map.
+        expect(doors.length).toBeGreaterThan(1);
+      }
+    });
+
+    it("every themed template's objects reference only Tree/Rock in addition to the original preset set", () => {
+      const themedIds = MAP_TEMPLATES.slice(3).map((template) => template.id);
+      for (const id of themedIds) {
+        const template = findTemplate(id);
+        for (const object of template.objects) {
+          expect(SEEDED_PRESET_IDS.has(object.asset_id)).toBe(true);
+        }
+      }
+      // Confirm Tree and Rock actually get used somewhere (not dead exports).
+      const allThemedObjects = themedIds.flatMap((id) => findTemplate(id).objects);
+      expect(allThemedObjects.some((object) => object.asset_id === PRESET_TREE)).toBe(true);
+      expect(allThemedObjects.some((object) => object.asset_id === PRESET_ROCK)).toBe(true);
+    });
   });
 });
