@@ -22,7 +22,13 @@ export interface CombatEncounter {
 export interface CombatCombatant {
   id: string;
   encounter_id: string;
-  token_id: string;
+  /** Nullable as of Freeform mode's ad-hoc named combatants (migration
+   * 0051, addFreeformCombatant below): such a row has no map token at all
+   * — exactly a 0038 "bare unstatted NPC" shape (character_id/
+   * monster_stat_block_id/npc_current_hp also null) minus even the token
+   * underneath it. Every token-keyed reader already treats "no token with
+   * this id" as "nothing to show", so a null here always correctly misses. */
+  token_id: string | null;
   character_id: string | null;
   npc_name: string | null;
   /** Snapshotted from the token when the combatant is added (Prompt 61) —
@@ -174,6 +180,31 @@ export async function addCombatant(
     p_encounter_id: encounterId,
     p_token_id: tokenId,
     p_initiative: initiative,
+  });
+  if (error) throw error;
+  return data as CombatCombatant;
+}
+
+/**
+ * Freeform mode's lightweight quick-add (migration 0051, add_freeform_
+ * combatant): seats a named combatant with NO map token, NO character, and
+ * NO stat block — just npc_name — into an ALREADY-ACTIVE encounter. DM-only
+ * (the RPC checks is_campaign_dm) and Freeform-only: the RPC itself raises
+ * unless the campaign's action_economy_strict is false, so a Strict table
+ * always falls back to add_combatant/start_combat's fully-modeled path.
+ * Initiative starts null, exactly like start_combat's original seed — the
+ * existing setCombatantInitiative/roll-initiative controls (already
+ * DM-writable for any character_id-null row) enter it afterward with no
+ * new UI plumbing needed.
+ */
+export async function addFreeformCombatant(
+  supabase: SupabaseClient,
+  encounterId: string,
+  npcName: string
+): Promise<CombatCombatant> {
+  const { data, error } = await supabase.rpc("add_freeform_combatant", {
+    p_encounter_id: encounterId,
+    p_npc_name: npcName,
   });
   if (error) throw error;
   return data as CombatCombatant;

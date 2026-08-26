@@ -778,3 +778,33 @@ the void-terrain precedent's exact "no new authorization surface" reasoning. `ma
 ground type, so a remembered (fogged-then-recalled) cell keeps rendering its plain terrain
 color regardless of what's live-painted underneath — consistent with that table's existing "no
 object-level memory either" scope, not something this addition widens.
+
+As of Freeform combat mode (migration `0051_freeform_combat.sql`), the DM's real gap in the
+existing token-based quick-add — `add_combatant` (0038) always requires a MAP TOKEN, itself
+requiring a character or a full `monster_stat_blocks` row — is closed for tables that don't want
+that overhead: `combat_combatants.token_id` drops its NOT NULL, and a new
+`add_freeform_combatant(p_encounter_id, p_npc_name)` (`addFreeformCombatant` in `combat.ts`)
+seats a named combatant with token_id/character_id/monster_stat_block_id/npc_current_hp ALL
+null — exactly the existing "bare unstatted NPC" shape minus even the token — into an
+already-active encounter. DM-only (`is_campaign_dm`) AND Freeform-only: the RPC itself raises
+unless the campaign's `action_economy_strict` is false, so a Strict table always falls back to
+`add_combatant`/`start_combat` unchanged. Initiative is left null, the `start_combat` seed's own
+precedent, so the existing DM-writable initiative controls need no new plumbing. `CombatCombatant.
+token_id` widens to `string | null` accordingly; every token-keyed reader (move_combat_token's
+join, the room's token-selection/vision/opportunity-attack lookups) already treats "no token with
+this id" as "nothing to show", so a null there always correctly misses rather than needing new
+branches — confirmed by re-running verify-npc-stat-blocks/action-economy/quick-actions/
+opportunity-attacks/hide-stealth unchanged. Two more pieces close out the DM's stated Freeform
+model — a genuinely lighter combat experience where the table narrates outcomes and the app just
+tracks numbers — both pure UI, no new schema: the Game Room's Quick Actions panel gets a
+Freeform-only reminder that a plain roll (the always-unblocked, never-turn-gated freeform roll
+route) is just as valid as its structured attack shortcuts; and a new small `HpPanel.tsx`
+component (its own `DraggablePanel` panel id, `"hp"`) lets a player directly set their own
+character's `current_hp` via the existing `updateCharacter`, gated to Freeform mode only (it
+renders nothing when Strict) since Strict's whole point is server-computed damage via
+`resolve_attack_damage`. No new grant needed: `characters`' existing owner-or-DM UPDATE RLS
+(0008) and the `characters_current_hp_in_range` CHECK (0028) already cover a player writing their
+own HP within `[0, max_hp]` — confirmed directly against the running database rather than
+assumed, per `verify-freeform-combat.mjs`, which also confirms a player cannot edit another
+player's HP and that every Strict-mode behavior (initiative, action economy, the automated
+attack/damage flow, and the new Freeform surfaces' absence) is unaffected.

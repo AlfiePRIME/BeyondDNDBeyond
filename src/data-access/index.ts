@@ -211,6 +211,7 @@ export {
   setCombatantEconomyFlag,
   declareDisengage,
   addCombatant,
+  addFreeformCombatant,
   applyNpcHpDelta,
   type CombatEncounter,
   type CombatCombatant,

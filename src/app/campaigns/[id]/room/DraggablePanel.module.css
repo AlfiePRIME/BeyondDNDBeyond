@@ -31,6 +31,16 @@
   right: 24px;
 }
 
+/* Freeform combat mode's HP self-edit panel, stacked directly BELOW
+   anchorTopRight (handout) — the anchorTopCenterLow precedent (a plain,
+   independent calc() using handout's own real max-height,
+   room.module.css's .handoutPanel 26vh, so the two panels' default
+   positions never overlap). */
+.anchorTopRightLow {
+  top: calc(64px + 26vh + 12px);
+  right: 24px;
+}
+
 .anchorBottomLeft {
   /* .tokenPanel's old position */
   bottom: 24px;

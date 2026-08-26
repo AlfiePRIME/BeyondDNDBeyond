@@ -70,6 +70,7 @@ export function QuickActionsPanel({
   statBlocks,
   combat,
   tokens,
+  strict,
   onRollLanded,
 }: {
   campaignId: string;
@@ -81,6 +82,11 @@ export function QuickActionsPanel({
   statBlocks: MonsterStatBlock[];
   combat: CombatState | null;
   tokens: MapToken[];
+  /** The campaign's live action-economy mode — Freeform mode shows the
+   * reminder below that a plain roll (the Dice panel) is just as valid as
+   * one of these structured attack shortcuts, so this panel never reads as
+   * the ONLY or the pushed way to act on your turn. */
+  strict: boolean;
   /** The room's post-roll hook (refresh HP + combat poke on applied damage). */
   onRollLanded: (roll: RollLogEntry) => void;
 }) {
@@ -340,6 +346,15 @@ export function QuickActionsPanel({
         </p>
       ) : (
         <>
+          {!strict ? (
+            // Freeform mode's "not the only or the pushed path" reminder:
+            // these are shortcuts, not the required way to take a turn — a
+            // plain roll in the Dice panel is just as valid and needs no
+            // target or AC.
+            <p className={styles.hint} data-testid="quick-actions-freeform-hint">
+              Or just roll a plain die in the Dice panel — these are shortcuts, not required.
+            </p>
+          ) : null}
           <AdvantageToggle
             mode={mode}
             onChange={setMode}

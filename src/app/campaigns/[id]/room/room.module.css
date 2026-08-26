@@ -113,6 +113,23 @@
   border-radius: 8px;
 }
 
+/* Freeform combat mode's HP self-edit panel (HpPanel.tsx) — .combatPanel's
+   own shape, teal-bordered (the "available/healthy" accent used elsewhere
+   in this file) to read as a distinct, player-facing self-service panel
+   rather than a DM combat control. */
+.hpPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  width: 260px;
+  max-height: 26vh;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
+  border-radius: 8px;
+}
+
 .combatRound {
   font-family: var(--font-m);
   font-size: 11px;
