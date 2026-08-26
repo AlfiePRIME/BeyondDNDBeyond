@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Clone, OrbitControls, PerspectiveCamera, RoundedBox, useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
@@ -483,12 +483,54 @@ function CombinedTable() {
 // it, are both gone — a real chair (Chair.tsx) now carries the role's
 // accent color via its own trim, so a separate floor ring in the same
 // footprint would just be a redundant, competing signal.
-function TableSeat({
+// Freeze bug fix (critical, confirmed via real Playwright reproduction —
+// see verify-seat-avatar-render-loop.mjs): this component MUST be memoized,
+// and every callback it hands to SeatAvatar/the drag mesh MUST be its own
+// stable useCallback, not an inline arrow created fresh per render.
+//
+// Root cause, traced end to end: SeatAvatar's own AvatarModel
+// (SeatAvatar.tsx) reports its measured size via
+// `useEffect(() => { onMeasureDebug?.(...) }, [sizeY, scale, onMeasureDebug])`
+// — so a FRESH onMeasureDebug reference re-fires that effect even though
+// sizeY/scale never changed. Before this fix, TableSeat built that closure
+// inline in its own JSX (`onMeasureDebug={(m) => onAvatarMeasureDebug(seat
+// .member.user_id, m)}`) with no memo boundary at all, so every single
+// render of GameTableScene — triggered by ANY GameRoom state change
+// whatsoever, e.g. clicking the "Free camera" toggle, or literally any
+// other button — created a brand new closure, re-firing that effect, which
+// called GameRoom's handleAvatarMeasureDebug, which (see its own doc
+// comment) unconditionally created a new state object every call. That new
+// state object re-rendered GameRoom, cascading right back through
+// GameTableScene into an unmemoized TableSeat again — a genuine,
+// unconditional infinite render loop with no possible exit, pegging the
+// main thread and hard-freezing the tab. It only manifests for a seat whose
+// member actually has a real avatar_url (SeatAvatar renders a static
+// PlaceholderAvatar — no AvatarModel, no effect — for a memberless avatar),
+// which is exactly why no existing verify-*.mjs script or this codebase's
+// own automated tests (none of their synthetic test users ever set an
+// avatar) had ever hit it, despite it firing on literally any click in a
+// REAL game room where a real player customized their avatar.
+//
+// The `memo()` wrapper alone is not sufficient by itself: the OLD call site
+// below (`seats.map(...)`) also built `onDragPointerDown` inline per seat
+// for whichever single seat is this viewer's own draggable one, which would
+// keep defeating the memo comparison for exactly that one seat. Fixed by
+// handing TableSeat the stable, top-level handleChairPointerDown callback
+// directly (GameTableScene's own useCallback, keyed off `[seats, layout
+// .seats, camera, gl]`) and letting TableSeat itself bind its own seat's
+// user_id via a local useCallback — the same shape onAvatarPoseDebug/
+// onAvatarMeasureDebug already used. A useCallback'd closure stays
+// REFERENTIALLY STABLE across re-renders of the same component instance
+// whenever its own inputs haven't changed, regardless of whether the outer
+// memo() bail succeeds — real defense in depth, not just a performance
+// nicety, since it independently breaks the loop even if some future prop
+// destabilizes TableSeat's own memo comparison again.
+const TableSeat = memo(function TableSeat({
   seat,
   onAvatarPoseDebug,
   onAvatarMeasureDebug,
   draggable = false,
-  onDragPointerDown,
+  onChairPointerDown,
 }: {
   seat: Seat;
   /** Verification-only pass-through to SeatAvatar's onPoseDebug — see
@@ -504,8 +546,26 @@ function TableSeat({
    * for anyone else's seat — there's no gesture to intercept, not a runtime
    * permission check a determined client could route around. */
   draggable?: boolean;
-  onDragPointerDown?: (event: ThreeEvent<PointerEvent>) => void;
+  /** The raw, seat-agnostic handler (GameTableScene's own stable
+   * handleChairPointerDown) — TableSeat binds this exact seat's own
+   * user_id itself, below, rather than the caller pre-binding a fresh
+   * closure per seat per render (see this component's own top doc comment
+   * for why that distinction is load-bearing, not stylistic). */
+  onChairPointerDown?: (userId: string, event: ThreeEvent<PointerEvent>) => void;
 }) {
+  const userId = seat.member.user_id;
+  const handlePoseDebug = useCallback(
+    (compatible: boolean) => onAvatarPoseDebug?.(userId, compatible),
+    [onAvatarPoseDebug, userId]
+  );
+  const handleMeasureDebug = useCallback(
+    (measurement: { sizeY: number; scale: number }) => onAvatarMeasureDebug?.(userId, measurement),
+    [onAvatarMeasureDebug, userId]
+  );
+  const handleDragPointerDown = useCallback(
+    (event: ThreeEvent<PointerEvent>) => onChairPointerDown?.(userId, event),
+    [onChairPointerDown, userId]
+  );
   return (
     <group position={seat.position} rotation={[0, seat.rotationY, 0]}>
       <Chair role={seat.member.role} />
@@ -520,18 +580,12 @@ function TableSeat({
         <SeatAvatar
           url={seat.member.avatar_url ?? null}
           forwardOffsetDeg={seat.member.avatar_forward_offset_deg ?? 0}
-          onPoseDebug={
-            onAvatarPoseDebug ? (compatible) => onAvatarPoseDebug(seat.member.user_id, compatible) : undefined
-          }
-          onMeasureDebug={
-            onAvatarMeasureDebug
-              ? (measurement) => onAvatarMeasureDebug(seat.member.user_id, measurement)
-              : undefined
-          }
+          onPoseDebug={onAvatarPoseDebug ? handlePoseDebug : undefined}
+          onMeasureDebug={onAvatarMeasureDebug ? handleMeasureDebug : undefined}
         />
       </group>
       {draggable ? (
-        <mesh position={[0, CHAIR_DRAG_HANDLE_Y, 0]} onPointerDown={onDragPointerDown}>
+        <mesh position={[0, CHAIR_DRAG_HANDLE_Y, 0]} onPointerDown={handleDragPointerDown}>
           <boxGeometry args={CHAIR_DRAG_HIT_BOX} />
           {/* opacity-0, not visible={false} — an invisible mesh is skipped
               by the raycaster, which would defeat the hit box entirely
@@ -541,7 +595,7 @@ function TableSeat({
       ) : null}
     </group>
   );
-}
+});
 
 /** The currently-live map, already resolved to renderable form by the app
  * layer (dense cells, viewer-appropriate object flags, loadable URLs). */
@@ -1368,11 +1422,11 @@ export function GameTableScene({
           onAvatarPoseDebug={onAvatarPoseDebug}
           onAvatarMeasureDebug={onAvatarMeasureDebug}
           draggable={seat.member.user_id === draggableUserId}
-          onDragPointerDown={
-            seat.member.user_id === draggableUserId
-              ? (event) => handleChairPointerDown(seat.member.user_id, event)
-              : undefined
-          }
+          // The stable top-level handler itself, not a per-seat closure
+          // built here — see TableSeat's own top doc comment for why that
+          // distinction is what actually keeps this memoized component's
+          // props referentially stable across unrelated re-renders.
+          onChairPointerDown={handleChairPointerDown}
         />
       ))}
     </>

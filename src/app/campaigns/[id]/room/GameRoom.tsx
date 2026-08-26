@@ -847,20 +847,56 @@ export function GameRoom({
   // object's own measured bounding-box maxDim and derived scale factor —
   // same reasoning as avatarMeasureDebug below, applied to PlacedObject
   // instead of SeatAvatar.
+  //
+  // Dedupes exactly like handleAvatarPoseDebug/handleObjectPoseDebug above
+  // — load-bearing, not just tidiness (confirmed by the critical GameRoom
+  // freeze bug this dedup was added to fix, see TableSeat's own doc comment
+  // in GameTableScene.tsx for the full mechanism): the caller's own
+  // useEffect re-invokes this on every render whose closure identity
+  // changed even when maxDim/scale themselves haven't, and an unconditional
+  // `{...current, [id]: measurement}` would hand back a NEW object every
+  // single time, which always re-renders GameRoom regardless of whether
+  // anything actually changed — defense in depth against exactly the kind
+  // of upstream closure instability ObjectMarker's own memo() currently
+  // (but not permanently) prevents.
   const [objectMeasureDebug, setObjectMeasureDebug] = useState<Record<string, { maxDim: number; scale: number }>>({});
   const handleObjectMeasureDebug = useCallback(
     (id: string, measurement: { maxDim: number; scale: number }) => {
-      setObjectMeasureDebug((current) => ({ ...current, [id]: measurement }));
+      setObjectMeasureDebug((current) => {
+        const existing = current[id];
+        if (existing && existing.maxDim === measurement.maxDim && existing.scale === measurement.scale) {
+          return current;
+        }
+        return { ...current, [id]: measurement };
+      });
     },
     []
   );
   // Investigation-only (teleport/mis-scale bug hunt): mirrors each seated
   // member's own loaded avatar model's measured bounding-box height and
   // derived scale factor — same reasoning as avatarPoseDebug above.
+  //
+  // Dedupes for the identical reason handleObjectMeasureDebug just above
+  // does — see that one's own doc comment. This is the setter side of the
+  // confirmed critical freeze: TableSeat (GameTableScene.tsx) used to hand
+  // this a fresh closure on every render with no memo boundary at all, so
+  // the unconditional new-object-every-call this used to do turned that
+  // into a genuine, unconditional infinite render loop the instant any
+  // seated member had a real avatar_url. TableSeat is now fixed at the
+  // source (memoized, stable useCallback'd closures), but this dedup stays
+  // as real defense in depth, not just belt-and-braces — it independently
+  // breaks the exact same class of loop regardless of what upstream
+  // closure instability might reintroduce it.
   const [avatarMeasureDebug, setAvatarMeasureDebug] = useState<Record<string, { sizeY: number; scale: number }>>({});
   const handleAvatarMeasureDebug = useCallback(
     (userId: string, measurement: { sizeY: number; scale: number }) => {
-      setAvatarMeasureDebug((current) => ({ ...current, [userId]: measurement }));
+      setAvatarMeasureDebug((current) => {
+        const existing = current[userId];
+        if (existing && existing.sizeY === measurement.sizeY && existing.scale === measurement.scale) {
+          return current;
+        }
+        return { ...current, [userId]: measurement };
+      });
     },
     []
   );
