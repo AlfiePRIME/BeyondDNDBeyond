@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Canvas } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
-import { Button, ChoiceCard, Select, TextInput } from "@/ui-components";
+import { Badge, Button, ChoiceCard, Select, TextInput } from "@/ui-components";
 import {
   clearMapReferenceImage,
   createConcealedPit,
@@ -65,6 +65,7 @@ import {
   type CellState,
   type EditorTool,
   type ElevationDirection,
+  type SculptTool,
 } from "./lib/cellGrid";
 import {
   completeRedo,
@@ -162,6 +163,45 @@ interface GeneratedAreaPayload {
   objects: { assetId: string; x: number; y: number; elevation: number; rotation: number }[];
 }
 
+// Toolbar redesign (docs/design/map-editor-toolbar-redesign.md §5.1): a
+// mode rail + context panel replaces the old single flat toolbar. `mode` is
+// deliberately NOT its own piece of state — it's a pure function of the
+// already-existing `tool`, so switching modes is just `switchTool` picking
+// that mode's own default tool, inheriting every one of switchTool's
+// existing clearing side effects for free rather than duplicating them.
+type EditorMode = "sculpt" | "paint" | "place" | "link" | "region";
+
+// Ordered per §5.5's number-key scheme: index 0 is hotkey "1", etc. Mirrors
+// §5.1's mode table exactly (Sculpt: elevation/pit/terrain; Paint: ground/
+// light — Eyedropper is a 3rd Paint-mode hotkey slot but isn't an
+// EditorTool, so it's handled separately, not listed here; Place: object/
+// light-source; Link: transition/concealed-pit; Region: fill/generate).
+const MODE_TOOLS: Record<EditorMode, readonly EditorTool[]> = {
+  sculpt: ["elevation", "pit", "terrain"],
+  paint: ["ground", "light"],
+  place: ["object", "light-source"],
+  link: ["transition", "concealed-pit"],
+  region: ["fill", "generate"],
+};
+
+function modeForTool(tool: EditorTool): EditorMode {
+  for (const mode of Object.keys(MODE_TOOLS) as EditorMode[]) {
+    if (MODE_TOOLS[mode].includes(tool)) return mode;
+  }
+  // Unreachable given EditorTool's own exhaustive union above, but a safe
+  // fallback (Sculpt is the app's own default mode) beats a thrown error if
+  // this and EditorTool's definition in cellGrid.ts ever drift apart.
+  return "sculpt";
+}
+
+const MODE_LABELS: Record<EditorMode, string> = {
+  sculpt: "Sculpt",
+  paint: "Paint",
+  place: "Place",
+  link: "Link",
+  region: "Region",
+};
+
 export function MapEditor({
   campaignId,
   campaignName,
@@ -210,6 +250,30 @@ export function MapEditor({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Toolbar redesign (docs/design/map-editor-toolbar-redesign.md §5.2):
+  // Eyedropper is a one-shot arm/disarm toggle layered on top of whichever
+  // Paint-mode tool (Ground or Light) is already selected — it never
+  // changes `tool` itself. Armed by the button, disarmed automatically by
+  // the very next cell click (handleEyedropperPick), whether or not that
+  // click actually changed anything.
+  const [eyedropperArmed, setEyedropperArmed] = useState(false);
+
+  // Region mode's Fill (§5.3): which of Sculpt/Paint's own axes a
+  // "Fill N cells" click applies to the whole dragged region. Persists
+  // across tool switches like brush/lightBrush/groundBrush already do —
+  // no reset-on-switch wiring needed for the same reason those don't reset.
+  const [fillAxis, setFillAxis] = useState<SculptTool>("terrain");
+  // Elevation has no per-cell mouse button to read a direction from once
+  // it's a whole-region fill instead of a click — the one genuinely new
+  // (not reused) sub-control §5.3 calls for.
+  const [fillElevationDirection, setFillElevationDirection] = useState<ElevationDirection>("raise");
+
+  // The "Map" utility drawer (§5.1): Grid size/grow and Reference image are
+  // whole-map operations, not per-cell tools, so they live behind a header
+  // button instead of inside any mode's rail/panel — closed by default,
+  // independent of `tool`/mode entirely.
+  const [mapDrawerOpen, setMapDrawerOpen] = useState(false);
 
   // Grid growth (mid-session grid resize) — deliberately its own tiny form,
   // not a paint `tool`, since it acts on the map's dimensions rather than
@@ -324,6 +388,15 @@ export function MapEditor({
   const selectedObjectIdsRef = useRef(selectedObjectIds);
   const moveArmedRef = useRef(moveArmed);
   const regionRef = useRef(region);
+  const eyedropperArmedRef = useRef(eyedropperArmed);
+  const fillAxisRef = useRef(fillAxis);
+  const fillElevationDirectionRef = useRef(fillElevationDirection);
+  // switchTool is a plain function declaration (recreated every render, but
+  // behaviorally invariant — it only ever closes over stable useState
+  // setters and refs), mirrored into a ref like the rest of this block so
+  // the number-key keydown effect below can call the always-current
+  // version without needing to resubscribe its listener on every render.
+  const switchToolRef = useRef<(next: EditorTool) => void>(() => {});
   useEffect(() => {
     toolRef.current = tool;
     brushRef.current = brush;
@@ -334,6 +407,9 @@ export function MapEditor({
     selectedObjectIdsRef.current = selectedObjectIds;
     moveArmedRef.current = moveArmed;
     regionRef.current = region;
+    eyedropperArmedRef.current = eyedropperArmed;
+    fillAxisRef.current = fillAxis;
+    fillElevationDirectionRef.current = fillElevationDirection;
   }, [
     tool,
     brush,
@@ -344,6 +420,9 @@ export function MapEditor({
     selectedObjectIds,
     moveArmed,
     region,
+    eyedropperArmed,
+    fillAxis,
+    fillElevationDirection,
   ]);
 
   // The last PERSISTED cell state: initialCells at mount, advanced whenever
@@ -458,6 +537,13 @@ export function MapEditor({
   const handlePaintCell = useCallback(
     (x: number, y: number, button: number) => {
       const tool = toolRef.current;
+      // Eyedropper's click READS a cell (via onCellClick, wired below) — it
+      // must never also PAINT the same click with the stale, pre-pick
+      // brush. Both handlers fire off the same pointer-down event
+      // (MapEditorScene's handleDown calls onPaintCell then onCellClick in
+      // that order), so this bails before any of Ground/Light's branches
+      // below can run.
+      if (eyedropperArmedRef.current) return;
       if (
         tool === "object" ||
         tool === "transition" ||
@@ -473,7 +559,17 @@ export function MapEditor({
       // right-drag free for camera orbit everywhere else.
       if (button !== 0 && tool !== "elevation") return;
 
-      if (tool === "generate") {
+      // Region mode's two tools (Generate and Fill, §5.3) share this exact
+      // drag-to-rectangle mechanic — the drag defines a selection, it never
+      // edits a cell directly, which is why applyTool is a batch call from
+      // handleFillRegion/handleGenerate instead of running per dragged cell
+      // here the way every other tool's branch below does.
+      if (tool === "generate" || tool === "fill") {
+        // Only "generate" has a preview lifecycle to guard against — Fill
+        // has no draft to protect, but blocking a fresh region-drag while
+        // ANY preview (from a prior Generate) is still pending keeps the
+        // two Region tools from fighting over the same region state before
+        // it's been accepted or discarded.
         if (previewRef.current) return;
         const drag = regionDragRef.current;
         if (!drag) {
@@ -712,6 +808,61 @@ export function MapEditor({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [runHistoryStep]);
 
+  // Number-key tool shortcuts (§5.5): 1–9 select a tool WITHIN the
+  // currently active mode, not across modes — no mode has more than 3
+  // tools today, so digits 1–3 cover every mode with room to grow. Reuses
+  // switchTool verbatim (identical to a button click, inheriting every one
+  // of its existing side effects — clearing transitionCell/concealedPitCell/
+  // the light form/the region — for free) and the exact same input-focus
+  // guard the undo/redo handler above uses, so typing into the area-fill/
+  // generate-prompt/reference-offset text fields never triggers a switch.
+  // Reads the active mode from toolRef (not a closed-over `tool`/`activeMode`
+  // variable) so this effect never needs to resubscribe as the tool changes.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable]")) return;
+      const switchTool = switchToolRef.current;
+      switch (modeForTool(toolRef.current)) {
+        case "sculpt":
+          if (event.key === "1") switchTool("elevation");
+          else if (event.key === "2") switchTool("pit");
+          else if (event.key === "3") switchTool("terrain");
+          else return;
+          break;
+        case "paint":
+          if (event.key === "1") switchTool("ground");
+          else if (event.key === "2") switchTool("light");
+          // Eyedropper (§5.2) is Paint mode's 3rd hotkey slot, but it's an
+          // arm/disarm toggle, not an EditorTool — it never calls
+          // switchTool, so it never touches `tool` or any of switchTool's
+          // other clearing side effects.
+          else if (event.key === "3") setEyedropperArmed(true);
+          else return;
+          break;
+        case "place":
+          if (event.key === "1") switchTool("object");
+          else if (event.key === "2") switchTool("light-source");
+          else return;
+          break;
+        case "link":
+          if (event.key === "1") switchTool("transition");
+          else if (event.key === "2") switchTool("concealed-pit");
+          else return;
+          break;
+        case "region":
+          if (event.key === "1") switchTool("fill");
+          else if (event.key === "2" && aiEnabled) switchTool("generate");
+          else return;
+          break;
+      }
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [aiEnabled]);
+
   // Plain click (no event, or a click without the shift key) replaces the
   // selection with just this object — today's exact single-select behavior.
   // Shift-click toggles this object in the current selection: adds it if
@@ -741,6 +892,36 @@ export function MapEditor({
         overlayRef.current.get(key) ??
         DEFAULT_CELL;
       return state.terrain;
+    },
+    [inRegion]
+  );
+
+  // Eyedropper (§5.2): reads a clicked cell's DISPLAYED state — the exact
+  // same preview-then-overlay-then-default precedence as displayedTerrainAt
+  // above, just returning the whole CellState instead of only `terrain` —
+  // and sets the matching brush for whichever Paint sub-tool is currently
+  // active, then disarms. Wired as `onCellClick` (fires once per pointer-
+  // down, unaffected by a drag) rather than through handlePaintCell's
+  // per-stroke `onPaintCell` path, which is guarded off entirely while
+  // armed (see handlePaintCell's own eyedropperArmedRef check) so the same
+  // click never also paints. A void cell's ground is whatever it was
+  // painted (default "default") — no special-casing needed, the
+  // independent-axis model already handles it.
+  const handleEyedropperPick = useCallback(
+    (x: number, y: number) => {
+      const key = cellKey(x, y);
+      const preview = previewRef.current;
+      const state =
+        (preview && inRegion(x, y) ? preview.cells.get(key) : undefined) ??
+        overlayRef.current.get(key) ??
+        DEFAULT_CELL;
+      if (toolRef.current === "ground") {
+        setGroundBrush(state.ground);
+        if (state.ground === "water" && state.waterFlow) setWaterFlowBrush(state.waterFlow);
+      } else if (toolRef.current === "light") {
+        setLightBrush(state.light);
+      }
+      setEyedropperArmed(false);
     },
     [inRegion]
   );
@@ -1380,6 +1561,10 @@ export function MapEditor({
     setTool(next);
     setSelectedObjectIds(new Set());
     setMoveArmed(false);
+    // A pending one-shot pick doesn't survive a tool switch — Eyedropper is
+    // deliberately never sticky (§5.2), and it only makes sense armed over
+    // Ground/Light in the first place.
+    setEyedropperArmed(false);
     if (next !== "transition") {
       setTransitionCell(null);
       setTransitionError(null);
@@ -1389,13 +1574,22 @@ export function MapEditor({
       setConcealedPitError(null);
     }
     if (next !== "light-source") resetLightForm();
-    // The selection rectangle only outlives the generate tool while a draft
-    // is under review — it marks where the preview branch applies.
-    if (!previewRef.current && next !== "generate") {
+    // The selection rectangle outlives a mode switch only while an active
+    // draft needs it (the preview branch), or while staying inside Region
+    // mode's own two tools (Fill and Generate share one region-drag
+    // interaction, §5.3 — flipping between them keeps whatever's selected
+    // rather than forcing a re-drag).
+    if (!previewRef.current && next !== "generate" && next !== "fill") {
       setRegion(null);
       setGenerateError(null);
     }
   }
+  // Runs every render with no dependency array (cheap — a single ref
+  // assignment) so switchToolRef.current is always this render's fresh
+  // closure, without the number-key effect below needing to depend on it.
+  useEffect(() => {
+    switchToolRef.current = switchTool;
+  });
 
   async function handleGenerate() {
     const bounds = region;
@@ -1543,6 +1737,54 @@ export function MapEditor({
     setGenerateError(null);
     setSelectedObjectIds(new Set());
     setMoveArmed(false);
+  }
+
+  // Region mode's Fill (§5.3): applies the picked axis's brush to EVERY
+  // cell in the dragged region as ONE action — reusing the exact
+  // drag-stroke history shape a normal paint stroke already produces (a
+  // single before/after Map, one pushHistory call — see handleStrokeEnd),
+  // just built from a batch loop over the region instead of accumulated
+  // one cell at a time during a live pointer stroke. Applies immediately,
+  // with no preview/accept/discard lifecycle: the DM picked an exact
+  // brush, so there's no AI-style uncertainty here to review before
+  // committing (unlike Generate). No MAX_AREA_CELLS-style cap — Fill is a
+  // local, synchronous loop with no network round trip or token cost
+  // (flagged in the design doc as worth a real perf check before a very
+  // large uncapped fill ships, not something this pass benchmarks). The
+  // region is deliberately left selected afterward (not cleared) so a DM
+  // can fill Ground, then Light, then Terrain on the same rectangle
+  // without re-dragging.
+  function handleFillRegion() {
+    const bounds = region;
+    // Mirrors handlePaintCell's own region-drag guard: no fill while a
+    // Generate draft is still pending review.
+    if (!bounds || previewRef.current) return;
+    const sculptAction: ElevationDirection | Exclude<SculptTool, "elevation"> =
+      fillAxis === "elevation" ? fillElevationDirection : fillAxis;
+    const changes = new Map<string, { before: CellState; after: CellState }>();
+    for (let dy = 0; dy < bounds.height; dy++) {
+      for (let dx = 0; dx < bounds.width; dx++) {
+        const key = cellKey(bounds.x + dx, bounds.y + dy);
+        const current = overlayRef.current.get(key) ?? DEFAULT_CELL;
+        const next = applyTool(
+          current,
+          sculptAction,
+          brushRef.current,
+          lightBrushRef.current,
+          groundBrushRef.current,
+          waterFlowBrushRef.current
+        );
+        if (next !== current) changes.set(key, { before: current, after: next });
+      }
+    }
+    if (changes.size === 0) return;
+    const before = new Map([...changes].map(([key, change]) => [key, change.before]));
+    const after = new Map([...changes].map(([key, change]) => [key, change.after]));
+    applyCellStates(after);
+    pushHistory({
+      apply: () => applyCellStates(after),
+      revert: () => applyCellStates(before),
+    });
   }
 
   // includeLight: the editor is the one surface that renders the authored
@@ -1734,6 +1976,129 @@ export function MapEditor({
     destYNum >= 0 &&
     destYNum < destMap.grid_height;
 
+  // The mode rail's active entry — a pure function of `tool` (see
+  // modeForTool's own doc comment for why this isn't its own state).
+  const activeMode = modeForTool(tool);
+
+  // Shared brush-selector rows (§5.3): the EXACT same <Button> rows, same
+  // testids, same setBrush/setLightBrush/setGroundBrush state, rendered
+  // both inside Sculpt/Paint's own per-tool panel AND inside Region mode's
+  // Fill sub-panel when that axis is picked — literally the same buttons,
+  // not a visually-similar duplicate, so painting live and filling a region
+  // always agree on what "Difficult" or "Dim" or "Grass" means. Each
+  // returns only the buttons themselves (a Fragment) — the caller supplies
+  // whatever surrounding toolRow/label markup fits its own context (a
+  // shared sibling row with the tool-select button in Sculpt/Paint, a
+  // dedicated row in Region's Fill panel).
+  function renderTerrainBrushRow() {
+    return (
+      <>
+        <Button
+          size="sm"
+          variant={brush === "difficult" ? "accent" : "ghost"}
+          onClick={() => setBrush("difficult")}
+          data-testid="brush-difficult"
+        >
+          Difficult
+        </Button>
+        <Button
+          size="sm"
+          variant={brush === "normal" ? "accent" : "ghost"}
+          onClick={() => setBrush("normal")}
+          data-testid="brush-normal"
+        >
+          Normal
+        </Button>
+        <Button
+          size="sm"
+          variant={brush === "void" ? "accent" : "ghost"}
+          onClick={() => setBrush("void")}
+          data-testid="brush-void"
+        >
+          Void
+        </Button>
+      </>
+    );
+  }
+
+  function renderLightBrushRow() {
+    return (
+      <>
+        <Button
+          size="sm"
+          variant={lightBrush === "bright" ? "accent" : "ghost"}
+          onClick={() => setLightBrush("bright")}
+          data-testid="brush-bright"
+        >
+          Bright
+        </Button>
+        <Button
+          size="sm"
+          variant={lightBrush === "dim" ? "accent" : "ghost"}
+          onClick={() => setLightBrush("dim")}
+          data-testid="brush-dim"
+        >
+          Dim
+        </Button>
+        <Button
+          size="sm"
+          variant={lightBrush === "dark" ? "accent" : "ghost"}
+          onClick={() => setLightBrush("dark")}
+          data-testid="brush-dark"
+        >
+          Dark
+        </Button>
+      </>
+    );
+  }
+
+  function renderGroundBrushRow() {
+    return (
+      <>
+        {GROUND_TYPES.map((type) => (
+          <Button
+            key={type}
+            size="sm"
+            variant={groundBrush === type ? "accent" : "ghost"}
+            onClick={() => setGroundBrush(type)}
+            data-testid={`brush-ground-${type}`}
+          >
+            {GROUND_TYPE_LABELS[type]}
+          </Button>
+        ))}
+      </>
+    );
+  }
+
+  // Unlike the three rows above, this one includes its own label/hint —
+  // it renders as a self-contained block (not just bare buttons) in both
+  // of its call sites, since "Flow direction" only ever appears alongside
+  // the Water ground brush, never as a bare row of buttons on its own.
+  function renderWaterFlowRow() {
+    return (
+      <>
+        <span className={styles.toolbarLabel}>Flow direction</span>
+        <div className={styles.toolRow}>
+          {WATER_FLOW_DIRECTIONS.map((direction) => (
+            <Button
+              key={direction}
+              size="sm"
+              variant={waterFlowBrush === direction ? "accent" : "ghost"}
+              onClick={() => setWaterFlowBrush(direction)}
+              data-testid={`water-flow-${direction}`}
+            >
+              {WATER_FLOW_DIRECTION_LABELS[direction]}
+            </Button>
+          ))}
+        </div>
+        <p className={styles.hint}>
+          Painting a water cell (or re-painting an existing one) also sets its flow arrow to
+          the direction picked here — purely a visual cue, drawn only on water cells.
+        </p>
+      </>
+    );
+  }
+
   return (
     <div className={styles.editor}>
       {/* Scoped to the canvas itself (not the whole editor page) — the
@@ -1749,15 +2114,17 @@ export function MapEditor({
           onPaintCell={handlePaintCell}
           onStrokeEnd={handleStrokeEnd}
           onCellClick={
-            tool === "object"
-              ? handleCellClick
-              : tool === "transition"
-                ? handleTransitionCellClick
-                : tool === "concealed-pit"
-                  ? handleConcealedPitCellClick
-                  : tool === "light-source" && lightAnchorKind === "cell" && !editingLightId
-                    ? handleLightSourceCellClick
-                    : undefined
+            eyedropperArmed
+              ? handleEyedropperPick
+              : tool === "object"
+                ? handleCellClick
+                : tool === "transition"
+                  ? handleTransitionCellClick
+                  : tool === "concealed-pit"
+                    ? handleConcealedPitCellClick
+                    : tool === "light-source" && lightAnchorKind === "cell" && !editingLightId
+                      ? handleLightSourceCellClick
+                      : undefined
           }
           region={
             tool === "transition"
@@ -1831,294 +2198,419 @@ export function MapEditor({
           >
             {saving ? "Saving…" : "Save map"}
           </Button>
+          {/* The "Map" utility drawer (§5.1): Grid size/grow and Reference
+              image are whole-map operations, not per-cell tools — they
+              live behind this header button instead of inside any mode's
+              rail/panel, next to the other always-relevant actions. */}
+          <Button
+            size="sm"
+            variant={mapDrawerOpen ? "accent" : "ghost"}
+            onClick={() => setMapDrawerOpen((open) => !open)}
+            data-testid="map-drawer-toggle"
+          >
+            Map
+          </Button>
         </div>
       </header>
 
-      <div className={styles.toolbar}>
-        {preview ? (
-          <>
-            <span className={styles.toolbarLabel}>AI draft</span>
-            <span className={styles.selectedMeta} data-testid="area-preview-summary">
-              {preview.cells.size} cells · {preview.objects.length}{" "}
-              {preview.objects.length === 1 ? "object" : "objects"} proposed
-            </span>
-            <p className={styles.hint}>
-              Adjust the draft with the normal tools inside the outlined region, then accept to
-              commit it or discard to leave the map untouched.
+      {mapDrawerOpen ? (
+        <div className={styles.mapDrawer} data-testid="map-drawer">
+          <span className={styles.toolbarLabel}>Grid size</span>
+          <span className={styles.selectedMeta} data-testid="grid-size-label">
+            {map.grid_width}×{map.grid_height}
+          </span>
+          <div className={styles.toolRow}>
+            <Select
+              label="Grow edge"
+              value={growEdge}
+              onChange={(event) => setGrowEdge(event.target.value as MapGrowthEdge)}
+              disabled={growBusy}
+              data-testid="grow-edge"
+            >
+              {MAP_GROWTH_EDGES.map((edge) => (
+                <option key={edge} value={edge}>
+                  {edge[0].toUpperCase()}
+                  {edge.slice(1)}
+                </option>
+              ))}
+            </Select>
+            <TextInput
+              label="Amount"
+              type="number"
+              min={1}
+              step={1}
+              value={growAmount}
+              onChange={(event) => setGrowAmount(event.target.value)}
+              disabled={growBusy}
+              data-testid="grow-amount"
+            />
+            <Button
+              size="sm"
+              variant="teal"
+              disabled={growBusy || !growAmountValid || Boolean(growBlockedReason)}
+              onClick={() => void handleGrowGrid()}
+              data-testid="grow-grid-button"
+            >
+              {growBusy ? "Growing…" : "Grow"}
+            </Button>
+          </div>
+          <p className={styles.hint}>
+            Adds cells to the chosen edge. Growing north or west shifts the map&apos;s existing
+            cells, objects, and tokens so nothing moves relative to the rest of the map — the
+            editor reloads afterward to reflect the new layout.
+          </p>
+          {growBlockedReason ? <p className={styles.hint}>{growBlockedReason}</p> : null}
+          {growError ? (
+            <p role="alert" className={styles.errorText} data-testid="grow-grid-error">
+              {growError}
             </p>
-            <div className={styles.toolRow}>
-              <Button
-                size="sm"
-                variant="teal"
-                disabled={accepting}
-                onClick={handleAcceptPreview}
-                data-testid="accept-area"
-              >
-                {accepting ? "Applying…" : "Accept"}
-              </Button>
-              <Button
-                size="sm"
-                variant="danger"
-                disabled={accepting}
-                onClick={handleDiscardPreview}
-                data-testid="discard-area"
-              >
-                Discard
-              </Button>
-            </div>
-            {generateError ? (
-              <p role="alert" className={styles.errorText} data-testid="generate-area-error">
-                {generateError}
+          ) : null}
+          <span className={styles.toolbarLabel}>Reference image</span>
+          {referenceRef ? (
+            <>
+              <div className={styles.toolRow}>
+                <TextInput
+                  label="Offset X"
+                  type="number"
+                  step={0.5}
+                  value={referenceX}
+                  onChange={(event) => setReferenceX(event.target.value)}
+                  className={styles.referenceField}
+                  data-testid="reference-offset-x"
+                />
+                <TextInput
+                  label="Offset Y"
+                  type="number"
+                  step={0.5}
+                  value={referenceY}
+                  onChange={(event) => setReferenceY(event.target.value)}
+                  className={styles.referenceField}
+                  data-testid="reference-offset-y"
+                />
+                <TextInput
+                  label="Scale"
+                  type="number"
+                  step={0.1}
+                  min={0.1}
+                  value={referenceScale}
+                  onChange={(event) => setReferenceScale(event.target.value)}
+                  className={styles.referenceField}
+                  data-testid="reference-scale"
+                />
+              </div>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={referenceBusy}
+                  onClick={() => referenceFileInputRef.current?.click()}
+                  data-testid="reference-replace"
+                >
+                  {referenceBusy ? "Uploading…" : "Replace image"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={referenceBusy}
+                  onClick={() => void handleReferenceRemove()}
+                  data-testid="reference-remove"
+                >
+                  Remove
+                </Button>
+              </div>
+              <p className={styles.hint}>
+                Guide art under the grid — offsets in cells from the grid&apos;s center. Only you
+                see it; it never renders on the live table.
               </p>
-            ) : null}
-          </>
-        ) : null}
-        <span className={styles.toolbarLabel}>Grid size</span>
-        <span className={styles.selectedMeta} data-testid="grid-size-label">
-          {map.grid_width}×{map.grid_height}
-        </span>
-        <div className={styles.toolRow}>
-          <Select
-            label="Grow edge"
-            value={growEdge}
-            onChange={(event) => setGrowEdge(event.target.value as MapGrowthEdge)}
-            disabled={growBusy}
-            data-testid="grow-edge"
-          >
-            {MAP_GROWTH_EDGES.map((edge) => (
-              <option key={edge} value={edge}>
-                {edge[0].toUpperCase()}
-                {edge.slice(1)}
-              </option>
-            ))}
-          </Select>
-          <TextInput
-            label="Amount"
-            type="number"
-            min={1}
-            step={1}
-            value={growAmount}
-            onChange={(event) => setGrowAmount(event.target.value)}
-            disabled={growBusy}
-            data-testid="grow-amount"
+            </>
+          ) : (
+            <>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={referenceBusy}
+                  onClick={() => referenceFileInputRef.current?.click()}
+                  data-testid="reference-upload"
+                >
+                  {referenceBusy ? "Uploading…" : "Upload image"}
+                </Button>
+              </div>
+              <p className={styles.hint}>
+                Sculpt over existing battle-map art — PNG, JPEG, or WebP, up to 10MB.
+              </p>
+            </>
+          )}
+          <input
+            ref={referenceFileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            aria-label="Upload a reference image"
+            className={styles.hiddenFileInput}
+            disabled={referenceBusy}
+            onChange={(event) => void handleReferenceUpload(event.target.files)}
+            data-testid="reference-file-input"
           />
-          <Button
-            size="sm"
-            variant="teal"
-            disabled={growBusy || !growAmountValid || Boolean(growBlockedReason)}
-            onClick={() => void handleGrowGrid()}
-            data-testid="grow-grid-button"
-          >
-            {growBusy ? "Growing…" : "Grow"}
-          </Button>
-        </div>
-        <p className={styles.hint}>
-          Adds cells to the chosen edge. Growing north or west shifts the map&apos;s existing
-          cells, objects, and tokens so nothing moves relative to the rest of the map — the
-          editor reloads afterward to reflect the new layout.
-        </p>
-        {growBlockedReason ? <p className={styles.hint}>{growBlockedReason}</p> : null}
-        {growError ? (
-          <p role="alert" className={styles.errorText} data-testid="grow-grid-error">
-            {growError}
-          </p>
-        ) : null}
-        <span className={styles.toolbarLabel}>Elevation</span>
-        <div className={styles.toolRow}>
-          <Button
-            size="sm"
-            variant={tool === "elevation" ? "primary" : "ghost"}
-            onClick={() => switchTool("elevation")}
-            data-testid="tool-elevation"
-          >
-            Raise / lower
-          </Button>
-        </div>
-        {tool === "elevation" ? (
-          <p className={styles.hint}>
-            Left-click (or drag) a cell to raise it one step · right-click to lower it one step.
-          </p>
-        ) : null}
-        <span className={styles.toolbarLabel}>Pit</span>
-        <div className={styles.toolRow}>
-          <Button
-            size="sm"
-            variant={tool === "pit" ? "primary" : "ghost"}
-            onClick={() => switchTool("pit")}
-            data-testid="tool-pit"
-          >
-            Dig pit −1
-          </Button>
-        </div>
-        {tool === "pit" ? (
-          <p className={styles.hint} data-testid="pit-hint">
-            Each click drops this cell&rsquo;s floor by 5 ft and marks it a pit — a hole with
-            visible walls down to the floor, distinct from a void cell&rsquo;s total absence. A
-            token that steps into a pit at least 10 ft deep (2 clicks) automatically falls: SRD
-            fall damage and prone apply. Shallower dips are a mechanical no-op under that same
-            formula — consider painting Difficult terrain with Lower instead if you don&rsquo;t
-            want a hazard there at all. Link this cell to another map (below) to make falling in
-            transport the character there instead of leaving them at the bottom on this map.
-          </p>
-        ) : null}
-        <span className={styles.toolbarLabel}>Terrain</span>
-        <div className={styles.toolRow}>
-          <Button
-            size="sm"
-            variant={tool === "terrain" ? "accent" : "ghost"}
-            onClick={() => switchTool("terrain")}
-            data-testid="tool-terrain"
-          >
-            Paint terrain
-          </Button>
-          {tool === "terrain" ? (
-            <>
-              <Button
-                size="sm"
-                variant={brush === "difficult" ? "accent" : "ghost"}
-                onClick={() => setBrush("difficult")}
-                data-testid="brush-difficult"
-              >
-                Difficult
-              </Button>
-              <Button
-                size="sm"
-                variant={brush === "normal" ? "accent" : "ghost"}
-                onClick={() => setBrush("normal")}
-                data-testid="brush-normal"
-              >
-                Normal
-              </Button>
-              <Button
-                size="sm"
-                variant={brush === "void" ? "accent" : "ghost"}
-                onClick={() => setBrush("void")}
-                data-testid="brush-void"
-              >
-                Void
-              </Button>
-            </>
-          ) : null}
-        </div>
-        {tool === "terrain" && brush === "void" ? (
-          <p className={styles.hint}>
-            Void cells have no floor at all — they render as empty space for everyone, and tokens
-            and objects can never sit there. Paint them to carve caves and irregular room shapes
-            out of the grid.
-          </p>
-        ) : null}
-        <span className={styles.toolbarLabel}>Lighting</span>
-        <div className={styles.toolRow}>
-          <Button
-            size="sm"
-            variant={tool === "light" ? "accent" : "ghost"}
-            onClick={() => switchTool("light")}
-            data-testid="tool-light"
-          >
-            Paint light
-          </Button>
-          {tool === "light" ? (
-            <>
-              <Button
-                size="sm"
-                variant={lightBrush === "bright" ? "accent" : "ghost"}
-                onClick={() => setLightBrush("bright")}
-                data-testid="brush-bright"
-              >
-                Bright
-              </Button>
-              <Button
-                size="sm"
-                variant={lightBrush === "dim" ? "accent" : "ghost"}
-                onClick={() => setLightBrush("dim")}
-                data-testid="brush-dim"
-              >
-                Dim
-              </Button>
-              <Button
-                size="sm"
-                variant={lightBrush === "dark" ? "accent" : "ghost"}
-                onClick={() => setLightBrush("dark")}
-                data-testid="brush-dark"
-              >
-                Dark
-              </Button>
-            </>
-          ) : null}
-        </div>
-        <span className={styles.toolbarLabel}>Ground</span>
-        <div className={styles.toolRow}>
-          <Button
-            size="sm"
-            variant={tool === "ground" ? "accent" : "ghost"}
-            onClick={() => switchTool("ground")}
-            data-testid="tool-ground"
-          >
-            Paint ground
-          </Button>
-          {tool === "ground" ? (
-            <>
-              {GROUND_TYPES.map((type) => (
-                <Button
-                  key={type}
-                  size="sm"
-                  variant={groundBrush === type ? "accent" : "ghost"}
-                  onClick={() => setGroundBrush(type)}
-                  data-testid={`brush-ground-${type}`}
-                >
-                  {GROUND_TYPE_LABELS[type]}
-                </Button>
-              ))}
-            </>
-          ) : null}
-        </div>
-        {tool === "ground" ? (
-          <p className={styles.hint}>
-            Ground type is a flat color only — a purely cosmetic layer independent of terrain.
-            Painting Forest here doesn&apos;t make a cell Difficult terrain, and painting
-            Difficult terrain doesn&apos;t change its ground color; set each separately. To make a
-            water cell cost extra movement, also paint it Difficult with the Terrain tool above —
-            water reuses that exact same mechanic, not a new one.
-          </p>
-        ) : null}
-        {/* Flow direction only appears/applies for the Water brush (the
-            confirmed requirement) — every other ground brush leaves this
-            entirely out of the toolbar, and painting them clears any flow
-            direction a cell previously had (applyTool's "ground" branch). */}
-        {tool === "ground" && groundBrush === "water" ? (
-          <>
-            <span className={styles.toolbarLabel}>Flow direction</span>
-            <div className={styles.toolRow}>
-              {WATER_FLOW_DIRECTIONS.map((direction) => (
-                <Button
-                  key={direction}
-                  size="sm"
-                  variant={waterFlowBrush === direction ? "accent" : "ghost"}
-                  onClick={() => setWaterFlowBrush(direction)}
-                  data-testid={`water-flow-${direction}`}
-                >
-                  {WATER_FLOW_DIRECTION_LABELS[direction]}
-                </Button>
-              ))}
-            </div>
-            <p className={styles.hint}>
-              Painting a water cell (or re-painting an existing one) also sets its flow arrow to
-              the direction picked here — purely a visual cue, drawn only on water cells.
+          {referenceError ? (
+            <p role="alert" className={styles.errorText} data-testid="reference-error">
+              {referenceError}
             </p>
-          </>
-        ) : null}
-        <span className={styles.toolbarLabel}>Objects</span>
-        <div className={styles.toolRow}>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className={styles.toolbarShell}>
+       <div className={styles.toolbarMain}>
+        {/* The mode rail (§5.1): a persistent left column of 5 top-level
+            modes, replacing the old single flat toolbar's "append one more
+            label+row to the bottom of an ever-growing list" structure.
+            `mode` is deliberately not its own state — it's a pure function
+            of `tool` (modeForTool) — so a rail click is just switchTool
+            picking that mode's own first tool, inheriting every one of
+            switchTool's existing clearing side effects for free. Clicking
+            the ALREADY-active mode is a no-op — it must never reset the
+            DM's current within-mode tool selection back to that mode's
+            default. No hotkey badges here: §5.5 deliberately gives mode
+            switching no dedicated keyboard shortcut, only within-mode
+            number keys. */}
+        <nav className={styles.modeRail} aria-label="Editor mode">
           <Button
             size="sm"
-            variant={tool === "object" ? "primary" : "ghost"}
-            onClick={() => switchTool("object")}
-            data-testid="tool-object"
+            variant={activeMode === "sculpt" ? "primary" : "ghost"}
+            className={styles.modeButton}
+            onClick={() => activeMode !== "sculpt" && switchTool(MODE_TOOLS.sculpt[0])}
+            data-testid="mode-sculpt"
           >
-            Place objects
+            {MODE_LABELS.sculpt}
           </Button>
-        </div>
-        {tool === "object" ? (
+          <Button
+            size="sm"
+            variant={activeMode === "paint" ? "primary" : "ghost"}
+            className={styles.modeButton}
+            onClick={() => activeMode !== "paint" && switchTool(MODE_TOOLS.paint[0])}
+            data-testid="mode-paint"
+          >
+            {MODE_LABELS.paint}
+          </Button>
+          <Button
+            size="sm"
+            variant={activeMode === "place" ? "primary" : "ghost"}
+            className={styles.modeButton}
+            onClick={() => activeMode !== "place" && switchTool(MODE_TOOLS.place[0])}
+            data-testid="mode-place"
+          >
+            {MODE_LABELS.place}
+          </Button>
+          <Button
+            size="sm"
+            variant={activeMode === "link" ? "primary" : "ghost"}
+            className={styles.modeButton}
+            onClick={() => activeMode !== "link" && switchTool(MODE_TOOLS.link[0])}
+            data-testid="mode-link"
+          >
+            {MODE_LABELS.link}
+          </Button>
+          <Button
+            size="sm"
+            variant={activeMode === "region" ? "primary" : "ghost"}
+            className={styles.modeButton}
+            onClick={() => activeMode !== "region" && switchTool(MODE_TOOLS.region[0])}
+            data-testid="mode-region"
+          >
+            {MODE_LABELS.region}
+          </Button>
+        </nav>
+
+        {/* The context panel (§5.1/§6): the ONE piece of this redesign that
+            structurally fixes the reported overflow bug — a real height
+            constraint plus its own scroll, independent of the mode rail and
+            the always-visible footer hint below (both outside this box). */}
+        {/* A stable hook for verify-toolbar-modes.mjs's real DOM scroll
+            probe (scrollHeight vs clientHeight, mirroring §3's own
+            diagnostic) — additive, not a rename of any existing testid. */}
+        <div className={styles.contextPanel} data-testid="context-panel">
+          {/* The AI draft review banner stays visible regardless of the
+              active mode, matching today's unconditional top-of-toolbar
+              placement — Accept/Discard must stay reachable even if the DM
+              switches to Sculpt/Paint to tweak the draft's cells mid-review
+              (handlePaintCell's own preview-in-region branch already
+              supports painting into a pending draft from any tool). */}
+          {preview ? (
+            <>
+              <span className={styles.toolbarLabel}>AI draft</span>
+              <span className={styles.selectedMeta} data-testid="area-preview-summary">
+                {preview.cells.size} cells · {preview.objects.length}{" "}
+                {preview.objects.length === 1 ? "object" : "objects"} proposed
+              </span>
+              <p className={styles.hint}>
+                Adjust the draft with the normal tools inside the outlined region, then accept to
+                commit it or discard to leave the map untouched.
+              </p>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant="teal"
+                  disabled={accepting}
+                  onClick={handleAcceptPreview}
+                  data-testid="accept-area"
+                >
+                  {accepting ? "Applying…" : "Accept"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={accepting}
+                  onClick={handleDiscardPreview}
+                  data-testid="discard-area"
+                >
+                  Discard
+                </Button>
+              </div>
+              {generateError ? (
+                <p role="alert" className={styles.errorText} data-testid="generate-area-error">
+                  {generateError}
+                </p>
+              ) : null}
+            </>
+          ) : null}
+
+          {activeMode === "sculpt" ? (
+            <>
+              <span className={styles.toolbarLabel}>Elevation</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={tool === "elevation" ? "primary" : "ghost"}
+                  onClick={() => switchTool("elevation")}
+                  data-testid="tool-elevation"
+                >
+                  Raise / lower <Badge>1</Badge>
+                </Button>
+              </div>
+              {tool === "elevation" ? (
+                <p className={styles.hint}>
+                  Left-click (or drag) a cell to raise it one step · right-click to lower it one step.
+                </p>
+              ) : null}
+              <span className={styles.toolbarLabel}>Pit</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={tool === "pit" ? "primary" : "ghost"}
+                  onClick={() => switchTool("pit")}
+                  data-testid="tool-pit"
+                >
+                  Dig pit −1 <Badge>2</Badge>
+                </Button>
+              </div>
+              {tool === "pit" ? (
+                <p className={styles.hint} data-testid="pit-hint">
+                  Each click drops this cell&rsquo;s floor by 5 ft and marks it a pit — a hole with
+                  visible walls down to the floor, distinct from a void cell&rsquo;s total absence. A
+                  token that steps into a pit at least 10 ft deep (2 clicks) automatically falls: SRD
+                  fall damage and prone apply. Shallower dips are a mechanical no-op under that same
+                  formula — consider painting Difficult terrain with Lower instead if you don&rsquo;t
+                  want a hazard there at all. Link this cell to another map (below) to make falling in
+                  transport the character there instead of leaving them at the bottom on this map.
+                </p>
+              ) : null}
+              <span className={styles.toolbarLabel}>Terrain</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={tool === "terrain" ? "accent" : "ghost"}
+                  onClick={() => switchTool("terrain")}
+                  data-testid="tool-terrain"
+                >
+                  Paint terrain <Badge>3</Badge>
+                </Button>
+                {tool === "terrain" ? renderTerrainBrushRow() : null}
+              </div>
+              {tool === "terrain" && brush === "void" ? (
+                <p className={styles.hint}>
+                  Void cells have no floor at all — they render as empty space for everyone, and tokens
+                  and objects can never sit there. Paint them to carve caves and irregular room shapes
+                  out of the grid.
+                </p>
+              ) : null}
+            </>
+          ) : null}
+
+          {activeMode === "paint" ? (
+            <>
+              <span className={styles.toolbarLabel}>Ground</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={tool === "ground" ? "accent" : "ghost"}
+                  onClick={() => switchTool("ground")}
+                  data-testid="tool-ground"
+                >
+                  Paint ground <Badge>1</Badge>
+                </Button>
+                {tool === "ground" ? renderGroundBrushRow() : null}
+              </div>
+              {tool === "ground" ? (
+                <p className={styles.hint}>
+                  Ground type is a flat color only — a purely cosmetic layer independent of terrain.
+                  Painting Forest here doesn&apos;t make a cell Difficult terrain, and painting
+                  Difficult terrain doesn&apos;t change its ground color; set each separately. To make a
+                  water cell cost extra movement, also paint it Difficult with the Terrain tool above —
+                  water reuses that exact same mechanic, not a new one.
+                </p>
+              ) : null}
+              {/* Flow direction only appears/applies for the Water brush
+                  (the confirmed requirement) — every other ground brush
+                  leaves this entirely out of the panel, and painting them
+                  clears any flow direction a cell previously had
+                  (applyTool's "ground" branch). */}
+              {tool === "ground" && groundBrush === "water" ? renderWaterFlowRow() : null}
+              <span className={styles.toolbarLabel}>Lighting</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={tool === "light" ? "accent" : "ghost"}
+                  onClick={() => switchTool("light")}
+                  data-testid="tool-light"
+                >
+                  Paint light <Badge>2</Badge>
+                </Button>
+                {tool === "light" ? renderLightBrushRow() : null}
+              </div>
+              <span className={styles.toolbarLabel}>Eyedropper</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={eyedropperArmed ? "accent" : "ghost"}
+                  onClick={() => setEyedropperArmed((armed) => !armed)}
+                  data-testid="eyedropper"
+                >
+                  Eyedropper <Badge>3</Badge>
+                </Button>
+              </div>
+              {eyedropperArmed ? (
+                <p className={styles.hint} data-testid="eyedropper-hint">
+                  Click any cell to pick up its {tool === "light" ? "light level" : "ground type"} as
+                  the active brush, then return automatically to painting.
+                </p>
+              ) : null}
+            </>
+          ) : null}
+
+          {activeMode === "place" ? (
+            <>
+              <span className={styles.toolbarLabel}>Objects</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={tool === "object" ? "primary" : "ghost"}
+                  onClick={() => switchTool("object")}
+                  data-testid="tool-object"
+                >
+                  Place objects <Badge>1</Badge>
+                </Button>
+              </div>
+              {tool === "object" ? (
           <>
             <div className={styles.assetGrid} data-testid="asset-palette">
               {assets.map((asset) => (
@@ -2242,19 +2734,211 @@ export function MapEditor({
               </p>
             ) : null}
           </>
-        ) : null}
-        <span className={styles.toolbarLabel}>Transitions</span>
-        <div className={styles.toolRow}>
-          <Button
-            size="sm"
-            variant={tool === "transition" ? "primary" : "ghost"}
-            onClick={() => switchTool("transition")}
-            data-testid="tool-transition"
-          >
-            Link transition
-          </Button>
-        </div>
-        {tool === "transition" ? (
+              ) : null}
+              <span className={styles.toolbarLabel}>Light sources</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={tool === "light-source" ? "primary" : "ghost"}
+                  onClick={() => switchTool("light-source")}
+                  data-testid="tool-light-source"
+                >
+                  Place lights <Badge>2</Badge>
+                </Button>
+              </div>
+              {tool === "light-source" ? (
+                <>
+                  {editingLightId === null ? (
+                    <>
+                      <Select
+                        label="Attach to"
+                        value={lightAnchorKind}
+                        onChange={(event) => {
+                          setLightAnchorKind(event.target.value as "cell" | "object" | "token");
+                          setLightCell(null);
+                          setLightError(null);
+                        }}
+                        disabled={lightBusy}
+                        data-testid="light-anchor-kind"
+                      >
+                        <option value="cell">A fixed cell</option>
+                        <option value="object">A placed object (moves with it)</option>
+                        <option value="token">A token (moves with its carrier)</option>
+                      </Select>
+                      {lightAnchorKind === "cell" ? (
+                        lightCell ? (
+                          <span className={styles.selectedMeta} data-testid="light-cell-label">
+                            Anchor cell ({lightCell.x},{lightCell.y})
+                          </span>
+                        ) : (
+                          <p className={styles.hint}>Click the cell the light sits on.</p>
+                        )
+                      ) : lightAnchorKind === "object" ? (
+                        <Select
+                          label="Object"
+                          value={lightObjectId}
+                          onChange={(event) => setLightObjectId(event.target.value)}
+                          disabled={lightBusy}
+                          data-testid="light-anchor-object"
+                        >
+                          <option value="">Choose an object…</option>
+                          {objects.map((object) => (
+                            <option key={object.id} value={object.id}>
+                              {object.asset.name} · ({object.x},{object.y})
+                            </option>
+                          ))}
+                        </Select>
+                      ) : initialTokens.length === 0 ? (
+                        <p className={styles.hint}>
+                          No tokens are placed on this map yet — place one from the Game Room first.
+                        </p>
+                      ) : (
+                        <Select
+                          label="Token"
+                          value={lightTokenId}
+                          onChange={(event) => setLightTokenId(event.target.value)}
+                          disabled={lightBusy}
+                          data-testid="light-anchor-token"
+                        >
+                          <option value="">Choose a token…</option>
+                          {initialTokens.map((token) => (
+                            <option key={token.id} value={token.id}>
+                              {tokenLabel(token)} · ({token.x},{token.y})
+                            </option>
+                          ))}
+                        </Select>
+                      )}
+                    </>
+                  ) : (
+                    <span className={styles.selectedMeta} data-testid="light-editing-label">
+                      Editing the light at {describeLightAnchor(
+                        lightSources.find((light) => light.id === editingLightId)!
+                      )}
+                    </span>
+                  )}
+                  <TextInput
+                    label="Radius (feet)"
+                    type="number"
+                    min={5}
+                    step={5}
+                    value={lightRadius}
+                    onChange={(event) => setLightRadius(event.target.value)}
+                    disabled={lightBusy}
+                    data-testid="light-radius"
+                  />
+                  <div className={styles.toolRow}>
+                    <Button
+                      size="sm"
+                      variant={lightBrightness === "bright" ? "accent" : "ghost"}
+                      onClick={() => setLightBrightness("bright")}
+                      disabled={lightBusy}
+                      data-testid="light-brightness-bright"
+                    >
+                      Bright
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={lightBrightness === "dim" ? "accent" : "ghost"}
+                      onClick={() => setLightBrightness("dim")}
+                      disabled={lightBusy}
+                      data-testid="light-brightness-dim"
+                    >
+                      Dim
+                    </Button>
+                  </div>
+                  <div className={styles.toolRow}>
+                    {editingLightId === null ? (
+                      <Button
+                        size="sm"
+                        variant="teal"
+                        disabled={lightBusy || !lightRadiusValid || !lightAnchorValid}
+                        onClick={() => void handleCreateLightSource()}
+                        data-testid="create-light-source"
+                      >
+                        {lightBusy ? "Placing…" : "Place light"}
+                      </Button>
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="teal"
+                          disabled={lightBusy || !lightRadiusValid}
+                          onClick={() => void handleUpdateLightSource()}
+                          data-testid="update-light-source"
+                        >
+                          {lightBusy ? "Saving…" : "Save light"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={lightBusy}
+                          onClick={resetLightForm}
+                          data-testid="cancel-light-edit"
+                        >
+                          Cancel
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                  {lightSources.length > 0 ? (
+                    <div data-testid="light-source-list">
+                      {lightSources.map((light) => (
+                        <div key={light.id} className={styles.toolRow} data-testid={`light-source-${light.id}`}>
+                          <span className={styles.selectedMeta}>
+                            {light.brightness === "bright" ? "Bright" : "Dim"} · {light.radius_feet} ft ·{" "}
+                            {describeLightAnchor(light)}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={lightBusy}
+                            onClick={() => startEditingLight(light)}
+                            data-testid={`edit-light-source-${light.id}`}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            disabled={lightBusy}
+                            onClick={() => void handleRemoveLightSource(light.id)}
+                            data-testid={`remove-light-source-${light.id}`}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className={styles.hint}>
+                      No lights yet — lighting data is stored now; the table renders vision from it in a
+                      later prompt.
+                    </p>
+                  )}
+                  {lightError ? (
+                    <p role="alert" className={styles.errorText} data-testid="light-source-error">
+                      {lightError}
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+            </>
+          ) : null}
+
+          {activeMode === "link" ? (
+            <>
+              <span className={styles.toolbarLabel}>Transitions</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={tool === "transition" ? "primary" : "ghost"}
+                  onClick={() => switchTool("transition")}
+                  data-testid="tool-transition"
+                >
+                  Link transition <Badge>1</Badge>
+                </Button>
+              </div>
+              {tool === "transition" ? (
           <>
             {otherMaps.length === 0 ? (
               <p className={styles.hint}>
@@ -2361,7 +3045,7 @@ export function MapEditor({
             onClick={() => switchTool("concealed-pit")}
             data-testid="tool-concealed-pit"
           >
-            Hide a pit
+            Hide a pit <Badge>2</Badge>
           </Button>
         </div>
         {tool === "concealed-pit" ? (
@@ -2446,193 +3130,141 @@ export function MapEditor({
             ) : null}
           </>
         ) : null}
-        <span className={styles.toolbarLabel}>Light sources</span>
-        <div className={styles.toolRow}>
-          <Button
-            size="sm"
-            variant={tool === "light-source" ? "primary" : "ghost"}
-            onClick={() => switchTool("light-source")}
-            data-testid="tool-light-source"
-          >
-            Place lights
-          </Button>
-        </div>
-        {tool === "light-source" ? (
-          <>
-            {editingLightId === null ? (
-              <>
-                <Select
-                  label="Attach to"
-                  value={lightAnchorKind}
-                  onChange={(event) => {
-                    setLightAnchorKind(event.target.value as "cell" | "object" | "token");
-                    setLightCell(null);
-                    setLightError(null);
-                  }}
-                  disabled={lightBusy}
-                  data-testid="light-anchor-kind"
-                >
-                  <option value="cell">A fixed cell</option>
-                  <option value="object">A placed object (moves with it)</option>
-                  <option value="token">A token (moves with its carrier)</option>
-                </Select>
-                {lightAnchorKind === "cell" ? (
-                  lightCell ? (
-                    <span className={styles.selectedMeta} data-testid="light-cell-label">
-                      Anchor cell ({lightCell.x},{lightCell.y})
-                    </span>
-                  ) : (
-                    <p className={styles.hint}>Click the cell the light sits on.</p>
-                  )
-                ) : lightAnchorKind === "object" ? (
-                  <Select
-                    label="Object"
-                    value={lightObjectId}
-                    onChange={(event) => setLightObjectId(event.target.value)}
-                    disabled={lightBusy}
-                    data-testid="light-anchor-object"
-                  >
-                    <option value="">Choose an object…</option>
-                    {objects.map((object) => (
-                      <option key={object.id} value={object.id}>
-                        {object.asset.name} · ({object.x},{object.y})
-                      </option>
-                    ))}
-                  </Select>
-                ) : initialTokens.length === 0 ? (
-                  <p className={styles.hint}>
-                    No tokens are placed on this map yet — place one from the Game Room first.
-                  </p>
-                ) : (
-                  <Select
-                    label="Token"
-                    value={lightTokenId}
-                    onChange={(event) => setLightTokenId(event.target.value)}
-                    disabled={lightBusy}
-                    data-testid="light-anchor-token"
-                  >
-                    <option value="">Choose a token…</option>
-                    {initialTokens.map((token) => (
-                      <option key={token.id} value={token.id}>
-                        {tokenLabel(token)} · ({token.x},{token.y})
-                      </option>
-                    ))}
-                  </Select>
-                )}
-              </>
-            ) : (
-              <span className={styles.selectedMeta} data-testid="light-editing-label">
-                Editing the light at {describeLightAnchor(
-                  lightSources.find((light) => light.id === editingLightId)!
-                )}
-              </span>
-            )}
-            <TextInput
-              label="Radius (feet)"
-              type="number"
-              min={5}
-              step={5}
-              value={lightRadius}
-              onChange={(event) => setLightRadius(event.target.value)}
-              disabled={lightBusy}
-              data-testid="light-radius"
-            />
-            <div className={styles.toolRow}>
-              <Button
-                size="sm"
-                variant={lightBrightness === "bright" ? "accent" : "ghost"}
-                onClick={() => setLightBrightness("bright")}
-                disabled={lightBusy}
-                data-testid="light-brightness-bright"
-              >
-                Bright
-              </Button>
-              <Button
-                size="sm"
-                variant={lightBrightness === "dim" ? "accent" : "ghost"}
-                onClick={() => setLightBrightness("dim")}
-                disabled={lightBusy}
-                data-testid="light-brightness-dim"
-              >
-                Dim
-              </Button>
-            </div>
-            <div className={styles.toolRow}>
-              {editingLightId === null ? (
+            </>
+          ) : null}
+
+          {activeMode === "region" ? (
+            <>
+              <span className={styles.toolbarLabel}>Fill</span>
+              <div className={styles.toolRow}>
                 <Button
                   size="sm"
-                  variant="teal"
-                  disabled={lightBusy || !lightRadiusValid || !lightAnchorValid}
-                  onClick={() => void handleCreateLightSource()}
-                  data-testid="create-light-source"
+                  variant={tool === "fill" ? "primary" : "ghost"}
+                  onClick={() => switchTool("fill")}
+                  data-testid="tool-fill"
                 >
-                  {lightBusy ? "Placing…" : "Place light"}
+                  Fill region <Badge>1</Badge>
                 </Button>
-              ) : (
-                <>
-                  <Button
-                    size="sm"
-                    variant="teal"
-                    disabled={lightBusy || !lightRadiusValid}
-                    onClick={() => void handleUpdateLightSource()}
-                    data-testid="update-light-source"
-                  >
-                    {lightBusy ? "Saving…" : "Save light"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={lightBusy}
-                    onClick={resetLightForm}
-                    data-testid="cancel-light-edit"
-                  >
-                    Cancel
-                  </Button>
-                </>
-              )}
-            </div>
-            {lightSources.length > 0 ? (
-              <div data-testid="light-source-list">
-                {lightSources.map((light) => (
-                  <div key={light.id} className={styles.toolRow} data-testid={`light-source-${light.id}`}>
-                    <span className={styles.selectedMeta}>
-                      {light.brightness === "bright" ? "Bright" : "Dim"} · {light.radius_feet} ft ·{" "}
-                      {describeLightAnchor(light)}
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={lightBusy}
-                      onClick={() => startEditingLight(light)}
-                      data-testid={`edit-light-source-${light.id}`}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      disabled={lightBusy}
-                      onClick={() => void handleRemoveLightSource(light.id)}
-                      data-testid={`remove-light-source-${light.id}`}
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                ))}
               </div>
-            ) : (
-              <p className={styles.hint}>
-                No lights yet — lighting data is stored now; the table renders vision from it in a
-                later prompt.
-              </p>
-            )}
-            {lightError ? (
-              <p role="alert" className={styles.errorText} data-testid="light-source-error">
-                {lightError}
-              </p>
-            ) : null}
-          </>
-        ) : null}
+              {tool === "fill" ? (
+                region ? (
+                  <>
+                    <span className={styles.selectedMeta} data-testid="area-region-label">
+                      Region {region.width}×{region.height} at ({region.x},{region.y})
+                    </span>
+                    <div className={styles.toolRow}>
+                      <Button
+                        size="sm"
+                        variant={fillAxis === "elevation" ? "accent" : "ghost"}
+                        onClick={() => setFillAxis("elevation")}
+                        data-testid="fill-axis-elevation"
+                      >
+                        Elevation
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={fillAxis === "pit" ? "accent" : "ghost"}
+                        onClick={() => setFillAxis("pit")}
+                        data-testid="fill-axis-pit"
+                      >
+                        Pit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={fillAxis === "terrain" ? "accent" : "ghost"}
+                        onClick={() => setFillAxis("terrain")}
+                        data-testid="fill-axis-terrain"
+                      >
+                        Terrain
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={fillAxis === "light" ? "accent" : "ghost"}
+                        onClick={() => setFillAxis("light")}
+                        data-testid="fill-axis-light"
+                      >
+                        Light
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={fillAxis === "ground" ? "accent" : "ghost"}
+                        onClick={() => setFillAxis("ground")}
+                        data-testid="fill-axis-ground"
+                      >
+                        Ground
+                      </Button>
+                    </div>
+                    {/* Elevation is the one genuinely new (not reused)
+                        sub-control this feature needs — a fill has no
+                        per-cell click to read a raise/lower direction from
+                        the way a live click's mouse button provides. */}
+                    {fillAxis === "elevation" ? (
+                      <div className={styles.toolRow}>
+                        <Button
+                          size="sm"
+                          variant={fillElevationDirection === "raise" ? "accent" : "ghost"}
+                          onClick={() => setFillElevationDirection("raise")}
+                          data-testid="fill-elevation-raise"
+                        >
+                          Raise
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={fillElevationDirection === "lower" ? "accent" : "ghost"}
+                          onClick={() => setFillElevationDirection("lower")}
+                          data-testid="fill-elevation-lower"
+                        >
+                          Lower
+                        </Button>
+                      </div>
+                    ) : null}
+                    {/* Every other axis reuses the EXACT SAME brush-selector
+                        buttons (same testids, same setBrush/setLightBrush/
+                        setGroundBrush state) Sculpt/Paint already render —
+                        literally the same rows, re-rendered here. */}
+                    {fillAxis === "terrain" ? (
+                      <div className={styles.toolRow}>{renderTerrainBrushRow()}</div>
+                    ) : null}
+                    {fillAxis === "light" ? (
+                      <div className={styles.toolRow}>{renderLightBrushRow()}</div>
+                    ) : null}
+                    {fillAxis === "ground" ? (
+                      <>
+                        <div className={styles.toolRow}>{renderGroundBrushRow()}</div>
+                        {groundBrush === "water" ? renderWaterFlowRow() : null}
+                      </>
+                    ) : null}
+                    <div className={styles.toolRow}>
+                      <Button
+                        size="sm"
+                        variant="teal"
+                        disabled={Boolean(preview)}
+                        onClick={handleFillRegion}
+                        data-testid="fill-region-button"
+                      >
+                        Fill {regionCellCount} {regionCellCount === 1 ? "cell" : "cells"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setRegion(null)}
+                        data-testid="clear-region"
+                      >
+                        Clear region
+                      </Button>
+                    </div>
+                    <p className={styles.hint}>
+                      Applies immediately to every cell in the region, in one undo step. The
+                      region stays selected afterward — pick another axis and fill again on the
+                      same rectangle, or clear it to drag a new one.
+                    </p>
+                  </>
+                ) : (
+                  <p className={styles.hint}>
+                    Drag across the grid to select the rectangular region to fill.
+                  </p>
+                )
+              ) : null}
         {aiEnabled ? (
           <>
             <span className={styles.toolbarLabel}>AI</span>
@@ -2643,7 +3275,7 @@ export function MapEditor({
                 onClick={() => switchTool("generate")}
                 data-testid="tool-generate"
               >
-                Generate area
+                Generate area <Badge>2</Badge>
               </Button>
             </div>
             {tool === "generate" && !preview ? (
@@ -2706,110 +3338,32 @@ export function MapEditor({
             ) : null}
           </>
         ) : null}
-        <span className={styles.toolbarLabel}>Reference image</span>
-        {referenceRef ? (
-          <>
-            <div className={styles.toolRow}>
-              <TextInput
-                label="Offset X"
-                type="number"
-                step={0.5}
-                value={referenceX}
-                onChange={(event) => setReferenceX(event.target.value)}
-                className={styles.referenceField}
-                data-testid="reference-offset-x"
-              />
-              <TextInput
-                label="Offset Y"
-                type="number"
-                step={0.5}
-                value={referenceY}
-                onChange={(event) => setReferenceY(event.target.value)}
-                className={styles.referenceField}
-                data-testid="reference-offset-y"
-              />
-              <TextInput
-                label="Scale"
-                type="number"
-                step={0.1}
-                min={0.1}
-                value={referenceScale}
-                onChange={(event) => setReferenceScale(event.target.value)}
-                className={styles.referenceField}
-                data-testid="reference-scale"
-              />
-            </div>
-            <div className={styles.toolRow}>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={referenceBusy}
-                onClick={() => referenceFileInputRef.current?.click()}
-                data-testid="reference-replace"
-              >
-                {referenceBusy ? "Uploading…" : "Replace image"}
-              </Button>
-              <Button
-                size="sm"
-                variant="danger"
-                disabled={referenceBusy}
-                onClick={() => void handleReferenceRemove()}
-                data-testid="reference-remove"
-              >
-                Remove
-              </Button>
-            </div>
-            <p className={styles.hint}>
-              Guide art under the grid — offsets in cells from the grid&apos;s center. Only you see
-              it; it never renders on the live table.
+            </>
+          ) : null}
+
+          {/* Global errors stay reachable regardless of the active mode —
+              undo/redo and Save are header actions available from any
+              mode, so a failure of either shouldn't only surface in
+              whichever mode happened to be active when it occurred. */}
+          {historyError ? (
+            <p role="alert" className={styles.errorText} data-testid="history-error">
+              {historyError}
             </p>
-          </>
-        ) : (
-          <>
-            <div className={styles.toolRow}>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={referenceBusy}
-                onClick={() => referenceFileInputRef.current?.click()}
-                data-testid="reference-upload"
-              >
-                {referenceBusy ? "Uploading…" : "Upload image"}
-              </Button>
-            </div>
-            <p className={styles.hint}>
-              Sculpt over existing battle-map art — PNG, JPEG, or WebP, up to 10MB.
+          ) : null}
+          {error ? (
+            <p role="alert" className={styles.errorText} data-testid="save-error">
+              {error}
             </p>
-          </>
-        )}
-        <input
-          ref={referenceFileInputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          aria-label="Upload a reference image"
-          className={styles.hiddenFileInput}
-          disabled={referenceBusy}
-          onChange={(event) => void handleReferenceUpload(event.target.files)}
-          data-testid="reference-file-input"
-        />
-        {referenceError ? (
-          <p role="alert" className={styles.errorText} data-testid="reference-error">
-            {referenceError}
-          </p>
-        ) : null}
-        <p className={styles.hint}>
+          ) : null}
+        </div>
+       </div>
+
+        {/* The footer hint sits OUTSIDE the scrolling context panel, like
+            the mode rail — always reachable regardless of how tall the
+            active mode's content gets (§6). */}
+        <p className={styles.footerHint}>
           Left click or drag applies the tool · right-drag orbits · scroll zooms · middle-drag pans
         </p>
-        {historyError ? (
-          <p role="alert" className={styles.errorText} data-testid="history-error">
-            {historyError}
-          </p>
-        ) : null}
-        {error ? (
-          <p role="alert" className={styles.errorText} data-testid="save-error">
-            {error}
-          </p>
-        ) : null}
       </div>
     </div>
   );

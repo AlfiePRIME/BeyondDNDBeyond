@@ -466,6 +466,9 @@ try {
 
   const editorPage = await dmContext.newPage();
   await loadEditor(editorPage, mapEditorId);
+  // Map editor toolbar redesign: Object now lives in Place mode's context
+  // panel, not the old always-mounted flat toolbar.
+  await editorPage.click('[data-testid="mode-place"]');
   await editorPage.click('[data-testid="tool-object"]');
   check(
     "the object palette offers a Bridge card",

@@ -10,7 +10,28 @@ import {
   parseCellKey,
   rowsForSave,
   type CellState,
+  type SculptTool,
 } from "./cellGrid";
+
+// Map editor toolbar redesign (docs/design/map-editor-toolbar-redesign.md
+// §7): "fill" (Region mode's batch-apply tool, sharing the region-drag
+// mechanic with "generate") must be excluded from SculptTool for the exact
+// reason "generate" already is — its drag defines a selection rectangle,
+// not a per-cell edit, so applyTool must never be called with either as the
+// sculpt action. A type-only check: if either were ever accidentally
+// re-admitted to SculptTool, the `false` branch below would make the
+// `true` assignment a compile error, so `yarn tsc --noEmit` — not just this
+// test's runtime assertions — is what actually enforces this.
+describe("SculptTool exclusions", () => {
+  it("excludes \"fill\", matching the existing \"generate\" exclusion", () => {
+    type FillExcluded = "fill" extends SculptTool ? false : true;
+    type GenerateExcluded = "generate" extends SculptTool ? false : true;
+    const fillExcluded: FillExcluded = true;
+    const generateExcluded: GenerateExcluded = true;
+    expect(fillExcluded).toBe(true);
+    expect(generateExcluded).toBe(true);
+  });
+});
 
 describe("applyTool", () => {
   it("raise increments elevation one step at a time", () => {

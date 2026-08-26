@@ -183,11 +183,28 @@ function cellPoint(cells, elevation, terrain) {
   return cells.find((c) => c.elevation === elevation && c.terrain_type === terrain) ?? null;
 }
 
+// Map editor toolbar redesign: Grid size now lives in the "Map" utility
+// drawer (closed by default) instead of the old always-mounted flat
+// toolbar. `handleGrowGrid`'s own full `window.location.reload()` means the
+// drawer is closed again after every grow — opens it (a no-op if it's
+// already open, checked first so this never just TOGGLES it shut on a
+// later poll of the same wait) before each attempt to read the label.
+async function openMapDrawer(page) {
+  const alreadyOpen = await page
+    .locator('[data-testid="grid-size-label"]')
+    .isVisible()
+    .catch(() => false);
+  if (!alreadyOpen) {
+    await page.click('[data-testid="map-drawer-toggle"]', { timeout: 2000 }).catch(() => {});
+  }
+}
+
 async function waitForGridLabel(page, expected, timeoutMs = 30000) {
   const start = Date.now();
   let last = null;
   while (Date.now() - start < timeoutMs) {
     try {
+      await openMapDrawer(page);
       last = await page.locator('[data-testid="grid-size-label"]').textContent({ timeout: 2000 });
       if (last && last.trim() === expected) return last.trim();
     } catch {
@@ -384,6 +401,9 @@ try {
   const page = await dmContext.newPage();
   await page.goto(`${APP_URL}/campaigns/${campaignId}/maps/${mapId}/edit`);
   await page.waitForSelector('[data-testid="editor-surface-state"]', { state: "attached", timeout: 60000 });
+  // Map editor toolbar redesign: Grid size now lives behind the "Map"
+  // utility drawer button, closed by default.
+  await openMapDrawer(page);
   check("the editor shows the starting 5×5 grid size", (await page.textContent('[data-testid="grid-size-label"]'))?.trim() === "5×5");
 
   // ── 3. Grow EAST by 2 — pure width bump, nothing moves. ──
