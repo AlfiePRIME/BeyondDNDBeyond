@@ -41,7 +41,8 @@ export type PanelId =
   | "quickActions"
   | "diceLog"
   | "handout"
-  | "diceTray";
+  | "diceTray"
+  | "hp";
 
 /**
  * Each panel's default position, expressed as a CSS anchor class
@@ -78,6 +79,12 @@ const DEFAULT_ANCHOR_CLASS: Record<PanelId, string> = {
   // genuinely separate, independently drag-repositionable panel so growing
   // ITS content never grows diceLog's own already-tuned footprint.
   diceTray: styles.anchorBottomCenterHigh,
+  // Freeform combat mode's HP self-edit panel — stacked directly BELOW
+  // anchorTopRight (handout), the anchorTopCenterLow precedent (a plain,
+  // independent calc() using handout's own real max-height,
+  // room.module.css's .handoutPanel, so the two panels' default positions
+  // never overlap).
+  hp: styles.anchorTopRightLow,
 };
 
 /**

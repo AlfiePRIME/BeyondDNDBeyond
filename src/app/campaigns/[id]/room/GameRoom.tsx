@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import {
   addCombatant,
+  addFreeformCombatant,
   advanceTurn,
   applyCondition,
   applyExhaustionDelta,
@@ -64,6 +65,7 @@ import {
   subscribeToProfileChanges,
   transitionMapToken,
   triggerMapObject,
+  updateCharacter,
   updateMonsterStatBlock,
   uploadHandoutFile,
   upsertMapCells,
@@ -166,6 +168,7 @@ import { DmBook } from "./DmBook";
 import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
+import { HpPanel } from "./HpPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
 import { TokenPanel, type TokenArm } from "./TokenPanel";
 import styles from "./room.module.css";
@@ -2655,6 +2658,60 @@ export function GameRoom({
     [runCombatAction]
   );
 
+  // Freeform mode's lightweight quick-add (add_freeform_combatant, 0051):
+  // a named combatant with no map token/character/stat block, seated into
+  // the active encounter. Shares CombatPanel's own busy/error surface —
+  // it's rendered inside that panel — through the same refresh-and-poke
+  // runCombatAction every other combat mutation here uses. The RPC itself
+  // re-checks DM-only and Freeform-only, so a stale/bypassed client call
+  // still fails cleanly server-side.
+  const handleAddFreeformCombatant = useCallback(
+    (name: string) => {
+      const encounterId = combat?.encounter.id;
+      if (!encounterId) return;
+      void runCombatAction(async (supabase) => {
+        await addFreeformCombatant(supabase, encounterId, name);
+      }, "Could not add that combatant.");
+    },
+    [combat, runCombatAction]
+  );
+
+  // Freeform mode's direct "edit my current HP" control (HpPanel below) —
+  // the DM's stated table model of a player typing their own new HP after
+  // narrated damage/healing, rather than a delta applied through
+  // apply_hp_delta. Writes current_hp DIRECTLY via updateCharacter: the
+  // characters UPDATE RLS (0008, owner or campaign DM) already allows this
+  // for a player's own row with no new grant, and the
+  // characters_current_hp_in_range CHECK (0028) is the same [0, max_hp]
+  // backstop apply_hp_delta relies on. Its own independent busy/error
+  // state — deliberately NOT runCombatAction's — since HpPanel is its own
+  // panel, not a CombatPanel control, and must work with no active combat
+  // at all (a player hurt between fights). Still rides the same refresh +
+  // COMBAT_EVENT poke so every other open client's character rows (and any
+  // active combat panel) update immediately, exactly like handleApplyHp.
+  const [hpPanelBusy, setHpPanelBusy] = useState(false);
+  const [hpPanelError, setHpPanelError] = useState<string | null>(null);
+  const handleSetOwnHp = useCallback(
+    (character: Character, value: number) => {
+      if (hpPanelBusy) return;
+      setHpPanelBusy(true);
+      setHpPanelError(null);
+      void (async () => {
+        try {
+          const supabase = createBrowserSupabaseClient();
+          await updateCharacter(supabase, character.id, { current_hp: value });
+          await refreshCombat(supabase);
+          await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+        } catch (err) {
+          setHpPanelError(errorMessage(err) ?? "Could not update your HP.");
+        } finally {
+          setHpPanelBusy(false);
+        }
+      })();
+    },
+    [hpPanelBusy, campaignId, refreshCombat]
+  );
+
   // Monster stat-block management (Prompt 61) — DM-only surface; 0038's
   // RLS is the real gate underneath. Each mutation refetches the list (the
   // ordering lives server-side) rather than hand-splicing sorted state.
@@ -3352,7 +3409,10 @@ export function GameRoom({
         .map((row) => row.hider_combatant_id)
     );
     for (const combatant of combat.combatants) {
-      if (hiderIds.has(combatant.id)) hidden.add(combatant.token_id);
+      // A Freeform ad-hoc combatant (token_id null — no map presence at
+      // all) has no token to suppress; skip rather than add a null into a
+      // Set<string>.
+      if (hiderIds.has(combatant.id) && combatant.token_id) hidden.add(combatant.token_id);
     }
     return hidden;
   }, [currentUserIsDM, combat, liveMap, ownCharacterIds]);
@@ -4360,6 +4420,26 @@ export function GameRoom({
           onDeclareDisengage={handleDeclareDisengage}
           onRollHide={handleRollHide}
           onStopHiding={handleStopHiding}
+          onAddFreeformCombatant={handleAddFreeformCombatant}
+        />
+      </DraggablePanel>
+      {/* Freeform mode's direct "edit my current HP" control — its own
+          independent panel (not folded into combat/the character sheet),
+          visible right in the Game Room per the DM's stated table model:
+          the player self-reports their new HP after narrated damage or
+          healing. Freeform-gated inside HpPanel itself (returns null when
+          strict) — Strict mode's whole point is server-computed damage via
+          resolve_attack_damage, so a silent self-edit there would
+          undermine exactly what a Strict table chose the mode for. Works
+          with no active combat at all (a player hurt between fights). */}
+      <DraggablePanel panelId="hp">
+        <HpPanel
+          characters={characterRows}
+          currentUserId={currentUserId}
+          strict={economyStrict}
+          busy={hpPanelBusy}
+          error={hpPanelError}
+          onSetHp={handleSetOwnHp}
         />
       </DraggablePanel>
       {/* Pending opportunity-attack prompts (Prompt 54): visible to the
@@ -4391,6 +4471,7 @@ export function GameRoom({
           statBlocks={statBlocks}
           combat={combat}
           tokens={liveMap?.tokens ?? []}
+          strict={economyStrict}
           onRollLanded={handleRollLanded}
         />
       </DraggablePanel>

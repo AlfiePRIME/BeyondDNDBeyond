@@ -97,7 +97,12 @@ export interface CombatState {
  * such an NPC (DM-only by construction: an NPC has no owning player),
  * writing npc_current_hp via apply_npc_hp_delta instead of a character's
  * current_hp. A bare unstatted NPC still has no HP anywhere and gets no
- * control, exactly as before.
+ * control, exactly as before. As of Freeform combat mode, the DM ALSO gets
+ * a name-only quick-add form (visible only when isDM && !strict) that
+ * calls add_freeform_combatant — the lightweight path for "a goblin" or
+ * "the bandit captain" with no map token or stat block, sitting alongside
+ * (never replacing) the existing token-based add_combatant/start_combat
+ * flow that Strict tables keep using unchanged.
  */
 export function CombatPanel({
   isDM,
@@ -122,6 +127,7 @@ export function CombatPanel({
   onDeclareDisengage,
   onRollHide,
   onStopHiding,
+  onAddFreeformCombatant,
 }: {
   isDM: boolean;
   currentUserId: string;
@@ -175,11 +181,18 @@ export function CombatPanel({
   /** Deletes every hidden-from pair the combatant holds as hider — a
    * plain hider-side clearHiddenAsHider delete. */
   onStopHiding: (combatant: CombatCombatant) => void;
+  /** Freeform mode's lightweight quick-add (add_freeform_combatant): seats
+   * a named combatant with no map token, character, or stat block into the
+   * active encounter. Only ever rendered for the DM in Freeform mode — see
+   * the render guard below — but the RPC itself re-checks both, so this is
+   * a UX nicety, not the real gate. */
+  onAddFreeformCombatant: (name: string) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedCombatantId, setSelectedCombatantId] = useState<string | null>(null);
   const [hpAmounts, setHpAmounts] = useState<Record<string, string>>({});
   const [d20Mode, setD20Mode] = useState<AdvantageMode>("normal");
+  const [freeformNpcName, setFreeformNpcName] = useState("");
 
   const characterById = useMemo(
     () => new Map(characters.map((character) => [character.id, character])),
@@ -355,6 +368,42 @@ export function CombatPanel({
       <span className={styles.currentTurn} data-testid="current-turn-indicator">
         {current ? `${combatantLabel(current)}'s turn` : "No combatants"}
       </span>
+
+      {isDM && !strict ? (
+        // Freeform mode's lightweight quick-add: name alone, no map token
+        // or stat block required — the gap Strict-mode's add_combatant
+        // (token-only) and start_combat (seeded from the live map) never
+        // closed. DM-only and Freeform-only, matching add_freeform_
+        // combatant's own server-side checks.
+        <form
+          className={styles.objectHeader}
+          onSubmit={(event) => {
+            event.preventDefault();
+            const name = freeformNpcName.trim();
+            if (name === "") return;
+            onAddFreeformCombatant(name);
+            setFreeformNpcName("");
+          }}
+        >
+          <input
+            className={styles.initiativeInput}
+            placeholder="NPC name (e.g. Goblin)"
+            aria-label="Ad-hoc NPC name"
+            value={freeformNpcName}
+            onChange={(event) => setFreeformNpcName(event.target.value)}
+            data-testid="freeform-combatant-name-input"
+          />
+          <Button
+            size="sm"
+            variant="teal"
+            type="submit"
+            disabled={busy || freeformNpcName.trim() === ""}
+            data-testid="freeform-combatant-add-button"
+          >
+            Add to initiative
+          </Button>
+        </form>
+      ) : null}
 
       {current ? (
         // The live action-economy readout (Prompt 53) for the CURRENT
