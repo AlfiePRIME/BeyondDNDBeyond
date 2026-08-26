@@ -53,6 +53,26 @@ const DEFAULT_BASE_SCORES: Record<AbilityScore, string> = {
   charisma: "8",
 };
 
+// Sentinel `raceName` value for the homebrew card — never a real RACES
+// entry, never written to storage. Selecting it takes the wizard off the
+// SRD-derivation path entirely: race/subrace stay null, so every place that
+// derives from them (increases, raceStats, resolveRaceOption) naturally
+// falls back to nothing, and the homebrew-specific fields below take over.
+const HOMEBREW_RACE_OPTION = "__homebrew__";
+
+// A homebrew race starts with no racial ability bonuses (an explicit,
+// visible "0" the player edits — not a silent default) and no darkvision;
+// speed is seeded at the SRD's most common value (also this file's existing
+// fallback for an unresolved race) purely as a convenient starting point.
+const DEFAULT_HOMEBREW_ABILITY_BONUSES: Record<AbilityScore, string> = {
+  strength: "0",
+  dexterity: "0",
+  constitution: "0",
+  intelligence: "0",
+  wisdom: "0",
+  charisma: "0",
+};
+
 function formatModifier(value: number): string {
   return value >= 0 ? `+${value}` : `${value}`;
 }
@@ -64,6 +84,23 @@ function formatRange(range: SpellRange): string {
 function parseScore(raw: string): number | null {
   const value = Number(raw);
   return Number.isInteger(value) && value >= 1 && value <= 20 ? value : null;
+}
+
+// Homebrew ability bonuses are additive adjustments, not scores — no 1-20
+// clamp, and negative is allowed (a homebrew race's flaw). Unparseable
+// input blocks the step exactly like an invalid base score does, rather
+// than silently coercing to zero.
+function parseBonus(raw: string): number | null {
+  const value = Number(raw);
+  return Number.isInteger(value) ? value : null;
+}
+
+// Speed/darkvision are plain non-negative feet values. No upper bound is
+// enforced — per the brief, this is deliberately not the place to police
+// whether a homebrew number is "reasonable".
+function parseFeet(raw: string): number | null {
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 export function CharacterWizard({
@@ -81,6 +118,12 @@ export function CharacterWizard({
   const [name, setName] = useState("");
   const [raceName, setRaceName] = useState<string | null>(null);
   const [subraceName, setSubraceName] = useState("");
+  const [homebrewRaceName, setHomebrewRaceName] = useState("");
+  const [homebrewSpeed, setHomebrewSpeed] = useState("30");
+  const [homebrewDarkvision, setHomebrewDarkvision] = useState("0");
+  const [homebrewAbilityBonuses, setHomebrewAbilityBonuses] = useState<Record<AbilityScore, string>>(
+    DEFAULT_HOMEBREW_ABILITY_BONUSES
+  );
   const [className, setClassName] = useState<string | null>(null);
   const [baseScores, setBaseScores] = useState(DEFAULT_BASE_SCORES);
   const [bonusPicks, setBonusPicks] = useState<(AbilityScore | "")[]>([]);
@@ -91,6 +134,14 @@ export function CharacterWizard({
 
   const race = RACES.find((r) => r.name === raceName) ?? null;
   const subrace = race?.subraces?.find((s) => s.name === subraceName) ?? null;
+  const isHomebrewRace = raceName === HOMEBREW_RACE_OPTION;
+  // "Chosen" for a homebrew pick means a non-empty name, not a catalog
+  // match — this is the genuinely-chosen case the `!race` validation used
+  // to treat as nothing-chosen.
+  const raceChosen = isHomebrewRace ? homebrewRaceName.trim().length > 0 : Boolean(race);
+  const resolvedRaceName = isHomebrewRace
+    ? homebrewRaceName.trim()
+    : (subrace ? subrace.name : race?.name) ?? "";
   const klass = CLASSES.find((c) => c.name === className) ?? null;
   const equipment = klass ? STARTING_EQUIPMENT.find((e) => e.className === klass.name) : null;
   const isCaster = Boolean(klass?.spellcastingAbility);
@@ -117,6 +168,22 @@ export function CharacterWizard({
     return out;
   }, [baseScores]);
 
+  // A homebrew race's ability bonuses come straight from the manual fields
+  // instead of a catalog `abilityScoreIncreases` list — direct player
+  // control in place of the fixed-race derivation, applied the same way
+  // (added onto the base score) so the rest of the calc below doesn't need
+  // to know which source it came from.
+  const parsedHomebrewBonuses = useMemo(() => {
+    if (!isHomebrewRace) return null;
+    const out = {} as AbilityScores;
+    for (const ability of ABILITIES) {
+      const value = parseBonus(homebrewAbilityBonuses[ability]);
+      if (value === null) return null;
+      out[ability] = value;
+    }
+    return out;
+  }, [isHomebrewRace, homebrewAbilityBonuses]);
+
   const finalScores = useMemo(() => {
     if (!parsedBaseScores) return null;
     const out = { ...parsedBaseScores };
@@ -127,8 +194,12 @@ export function CharacterWizard({
       const pick = bonusPicks[i];
       if (pick) out[pick] += inc.amount;
     });
+    if (isHomebrewRace) {
+      if (!parsedHomebrewBonuses) return null;
+      for (const ability of ABILITIES) out[ability] += parsedHomebrewBonuses[ability];
+    }
     return out;
-  }, [parsedBaseScores, increases, choiceIncreases, bonusPicks]);
+  }, [parsedBaseScores, increases, choiceIncreases, bonusPicks, isHomebrewRace, parsedHomebrewBonuses]);
 
   const racialBonus = (ability: AbilityScore): number =>
     increases
@@ -137,7 +208,8 @@ export function CharacterWizard({
     choiceIncreases.reduce(
       (sum, inc, i) => (bonusPicks[i] === ability ? sum + inc.amount : sum),
       0
-    );
+    ) +
+    (isHomebrewRace ? parseBonus(homebrewAbilityBonuses[ability]) ?? 0 : 0);
 
   const inventory: InventoryItem[] = useMemo(() => {
     if (!equipment) return [];
@@ -156,8 +228,17 @@ export function CharacterWizard({
   // later race edits derive identical stats. Stored on the character at
   // creation.
   const raceStats = race ? resolveRaceOption(subrace ? subrace.name : race.name) : null;
-  const speed = raceStats?.speedFeet ?? 30;
-  const darkvisionFeet = raceStats?.darkvisionFeet ?? null;
+  const parsedHomebrewSpeed = parseFeet(homebrewSpeed);
+  const parsedHomebrewDarkvision = parseFeet(homebrewDarkvision);
+  // 0 ft darkvision reads as "none" (null), matching the rest of the app's
+  // convention (a matched race with no darkvision also stores null) — the
+  // field's default of "0" is the sensible off-state, not a silent zero.
+  const speed = isHomebrewRace ? parsedHomebrewSpeed ?? 30 : raceStats?.speedFeet ?? 30;
+  const darkvisionFeet = isHomebrewRace
+    ? parsedHomebrewDarkvision && parsedHomebrewDarkvision > 0
+      ? parsedHomebrewDarkvision
+      : null
+    : raceStats?.darkvisionFeet ?? null;
   const maxHp = klass && finalScores ? levelOneHitPoints(klass.hitDie, finalScores.constitution) : null;
   const armorClass = finalScores ? 10 + abilityModifier(finalScores.dexterity) : null;
 
@@ -198,6 +279,15 @@ export function CharacterWizard({
   function stepIsValid(index: number): boolean {
     switch (index) {
       case 0:
+        if (isHomebrewRace) {
+          return Boolean(
+            name.trim() &&
+              klass &&
+              homebrewRaceName.trim() &&
+              parsedHomebrewSpeed !== null &&
+              parsedHomebrewDarkvision !== null
+          );
+        }
         return Boolean(
           name.trim() && race && klass && (!race.subraces?.length || subrace)
         );
@@ -211,7 +301,12 @@ export function CharacterWizard({
   }
 
   async function handleCreate() {
-    if (!race || !klass || !finalScores || maxHp === null || armorClass === null) return;
+    // Computed locally (not from the render-scope resolvedRaceName) — a
+    // value this closure shares with JSX render output while also
+    // depending on the increases-memo's race/subrace inputs defeats the
+    // React Compiler's manual-memoization preservation check.
+    const raceToSave = isHomebrewRace ? homebrewRaceName.trim() : (subrace ? subrace.name : race?.name);
+    if (!raceToSave || !klass || !finalScores || maxHp === null || armorClass === null) return;
     setSaving(true);
     setSaveError(null);
 
@@ -221,7 +316,7 @@ export function CharacterWizard({
         campaign_id: campaignId,
         owner_id: userId,
         name: name.trim(),
-        race: subrace ? subrace.name : race.name,
+        race: raceToSave,
         class: klass.name,
         level: 1,
         ...finalScores,
@@ -292,6 +387,14 @@ export function CharacterWizard({
                         onClick={() => selectRace(r.name)}
                       />
                     ))}
+                    <ChoiceCard
+                      key={HOMEBREW_RACE_OPTION}
+                      title="Homebrew / Other"
+                      meta="Custom race — set your own stats"
+                      selected={isHomebrewRace}
+                      onClick={() => selectRace(HOMEBREW_RACE_OPTION)}
+                      data-testid="wizard-race-homebrew"
+                    />
                   </div>
                   {race ? (
                     <div className={styles.detailRow}>
@@ -335,6 +438,42 @@ export function CharacterWizard({
                   </div>
                 ) : null}
 
+                {isHomebrewRace ? (
+                  <div className={styles.group}>
+                    <span className={styles.groupLabel}>Homebrew race details</span>
+                    <TextInput
+                      label="Race name"
+                      value={homebrewRaceName}
+                      onChange={(e) => setHomebrewRaceName(e.target.value)}
+                      placeholder="e.g. Warforged"
+                      required
+                      data-testid="wizard-homebrew-race-name"
+                    />
+                    <div className={styles.abilityGrid}>
+                      <TextInput
+                        label="Speed (ft)"
+                        type="number"
+                        min={0}
+                        value={homebrewSpeed}
+                        onChange={(e) => setHomebrewSpeed(e.target.value)}
+                        error={parsedHomebrewSpeed === null ? "Enter a whole number, 0 or greater" : undefined}
+                        data-testid="wizard-homebrew-speed"
+                      />
+                      <TextInput
+                        label="Darkvision (ft, 0 for none)"
+                        type="number"
+                        min={0}
+                        value={homebrewDarkvision}
+                        onChange={(e) => setHomebrewDarkvision(e.target.value)}
+                        error={
+                          parsedHomebrewDarkvision === null ? "Enter a whole number, 0 or greater" : undefined
+                        }
+                        data-testid="wizard-homebrew-darkvision"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className={styles.group}>
                   <span className={styles.groupLabel}>Class</span>
                   <div className={styles.cardGrid}>
@@ -367,11 +506,13 @@ export function CharacterWizard({
               </>
             ) : null}
 
-            {stepIndex === 1 && race && klass ? (
+            {stepIndex === 1 && raceChosen && klass ? (
               <>
                 <p className={styles.detailText}>
-                  Seeded with the standard array (15/14/13/12/10/8) — edit freely. Racial increases
-                  from {subrace ? subrace.name : race.name} are applied to the final scores.
+                  Seeded with the standard array (15/14/13/12/10/8) — edit freely.{" "}
+                  {isHomebrewRace
+                    ? "Set the ability score bonuses for your homebrew race below — they're applied to the final scores."
+                    : `Racial increases from ${resolvedRaceName} are applied to the final scores.`}
                 </p>
                 <div className={styles.abilityGrid}>
                   {ABILITIES.map((ability) => {
@@ -404,9 +545,7 @@ export function CharacterWizard({
 
                 {choiceIncreases.length > 0 ? (
                   <div className={styles.group}>
-                    <span className={styles.groupLabel}>
-                      {subrace ? subrace.name : race.name} bonus ability choices
-                    </span>
+                    <span className={styles.groupLabel}>{resolvedRaceName} bonus ability choices</span>
                     {choiceIncreases.map((inc, i) => (
                       <Select
                         key={i}
@@ -430,6 +569,33 @@ export function CharacterWizard({
                         ))}
                       </Select>
                     ))}
+                  </div>
+                ) : null}
+
+                {isHomebrewRace ? (
+                  <div className={styles.group}>
+                    <span className={styles.groupLabel}>
+                      {homebrewRaceName.trim() || "Homebrew race"} ability score increases
+                    </span>
+                    <div className={styles.abilityGrid}>
+                      {ABILITIES.map((ability) => (
+                        <TextInput
+                          key={ability}
+                          label={`${ABILITY_LABEL[ability]} bonus`}
+                          type="number"
+                          value={homebrewAbilityBonuses[ability]}
+                          onChange={(e) =>
+                            setHomebrewAbilityBonuses((b) => ({ ...b, [ability]: e.target.value }))
+                          }
+                          error={
+                            parseBonus(homebrewAbilityBonuses[ability]) === null
+                              ? "Enter a whole number"
+                              : undefined
+                          }
+                          data-testid={`wizard-homebrew-bonus-${ability}`}
+                        />
+                      ))}
+                    </div>
                   </div>
                 ) : null}
 
@@ -531,7 +697,7 @@ export function CharacterWizard({
               </>
             ) : null}
 
-            {stepIndex === reviewStepIndex && race && klass && finalScores ? (
+            {stepIndex === reviewStepIndex && raceChosen && klass && finalScores ? (
               <ul className={styles.summaryList}>
                 <li className={styles.summaryRow}>
                   <span className={styles.summaryLabel}>Name</span>
@@ -539,7 +705,9 @@ export function CharacterWizard({
                 </li>
                 <li className={styles.summaryRow}>
                   <span className={styles.summaryLabel}>Race</span>
-                  <span className={styles.summaryValue}>{subrace ? subrace.name : race.name}</span>
+                  <span className={styles.summaryValue} data-testid="wizard-summary-race">
+                    {resolvedRaceName}
+                  </span>
                 </li>
                 <li className={styles.summaryRow}>
                   <span className={styles.summaryLabel}>Class</span>
