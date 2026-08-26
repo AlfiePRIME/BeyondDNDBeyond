@@ -93,6 +93,53 @@ const LOOK_TARGET = [0, TABLE_SURFACE_Y, 0] as const;
 const FALLBACK_CAMERA_POSITION: readonly [number, number, number] = [0, 13, 10];
 
 // ---------------------------------------------------------------------------
+// Turn camera: an automatically-offered better vantage on the viewing
+// player's own combat turn (see GameTableSceneProps.turnCameraActive's own
+// doc comment for the full gating story — cameraMode/orbit-vs-seat/dismiss/
+// chair-drag deferral all live in GameRoom.tsx; this file's only job is
+// "what does the improved angle actually look like"). Keeps the exact same
+// angular direction from LOOK_TARGET the seat's own normal camera already
+// uses (seating.ts's seatAtAngle placement), so the improved view still
+// favors the player's own side of the table — just extends that same ray
+// further out (more of the tabletop fits in the same fov) and up (a more
+// top-down look, matching the brief's own "slightly higher, more top-down"
+// framing) rather than picking a fresh, unrelated vantage.
+const TURN_CAMERA_SETBACK_BONUS = 2.2;
+const TURN_CAMERA_HEIGHT_BONUS = 2.4;
+
+/**
+ * Derives the improved "your turn" camera position from a seat's own
+ * already-EFFECTIVE cameraPosition (i.e. whatever applySeatOffset already
+ * resolved it to — includes any persisted or in-progress chair-drag offset,
+ * per the project owner's explicit "derive from the actual current
+ * position, not the static default" call), never seating.ts's raw
+ * per-angle default directly. Pure function of that one point (plus the
+ * fixed LOOK_TARGET every seat's camera already looks at) so it needs no
+ * extra seat/table plumbing beyond what this file already threads through.
+ */
+function computeTurnCameraPosition(
+  seatCameraPosition: readonly [number, number, number]
+): [number, number, number] {
+  const dx = seatCameraPosition[0] - LOOK_TARGET[0];
+  const dz = seatCameraPosition[2] - LOOK_TARGET[2];
+  const horizontalDistance = Math.hypot(dx, dz);
+  // Degenerate case (camera already directly above the look target) is
+  // never actually reachable via seatAtAngle's own fixed CAMERA_SETBACK,
+  // but guarded anyway the same defensive way seating.ts's own
+  // outwardFromCenter guards a zero-distance point: no horizontal
+  // direction to extend along, so just add height.
+  if (horizontalDistance < 1e-6) {
+    return [seatCameraPosition[0], seatCameraPosition[1] + TURN_CAMERA_HEIGHT_BONUS, seatCameraPosition[2]];
+  }
+  const scale = (horizontalDistance + TURN_CAMERA_SETBACK_BONUS) / horizontalDistance;
+  return [
+    LOOK_TARGET[0] + dx * scale,
+    seatCameraPosition[1] + TURN_CAMERA_HEIGHT_BONUS,
+    LOOK_TARGET[2] + dz * scale,
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Movable chairs (drag gesture): a player may grab and drag their OWN chair
 // (never another member's, never the DM's throne — see draggableUserId
 // below) anywhere near the table arrangement, with their own seated camera
@@ -502,6 +549,30 @@ export interface GameTableSceneProps {
    * applySeatOffset's own cameraPosition translation by inference alone.
    * Not read by GameTableScene itself. */
   onOwnCameraDebug?: (position: readonly [number, number, number]) => void;
+  /** Turn camera: fires whenever THIS viewer's own chair-drag session
+   * starts or stops. Not verification-only like onOwnChairProjectedPosition/
+   * onOwnCameraDebug above — GameRoom.tsx mirrors it into its own state so
+   * it can defer showing/applying the improved "your turn" camera (or the
+   * orbit-mode offer to switch to it) until an in-progress drag actually
+   * finishes, per the project owner's confirmed "don't fight an
+   * already-in-progress drag" call. Only ever reflects the current viewer's
+   * own draggable chair — nobody else's chair can ever start a drag session
+   * on this client (draggableUserId's own single-seat restriction, above),
+   * so there's no per-user keying to do here. */
+  onChairDraggingChange?: (dragging: boolean) => void;
+  /** Turn camera: true means "the viewing player's own combat turn is
+   * active, they're in seat mode, and nothing currently suppresses it"
+   * (isDraggingChair aside — this file re-checks that itself; see
+   * turnCameraApplied's own comment below for why). GameRoom.tsx computes
+   * this whole gate itself — it alone knows whose combat turn is active,
+   * owns cameraMode, and tracks the offer/dismiss state — so this file's
+   * only remaining job is "what does the improved angle actually look
+   * like" (computeTurnCameraPosition above), derived from this seat's own
+   * EFFECTIVE cameraPosition (post chair-drag-offset), never a static
+   * default. Absent/false renders byte-for-byte this prompt's pre-existing
+   * seated camera, exactly like every other optional prop here defaults to
+   * "unchanged behavior". */
+  turnCameraActive?: boolean;
 }
 
 // Stable empty-Map default for GameTableSceneProps.seatOffsets — a fresh
@@ -555,6 +626,8 @@ export function GameTableScene({
   onChairDragEnd,
   onOwnChairProjectedPosition,
   onOwnCameraDebug,
+  onChairDraggingChange,
+  turnCameraActive = false,
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
   const { camera, gl, size } = useThree();
@@ -574,6 +647,14 @@ export function GameTableScene({
 
   const chairDragSessionRef = useRef<ChairDragSession | null>(null);
   const [isDraggingChair, setIsDraggingChair] = useState(false);
+  // Turn camera: mirrors isDraggingChair out to GameRoom.tsx (see
+  // onChairDraggingChange's own doc comment) — fires exactly on the two
+  // real transitions (drag starts, drag ends), never every render, since
+  // the effect only re-runs when isDraggingChair itself actually changes
+  // value.
+  useEffect(() => {
+    onChairDraggingChange?.(isDraggingChair);
+  }, [isDraggingChair, onChairDraggingChange]);
   // The seat currently overridden by purely LOCAL state — covers both the
   // live in-progress drag (updated every "pointermove", see the effect
   // below) and the brief window right after release before GameRoom.tsx's
@@ -697,7 +778,18 @@ export function GameTableScene({
   }, [isDraggingChair, camera, gl]);
 
   const mySeat = seats.find((seat) => seat.member.user_id === currentUserId);
-  const cameraPosition = mySeat ? mySeat.cameraPosition : FALLBACK_CAMERA_POSITION;
+  const seatCameraPosition = mySeat ? mySeat.cameraPosition : FALLBACK_CAMERA_POSITION;
+  // Turn camera: GameRoom.tsx's turnCameraActive prop already encodes the
+  // camera-mode/dismiss/drag gating (see that prop's own doc comment), but
+  // `isDraggingChair` is re-checked directly here rather than trusted
+  // solely via the onChairDraggingChange mirror above — that callback fires
+  // one render AFTER the state change lands here, so a parent reacting to
+  // it is necessarily one frame behind. Checking the authoritative local
+  // state directly instead closes that gap completely, guaranteeing the
+  // chair-drag camera-follow and the turn camera never fight even for a
+  // single frame.
+  const turnCameraApplied = turnCameraActive && cameraMode === "seat" && mySeat !== undefined && !isDraggingChair;
+  const cameraPosition = turnCameraApplied ? computeTurnCameraPosition(seatCameraPosition) : seatCameraPosition;
 
   // Verification-only: this client's own seated camera position, reported
   // whenever it genuinely changes value (not every frame regardless — a
