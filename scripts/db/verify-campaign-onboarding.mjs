@@ -40,6 +40,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
+import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const APP_URL = process.env.APP_URL ?? "http://localhost:3090";
@@ -146,7 +147,7 @@ if (!(await healthOk())) {
 const dm = await makeTestUser("dm");
 const player = await makeTestUser("player");
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
 try {
   const dmContext = await browser.newContext();
   await dmContext.addCookies(sessionCookies(dm.session));

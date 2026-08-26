@@ -40,6 +40,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
+import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PORT = 3101;
@@ -183,7 +184,7 @@ await ensureDevServer();
 
 const dm = await makeTestUser("dm");
 const player = await makeTestUser("player");
-const browser = await chromium.launch();
+const browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
 
 try {
   const campaignId = crypto.randomUUID();

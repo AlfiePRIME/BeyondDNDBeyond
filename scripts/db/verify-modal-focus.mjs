@@ -50,6 +50,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
+import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -148,7 +149,7 @@ async function makeTestUser(label) {
 await ensureDevServer();
 
 const dm = await makeTestUser("dm");
-const browser = await chromium.launch();
+const browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
 let campaignId;
 let uploadedAssetId = null;
 const mapAssetGlb = join(rootDir, "public", "assets", "presets", "chest.glb");

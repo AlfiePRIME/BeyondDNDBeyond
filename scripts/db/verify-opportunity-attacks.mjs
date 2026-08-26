@@ -50,6 +50,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
+import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
 import { createServer } from "vite";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -178,7 +179,7 @@ const rules = await vite.ssrLoadModule("/src/rules-engine/opportunityAttacks.ts"
 const dm = await makeTestUser("dm");
 const alice = await makeTestUser("alice");
 const bob = await makeTestUser("bob");
-const browser = await chromium.launch();
+const browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
 
 try {
   const campaignId = crypto.randomUUID();

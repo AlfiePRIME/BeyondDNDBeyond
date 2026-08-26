@@ -45,6 +45,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
+import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
@@ -302,6 +303,7 @@ const bob = await makeTestUser("bob");
 // entirely, not just slow it down.
 const browser = await chromium.launch({
   args: [
+    ...GPU_LAUNCH_ARGS,
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
     "--disable-background-timer-throttling",
