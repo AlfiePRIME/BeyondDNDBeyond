@@ -34,21 +34,29 @@ const nextConfig: NextConfig = {
   // exactly that (see serverExternalPackages' own comment above) — pdf.js
   // resolves its worker script, character maps (cmaps/), and non-embedded
   // font substitutes (standard_fonts/) by constructing a path/URL at
-  // runtime rather than importing them, and tesseract.js's actual OCR
-  // engine lives in the separate tesseract.js-core package, loaded the
-  // same dynamic way. The tracer silently drops all of it — confirmed
-  // directly: a built .next/standalone/node_modules/pdfjs-dist contained
-  // only legacy/build/pdf.mjs (no worker, no cmaps, no fonts, not even a
-  // package.json), and tesseract.js-core was entirely absent. This
-  // produces no build error and no obvious symptom until a real PDF
-  // exercises the missing code path at runtime (a non-embedded/unusual
-  // font or encoding for pdf.js; any OCR pass at all for tesseract.js),
-  // at which point the failure gets caught by this route's own broad
-  // try/catch and surfaces as a generic "not a valid PDF" — the actual
-  // cause is a missing runtime file, not the uploaded PDF.
+  // runtime rather than importing them, and tesseract.js spawns its OCR
+  // work in a real Node worker_thread (src/worker-script/node/index.js)
+  // that itself does a relative `require('..')` back up into the rest of
+  // the tesseract.js package tree once running — something the tracer,
+  // walking forward from createWorker's own static imports, never
+  // followed. The tracer silently drops all of this — confirmed directly:
+  // a built .next/standalone/node_modules/pdfjs-dist contained only
+  // legacy/build/pdf.mjs (no worker, no cmaps, no fonts, not even a
+  // package.json); tesseract.js-core was entirely absent; and
+  // tesseract.js/src/worker-script itself had only 1 of its real 13
+  // files. None of this produces a build error. pdfjs-dist's gap throws a
+  // catchable exception (surfacing as a generic "not a valid PDF" via this
+  // route's own broad try/catch). tesseract.js's gap is worse: the missing
+  // module crashes the newly-spawned worker THREAD before it can send its
+  // own "I'm ready" message, and that failure never propagates back to the
+  // main thread's awaited createWorker() promise at all — the request just
+  // hangs forever with near-zero CPU (a dead, waiting thread, not
+  // computation), the exact symptom this was root-caused against a real
+  // browser session, not assumed.
   outputFileTracingIncludes: {
     "/campaigns/\\[id\\]/characters/import/parse": [
       "./node_modules/pdfjs-dist/**/*",
+      "./node_modules/tesseract.js/**/*",
       "./node_modules/tesseract.js-core/**/*",
     ],
   },
