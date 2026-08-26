@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useId, useRef, type MouseEvent, type ReactNode } from "react";
 import styles from "./ui.module.css";
 
 export interface ModalProps {
@@ -24,6 +24,17 @@ export function Modal({ open, onClose, title, footer, children }: ModalProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
 
+  // useEffectEvent always sees the latest onClose without onClose being a
+  // dependency of the effect below — the effect itself should only re-run
+  // on a genuine open transition (open going false→true, or mounting
+  // already open), not whenever the caller passes a new onClose identity
+  // (e.g. an inline onClose that's recreated on every keystroke in a
+  // sibling input). Effect Events are only callable from inside an Effect,
+  // which the Escape keydown listener registered below satisfies.
+  const handleEscape = useEffectEvent(() => {
+    onClose();
+  });
+
   useEffect(() => {
     if (!open) return;
 
@@ -31,7 +42,7 @@ export function Modal({ open, onClose, title, footer, children }: ModalProps) {
     dialogRef.current?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") handleEscape();
     };
     document.addEventListener("keydown", onKeyDown);
 
@@ -43,7 +54,7 @@ export function Modal({ open, onClose, title, footer, children }: ModalProps) {
       document.body.style.overflow = previousOverflow;
       previouslyFocused?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
