@@ -37,13 +37,35 @@ const HIT_BOX: [number, number, number] = [0.66, 0.4, 0.56];
 
 // How far above the book's base the Html panel's anchor sits — well clear
 // of the open pages' peak (~0.11 at PAGE_TILT_RAD), and enough that the
-// panel (DmBook.module.css's `.book`, a deliberately modest floating card —
-// see its own doc comment) visibly hovers above the book with a gap rather
-// than centering right on top of it. That gap matters for more than looks:
-// it keeps the book's own oversized-but-still-modest hit box exposed below
-// the panel so a DM can click the physical book itself to close it again,
-// not just the panel's in-content "✕ Close" button.
-const HTML_ANCHOR_Y = 1.15;
+// panel (DmBook.module.css's `.book`, a fixed-height `min(400px, 50vh)`
+// floating card — see its own doc comment) visibly hovers above the book
+// with a gap rather than centering right on top of it. That gap matters for
+// more than looks: it keeps the book's own oversized-but-still-modest hit
+// box exposed below the panel so a DM can click the physical book itself to
+// close it again, not just the panel's in-content "✕ Close" button — AND
+// keeps the panel's own tab row from riding up above the viewport's top
+// edge, where clicking a tab would stop being possible at all (Playwright
+// treats an element outside the viewport as un-actionable; a real user
+// would just be unable to reach it with the mouse either).
+//
+// Re-tuned from 1.15 for the doubled table's re-tuned, further-back seated
+// camera (seating.ts's CAMERA_SETBACK/CAMERA_EYE_HEIGHT): the book's
+// on-screen vertical position barely moves with that camera change (it sits
+// close enough to the look-target that the two roughly cancel out), but the
+// available on-screen room ABOVE the book — where this fixed-360px panel
+// has to fit, between the viewport's top edge and the book's own hit box —
+// did not grow to match, and the original 1.15 already left barely any
+// margin on either side (confirmed by measuring the ORIGINAL, single-table
+// geometry directly: its tab row's center already sat a hair above the
+// viewport's top edge, and its click clearance below the panel was real but
+// modest). This value is the empirically-measured midpoint that splits the
+// (unchanged, still narrow) total slack evenly between "tab row stays
+// clearly on-screen" and "panel stays clearly clear of the book's own hit
+// box" — verified directly via real getBoundingClientRect() measurements at
+// this exact camera/book configuration, and then end to end against
+// verify-dm-book.mjs's full open → tab-switch → close → reopen → close
+// flow, not just a single click.
+const HTML_ANCHOR_Y = 1.55;
 
 const labelTextureCache = new Map<string, CanvasTexture>();
 // Same cached 2D-canvas-texture technique as DiceTumble's resultBadgeTexture

@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { computeSeatLayout, type SeatMember } from "@/scene-3d";
-import { TABLE_TOP } from "./table";
+import { computeSeatLayout, seatEllipseSemiAxes, type SeatMember } from "@/scene-3d";
+import { COMBINED_TABLE_TOP, TABLE_TOP } from "./table";
 
-// Imports the real constant rather than a hardcoded copy so this test can
-// never silently drift from table.ts's actual dimensions.
+// Imports the real constants rather than hardcoded copies so these tests can
+// never silently drift from table.ts's actual dimensions. TABLE is the
+// single physical table's own footprint (still useful below to prove seats
+// land OUTSIDE any one table, not just the combined pair); COMBINED_TABLE is
+// the full two-table footprint computeSeatLayout now fits its ellipse
+// around by default.
 const TABLE = TABLE_TOP;
+const COMBINED_TABLE = COMBINED_TABLE_TOP;
 
 // Mirrors seating.ts's own private FIRST_SEAT_ANGLE — not exported, so the
 // DM-placement tests below re-derive the "closest to opposite" seat index
@@ -122,6 +127,44 @@ describe("computeSeatLayout", () => {
         const insideTable = Math.abs(x) < TABLE.width / 2 && Math.abs(z) < TABLE.depth / 2;
         expect(insideTable).toBe(false);
       }
+    }
+  });
+
+  // Prompt: doubling the table along its long edge. computeSeatLayout's
+  // default `table` param is now COMBINED_TABLE_TOP (the two-table
+  // footprint), not a single table's — these two tests are the direct
+  // acceptance check that the ellipse actually fits the FULL combined
+  // surface by default, not just a single table's worth of it.
+  it("keeps seats outside the COMBINED two-table footprint by default (no explicit table arg)", () => {
+    for (const count of [1, 2, 3, 5, 8]) {
+      for (const seat of computeSeatLayout(makeMembers(count))) {
+        const [x, , z] = seat.position;
+        const insideCombinedTable =
+          Math.abs(x) < COMBINED_TABLE.width / 2 && Math.abs(z) < COMBINED_TABLE.depth / 2;
+        expect(insideCombinedTable).toBe(false);
+      }
+    }
+  });
+
+  it("spreads seats across the full combined perimeter, not clustered as if only one table existed", () => {
+    // A seat computed against the default (combined) footprint must sit
+    // meaningfully further from center, on the now-much-longer depth axis,
+    // than the SAME seat computed against a single table's footprint would
+    // — proving the ellipse genuinely grew with the second table rather
+    // than silently still fitting just the first one.
+    const { semiZ: combinedSemiZ } = seatEllipseSemiAxes(COMBINED_TABLE);
+    const { semiZ: singleSemiZ } = seatEllipseSemiAxes(TABLE);
+    expect(combinedSemiZ).toBeGreaterThan(singleSemiZ * 1.5);
+
+    // n=2's two seats sit exactly on the depth axis (FIRST_SEAT_ANGLE is
+    // π/2, and computeSeatLayout's DM placement puts the other seat exactly
+    // opposite it at n=2) — the axis combined depth actually stretched
+    // along — so their distance from center should match combinedSemiZ
+    // exactly, not the single table's much shorter one.
+    const seats = computeSeatLayout(makeMembers(2));
+    for (const seat of seats) {
+      const dist = Math.hypot(seat.position[0], seat.position[2]);
+      expect(dist).toBeCloseTo(combinedSemiZ, 5);
     }
   });
 

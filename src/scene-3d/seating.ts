@@ -1,4 +1,4 @@
-import { TABLE_TOP } from "./table";
+import { COMBINED_TABLE_TOP } from "./table";
 
 /**
  * Structurally matches data-access's CampaignMember so callers can pass that
@@ -43,8 +43,15 @@ export interface Seat {
 const SEAT_MARGIN = 0.4;
 // Eye point sits above and behind the stool — a strict seated eye height
 // buries the view in the tabletop and hides everyone else's seat markers.
-const CAMERA_SETBACK = 1.6;
-const CAMERA_EYE_HEIGHT = 3.4;
+// Re-tuned up from 1.6/3.4 for the two-table combined footprint (table.ts's
+// COMBINED_TABLE_TOP, this function's new default `table`): the ellipse's
+// depth-axis half-extent nearly doubled (old single-table depth 2.1 → the
+// combined 4.2), so every seat sits noticeably further from center than
+// before. A taller, further-back eye point keeps the WHOLE combined surface
+// comfortably inside the seated camera's 50° FOV from any seat, the same
+// way the old values kept the smaller single table comfortably framed.
+const CAMERA_SETBACK = 2.1;
+const CAMERA_EYE_HEIGHT = 4.3;
 // Seat 0 (the campaign creator, first in joined_at order) sits on the near
 // (+z) side, matching the direction Prompt 19's fixed camera looked from.
 const FIRST_SEAT_ANGLE = Math.PI / 2;
@@ -90,15 +97,31 @@ function placeDmAtNorthSlot(members: readonly SeatMember[]): readonly SeatMember
   return reordered;
 }
 
-export function computeSeatLayout(
-  members: readonly SeatMember[],
-  table: { width: number; depth: number } = TABLE_TOP
-): Seat[] {
+/**
+ * Half-extents of the seating ellipse for a given table footprint — the
+ * same √2-through-the-corners fit computeSeatLayout uses internally,
+ * exported so any other system that needs to know exactly how far out a
+ * seat/chair can land (the directional light's shadow-camera frustum in
+ * GameTableScene.tsx) stays derived from the one real fit formula instead
+ * of a hand-copied guess that could silently drift from it.
+ */
+export function seatEllipseSemiAxes(
+  table: { width: number; depth: number } = COMBINED_TABLE_TOP
+): { semiX: number; semiZ: number } {
   // √2 × the half-dimensions is the ellipse through the rectangle's corners
   // — a plain half-dimension ellipse dips inside the tabletop near the
   // corners, clipping seats through it.
-  const semiX = (table.width / 2) * Math.SQRT2 + SEAT_MARGIN;
-  const semiZ = (table.depth / 2) * Math.SQRT2 + SEAT_MARGIN;
+  return {
+    semiX: (table.width / 2) * Math.SQRT2 + SEAT_MARGIN,
+    semiZ: (table.depth / 2) * Math.SQRT2 + SEAT_MARGIN,
+  };
+}
+
+export function computeSeatLayout(
+  members: readonly SeatMember[],
+  table: { width: number; depth: number } = COMBINED_TABLE_TOP
+): Seat[] {
+  const { semiX, semiZ } = seatEllipseSemiAxes(table);
 
   const ordered = placeDmAtNorthSlot(members);
 
