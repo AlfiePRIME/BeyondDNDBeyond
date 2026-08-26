@@ -34,7 +34,8 @@ import {
   listMapCells,
   listMapObjects,
   listMapTokens,
-  listMapTransitions,
+  listMapTokensForCampaign,
+  listMapTransitionsForCampaign,
   listMonsterStatBlocks,
   listSeenCells,
   moveCombatToken,
@@ -547,6 +548,8 @@ export function GameRoom({
   currentUserIsDM,
   currentUserDisplayName,
   initialLiveMap,
+  initialCampaignLiveMapId,
+  initialCampaignTokens,
   availableMaps,
   assets,
   characters,
@@ -570,7 +573,30 @@ export function GameRoom({
   currentUserId: string;
   currentUserIsDM: boolean;
   currentUserDisplayName: string | null;
+  /** The FULL bundle for whichever map THIS viewer should start on (0046) —
+   * their own effective map, computed server-side the identical way the
+   * client re-derives it (see ownTokenMapId/desiredMapId below): wherever
+   * their own character's token currently is, falling back to the
+   * campaign's shared default (initialCampaignLiveMapId) when they have
+   * none. For the DM this is always the shared default itself — their own
+   * view starts there, same as always, and is independently switchable
+   * from then on. */
   initialLiveMap: LiveMapData | null;
+  /** The raw campaigns.live_map column (0046) — distinct from
+   * initialLiveMap above (which map's bundle THIS viewer starts on): this
+   * is the campaign-wide SHARED DEFAULT every token-less member still
+   * follows live, and what the DM's own view starts on before any local
+   * preview/switch. */
+  initialCampaignLiveMapId: string | null;
+  /** Every map_token this viewer's own RLS lets them read, campaign-wide —
+   * not scoped to one single map's bundle like initialLiveMap. For a
+   * player, this always includes wherever their own character's token
+   * currently sits (0046's extended can_read_map), which is what lets
+   * ownTokenMapId below resolve correctly even when that's a map other
+   * than initialCampaignLiveMapId. For the DM, every token on every map in
+   * the campaign — livePlayerMapIds below is the map-picker's "which maps
+   * are live" indicator computed from this. */
+  initialCampaignTokens: MapToken[];
   availableMaps: CampaignMap[];
   assets: PaletteAsset[];
   /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
@@ -1031,6 +1057,56 @@ export function GameRoom({
   // stack, not clobber.
   const liveMapRef = useRef(liveMap);
 
+  // ---------------------------------------------------------------------
+  // Per-viewer map transitions (0046): what used to be one single "the
+  // live map" concept splits into three independent pieces here — see each
+  // one's own comment. `liveMap`/`liveMapRef` above stay exactly what they
+  // always were: whichever map's FULL bundle THIS client currently has
+  // loaded and renders from. Nothing downstream of `liveMap` (vision
+  // masking, seen-cells memory, the table's own render model, the combat
+  // highlight sweep, all still reading `liveMap`/`liveMapId` exactly as
+  // before) needed to change at all — they were already written as
+  // per-CLIENT state; only what fed `liveMap` needed to stop being one
+  // campaign-wide broadcast.
+  // ---------------------------------------------------------------------
+
+  // Every map_token this viewer's own RLS currently lets them read,
+  // CAMPAIGN-WIDE — not scoped to whichever single map's bundle `liveMap`
+  // above holds. Two uses further down: ownTokenMapId (a player's own
+  // effective current map, wherever their own character's token actually
+  // is) and livePlayerMapIds (the DM's own map-picker "which maps are
+  // live" indicator). Kept live by the SAME applyTokenChange every token
+  // mutation/broadcast already calls below — one function updating both
+  // this and the current-map cache from the exact same event, never a
+  // second parallel fetch — plus a dedicated reconnect refetch (a dropped
+  // TOKEN_EVENT is gone from the wire, the same "DB is the source of truth
+  // after a drop" reasoning as every other feed on this channel).
+  const campaignTokensRef = useRef<MapToken[]>(initialCampaignTokens);
+  const [campaignTokensState, setCampaignTokensState] = useState<MapToken[]>(initialCampaignTokens);
+
+  // campaigns.live_map itself. Before this prompt this WAS "the table's
+  // one current map", full stop; now it's just the campaign-wide SHARED
+  // DEFAULT — a member with no token of their own anywhere still follows
+  // this live, exactly like every viewer unconditionally did before (the
+  // "nobody has ever split up" case this must reproduce byte-for-byte).
+  // Kept live via LIVE_MAP_EVENT below, which no longer directly triggers
+  // a fetch itself — see that handler's own comment.
+  const [campaignDefaultMapId, setCampaignDefaultMapId] = useState<string | null>(
+    initialCampaignLiveMapId
+  );
+
+  // The DM's OWN independently-selectable view (0046's core ask) —
+  // meaningless for a player, whose own effective map is always
+  // ownTokenMapId ?? campaignDefaultMapId (below), never this. Starts on
+  // the shared default, same as every viewer always started; changed
+  // ONLY by the DM's own local map-picker actions: handleSwitchMap's
+  // existing "push to the whole party" action ALSO updates this (matching
+  // today's DM-follows-their-own-switch UX exactly), while the new
+  // handlePreviewMap below updates ONLY this — no database write, no
+  // broadcast — the genuinely new "look at any live map without moving
+  // anyone else" capability.
+  const [dmSelectedMapId, setDmSelectedMapId] = useState<string | null>(initialCampaignLiveMapId);
+
   const applyTriggered = useCallback((objectId: string, triggered: boolean) => {
     const current = liveMapRef.current;
     if (!current) return;
@@ -1151,9 +1227,17 @@ export function GameRoom({
     transitionsRef.current = [];
     // Transitions are DM-only-readable (0025) and the offer is DM-only by
     // design — a player's client would just get an empty list back anyway.
-    if (!currentUserIsDM || !liveMapId) return;
+    // Campaign-wide (0046), not keyed to whichever single map this DM
+    // client currently has loaded: the DM's own view is now independently
+    // selectable, so a player can cross a transition authored on a map the
+    // DM isn't even looking at right now — maybeOfferTransition below
+    // needs to recognize that regardless of what liveMapId currently is
+    // (it already matches candidates by the MOVED TOKEN's own map_id, not
+    // by liveMapId — this fetch just needs to actually cover every map's
+    // transitions for that matching to have anything to find).
+    if (!currentUserIsDM) return;
     let cancelled = false;
-    listMapTransitions(createBrowserSupabaseClient(), liveMapId)
+    listMapTransitionsForCampaign(createBrowserSupabaseClient(), campaignId)
       .then((rows) => {
         if (!cancelled) transitionsRef.current = rows;
       })
@@ -1161,7 +1245,7 @@ export function GameRoom({
     return () => {
       cancelled = true;
     };
-  }, [currentUserIsDM, liveMapId]);
+  }, [currentUserIsDM, campaignId]);
 
   // The single point of authority for crossing a transition is the DM,
   // matching setLiveMap being DM-only everywhere else: whoever moved the
@@ -1234,19 +1318,46 @@ export function GameRoom({
   const [rulerDrag, setRulerDrag] = useState<RulerDrag | null>(null);
   const rulerDragRef = useRef<RulerDrag | null>(null);
 
+  // Updates BOTH the campaign-wide token cache (campaignTokensState/Ref)
+  // AND, iff relevant, the currently-loaded map's own token list
+  // (liveMap/liveMapRef) — one function, called from every token
+  // mutation/broadcast site exactly like before this prompt, so both stay
+  // in lockstep from the same event without any call site needing to
+  // remember two separate updates.
+  //
+  // The current-map half fixes a real bug 0046 exposes (harmless before
+  // it, since every client always followed the same single live map, so
+  // nobody was ever left "still looking at" a map a token just left): a
+  // token that MOVES to a different map (a transition) must be REMOVED
+  // from this client's own currently-loaded map if it was previously
+  // there, not just silently ignored — before this fix, a viewer who
+  // stayed behind on the source map (the DM watching a solo transition,
+  // or another player still there) would see the departed token stuck at
+  // its last known position forever. `belongsHere` decides whether the
+  // token affects the current map's list AT ALL; `exists` decides
+  // update-in-place vs. append vs. remove within that.
   const applyTokenChange = useCallback((tokenId: string, token: MapToken | null) => {
+    const cTokens = campaignTokensRef.current;
+    const cExists = cTokens.some((candidate) => candidate.id === tokenId);
+    const nextCampaignTokens = token
+      ? cExists
+        ? cTokens.map((candidate) => (candidate.id === tokenId ? token : candidate))
+        : [...cTokens, token]
+      : cTokens.filter((candidate) => candidate.id !== tokenId);
+    campaignTokensRef.current = nextCampaignTokens;
+    setCampaignTokensState(nextCampaignTokens);
+
     const current = liveMapRef.current;
     if (!current) return;
-    // A broadcast can race a live-map switch — a token for some other map
-    // must not be spliced into this one's list.
-    if (token && token.map_id !== current.map.id) return;
     const exists = current.tokens.some((candidate) => candidate.id === tokenId);
+    const belongsHere = token !== null && token.map_id === current.map.id;
+    if (!exists && !belongsHere) return;
     liveMapRef.current = {
       ...current,
-      tokens: token
+      tokens: belongsHere
         ? exists
-          ? current.tokens.map((candidate) => (candidate.id === tokenId ? token : candidate))
-          : [...current.tokens, token]
+          ? current.tokens.map((candidate) => (candidate.id === tokenId ? (token as MapToken) : candidate))
+          : [...current.tokens, token as MapToken]
         : current.tokens.filter((candidate) => candidate.id !== tokenId),
     };
     setLiveMapState(liveMapRef.current);
@@ -1389,8 +1500,20 @@ export function GameRoom({
     });
     campaignChannelRef.current = channel;
 
+    // 0046: this is now "the campaign's shared DEFAULT map changed", not
+    // "everyone goes there NOW regardless of what they're looking at" —
+    // the reactive desiredMapId effect (right after ownTokenMapId) is what
+    // actually decides whether THIS client's own rendered map needs to
+    // follow, per-viewer.
     const unsubscribeLiveMap = channel.subscribe<LiveMapPayload>(LIVE_MAP_EVENT, (payload) => {
-      void refreshLiveMap(supabase, payload.mapId);
+      setCampaignDefaultMapId(payload.mapId);
+      // The DM's own view auto-follows a party-wide live-map push exactly
+      // like every viewer unconditionally did before this prompt (today's
+      // DM UX, preserved) — but ONLY a push (handleSwitchMap), never a
+      // transition: handleConfirmTransition's own solo-token path never
+      // publishes this event at all, so a DM independently previewing a
+      // different map is never yanked back by someone ELSE's transition.
+      if (currentUserIsDM) setDmSelectedMapId(payload.mapId);
     });
     const unsubscribeTrigger = channel.subscribe<TriggerPayload>(TRIGGER_EVENT, (payload) => {
       applyTriggered(payload.objectId, payload.triggered);
@@ -1399,9 +1522,13 @@ export function GameRoom({
       // Position compared against the pre-update row so only genuine moves
       // (a player's click-confirmed move, or the DM acting in another
       // window) can raise a transition offer — placements and allegiance
-      // flips never do.
+      // flips never do. Looked up from the CAMPAIGN-WIDE token cache
+      // (0046), not liveMapRef's own currently-loaded map: the DM's own
+      // view is independently selectable now and may not even be the
+      // moved token's own map, so this lookup must not depend on what's
+      // currently rendered for it to still catch a genuine move.
       const previous =
-        liveMapRef.current?.tokens.find((candidate) => candidate.id === payload.tokenId) ?? null;
+        campaignTokensRef.current.find((candidate) => candidate.id === payload.tokenId) ?? null;
       applyTokenChange(payload.tokenId, payload.token);
       const token = payload.token;
       if (token && previous && (previous.x !== token.x || previous.y !== token.y)) {
@@ -1423,17 +1550,25 @@ export function GameRoom({
         if (resolved.revealed) setHandoutPopup(resolved);
       })();
     });
-    // The DB is the source of truth after a drop: any live-map-changed or
-    // trigger broadcasts sent while disconnected are simply gone, so re-read
-    // campaigns.live_map itself rather than trusting local state.
+    // The DB is the source of truth after a drop: any live-map-changed,
+    // token, or trigger broadcasts sent while disconnected are simply
+    // gone, so re-read campaigns.live_map AND every campaign_token this
+    // viewer can see (0046) rather than trusting local state — either one
+    // changing while disconnected can change what THIS viewer's own
+    // desiredMapId resolves to (the reactive effect below picks that up),
+    // and a plain re-fetch of whatever map is currently loaded recovers
+    // any TOKEN_EVENT/TRIGGER_EVENT dropped for it specifically.
     const unsubscribeReconnect = channel.onReconnect(async () => {
-      const { data, error } = await supabase
-        .from("campaigns")
-        .select("live_map")
-        .eq("id", campaignId)
-        .maybeSingle();
-      if (error) return;
-      await refreshLiveMap(supabase, data?.live_map ?? null);
+      const [{ data: campaignRow }, freshTokens] = await Promise.all([
+        supabase.from("campaigns").select("live_map").eq("id", campaignId).maybeSingle(),
+        listMapTokensForCampaign(supabase, campaignId).catch(() => null),
+      ]);
+      setCampaignDefaultMapId(campaignRow?.live_map ?? null);
+      if (freshTokens) {
+        campaignTokensRef.current = freshTokens;
+        setCampaignTokensState(freshTokens);
+      }
+      await refreshLiveMap(supabase, liveMapRef.current?.map.id ?? null);
     });
     // Same dropped-broadcast reasoning for handouts — a reveal sent while
     // disconnected is gone, so re-read the RLS-filtered list.
@@ -1534,7 +1669,7 @@ export function GameRoom({
       campaignChannelRef.current = null;
       void channel.leave();
     };
-  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered, applyTokenChange, applyHandoutChange, maybeOfferTransition, refreshCombat]);
+  }, [campaignId, currentUserId, currentUserDisplayName, currentUserIsDM, refreshLiveMap, applyTriggered, applyTokenChange, applyHandoutChange, maybeOfferTransition, refreshCombat]);
 
   const triggeringRef = useRef(false);
   const handleTrigger = useCallback(
@@ -1572,6 +1707,18 @@ export function GameRoom({
     [handleTrigger]
   );
 
+  // The DM's "push this map to the whole party" action (0046) — writes the
+  // campaign-wide SHARED DEFAULT (campaigns.live_map) and broadcasts it, so
+  // every token-less member's own view follows live, exactly like every
+  // viewer unconditionally did before this prompt. Also updates the
+  // confirming DM's OWN view (dmSelectedMapId) to match — this is the
+  // pre-existing control, so it keeps its pre-existing "I see what I just
+  // set" behavior; handlePreviewMap below is the new, genuinely independent
+  // one. Doesn't call refreshLiveMap directly: setting
+  // campaignDefaultMapId/dmSelectedMapId changes desiredMapId, and the
+  // reactive effect below (right after ownTokenMapId) is the one place
+  // that actually fetches — the same single path a transition or an
+  // incoming own-token move goes through, not a second parallel fetch here.
   const handleSwitchMap = useCallback(
     async (mapId: string | null) => {
       if (switching) return;
@@ -1582,7 +1729,8 @@ export function GameRoom({
         // Persist first, broadcast second — same ordering rationale as
         // triggering, so a client joining mid-switch can't read stale state.
         await setLiveMap(supabase, campaignId, mapId);
-        await refreshLiveMap(supabase, mapId);
+        setCampaignDefaultMapId(mapId);
+        setDmSelectedMapId(mapId);
         await campaignChannelRef.current?.publish<LiveMapPayload>(LIVE_MAP_EVENT, { mapId });
       } catch (err) {
         setSwitchError(errorMessage(err) ?? "Could not change the live map.");
@@ -1590,8 +1738,17 @@ export function GameRoom({
         setSwitching(false);
       }
     },
-    [campaignId, switching, refreshLiveMap]
+    [campaignId, switching]
   );
+
+  // The NEW capability (0046's core ask): switches ONLY the DM's own local
+  // view — no database write, no broadcast, nobody else's screen changes
+  // at all. Lets the DM freely check in on any map with an active player
+  // token (or any map at all) without disturbing what any player, or the
+  // campaign's own shared default, currently shows.
+  const handlePreviewMap = useCallback((mapId: string | null) => {
+    setDmSelectedMapId(mapId);
+  }, []);
 
   // Same persist-then-broadcast ordering as triggering and map switching:
   // the DB is the source of truth for anyone joining or reconnecting.
@@ -2441,8 +2598,7 @@ export function GameRoom({
   const handleConfirmTransition = useCallback(
     async (wholeParty: boolean) => {
       const offer = transitionOffer;
-      const current = liveMapRef.current;
-      if (!offer || !current || transitionBusy) return;
+      if (!offer || transitionBusy) return;
       setTransitionBusy(true);
       setTransitionError(null);
       try {
@@ -2457,35 +2613,65 @@ export function GameRoom({
           y: transition.to_y,
           elevation: cellElevation(destinationCells, transition.to_x, transition.to_y),
         };
-        // "Whole party" = every party-allegiance token on the source map
+        // "Whole party" = every party-allegiance token on the SOURCE map
         // (never NPCs/hostiles), plus the triggering token itself; all land
         // stacked on the entry cell — tokens may share a cell here as
-        // anywhere else.
+        // anywhere else. Fetched fresh from the source map directly
+        // (transition.from_map_id), NOT liveMapRef.current's own tokens
+        // (0046): the confirming DM's own view is independently selectable
+        // now and may not even BE the source map — this offer can be
+        // raised by a broadcast from a player's move on a map the DM isn't
+        // currently looking at at all (see maybeOfferTransition/
+        // transitionsRef's own comment on why the fetch that populates the
+        // offer itself is already campaign-wide, not liveMap-scoped).
         const movers = new Map<string, MapToken>([[offer.token.id, offer.token]]);
         if (wholeParty) {
-          for (const token of current.tokens) {
+          const sourceTokens = await listMapTokens(supabase, transition.from_map_id);
+          for (const token of sourceTokens) {
             if (token.allegiance === "party") movers.set(token.id, token);
           }
         }
         for (const token of movers.values()) {
           const { moved, removedTokenId } = await transitionMapToken(supabase, token, destination);
-          if (removedTokenId) await publishTokenChange(removedTokenId, null);
+          // Apply locally FIRST, exactly like every other token mutation
+          // in this file — publish never echoes to its own sender, and the
+          // confirming DM's client is always the one calling this, never a
+          // broadcast RECEIVER of its own action. This is what keeps the
+          // confirming DM's own campaign-wide token cache (and, if
+          // relevant, whatever map their own view currently shows) correct
+          // even for a solo crossing, where no handleSwitchMap-driven
+          // refetch follows below.
+          if (removedTokenId) {
+            applyTokenChange(removedTokenId, null);
+            await publishTokenChange(removedTokenId, null);
+          }
+          applyTokenChange(moved.id, moved);
           await publishTokenChange(moved.id, moved);
         }
         setTransitionOffer(null);
-        // Known limitation, by design: any token NOT moved through the
-        // transition stays at its old position on the old map, yet every
-        // connected client still follows this switch — there is only ONE
-        // live map per campaign, so a stay-behind token is simply absent
-        // from the new live map's view rather than splitting the table.
-        await handleSwitchMap(transition.to_map_id);
+        // Per-viewer map transitions (0046): moving a token never forces
+        // whose VIEW it's on. Each mover's own client (ownTokenMapId,
+        // recomputed from campaignTokensState the moment its own broadcast
+        // — or, for the confirming DM's own moves above, the direct
+        // applyTokenChange call — lands) naturally follows to the
+        // destination on its own, with zero effect on anyone else's
+        // current view. "Whole party" ADDITIONALLY pushes the campaign's
+        // own SHARED DEFAULT map to the destination — reproducing today's
+        // exact behavior for the common "the party moves together" case (a
+        // future token-less joiner should land where the party actually
+        // is) — and follows the confirming DM's own view there too,
+        // matching handleSwitchMap's pre-existing "the DM sees what they
+        // just set" UX. A solo crossing (wholeParty false) does NEITHER:
+        // campaigns.live_map stays untouched and the DM's own current view
+        // stays exactly where it was — the whole point of this prompt.
+        if (wholeParty) await handleSwitchMap(transition.to_map_id);
       } catch (err) {
         setTransitionError(errorMessage(err) ?? "Could not move through the transition.");
       } finally {
         setTransitionBusy(false);
       }
     },
-    [transitionOffer, transitionBusy, publishTokenChange, handleSwitchMap]
+    [transitionOffer, transitionBusy, applyTokenChange, publishTokenChange, handleSwitchMap]
   );
 
   const handleCreateHandout = useCallback(
@@ -2605,6 +2791,65 @@ export function GameRoom({
     () => new Map(characterRows.map((character) => [character.id, character])),
     [characterRows]
   );
+
+  // ---------------------------------------------------------------------
+  // Per-viewer map transitions (0046): the reactive derivation that decides
+  // which single map THIS client's own `liveMap` should be showing right
+  // now, and the one effect that turns a change in that decision into an
+  // actual fetch. Placed here (not up with campaignTokensState/
+  // campaignDefaultMapId/dmSelectedMapId themselves) because it needs
+  // ownCharacterIds, just defined above.
+  // ---------------------------------------------------------------------
+
+  // THIS viewer's own character's current token, if any — the same
+  // "most recently placed" tie-break visionMasking/turn-camera already use
+  // (mostRecentOwnToken, vision.ts), just run over the CAMPAIGN-WIDE token
+  // cache instead of whichever single map liveMap currently holds. Null
+  // for the DM (who has no characters of their own to place) and for a
+  // player who hasn't placed a token anywhere yet.
+  const ownTokenMapId = useMemo(
+    () => mostRecentOwnToken(campaignTokensState, ownCharacterIds)?.map_id ?? null,
+    [campaignTokensState, ownCharacterIds]
+  );
+
+  // Every map_id currently carrying at least one active PC token — the
+  // brief's own "a map-picker UI showing which maps are 'live'" ask,
+  // handed to MapPanel below. Meaningless for a player (they never see the
+  // picker at all), but cheap enough to compute unconditionally rather
+  // than gate on currentUserIsDM here too.
+  const livePlayerMapIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const token of campaignTokensState) {
+      if (token.character_id !== null) ids.add(token.map_id);
+    }
+    return ids;
+  }, [campaignTokensState]);
+
+  // The single source of truth for "which map should THIS client's own
+  // `liveMap` be showing right now": the DM's own independently-selected
+  // view, or — for a player — wherever their own character's token
+  // actually is, falling back to the campaign's shared default when they
+  // have none (nobody has placed one yet, or they've never split from the
+  // party) — the exact value that reproduces today's single-shared-map
+  // behavior, unchanged, for every existing campaign where nobody ever has.
+  const desiredMapId = currentUserIsDM ? dmSelectedMapId : (ownTokenMapId ?? campaignDefaultMapId);
+
+  // Loads whatever desiredMapId now says, whenever it changes — the ONE
+  // place any map switch actually fetches. handleSwitchMap,
+  // handlePreviewMap, a confirmed transition (solo or whole-party), an
+  // incoming LIVE_MAP_EVENT push, and an own-token-moved broadcast/local
+  // mutation all just change one of the pieces desiredMapId is computed
+  // from; this effect is what turns that into a real refreshLiveMap call.
+  // Compared against liveMapRef (not liveMap state) so this doesn't
+  // re-run on every unrelated in-place liveMap mutation (a token nudge, an
+  // object trigger) — only an actual change of WHICH map. Guarded to a
+  // true no-op whenever they already match: SSR (page.tsx) computes
+  // initialLiveMap via the identical derivation, so the very first render
+  // never causes an extra fetch.
+  useEffect(() => {
+    if (desiredMapId === (liveMapRef.current?.map.id ?? null)) return;
+    void refreshLiveMap(createBrowserSupabaseClient(), desiredMapId);
+  }, [desiredMapId, refreshLiveMap]);
 
   // ---------------------------------------------------------------------
   // Turn camera: an automatically-offered better vantage on the viewing
@@ -3382,6 +3627,25 @@ export function GameRoom({
       <div data-testid="day-night-state" hidden>
         {JSON.stringify({ mode: dayNightMode })}
       </div>
+      {/* Hidden render-state mirror for verify-per-viewer-map.mjs (0046):
+          no DOM otherwise exposes campaignDefaultMapId/dmSelectedMapId/
+          ownTokenMapId/livePlayerMapIds distinctly from whatever `liveMap`
+          this client happens to currently be rendering — live-map-name
+          (MapPanel) already covers "what am I looking at right now" for
+          both a player and the DM, but a real multi-client test needs to
+          tell those apart from the campaign's own shared default and from
+          which maps currently count as "live" to actually prove the
+          per-viewer split (as opposed to everyone coincidentally landing
+          on the same map). */}
+      <div data-testid="map-view-state" hidden>
+        {JSON.stringify({
+          viewingMapId: liveMap?.map.id ?? null,
+          viewingMapName: liveMap?.map.name ?? null,
+          campaignDefaultMapId,
+          ownTokenMapId,
+          livePlayerMapIds: [...livePlayerMapIds],
+        })}
+      </div>
       {/* Hidden render-state mirror for verify-per-member-dice-trays.mjs
           (and the surviving parts of verify-dice-tumble.mjs/
           verify-private-dice-rolls.mjs) — one entry per CONNECTED member's
@@ -3689,9 +3953,12 @@ export function GameRoom({
           maps={availableMaps}
           liveMapId={liveMap?.map.id ?? null}
           liveMapName={liveMap?.map.name ?? null}
+          partyMapId={campaignDefaultMapId}
+          livePlayerMapIds={livePlayerMapIds}
           switching={switching}
           switchError={switchError}
           onSwitch={handleSwitchMap}
+          onPreview={handlePreviewMap}
           entries={interactiveEntries}
           onTrigger={handleTrigger}
           triggerError={triggerError}
@@ -3876,8 +4143,13 @@ export function GameRoom({
               cell ({transitionOfferView.transition.to_x},{transitionOfferView.transition.to_y})?
             </p>
             <p className={styles.hint}>
-              The live map switches for everyone. Tokens left behind stay where they are on this map
-              and won&apos;t appear until the table returns here.
+              &quot;Just this token&quot; moves only{" "}
+              <span className={styles.objectName}>{transitionOfferView.tokenLabel}</span> — their own
+              view follows to {transitionOfferView.destinationName}, and nobody else&apos;s view
+              changes at all. &quot;Move the whole party&quot; moves every party token there too, and
+              also sets {transitionOfferView.destinationName} as the table&apos;s shared default map —
+              your own view follows there as well. Either way, tokens left behind stay where they are
+              on this map.
             </p>
             {transitionError ? (
               <p role="alert" className={styles.errorText} data-testid="transition-offer-error">

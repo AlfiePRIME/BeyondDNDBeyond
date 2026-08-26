@@ -38,6 +38,100 @@ export async function listMapTokens(supabase: SupabaseClient, mapId: string): Pr
   return data ?? [];
 }
 
+/**
+ * Every map_token the caller can currently read, across EVERY map in the
+ * campaign — not just whichever one is currently loaded as a "live map"
+ * bundle. This is the per-viewer map-transitions primitive (0046): RLS
+ * (can_read_map, extended by 0046) means a player's own result here always
+ * includes wherever their own character's token currently sits, even on a
+ * map that isn't campaigns.live_map, plus whatever's on the shared live_map
+ * itself; the DM's result is every token on every map in their campaign
+ * (their read access is already unrestricted). Two combined uses:
+ *   - A player's own effective "current map" = mostRecentOwnToken(this,
+ *     ownCharacterIds)?.map_id — see vision.ts's own doc comment on why
+ *     "most recent" resolves the (rare) case of owning more than one
+ *     placed character.
+ *   - The DM's own map-picker "which maps are live" indicator = every
+ *     distinct map_id among the PC tokens (character_id not null) in this
+ *     same result.
+ *
+ * campaign_maps!inner(campaign_id), not a campaign_id column on map_tokens
+ * itself (there isn't one) — the same embedded-join-filter shape
+ * getActiveCombatantForCharacter (combat.ts) already uses for
+ * combat_combatants -> combat_encounters.campaign_id. The embedded `map`
+ * object only exists to filter the query — mapped out below into plain
+ * MapToken rows, the listLorePageLinksForCampaign (narrative.ts) precedent
+ * for the same shape, rather than destructured-and-discarded.
+ */
+export async function listMapTokensForCampaign(
+  supabase: SupabaseClient,
+  campaignId: string
+): Promise<MapToken[]> {
+  const { data, error } = await supabase
+    .from("map_tokens")
+    .select("*, map:campaign_maps!inner(campaign_id)")
+    .eq("map.campaign_id", campaignId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    map_id: row.map_id,
+    character_id: row.character_id,
+    npc_name: row.npc_name,
+    monster_stat_block_id: row.monster_stat_block_id,
+    x: row.x,
+    y: row.y,
+    elevation: row.elevation,
+    allegiance: row.allegiance,
+    created_at: row.created_at,
+  }));
+}
+
+/**
+ * A single token by id, or null if it doesn't exist or RLS hides it (the
+ * getMap/getCharacter convention: indistinguishable on purpose). Added for
+ * the roll route's per-token perception context (Prompt 59/60) — resolving
+ * a combatant's hider/attacker/target position from ITS OWN token's actual
+ * current map_id, rather than assuming campaign.live_map, is what keeps
+ * Hide/attack perception checks correct once a combatant's token can live
+ * on a map other than the campaign's shared one (0046).
+ */
+export async function getMapToken(supabase: SupabaseClient, tokenId: string): Promise<MapToken | null> {
+  const { data, error } = await supabase.from("map_tokens").select().eq("id", tokenId).maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * A character's own current token, wherever it is — the most-recently-
+ * created row for this character_id, in the rare case a stray extra one
+ * exists (map_tokens' own unique constraint (0019) only guards against two
+ * rows on the SAME map; transitionMapToken normally collapses a moved
+ * character down to exactly one row campaign-wide, but a DM manually
+ * placing a second one directly is possible). Used by the roll route's PC
+ * attack-perception check (0046): a PC attacker isn't always a currently-
+ * tracked combatant (combatant.token_id needs an active encounter row), so
+ * their own position has to be resolved from their character_id directly
+ * rather than through a combatant row that might not exist.
+ */
+export async function getCharacterCurrentToken(
+  supabase: SupabaseClient,
+  characterId: string
+): Promise<MapToken | null> {
+  const { data, error } = await supabase
+    .from("map_tokens")
+    .select()
+    .eq("character_id", characterId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
 /** Allowed for the character's owner or the campaign's DM (0019 RLS). */
 export async function placeCharacterToken(
   supabase: SupabaseClient,

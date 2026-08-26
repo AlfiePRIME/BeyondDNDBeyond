@@ -18,12 +18,16 @@ import {
   triggerMapObject,
   parseMapObjectBehavior,
   listMapTokens,
+  listMapTokensForCampaign,
+  getMapToken,
+  getCharacterCurrentToken,
   placeCharacterToken,
   placeNpcToken,
   moveMapToken,
   setTokenAllegiance,
   deleteMapToken,
   TOKEN_ALLEGIANCES,
+  listMapTransitionsForCampaign,
   setHouseRules,
   listNpcs,
   createNpc,
@@ -115,12 +119,19 @@ describe("data-access module", () => {
 
   it("exports the map token functions from the main barrel", () => {
     expect(listMapTokens).toBeTypeOf("function");
+    expect(listMapTokensForCampaign).toBeTypeOf("function");
+    expect(getMapToken).toBeTypeOf("function");
+    expect(getCharacterCurrentToken).toBeTypeOf("function");
     expect(placeCharacterToken).toBeTypeOf("function");
     expect(placeNpcToken).toBeTypeOf("function");
     expect(moveMapToken).toBeTypeOf("function");
     expect(setTokenAllegiance).toBeTypeOf("function");
     expect(deleteMapToken).toBeTypeOf("function");
     expect(TOKEN_ALLEGIANCES).toEqual(["party", "hostile", "neutral"]);
+  });
+
+  it("exports the campaign-wide map transitions function from the main barrel (0046)", () => {
+    expect(listMapTransitionsForCampaign).toBeTypeOf("function");
   });
 
   it("exports the combat functions from the main barrel", () => {
