@@ -541,6 +541,25 @@
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
+/* Turn camera: an inline chip in the header controls row (not a floating
+   .moveReadout-style panel — this lives right next to the camera-mode
+   toggle it's directly related to, not centered over the table). Pointer
+   events stay enabled throughout (unlike .moveReadout's default
+   pointer-events: none) since every use of this chip carries at least one
+   real button. */
+.turnCameraOffer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--surface2) 85%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
+  border-radius: 8px;
+  font-family: var(--font-m);
+  font-size: 12px;
+  color: var(--dim);
+}
+
 .rulerDistance {
   font-family: var(--font-m);
   font-size: 15px;

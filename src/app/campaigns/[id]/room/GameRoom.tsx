@@ -701,6 +701,19 @@ export function GameRoom({
   // acceptance criterion (GameTableScene's onOwnCameraDebug's own doc
   // comment).
   const [ownCameraPosition, setOwnCameraPosition] = useState<readonly [number, number, number] | null>(null);
+  // Turn camera: mirrors GameTableScene's own isDraggingChair state
+  // (onChairDraggingChange — load-bearing, not just verification; see that
+  // prop's own doc comment) so the "better view" offer/auto-apply below can
+  // defer showing or applying anything until an in-progress chair drag
+  // actually finishes, per the project owner's confirmed "don't fight a
+  // drag already underway" call. Wrapped in useCallback so the prop handed
+  // to GameTableScene has a stable identity — its own effect keys off this
+  // exact reference, and a fresh arrow function every render would fire it
+  // needlessly often.
+  const [chairDragging, setChairDragging] = useState(false);
+  const handleChairDraggingChange = useCallback((dragging: boolean) => {
+    setChairDragging(dragging);
+  }, []);
 
   // Movable chairs: the one place a dragged chair's position actually gets
   // persisted — GameTableScene's own onChairDragEnd (wired below) hands
@@ -2321,6 +2334,69 @@ export function GameRoom({
     [characterRows]
   );
 
+  // ---------------------------------------------------------------------
+  // Turn camera: an automatically-offered better vantage on the viewing
+  // player's own combat turn. Everything that decides WHETHER the improved
+  // angle shows (whose turn it is, seat vs. orbit mode, an in-progress
+  // chair drag, an explicit dismiss) lives here — GameTableScene.tsx only
+  // renders whatever single `turnCameraActive` boolean this file hands it
+  // (see that prop's own doc comment there).
+  // ---------------------------------------------------------------------
+
+  // True only while combat is active AND the current combatant is a PC
+  // belonging to THIS viewer — reusing ownCharacterIds (the exact "which
+  // characters does this viewer control" answer CombatPanel's own
+  // ownsCombatant already leans on) rather than re-deriving character
+  // ownership a second way. A bare/stat-blocked NPC combatant's
+  // character_id is always null, so it never matches here — NPCs are
+  // always DM-controlled, and the DM's own view is deliberately untouched
+  // by this feature (the brief's own "player's own turn" framing; the DM
+  // still has the plain seat/orbit toggle like always). Computed
+  // independently on every client from the shared `combat` state plus this
+  // client's own currentUserId/characterRows, so a turn change only ever
+  // moves THIS viewer's own camera, never anyone else's.
+  const isMyTurn = useMemo(() => {
+    const current = currentCombatantOf(combat);
+    return current !== null && current.character_id !== null && ownCharacterIds.has(current.character_id);
+  }, [combat, ownCharacterIds]);
+
+  // An explicit "no thanks" for the CURRENT turn only — the orbit-mode
+  // offer's Dismiss, the seat-mode active view's own "Back to normal"
+  // control, and a manual seat/orbit toggle click all set this (see the
+  // camera-mode toggle button below). Reset via the render-time "adjust
+  // state when a prop changes" pattern this file already uses for
+  // prevMembers/prevSeatOffsets above, keyed on a composite
+  // round+turn-index string rather than the current combatant's id alone,
+  // so even a solo-combatant encounter (advance_turn wraps back to the
+  // very same combatant next round) still counts as a genuinely NEW turn
+  // rather than silently inheriting the previous turn's dismissal.
+  const [turnCameraDismissed, setTurnCameraDismissed] = useState(false);
+  const turnKey = combat ? `${combat.encounter.round_number}:${combat.encounter.current_turn_index}` : null;
+  const [prevTurnKey, setPrevTurnKey] = useState(turnKey);
+  if (prevTurnKey !== turnKey) {
+    setPrevTurnKey(turnKey);
+    setTurnCameraDismissed(false);
+  }
+
+  // Never while this viewer's own chair is mid-drag (defer, don't fight the
+  // gesture — the project owner's confirmed call) and never after an
+  // explicit dismiss for this exact turn. Split by cameraMode per the OTHER
+  // confirmed call: seat mode gets the improved angle automatically (no
+  // added friction for a player who hasn't gone looking for a different
+  // camera), orbit mode gets a dismissible offer instead of a forced switch
+  // (they deliberately left the seat, so this shouldn't yank them back out
+  // of orbit without asking).
+  const turnCameraEligible = isMyTurn && !chairDragging && !turnCameraDismissed;
+  const turnCameraOffered = turnCameraEligible && cameraMode === "orbit";
+  const turnCameraActive = turnCameraEligible && cameraMode === "seat";
+
+  const handleAcceptTurnCameraOffer = useCallback(() => {
+    setCameraMode("seat");
+  }, []);
+  const handleDismissTurnCamera = useCallback(() => {
+    setTurnCameraDismissed(true);
+  }, []);
+
   // Badge labels per TOKEN (combatants carry their seeding token_id), so
   // the table model below can attach them without re-deriving per render.
   // Abbreviations come from the rules-engine catalog; exhaustion shows its
@@ -2940,6 +3016,8 @@ export function GameRoom({
           onChairDragEnd={handleChairDragEnd}
           onOwnChairProjectedPosition={setOwnChairScreenPosition}
           onOwnCameraDebug={setOwnCameraPosition}
+          onChairDraggingChange={handleChairDraggingChange}
+          turnCameraActive={turnCameraActive}
         />
         {/* A modest, fixed corner of the table (its own doc comment) — never
             full-screen, never over the map/tokens/camera controls. */}
@@ -3147,6 +3225,26 @@ export function GameRoom({
           error: chairMoveError,
         })}
       </div>
+      {/* Hidden render-state mirror for a real Playwright verification of
+          the turn camera feature — same "WebGL has no DOM of its own"
+          reasoning as every other mirror on this page, plus this feature's
+          full gate is otherwise only inferable indirectly from raw camera
+          coordinates (fragile — it'd have to replay computeTurnCameraPosition's
+          own geometry to know what "improved" should even look like).
+          `active`/`offered` are exactly turnCameraActive/turnCameraOffered
+          above — whichever a script expects to see true tells it which of
+          the two UI affordances (the offer chip vs. the active chip) should
+          be on screen right now. */}
+      <div data-testid="turn-camera-state" hidden>
+        {JSON.stringify({
+          isMyTurn,
+          cameraMode,
+          chairDragging,
+          dismissed: turnCameraDismissed,
+          offered: turnCameraOffered,
+          active: turnCameraActive,
+        })}
+      </div>
       {rulerReadout !== null ? (
         <div className={`${styles.moveReadout} ${styles.rulerReadout}`} data-testid="ruler-readout">
           <span className={styles.moveReadoutLabel}>Measuring</span>
@@ -3209,10 +3307,68 @@ export function GameRoom({
           >
             {rulerActive ? "Put ruler away" : "Measure distance"}
           </Button>
+          {/* Turn camera: the orbit-mode offer — shown instead of an
+              automatic switch, per the project owner's confirmed "don't
+              yank a player out of a mode they deliberately chose" call.
+              "Take the view" hands control to the plain cameraMode toggle
+              (setCameraMode("seat")) — once seat mode is active, the exact
+              same isMyTurn/dismissed gate above naturally renders the
+              improved angle, with no separate "accepted" flag needed. */}
+          {turnCameraOffered ? (
+            <div className={styles.turnCameraOffer} data-testid="turn-camera-offer">
+              <span>Better view available for your turn</span>
+              <Button
+                size="sm"
+                variant="teal"
+                onClick={handleAcceptTurnCameraOffer}
+                data-testid="turn-camera-accept"
+              >
+                Take the view
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleDismissTurnCamera}
+                data-testid="turn-camera-dismiss"
+              >
+                Dismiss
+              </Button>
+            </div>
+          ) : null}
+          {/* Turn camera: the seat-mode indicator — the improved angle is
+              already applied by the time this renders (turnCameraActive
+              feeds straight into GameTableScene); this is just a visible,
+              one-click way back to the normal seated view without waiting
+              for the turn to end. */}
+          {turnCameraActive ? (
+            <div className={styles.turnCameraOffer} data-testid="turn-camera-active">
+              <span>Using the better view for your turn</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleDismissTurnCamera}
+                data-testid="turn-camera-dismiss"
+              >
+                Back to normal
+              </Button>
+            </div>
+          ) : null}
           <Button
             size="sm"
             variant={cameraMode === "orbit" ? "teal" : "ghost"}
-            onClick={() => setCameraMode((mode) => (mode === "seat" ? "orbit" : "seat"))}
+            onClick={() => {
+              // A manual mode switch counts as an explicit dismiss for the
+              // rest of this turn too (the brief's own "turn ends, or on an
+              // explicit manual dismiss/switch" framing) — otherwise
+              // toggling straight to orbit mid-turn-camera would just
+              // immediately re-surface the orbit-mode offer, and toggling
+              // back to seat mid-offer would silently re-apply the
+              // improved angle the player didn't actually ask for via
+              // "Take the view".
+              if (turnCameraActive || turnCameraOffered) setTurnCameraDismissed(true);
+              setCameraMode((mode) => (mode === "seat" ? "orbit" : "seat"));
+            }}
+            data-testid="camera-mode-toggle"
           >
             {cameraMode === "seat" ? "Free camera" : "Return to seat"}
           </Button>
