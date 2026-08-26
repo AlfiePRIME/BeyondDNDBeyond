@@ -1543,8 +1543,10 @@ export function GameRoom({
                 // painted one over the trap to help disguise it) is
                 // preserved exactly as it was, not silently reset to
                 // "default" (see ground-types' own terrain/ground
-                // independence guarantee).
+                // independence guarantee). Same reasoning for a painted-over
+                // water cell's flow direction — carried through unchanged.
                 ground_type: destCell?.ground_type ?? "default",
+                water_flow_direction: destCell?.water_flow_direction ?? null,
               };
               await upsertMapCells(supabase, [revealedCell]);
               await deleteConcealedPit(supabase, token.map_id, token.x, token.y);
@@ -3700,11 +3702,24 @@ export function GameRoom({
   // simply won't appear here even if its live ground type is painted.
   const tableSurfaceDebug = useMemo(() => {
     if (!liveMap || !tableMap) {
-      return JSON.stringify({ mapId: null, voidCells: [], groundByCell: {}, pitCells: [] });
+      return JSON.stringify({
+        mapId: null,
+        voidCells: [],
+        groundByCell: {},
+        waterFlowByCell: {},
+        pitCells: [],
+      });
     }
     const groundByCell: Record<string, string> = {};
+    // Water flow direction (the water-terrain addition): the exact same
+    // "mirror THIS viewer's actual rendered value, sourced from tableMap"
+    // rule as groundByCell above — a remembered cell never carries a flow
+    // direction either (the seen-cells schema captures terrain only), so it
+    // simply won't appear here.
+    const waterFlowByCell: Record<string, string> = {};
     for (const cell of tableMap.cells) {
       if (cell.ground) groundByCell[cellKey(cell.x, cell.y)] = cell.ground;
+      if (cell.waterFlowDirection) waterFlowByCell[cellKey(cell.x, cell.y)] = cell.waterFlowDirection;
     }
     return JSON.stringify({
       mapId: liveMap.map.id,
@@ -3712,6 +3727,7 @@ export function GameRoom({
         .filter((cell) => cell.terrain_type === "void")
         .map((cell) => cellKey(cell.x, cell.y)),
       groundByCell,
+      waterFlowByCell,
       // Pits and falling (verify-pits-and-falling.mjs's own precedent): key
       // + the cell's own (possibly negative) floor elevation — a concealed
       // pit never appears here for a non-DM viewer until it's revealed,

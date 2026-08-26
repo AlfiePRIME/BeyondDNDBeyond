@@ -27,6 +27,7 @@ import {
   uploadMapReferenceImageFile,
   upsertMapCells,
   GROUND_TYPES,
+  WATER_FLOW_DIRECTIONS,
   type CampaignMap,
   type ConcealedPit,
   type GroundType,
@@ -41,6 +42,7 @@ import {
   type MapToken,
   type MapTransition,
   type SupabaseClient,
+  type WaterFlowDirection,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
@@ -122,6 +124,16 @@ const GROUND_TYPE_LABELS: Record<GroundType, string> = {
   sand: "Sand",
   swamp: "Swamp",
   stone: "Stone",
+  water: "Water",
+};
+
+// Display labels for the flow-direction picker's buttons — same plain-label
+// convention as GROUND_TYPE_LABELS above.
+const WATER_FLOW_DIRECTION_LABELS: Record<WaterFlowDirection, string> = {
+  north: "North",
+  east: "East",
+  south: "South",
+  west: "West",
 };
 
 /** An AI-proposed object placement, client-side only until the DM accepts —
@@ -187,6 +199,13 @@ export function MapEditor({
   const [brush, setBrush] = useState<TerrainType>("difficult");
   const [lightBrush, setLightBrush] = useState<LightLevel>("dim");
   const [groundBrush, setGroundBrush] = useState<GroundType>("grass");
+  // Only ever read by applyTool when groundBrush is "water": the paired
+  // "second value" the water ground brush carries, exactly the way
+  // lightBrush pairs with the light tool and groundBrush itself pairs with
+  // the ground tool. Defaults to "south" (this schema's own
+  // MAP_GROWTH_EDGES-matching convention; see MapSurface.tsx's
+  // WATER_FLOW_Y_ROTATION comment for the same choice on the render side).
+  const [waterFlowBrush, setWaterFlowBrush] = useState<WaterFlowDirection>("south");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -299,6 +318,7 @@ export function MapEditor({
   const brushRef = useRef(brush);
   const lightBrushRef = useRef(lightBrush);
   const groundBrushRef = useRef(groundBrush);
+  const waterFlowBrushRef = useRef(waterFlowBrush);
   const selectedAssetIdRef = useRef(selectedAssetId);
   const selectedObjectIdsRef = useRef(selectedObjectIds);
   const moveArmedRef = useRef(moveArmed);
@@ -308,11 +328,22 @@ export function MapEditor({
     brushRef.current = brush;
     lightBrushRef.current = lightBrush;
     groundBrushRef.current = groundBrush;
+    waterFlowBrushRef.current = waterFlowBrush;
     selectedAssetIdRef.current = selectedAssetId;
     selectedObjectIdsRef.current = selectedObjectIds;
     moveArmedRef.current = moveArmed;
     regionRef.current = region;
-  }, [tool, brush, lightBrush, groundBrush, selectedAssetId, selectedObjectIds, moveArmed, region]);
+  }, [
+    tool,
+    brush,
+    lightBrush,
+    groundBrush,
+    waterFlowBrush,
+    selectedAssetId,
+    selectedObjectIds,
+    moveArmed,
+    region,
+  ]);
 
   // The last PERSISTED cell state: initialCells at mount, advanced whenever
   // cells actually reach the database (Save, AI-draft accept). Undo/redo
@@ -359,7 +390,8 @@ export function MapEditor({
           state.elevation === base.elevation &&
           state.terrain === base.terrain &&
           state.light === base.light &&
-          state.ground === base.ground
+          state.ground === base.ground &&
+          state.waterFlow === base.waterFlow
         )
           next.delete(key);
         else next.add(key);
@@ -483,7 +515,8 @@ export function MapEditor({
           sculptAction,
           brushRef.current,
           lightBrushRef.current,
-          groundBrushRef.current
+          groundBrushRef.current,
+          waterFlowBrushRef.current
         );
         if (next === current) return;
         const cells = new Map(preview.cells);
@@ -498,7 +531,8 @@ export function MapEditor({
         sculptAction,
         brushRef.current,
         lightBrushRef.current,
-        groundBrushRef.current
+        groundBrushRef.current,
+        waterFlowBrushRef.current
       );
       if (next === current) return;
       const changes = (strokeChangesRef.current ??= new Map());
@@ -1379,6 +1413,7 @@ export function MapEditor({
           terrain: cell.terrain,
           light: "bright",
           ground: "default",
+          waterFlow: null,
         });
       }
       const previewObjects = payload.area.objects.map((object) => ({
@@ -1415,6 +1450,7 @@ export function MapEditor({
           terrain_type: state.terrain,
           light_level: state.light,
           ground_type: state.ground,
+          water_flow_direction: state.waterFlow,
         };
       });
       await upsertMapCells(supabase, rows);
@@ -1501,6 +1537,16 @@ export function MapEditor({
           .map((cell) => cellKey(cell.x, cell.y)),
         groundByCell: Object.fromEntries(
           cells.filter((cell) => cell.ground).map((cell) => [cellKey(cell.x, cell.y), cell.ground])
+        ),
+        // Water flow direction: the same "mirror exactly what the render
+        // decision carries" rule as groundByCell above, so a real-browser
+        // check can confirm the flow-direction picker's own click sets the
+        // right value before Save, not just that the Water brush painted
+        // the right cell.
+        waterFlowByCell: Object.fromEntries(
+          cells
+            .filter((cell) => cell.waterFlowDirection)
+            .map((cell) => [cellKey(cell.x, cell.y), cell.waterFlowDirection])
         ),
         // Pits and falling (verify-pits-and-falling.mjs's own precedent):
         // key + the cell's own (possibly negative) floor elevation, so a
@@ -1998,8 +2044,36 @@ export function MapEditor({
           <p className={styles.hint}>
             Ground type is a flat color only — a purely cosmetic layer independent of terrain.
             Painting Forest here doesn&apos;t make a cell Difficult terrain, and painting
-            Difficult terrain doesn&apos;t change its ground color; set each separately.
+            Difficult terrain doesn&apos;t change its ground color; set each separately. To make a
+            water cell cost extra movement, also paint it Difficult with the Terrain tool above —
+            water reuses that exact same mechanic, not a new one.
           </p>
+        ) : null}
+        {/* Flow direction only appears/applies for the Water brush (the
+            confirmed requirement) — every other ground brush leaves this
+            entirely out of the toolbar, and painting them clears any flow
+            direction a cell previously had (applyTool's "ground" branch). */}
+        {tool === "ground" && groundBrush === "water" ? (
+          <>
+            <span className={styles.toolbarLabel}>Flow direction</span>
+            <div className={styles.toolRow}>
+              {WATER_FLOW_DIRECTIONS.map((direction) => (
+                <Button
+                  key={direction}
+                  size="sm"
+                  variant={waterFlowBrush === direction ? "accent" : "ghost"}
+                  onClick={() => setWaterFlowBrush(direction)}
+                  data-testid={`water-flow-${direction}`}
+                >
+                  {WATER_FLOW_DIRECTION_LABELS[direction]}
+                </Button>
+              ))}
+            </div>
+            <p className={styles.hint}>
+              Painting a water cell (or re-painting an existing one) also sets its flow arrow to
+              the direction picked here — purely a visual cue, drawn only on water cells.
+            </p>
+          </>
         ) : null}
         <span className={styles.toolbarLabel}>Objects</span>
         <div className={styles.toolRow}>

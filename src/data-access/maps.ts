@@ -36,8 +36,11 @@ export type LightLevel = (typeof LIGHT_LEVELS)[number];
  * and void-ness come from terrain_type alone, forever). 'default' is the
  * sparse-storage default: a cell painted no other way IS 'default', and
  * renders with the plain terrain-driven color every cell always has. The
- * other eight are the starter set — enough for the map-template pack and
- * leaving room for a later "water" addition to extend this list. */
+ * first eight were the starter set; 'water' (migration 0051) is the "later
+ * addition" 0047's own header comment anticipated by name. A water cell
+ * only costs double movement when the DM ALSO paints it 'difficult' terrain
+ * via the existing terrain brush — this column never feeds movement cost,
+ * water included. */
 export const GROUND_TYPES = [
   "default",
   "grass",
@@ -48,9 +51,20 @@ export const GROUND_TYPES = [
   "sand",
   "swamp",
   "stone",
+  "water",
 ] as const;
 
 export type GroundType = (typeof GROUND_TYPES)[number];
+
+/** map_cells.water_flow_direction's vocabulary (migration 0051) — a per-cell
+ * AUTHORED direction, purely decorative (nothing in the rules engine reads
+ * it; no current/push mechanic exists). Four-way cardinal, reusing the
+ * EXACT words MAP_GROWTH_EDGES already established for "which way" on this
+ * schema, rather than an 8-way vocabulary this purely-visual arrow doesn't
+ * need. */
+export const WATER_FLOW_DIRECTIONS = ["north", "east", "south", "west"] as const;
+
+export type WaterFlowDirection = (typeof WATER_FLOW_DIRECTIONS)[number];
 
 export interface MapCell {
   map_id: string;
@@ -67,6 +81,17 @@ export interface MapCell {
    * void-ness, and painting one never touches the other. 'default' is the
    * sparse-storage default. */
   ground_type: GroundType;
+  /** Flow direction authored on a water cell (migration 0051) — the
+   * nullable-DB-column convention this codebase already uses for
+   * always-present-but-optional fields (CampaignMap.thumbnail_ref,
+   * .reference_image_ref, ...): a required key, typed `| null`, rather than
+   * an optional key, so every reader handles the "no direction chosen" case
+   * explicitly instead of it being silently indistinguishable from "field
+   * omitted". Meaningful only when `ground_type === "water"`; null on every
+   * other cell, and legitimately null on a water cell too (a DM can paint
+   * water without ever picking a direction). Purely decorative — see
+   * WaterFlowDirection's own doc comment. */
+  water_flow_direction: WaterFlowDirection | null;
 }
 
 /**
@@ -111,6 +136,10 @@ export interface NewMapCell {
    * the 'default' sparse-storage default, so pre-ground-types callers
    * (existing starter templates) stay valid unchanged. */
   ground_type?: GroundType;
+  /** Optional for the same reason as ground_type — an omitted value stores
+   * null, so pre-water callers (every existing starter template) stay
+   * valid unchanged. */
+  water_flow_direction?: WaterFlowDirection | null;
 }
 
 export interface NewMapObjectSeed {
@@ -170,6 +199,7 @@ export async function createPopulatedMap(
     terrain_type: cell.terrain_type,
     light_level: cell.light_level ?? "bright",
     ground_type: cell.ground_type ?? "default",
+    water_flow_direction: cell.water_flow_direction ?? null,
   }));
   await upsertMapCells(supabase, cells);
 

@@ -131,6 +131,7 @@ export {
   clearMapReferenceImage,
   LIGHT_LEVELS,
   GROUND_TYPES,
+  WATER_FLOW_DIRECTIONS,
   type CampaignMap,
   type MapCell,
   type MapFolder,
@@ -139,6 +140,7 @@ export {
   type LightLevel,
   type MapGrowthEdge,
   type GroundType,
+  type WaterFlowDirection,
 } from "./maps";
 export {
   listMapObjects,

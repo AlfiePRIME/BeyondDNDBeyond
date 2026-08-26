@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useState } from "react";
 import { Billboard } from "@react-three/drei";
 import { BufferAttribute, BufferGeometry, CanvasTexture, Color, SRGBColorSpace } from "three";
 import type { ThreeEvent } from "@react-three/fiber";
@@ -51,7 +51,15 @@ export type MapSurfaceGroundType =
   | "path"
   | "sand"
   | "swamp"
-  | "stone";
+  | "stone"
+  | "water";
+
+/** Structurally matches data-access's WaterFlowDirection (the
+ * MapSurfaceGroundType decoupling precedent above). Meaningful only
+ * alongside `ground === "water"` — see MapSurfaceCell.waterFlowDirection;
+ * MapSurface never draws an arrow otherwise, regardless of whether this is
+ * set. */
+export type MapSurfaceWaterFlowDirection = "north" | "east" | "south" | "west";
 
 // One flat base/high pair per real ground type, the exact NORMAL/DIFFICULT
 // shape — each hue chosen to read apart from the others, from the terrain
@@ -61,7 +69,12 @@ export type MapSurfaceGroundType =
 // near-black canopy green -> muddy olive) rather than brightness alone,
 // since elevation already owns that axis; rock (natural, warm grey-brown)
 // and stone (worked masonry, cooler blue-grey) are the two earth tones kept
-// deliberately apart in hue so they don't read as the same material.
+// deliberately apart in hue so they don't read as the same material. Water
+// (the water-terrain addition) is a deep blue -> bright aqua pair — the
+// only genuinely blue entry in the palette, so it reads apart from stone's
+// desaturated blue-grey, from swamp's olive, and from PIT's near-black warm
+// charcoal at a glance, from directly overhead as well as at a shallow seat
+// angle.
 const GROUND_COLORS: Record<Exclude<MapSurfaceGroundType, "default">, readonly [string, string]> = {
   grass: ["#3d6b2f", "#b8e08a"],
   forest: ["#204a2c", "#7bb37c"],
@@ -71,6 +84,7 @@ const GROUND_COLORS: Record<Exclude<MapSurfaceGroundType, "default">, readonly [
   path: ["#7a5c3a", "#d9b988"],
   sand: ["#c8b06a", "#f3e7bd"],
   swamp: ["#414a2c", "#8b995a"],
+  water: ["#155377", "#7fe0f0"],
 };
 
 const CELL_GAP_RATIO = 0.08;
@@ -224,6 +238,16 @@ export interface MapSurfaceCell {
    * an editor-only authoring tint), while a REMEMBERED cell never carries
    * it — the seen-cells snapshot captures terrain/elevation/light only. */
   ground?: MapSurfaceGroundType;
+  /** Flow direction drawn on a water cell (the water-terrain addition) —
+   * purely decorative, a small arrow overlay rendered ON TOP of the cell's
+   * own block (see WaterFlowArrow below), never part of `cellColor`'s flat
+   * fill. Only ever meaningful — and only ever rendered — alongside
+   * `ground === "water"`; the map editor's buildDenseCells call and the
+   * game table's live (full/dim) cells both carry it (the same
+   * unconditional-when-set rule `ground` itself follows), while a
+   * REMEMBERED cell never carries it, matching `ground`'s own omission
+   * there. */
+  waterFlowDirection?: MapSurfaceWaterFlowDirection;
 }
 
 interface CellBlockProps {
@@ -308,6 +332,66 @@ const CellBlock = memo(function CellBlock({
         emissive={hoverLit ? TEAL : highlighted ? HIGHLIGHT_COLOR : PURPLE}
         emissiveIntensity={hoverLit ? 0.4 : highlighted ? 0.35 : preview ? 0.3 : 0}
         roughness={0.65}
+      />
+    </mesh>
+  );
+});
+
+// Water flow direction (purely cosmetic — see MapSurfaceCell.waterFlowDirection)
+// renders as a small flat arrowhead resting on the water cell's own top
+// face, oriented toward the authored cardinal direction. Deliberately
+// STATIC, not animated: a per-frame rotation/pulse on every water cell of a
+// large map would cost real per-frame work for a purely decorative cue —
+// "a visible directional cue" (the acceptance criterion) doesn't need
+// motion to read clearly, and a fixed arrow is the simplest, cheapest thing
+// that satisfies it. A 3-sided cone laid flat reads as a plain
+// arrowhead/triangle without a custom BufferGeometry or a canvas texture —
+// no new dependency, one cheap built-in primitive per water cell that
+// authored a direction (most water cells author none at all).
+const WATER_FLOW_ARROW_COLOR = "#eafeff";
+
+// Rotating a cone flat (rotateX(Math.PI / 2)) alone points its apex along
+// world +Z, i.e. toward increasing grid y — "south" by this app's own
+// convention (maps.ts's MAP_GROWTH_EDGES: south grows the +y edge, and a
+// cell's own y already maps to worldZ = cell.y * cellSize - offsetZ,
+// increasing together). The other three cardinals are Y-axis rotations off
+// that resting pose, derived the same way (east = +X, a quarter-turn from
+// south; north and west following at the remaining quarter-turns).
+const WATER_FLOW_Y_ROTATION: Record<MapSurfaceWaterFlowDirection, number> = {
+  south: 0,
+  east: Math.PI / 2,
+  north: Math.PI,
+  west: -Math.PI / 2,
+};
+
+const WaterFlowArrow = memo(function WaterFlowArrow({
+  worldX,
+  worldZ,
+  topY,
+  span,
+  direction,
+}: {
+  worldX: number;
+  worldZ: number;
+  /** The water cell's own top-face world height — the same quantity
+   * MapSurface's cells.map already derives per cell (see its topY), passed
+   * straight through so the arrow always sits exactly on that face,
+   * including a pit cell that also happens to be painted water. */
+  topY: number;
+  span: number;
+  direction: MapSurfaceWaterFlowDirection;
+}) {
+  return (
+    <mesh
+      position={[worldX, topY + span * 0.02, worldZ]}
+      rotation={[Math.PI / 2, WATER_FLOW_Y_ROTATION[direction], 0]}
+    >
+      <coneGeometry args={[span * 0.16, span * 0.34, 3]} />
+      <meshBasicMaterial
+        color={WATER_FLOW_ARROW_COLOR}
+        transparent
+        opacity={0.8}
+        depthWrite={false}
       />
     </mesh>
   );
@@ -1085,26 +1169,38 @@ export function MapSurface({
             // identical in shape to an ordinary raised cell at that height.
             const topY = baseHeight + cell.elevation * elevationStepHeight;
             const blockHeight = cell.terrain === "pit" ? Math.abs(topY) : topY;
+            const worldX = cell.x * cellSize - offsetX;
+            const worldZ = cell.y * cellSize - offsetZ;
             return (
-              <CellBlock
-                key={`${cell.x},${cell.y}`}
-                x={cell.x}
-                y={cell.y}
-                worldX={cell.x * cellSize - offsetX}
-                worldZ={cell.y * cellSize - offsetZ}
-                centerY={topY / 2}
-                blockHeight={blockHeight}
-                span={span}
-                elevation={cell.elevation}
-                terrain={cell.terrain}
-                preview={cell.preview ?? false}
-                light={cell.light}
-                visibility={cell.visibility}
-                highlighted={cell.highlighted ?? false}
-                ground={cell.ground}
-                onDown={onCellPointerDown}
-                onOver={onCellPointerOver}
-              />
+              <Fragment key={`${cell.x},${cell.y}`}>
+                <CellBlock
+                  x={cell.x}
+                  y={cell.y}
+                  worldX={worldX}
+                  worldZ={worldZ}
+                  centerY={topY / 2}
+                  blockHeight={blockHeight}
+                  span={span}
+                  elevation={cell.elevation}
+                  terrain={cell.terrain}
+                  preview={cell.preview ?? false}
+                  light={cell.light}
+                  visibility={cell.visibility}
+                  highlighted={cell.highlighted ?? false}
+                  ground={cell.ground}
+                  onDown={onCellPointerDown}
+                  onOver={onCellPointerOver}
+                />
+                {cell.ground === "water" && cell.waterFlowDirection ? (
+                  <WaterFlowArrow
+                    worldX={worldX}
+                    worldZ={worldZ}
+                    topY={topY}
+                    span={span}
+                    direction={cell.waterFlowDirection}
+                  />
+                ) : null}
+              </Fragment>
             );
           })()
         )
