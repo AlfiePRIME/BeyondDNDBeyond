@@ -16,6 +16,7 @@ import {
   type MapSurfaceToken,
 } from "./MapSurface";
 import { computeTableMapMetrics } from "./mapFit";
+import type { TokenSlidePhase } from "./useTokenSlide";
 
 // Room ambiance pulls from the app's design tokens (see
 // src/ui-components/tokens.css) — scene-3d can't import CSS custom
@@ -240,6 +241,10 @@ export interface GameTableSceneProps {
    * plan); defaults to "day" — today's original, unchanged values. Has no
    * effect on the per-cell vision/light-level system. */
   dayNightMode?: DayNightMode;
+  /** Verification-only pass-through to MapSurface's onTokenSlideDebug — see
+   * its own doc comment. Purely a mirror of each token's slide animation
+   * state; omitting it changes nothing about how tokens move or render. */
+  onTokenSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
 }
 
 export function GameTableScene({
@@ -255,6 +260,7 @@ export function GameTableScene({
   onRulerDragOverCell,
   onRulerDragEnd,
   dayNightMode = "day",
+  onTokenSlideDebug,
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
 
@@ -410,6 +416,7 @@ export function GameTableScene({
             onTokenPointerDown={
               !rulerActive && onTokenClick ? handleTokenPointerDown : undefined
             }
+            onTokenSlideDebug={onTokenSlideDebug}
           />
         </group>
       ) : null}

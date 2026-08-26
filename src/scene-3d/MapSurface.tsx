@@ -7,6 +7,7 @@ import type { ThreeEvent } from "@react-three/fiber";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
 import { buildGridOverlayPositions } from "./gridOverlay";
+import { useTokenSlide, type TokenSlidePhase } from "./useTokenSlide";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
 // — same hex-mirroring reasoning as GameTableScene.
@@ -691,8 +692,11 @@ const RAISE_HEIGHT = 0.22;
 // cell all but disappears.
 const TokenMarker = memo(function TokenMarker({
   id,
-  worldX,
-  worldZ,
+  gridX,
+  gridY,
+  cellSize,
+  offsetX,
+  offsetZ,
   topY,
   scale,
   allegiance,
@@ -711,10 +715,14 @@ const TokenMarker = memo(function TokenMarker({
   concentrating,
   dimmed,
   onPointerDown,
+  onSlideDebug,
 }: {
   id: string;
-  worldX: number;
-  worldZ: number;
+  gridX: number;
+  gridY: number;
+  cellSize: number;
+  offsetX: number;
+  offsetZ: number;
   topY: number;
   scale: number;
   allegiance: MapTokenAllegiance;
@@ -728,6 +736,7 @@ const TokenMarker = memo(function TokenMarker({
   concentrating: boolean;
   dimmed: boolean;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
+  onSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const color = dimmed ? DIMMED_ALLEGIANCE_COLOR[allegiance] : ALLEGIANCE_COLOR[allegiance];
@@ -737,59 +746,82 @@ const TokenMarker = memo(function TokenMarker({
   // can be subtle at a shallow seat-camera angle, so the glow carries part
   // of the "picked up" read too.
   const emissiveScale = (dimmed ? 0.2 : 1) * (raised ? 1.4 : 1);
+  // Slides from wherever the pawn last rendered to (gridX, gridY, topY)
+  // rather than snapping — see useTokenSlide's doc comment. Deliberately no
+  // JSX `position` prop on the group below: this ref's imperative per-frame
+  // writes are the ONLY thing that ever moves it, the same convention
+  // useDiceTumble uses, so there's nothing for a re-render to fight. The
+  // click-selected raise (RAISE_HEIGHT) is a SEPARATE, inner, React-managed
+  // group nested inside the slide-driven one — composing a static offset on
+  // top of an imperatively-written parent transform is safe (three.js
+  // recomputes the child's world matrix from both every frame), unlike
+  // trying to fold the raise into the imperative write itself, which would
+  // require useTokenSlide to know about a concern (selection) that belongs
+  // to this component, not the slide hook.
+  const { ref: slideRef, phase } = useTokenSlide({ gridX, gridY, topY, cellSize, offsetX, offsetZ });
+  // Verification-only: mirrors this token's slide phase out to whoever asked
+  // for it (see MapSurfaceProps.onTokenSlideDebug's doc comment) — a plain
+  // effect on the phase transition, not a per-frame subscription, since
+  // `phase` itself already only changes twice per slide.
+  useEffect(() => {
+    onSlideDebug?.(id, phase);
+  }, [id, phase, onSlideDebug]);
   return (
-    <group position={[worldX, topY + (raised ? RAISE_HEIGHT : 0), worldZ]} scale={scale}>
-      <mesh position={[0, 0.05, 0]}>
-        <cylinderGeometry args={[0.3, 0.36, 0.1, 20]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
-      </mesh>
-      <mesh position={[0, 0.26, 0]}>
-        <cylinderGeometry args={[0.12, 0.16, 0.32, 12]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
-      </mesh>
-      <mesh position={[0, 0.5, 0]}>
-        <sphereGeometry args={[0.17, 16, 16]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5 * emissiveScale} roughness={0.35} />
-      </mesh>
+    <group ref={slideRef} scale={scale}>
+      <group position={[0, raised ? RAISE_HEIGHT : 0, 0]}>
+        <mesh position={[0, 0.05, 0]}>
+          <cylinderGeometry args={[0.3, 0.36, 0.1, 20]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+        </mesh>
+        <mesh position={[0, 0.26, 0]}>
+          <cylinderGeometry args={[0.12, 0.16, 0.32, 12]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+        </mesh>
+        <mesh position={[0, 0.5, 0]}>
+          <sphereGeometry args={[0.17, 16, 16]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5 * emissiveScale} roughness={0.35} />
+        </mesh>
+        {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
+        {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
+        {deathSaveLabel !== "" ? <TokenDeathSaveBadge label={deathSaveLabel} /> : null}
+        {concentrating ? <TokenConcentrationBadge /> : null}
+        {draggable ? (
+          // Same uniform-hit-box reasoning as ObjectMarker: raycasting the
+          // pawn's thin stem makes grabbing fiddly at table scale. Attached
+          // only for draggable tokens so everyone else's pawns stay
+          // raycast-free. Nested inside the raise group so the hit-box
+          // tracks wherever the pawn is actually drawn.
+          <mesh
+            position={[0, 0.34, 0]}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.stopPropagation();
+              onPointerDown(id, event);
+            }}
+            onPointerOver={() => setHovered(true)}
+            onPointerOut={() => setHovered(false)}
+          >
+            <cylinderGeometry args={[0.42, 0.42, 0.72, 12]} />
+            <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+          </mesh>
+        ) : null}
+        {selected || (draggable && hovered) ? (
+          <mesh position={[0, 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
+            <torusGeometry args={[0.44, 0.035, 10, 32]} />
+            <meshBasicMaterial color="#ede0ff" transparent opacity={selected ? 1 : 0.45} />
+          </mesh>
+        ) : null}
+      </group>
       {raised ? (
-        // A "landing spot" ring left behind at the pawn's actual cell
-        // height (the group itself is already lifted by RAISE_HEIGHT, so
-        // this sits RAISE_HEIGHT below origin) — ties the lifted pawn back
-        // to the cell it's actually still standing on, and reuses the same
+        // A "landing spot" ring left behind at the pawn's actual (unraised)
+        // cell height — a sibling of the raise group, not nested inside it,
+        // so it needs no compensating offset. Ties the lifted pawn back to
+        // the cell it's actually still standing on, and reuses the same
         // highlight green the reachable cells glow, so the two visuals read
         // as one feature.
-        <mesh position={[0, -RAISE_HEIGHT + 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <mesh position={[0, 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[0.4, 0.03, 10, 32]} />
           <meshBasicMaterial color={HIGHLIGHT_COLOR} transparent opacity={0.85} />
-        </mesh>
-      ) : null}
-      {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
-      {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
-      {deathSaveLabel !== "" ? <TokenDeathSaveBadge label={deathSaveLabel} /> : null}
-      {concentrating ? <TokenConcentrationBadge /> : null}
-      {draggable ? (
-        // Same uniform-hit-box reasoning as ObjectMarker: raycasting the
-        // pawn's thin stem makes grabbing fiddly at table scale. Attached
-        // only for draggable tokens so everyone else's pawns stay
-        // raycast-free.
-        <mesh
-          position={[0, 0.34, 0]}
-          onPointerDown={(event) => {
-            if (event.button !== 0) return;
-            event.stopPropagation();
-            onPointerDown(id, event);
-          }}
-          onPointerOver={() => setHovered(true)}
-          onPointerOut={() => setHovered(false)}
-        >
-          <cylinderGeometry args={[0.42, 0.42, 0.72, 12]} />
-          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-        </mesh>
-      ) : null}
-      {selected || (draggable && hovered) ? (
-        <mesh position={[0, 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[0.44, 0.035, 10, 32]} />
-          <meshBasicMaterial color="#ede0ff" transparent opacity={selected ? 1 : 0.45} />
         </mesh>
       ) : null}
     </group>
@@ -858,6 +890,15 @@ export interface MapSurfaceProps {
    * cell, committing on release) stay in the wrapping scene, same split as
    * the cell hooks above. */
   onTokenPointerDown?: (id: string, event: ThreeEvent<PointerEvent>) => void;
+  /** Verification-only: fires whenever a token's slide animation
+   * (useTokenSlide) starts or settles. Nothing in this module reads it back
+   * — the animation itself is entirely self-contained in the imperative
+   * per-frame ref writes — it exists purely so a caller can mirror it into
+   * a hidden DOM node for Playwright, the exact DiceTumbleProps.onQueueChange
+   * precedent: a WebGL canvas has no DOM of its own for a test to inspect a
+   * slide's timing directly. Omit it (as every real caller does today) and
+   * nothing changes about how tokens render or move. */
+  onTokenSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
 }
 
 /**
@@ -879,6 +920,7 @@ export function MapSurface({
   onCellPointerDown,
   onCellPointerOver,
   onTokenPointerDown,
+  onTokenSlideDebug,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
   const offsetX = ((gridWidth - 1) / 2) * cellSize;
@@ -953,8 +995,11 @@ export function MapSurface({
         <TokenMarker
           key={token.id}
           id={token.id}
-          worldX={token.x * cellSize - offsetX}
-          worldZ={token.y * cellSize - offsetZ}
+          gridX={token.x}
+          gridY={token.y}
+          cellSize={cellSize}
+          offsetX={offsetX}
+          offsetZ={offsetZ}
           topY={baseHeight + token.elevation * elevationStepHeight}
           scale={cellSize}
           allegiance={token.allegiance}
@@ -968,6 +1013,7 @@ export function MapSurface({
           concentrating={token.concentrating ?? false}
           dimmed={token.dimmed ?? false}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
+          onSlideDebug={onTokenSlideDebug}
         />
       ))}
 
