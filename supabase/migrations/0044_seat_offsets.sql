@@ -1,0 +1,48 @@
+-- Movable-chair data layer (drag gesture itself is a later prompt). Stores
+-- a member's own persisted override for where their chair actually sits, as
+-- an OFFSET from seating.ts's computeCampaignSeatLayout's own computed
+-- default for that seat — deliberately never an absolute world coordinate.
+--
+-- Why an offset and not an absolute position: computeCampaignSeatLayout's
+-- output reshapes as party size changes — a table getting appended, or the
+-- head square's own per-seat angles shifting as its bucket fills or empties
+-- (every seat at a table is spaced evenly by that table's own current
+-- occupant count, see seating.ts's own comment on this). An absolute stored
+-- coordinate would silently go stale the moment that happens: a chair left
+-- floating over empty space, or now overlapping a newly-appended table. An
+-- offset stays sensibly attached to wherever that seat's default now sits
+-- instead — see seating.ts's applySeatOffset, the one place this offset
+-- ever actually gets combined with a computed default.
+--
+-- A plain column on campaign_members, not a new table: this is exactly a
+-- per-(campaign_id, user_id) attribute, campaign_members' own existing
+-- grain (its own `unique (campaign_id, user_id)` constraint, 0003). That's
+-- different from model_orientation (0043), which needed a table of its own
+-- because it's genuinely cross-cutting over two unrelated OWNING tables
+-- (asset_library and profiles, neither of which is "this member, in this
+-- campaign") — that reasoning doesn't apply here, since campaign_members is
+-- already the one and only owner of the entity this data describes. This is
+-- also the first per-member customization column ever added to
+-- campaign_members (checked: only role/joined_at exist since 0003), but the
+-- table's own grain is still the right fit regardless.
+--
+-- jsonb, not three separate numeric columns: "no override" is a single NULL
+-- check either way, but one nullable jsonb blob keeps "has an override" and
+-- "the override's own shape" both governed by one column instead of three
+-- numeric columns' nullability needing to agree with each other. Same
+-- schemaless-jsonb, app-layer-owns-the-shape convention as
+-- profiles.ui_preferences (0040) — data-access/seatOffsets.ts's SeatOffset
+-- interface (dx, dz, dRotationY) is the real schema.
+--
+-- No new RLS: campaign_members' existing "a member can update their own
+-- membership row" policy (0004) is a blanket
+-- USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid()) with no
+-- column-level restriction — the exact ui_preferences/day_night_mode
+-- precedent (0040/0041's own comments) of an existing blanket self-only
+-- UPDATE policy already covering a brand new column on the same row. The
+-- existing "members can read their campaign's roster" SELECT policy already
+-- covers reading it back for every member too — this is shared, visible
+-- table state (everyone sees where everyone else's chair actually is), not
+-- private data, matching every other roster field.
+alter table public.campaign_members
+  add column if not exists seat_offset jsonb null default null;

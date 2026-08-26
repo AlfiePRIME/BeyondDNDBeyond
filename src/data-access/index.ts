@@ -91,6 +91,12 @@ export {
   type ModelOrientation,
 } from "./modelOrientation";
 export {
+  getSeatOffset,
+  getSeatOffsetsForCampaign,
+  setSeatOffset,
+  type SeatOffset,
+} from "./seatOffsets";
+export {
   createMap,
   createPopulatedMap,
   duplicateMap,

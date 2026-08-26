@@ -7,6 +7,9 @@ import {
   SINGLE_TABLE_SEAT_CAPACITY,
   PLAYER_CHAIR_FRONTAGE,
   DM_CHAIR_FRONTAGE,
+  applySeatOffset,
+  getEffectiveSeat,
+  type SeatOffset,
 } from "./seating";
 
 // Imports the real constants rather than hardcoded copies so these tests can
@@ -440,5 +443,147 @@ describe("computeCampaignSeatLayout — appended tables never collide with a nei
     // Not adjacent, but checked anyway — cheap, and confirms the row
     // doesn't fold back on itself at three tables.
     expectNoCrossTableCollisions(headOnly, table1Only);
+  });
+});
+
+/** Finds a seat by member.user_id, throwing (not returning undefined) on a
+ * miss — every test below expects the id it looks up to actually be
+ * present, and a thrown error at the lookup site is a much clearer failure
+ * than a later "Cannot read properties of undefined". */
+function findSeatByUserId(seats: ReturnType<typeof computeCampaignSeatLayout>["seats"], userId: string) {
+  const seat = seats.find((s) => s.member.user_id === userId);
+  if (!seat) throw new Error(`no seat found for ${userId}`);
+  return seat;
+}
+
+describe("applySeatOffset", () => {
+  const offset: SeatOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
+
+  it("returns the seat completely unchanged when there is no override (null or undefined)", () => {
+    const { seats } = computeCampaignSeatLayout(makeMembers(4));
+    const seat = seats[0];
+    expect(applySeatOffset(seat, null)).toEqual(seat);
+    expect(applySeatOffset(seat, undefined)).toEqual(seat);
+  });
+
+  it("applies the offset's dx/dz to both position and cameraPosition, and dRotationY to rotationY", () => {
+    const { seats } = computeCampaignSeatLayout(makeMembers(4));
+    const seat = seats[0];
+    const effective = applySeatOffset(seat, offset);
+
+    expect(effective.position).toEqual([seat.position[0] + offset.dx, seat.position[1], seat.position[2] + offset.dz]);
+    expect(effective.rotationY).toBeCloseTo(seat.rotationY + offset.dRotationY);
+    expect(effective.cameraPosition).toEqual([
+      seat.cameraPosition[0] + offset.dx,
+      seat.cameraPosition[1],
+      seat.cameraPosition[2] + offset.dz,
+    ]);
+  });
+
+  it("preserves every other field on the seat (member identity, tableIndex) untouched", () => {
+    const { seats } = computeCampaignSeatLayout(makeMembers(HEAD_SQUARE_SEAT_CAPACITY + 1));
+    const seat = seats.find((s) => s.tableIndex === 0)!;
+    const effective = applySeatOffset(seat, offset);
+    expect(effective.member).toBe(seat.member);
+    expect(effective.tableIndex).toBe(seat.tableIndex);
+  });
+});
+
+describe("getEffectiveSeat", () => {
+  const offset: SeatOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
+
+  it("equals computeCampaignSeatLayout's own default when no override is stored for that member", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(5));
+    const userId = layout.seats[2].member.user_id;
+    expect(getEffectiveSeat(layout, userId, new Map())).toEqual(layout.seats[2]);
+  });
+
+  it("applies a stored override on top of that member's default seat", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(5));
+    const userId = layout.seats[2].member.user_id;
+    const offsets = new Map([[userId, offset]]);
+    expect(getEffectiveSeat(layout, userId, offsets)).toEqual(applySeatOffset(layout.seats[2], offset));
+  });
+
+  it("returns null for a user_id not present in the layout at all", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(4));
+    expect(getEffectiveSeat(layout, "not-a-member", new Map())).toBeNull();
+  });
+});
+
+describe("effective position tracks a reshaped default instead of going stale", () => {
+  const offset: SeatOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
+
+  it("stays correct as the head square's own ring re-spaces its seats (party growing, table capacity untouched)", () => {
+    // user-2 (a player, not the DM, and deliberately not the very first
+    // joiner — placeDmAtNorthSlot's own construction pins the first
+    // joiner's seat index, and therefore angle, at 0 for every party size,
+    // by design, per FIRST_SEAT_ANGLE's own doc comment, so it wouldn't
+    // demonstrate a reshaped default here) is seated at the head square at
+    // both party sizes — well under HEAD_SQUARE_SEAT_CAPACITY either time —
+    // but computeSeatLayout spaces a table's seats evenly by CURRENT
+    // occupant count, so this member's own default angle (and therefore
+    // position) is NOT the same before and after growth: the default
+    // itself moved.
+    const before = computeCampaignSeatLayout(makeMembers(3));
+    const after = computeCampaignSeatLayout(makeMembers(6));
+    const seatBefore = findSeatByUserId(before.seats, "user-2");
+    const seatAfter = findSeatByUserId(after.seats, "user-2");
+
+    expect(seatAfter.tableIndex).toBe(seatBefore.tableIndex); // still the head square (-1)
+    expect(seatAfter.position).not.toEqual(seatBefore.position); // the default genuinely moved
+
+    const effectiveBefore = applySeatOffset(seatBefore, offset);
+    const effectiveAfter = applySeatOffset(seatAfter, offset);
+
+    // Not stale: the effective position after growth is the NEW default
+    // plus the same stored offset — not the OLD effective position left
+    // sitting wherever it used to be.
+    expect(effectiveAfter.position).toEqual([
+      seatAfter.position[0] + offset.dx,
+      seatAfter.position[1],
+      seatAfter.position[2] + offset.dz,
+    ]);
+    expect(effectiveAfter.position).not.toEqual(effectiveBefore.position);
+    // The shift in effective position is EXACTLY the shift in the
+    // underlying default — the stored offset never changed, only the
+    // default it's added to did.
+    expect(effectiveAfter.position[0] - effectiveBefore.position[0]).toBeCloseTo(
+      seatAfter.position[0] - seatBefore.position[0]
+    );
+    expect(effectiveAfter.position[2] - effectiveBefore.position[2]).toBeCloseTo(
+      seatAfter.position[2] - seatBefore.position[2]
+    );
+  });
+
+  it("stays correct as a table gets appended and its own ring grows (party crossing HEAD_SQUARE_SEAT_CAPACITY)", () => {
+    // The first three overflow members (index HEAD_SQUARE_SEAT_CAPACITY,
+    // +1, +2 in the joined_at order) all land at appended table 0 once the
+    // party is this large. At exactly one overflow member, that lone
+    // member sits alone at that table's angle-0 end-cap; growing to three
+    // overflow members splits the two end-caps 2/1 (appendedTableAngles'
+    // own ceil(n/2) split), moving the FIRST overflow member's own angle
+    // off of plain 0 — a real default reshape driven by a table actually
+    // being appended/growing, not just an existing ring re-spacing.
+    const firstOverflowUserId = makeMembers(HEAD_SQUARE_SEAT_CAPACITY + 1)[HEAD_SQUARE_SEAT_CAPACITY].user_id;
+    const before = computeCampaignSeatLayout(makeMembers(HEAD_SQUARE_SEAT_CAPACITY + 1));
+    const after = computeCampaignSeatLayout(makeMembers(HEAD_SQUARE_SEAT_CAPACITY + 3));
+
+    const seatBefore = findSeatByUserId(before.seats, firstOverflowUserId);
+    const seatAfter = findSeatByUserId(after.seats, firstOverflowUserId);
+
+    expect(seatBefore.tableIndex).toBe(0);
+    expect(seatAfter.tableIndex).toBe(0); // same appended table both times — append-only bucketing
+    expect(seatAfter.position).not.toEqual(seatBefore.position); // this table's own ring reshaped
+
+    const effectiveBefore = applySeatOffset(seatBefore, offset);
+    const effectiveAfter = applySeatOffset(seatAfter, offset);
+
+    expect(effectiveAfter.position).toEqual([
+      seatAfter.position[0] + offset.dx,
+      seatAfter.position[1],
+      seatAfter.position[2] + offset.dz,
+    ]);
+    expect(effectiveAfter.position).not.toEqual(effectiveBefore.position);
   });
 });

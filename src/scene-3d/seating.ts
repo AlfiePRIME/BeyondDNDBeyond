@@ -550,3 +550,96 @@ export function computeCampaignSeatLayout(members: readonly SeatMember[]): Campa
 
   return { appendedTables, seats };
 }
+
+/**
+ * A member's own persisted override for where their chair actually sits —
+ * always an OFFSET from computeCampaignSeatLayout's own computed default
+ * for that seat, never an absolute world coordinate. See
+ * supabase/migrations/0044_seat_offsets.sql for the full reasoning: the
+ * default reshapes as party size changes (a table getting appended, or a
+ * table's own per-seat angles shifting as its bucket fills/empties), so an
+ * absolute stored position would silently go stale — a chair left floating
+ * over empty space, or now overlapping a newly-appended table — the moment
+ * that happens. An offset stays sensibly attached to wherever the default
+ * now sits instead.
+ *
+ * Deliberately floor-plane only (dx/dz, no dy): every seat's `position` is
+ * already fixed to y=0 ("Stool base on the floor" — Seat's own doc
+ * comment), and this data layer has no reason to invent a vertical degree
+ * of freedom a chair drag was never going to produce.
+ *
+ * Structurally matches data-access/seatOffsets.ts's own SeatOffset — the
+ * same module-boundary convention as SeatMember above (scene-3d can't
+ * import data-access's type directly, so this is scene-3d's independent,
+ * structurally-identical definition of the same shape).
+ */
+export interface SeatOffset {
+  /** Added to position[0]/cameraPosition[0]. */
+  dx: number;
+  /** Added to position[2]/cameraPosition[2]. */
+  dz: number;
+  /** Added to rotationY, radians — same unit computeSeatLayout already
+   * uses (Math.atan2 output). */
+  dRotationY: number;
+}
+
+/**
+ * The one place a stored SeatOffset ever actually gets combined with a
+ * computed default — every later consumer of a seat's position (the chair
+ * drag gesture, the personal dice tray, camera-mode) should route through
+ * this (or getEffectiveSeat below) instead of reading a Seat/CampaignSeat
+ * straight off computeSeatLayout/computeCampaignSeatLayout, so "where is
+ * this member actually sitting right now" has exactly one answer everywhere
+ * — never a computed value in some call sites and an overridden one in
+ * others.
+ *
+ * `offset` null/undefined (no override ever stored, or explicitly cleared
+ * back to the default) returns `seat` completely unchanged — the identity
+ * case. Generic over S (Seat or the CampaignSeat superset) so this works
+ * unmodified for either computeSeatLayout's or computeCampaignSeatLayout's
+ * own output, preserving whatever extra fields (e.g. CampaignSeat's
+ * tableIndex) the input seat already carried.
+ *
+ * Translates position AND cameraPosition by the identical (dx, dz) — a
+ * rigid translation that keeps the seated camera's setback/height relative
+ * to the chair exactly as tuned (CAMERA_SETBACK/CAMERA_EYE_HEIGHT above),
+ * rather than re-deriving a camera offset from the new position and getting
+ * a different (wrong) relationship to it.
+ */
+export function applySeatOffset<S extends Seat>(seat: S, offset: SeatOffset | null | undefined): S {
+  if (!offset) return seat;
+  return {
+    ...seat,
+    position: [seat.position[0] + offset.dx, seat.position[1], seat.position[2] + offset.dz],
+    rotationY: seat.rotationY + offset.dRotationY,
+    cameraPosition: [
+      seat.cameraPosition[0] + offset.dx,
+      seat.cameraPosition[1],
+      seat.cameraPosition[2] + offset.dz,
+    ],
+  } as S;
+}
+
+/**
+ * Finds `userId`'s own seat in `layout` and applies their stored offset (if
+ * any) — the convenience form of applySeatOffset for the common "where is
+ * THIS member actually sitting" query (the private dice tray's own seat,
+ * the local player's camera seat, one dragged chair), so a caller doesn't
+ * need to re-derive the `seats.find(...)` lookup that GameRoom.tsx's own
+ * dmSeat memo (and others like it) already does today. Returns null if
+ * `userId` isn't seated at all (not a member of this campaign's roster) —
+ * the same "absent, not a wrong answer" shape as a missed Map lookup.
+ *
+ * `offsets` accepts a plain Map (data-access's getSeatOffsetsForCampaign's
+ * own return shape) so a caller holding that result can pass it straight
+ * through without re-keying it into a different structure first.
+ */
+export function getEffectiveSeat(
+  layout: CampaignSeatLayout,
+  userId: string,
+  offsets: ReadonlyMap<string, SeatOffset>
+): CampaignSeat | null {
+  const seat = layout.seats.find((candidate) => candidate.member.user_id === userId);
+  if (!seat) return null;
+  return applySeatOffset(seat, offsets.get(userId));
+}
