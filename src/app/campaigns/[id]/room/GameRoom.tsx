@@ -890,6 +890,11 @@ export function GameRoom({
   // acceptance criterion (GameTableScene's onOwnCameraDebug's own doc
   // comment).
   const [ownCameraPosition, setOwnCameraPosition] = useState<readonly [number, number, number] | null>(null);
+  // Seated look-around: this client's own look-around yaw/pitch offset,
+  // live — GameTableScene's onLookAroundDebug, the same "WebGL has no DOM
+  // of its own for a test to inspect a camera's orientation" reasoning as
+  // ownCameraPosition above, generalized from position to look direction.
+  const [lookAroundDebug, setLookAroundDebug] = useState<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0 });
   // Turn camera: mirrors GameTableScene's own isDraggingChair state
   // (onChairDraggingChange — load-bearing, not just verification; see that
   // prop's own doc comment) so the "better view" offer/auto-apply below can
@@ -3291,6 +3296,7 @@ export function GameRoom({
           onChairDraggingChange={handleChairDraggingChange}
           turnCameraActive={turnCameraActive}
           onLiveChairOffset={handleLiveChairOffset}
+          onLookAroundDebug={setLookAroundDebug}
         />
         {/* Prompt 8b: one personal dice tray per CONNECTED member —
             replacing the old single shared corner tray plus the DM's
@@ -3552,6 +3558,17 @@ export function GameRoom({
           offered: turnCameraOffered,
           active: turnCameraActive,
         })}
+      </div>
+      {/* Hidden render-state mirror for a real Playwright verification of
+          the seated look-around feature — same "WebGL has no DOM of its
+          own" reasoning as every other mirror on this page. `yaw`/`pitch`
+          are this client's own current look-around offset in radians
+          (GameTableScene's onLookAroundDebug) — the only way a script can
+          confirm the camera's LOOK DIRECTION is actually rotating smoothly,
+          clamped, and auto-recentering, without re-deriving three.js's own
+          lookAt/quaternion math from raw camera coordinates. */}
+      <div data-testid="look-around-state" hidden>
+        {JSON.stringify(lookAroundDebug)}
       </div>
       {rulerReadout !== null ? (
         <div className={`${styles.moveReadout} ${styles.rulerReadout}`} data-testid="ruler-readout">
