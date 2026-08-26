@@ -1,4 +1,4 @@
-import { COMBINED_TABLE_TOP } from "./table";
+import { COMBINED_TABLE_TOP, TABLE_TOP, singleTableOffsetZ } from "./table";
 
 /**
  * Structurally matches data-access's CampaignMember so callers can pass that
@@ -117,27 +117,436 @@ export function seatEllipseSemiAxes(
   };
 }
 
+/**
+ * The position/rotation/camera math for a single seat at a given angle
+ * around a given table's ellipse — factored out of computeSeatLayout so a
+ * DIFFERENT angle-generation scheme (appendedTableAngles below, for
+ * appended tables' own end-cap-only arcs) can reuse the exact same
+ * placement formula instead of a hand-copied duplicate. Pure function of
+ * (table, angle) alone — computeSeatLayout supplies angles via its own
+ * full-circle, equal-spacing formula; appendedTableAngles supplies them via
+ * two restricted arcs instead. Neither knows or cares which the other does.
+ */
+function seatAtAngle(
+  table: { width: number; depth: number },
+  angle: number
+): Pick<Seat, "position" | "rotationY" | "cameraPosition"> {
+  const { semiX, semiZ } = seatEllipseSemiAxes(table);
+  const x = semiX * Math.cos(angle);
+  const z = semiZ * Math.sin(angle);
+  return {
+    position: [x, 0, z],
+    rotationY: Math.atan2(x, z),
+    cameraPosition: [
+      (semiX + CAMERA_SETBACK) * Math.cos(angle),
+      CAMERA_EYE_HEIGHT,
+      (semiZ + CAMERA_SETBACK) * Math.sin(angle),
+    ],
+  };
+}
+
 export function computeSeatLayout(
   members: readonly SeatMember[],
   table: { width: number; depth: number } = COMBINED_TABLE_TOP
 ): Seat[] {
-  const { semiX, semiZ } = seatEllipseSemiAxes(table);
-
   const ordered = placeDmAtNorthSlot(members);
 
   return ordered.map((member, index) => {
     const angle = FIRST_SEAT_ANGLE + (index / members.length) * Math.PI * 2;
-    const x = semiX * Math.cos(angle);
-    const z = semiZ * Math.sin(angle);
+    return { member, ...seatAtAngle(table, angle) };
+  });
+}
+
+// Real chair frontage (side-to-side width a chair actually occupies once
+// rendered), re-measured the same way table.ts's own TABLE_TOP comment
+// documents: a Box3 over each raw glTF's loaded scene
+// (public/table/player-chair.glb, public/table/dm-chair.glb — a plain
+// GLB-chunk walk + per-vertex world-matrix transform, not GLTFLoader, since
+// this was measured from a throwaway Node script outside the browser;
+// cross-checked against table.glb's own already-documented raw bounding box
+// to confirm the measurement approach itself is correct), then scaled by
+// the exact same targetHeight/rawHeight factor Chair.tsx's ChairModel
+// applies at render time:
+//   player: raw Box3 size (x,y,z) ≈ (0.5897, 1.2630, 0.6626); Chair.tsx's
+//     PLAYER_CHAIR_HEIGHT (1.0) / raw y (1.2630) = 0.7918 scale →
+//     frontage = 0.5897 × 0.7918 ≈ 0.4669
+//   dm: raw Box3 size (x,y,z) ≈ (1.4269, 2.2063, 0.9312); Chair.tsx's
+//     DM_CHAIR_HEIGHT (2.0) / raw y (2.2063) = 0.9065 scale →
+//     frontage = 1.4269 × 0.9065 ≈ 1.2935
+// Local X (not Z) is the right axis to measure: both chair models were
+// authored with local +Z as their own front-facing direction (confirmed by
+// Chair.tsx's own axis-aligned-camera probe comment), making X the
+// side-to-side ("frontage") axis, not the front-to-back depth axis. The
+// 180° *_FORWARD_CORRECTION yaw Chair.tsx applies doesn't change this
+// number: a pure rotation about Y by exactly π maps local x to -x, which
+// preserves the overall x-extent (max−min) exactly, so the raw model's
+// local-X footprint IS the rendered chair's world-frame tangential width
+// regardless of that correction (or of TableSeat's own further per-seat
+// rotation, which this circular-footprint model deliberately doesn't need
+// to track — see HEAD_SQUARE_SEAT_CAPACITY's own comment).
+// Exported (not just module-private) so tests can check real non-collision
+// against the exact same numbers this file's own capacity derivation uses,
+// instead of a hand-copied duplicate that could silently drift from them —
+// the same "single source of truth" reasoning seatEllipseSemiAxes was
+// already exported for.
+export const PLAYER_CHAIR_FRONTAGE = 0.4669;
+export const DM_CHAIR_FRONTAGE = 1.2935;
+
+/**
+ * How many seats fit around one "table unit" before the next one's chair
+ * would visually collide with its neighbor — derived, not guessed, by
+ * actually finding (below, at module load — not a hand-copied literal that
+ * could silently drift from the formula it claims to summarize) the largest
+ * n for which every pair of ADJACENT seats (computeSeatLayout's own
+ * equal-angle-spacing formula, walked around the ring) clears half of each
+ * seat's own chair frontage summed together — the standard minimum
+ * non-overlapping center-to-center spacing for two differently-sized
+ * objects centered on their own anchor points, modeling each chair as a
+ * frontage-diameter circle (a deliberately simple proxy for the real,
+ * individually-rotated rectangular footprint that sidesteps needing to
+ * track each seat's own rotationY, since a circle looks the same from every
+ * angle). Only ADJACENT pairs need checking: seats sit in strictly
+ * increasing angular order around a convex ellipse, so any non-adjacent
+ * pair is always farther apart than its nearer neighbor.
+ */
+function maxSeatCapacity(
+  table: { width: number; depth: number },
+  frontageAt: (seatIndex: number, seatCount: number) => number
+): number {
+  const { semiX, semiZ } = seatEllipseSemiAxes(table);
+  const positionAt = (index: number, n: number): [number, number] => {
+    const angle = FIRST_SEAT_ANGLE + (index / n) * Math.PI * 2;
+    return [semiX * Math.cos(angle), semiZ * Math.sin(angle)];
+  };
+
+  let best = 1; // a solo seat never has a neighbor to collide with
+  for (let n = 2; n <= 200; n++) {
+    let everyAdjacentPairFits = true;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const required = frontageAt(i, n) / 2 + frontageAt(j, n) / 2;
+      const [ix, iz] = positionAt(i, n);
+      const [jx, jz] = positionAt(j, n);
+      if (Math.hypot(ix - jx, iz - jz) < required) {
+        everyAdjacentPairFits = false;
+        break;
+      }
+    }
+    if (!everyAdjacentPairFits) break;
+    best = n;
+  }
+  return best;
+}
+
+// placeDmAtNorthSlot's own north-slot formula, replayed here so the head
+// square's capacity search knows exactly which one of its n seats is the
+// wider DM throne rather than assuming every seat is a plain player chair.
+function dmSeatIndex(n: number): number {
+  return Math.round(n / 2) % n;
+}
+
+/**
+ * How many seats fit around the fixed head square (COMBINED_TABLE_TOP's own
+ * ellipse) before the next one would visually collide with a neighbor —
+ * exactly one of these n seats (placeDmAtNorthSlot's own north-slot index)
+ * is the much wider DM throne (DM_CHAIR_FRONTAGE); the rest are player
+ * chairs (PLAYER_CHAIR_FRONTAGE). See maxSeatCapacity's own doc comment for
+ * the fitting method.
+ *
+ * This number comes out much larger than a typical real-world game table
+ * seats (23 players before the head square alone is full) — a real,
+ * verified consequence of this scene's EXISTING geometry, not a mistake
+ * introduced here: COMBINED_TABLE_TOP's footprint was independently scaled
+ * to match TABLE_SURFACE_Y (table.ts's own comment — "kept unchanged on
+ * purpose" for camera/fog framing, deliberately taller, and by that same
+ * scale factor wider, than a real table), while the chairs were separately
+ * tuned to REAL dining-chair proportions (Chair.tsx's own comment on
+ * PLAYER_CHAIR_HEIGHT). Those two independently-correct facts together mean
+ * this specific table, at its current size, can genuinely seat far more
+ * real-proportioned chairs than a realistically-sized table could — not a
+ * bug, just what the real numbers say once actually measured, which is
+ * exactly what was asked for instead of a guessed round number.
+ */
+export const HEAD_SQUARE_SEAT_CAPACITY = maxSeatCapacity(COMBINED_TABLE_TOP, (index, n) =>
+  index === dmSeatIndex(n) ? DM_CHAIR_FRONTAGE : PLAYER_CHAIR_FRONTAGE
+);
+
+/**
+ * An appended single table's own two seats never wrap all the way around
+ * its ellipse the way the head square's (or a genuinely standalone table's)
+ * do — table.ts's own TABLE_TOP_JOIN_DEPTH comment has the reasoning: the
+ * table-doubling work already established that tables in this row join
+ * along their WIDTH edges ("that join runs along the WIDTH axis... the two
+ * tables stack along DEPTH instead" — table.ts's own COMBINED_TABLE_TOP
+ * comment). That means every table's own two WIDTH (long) edges — the
+ * angle-π/2 and angle-3π/2 ends of its ellipse, at the ellipse's Z-extremes
+ * — are exactly the edges touching whatever's next to it in the row (the
+ * head square on one side, and — for every table but the last in a longer
+ * row — another appended table on the other). Only the two DEPTH (short)
+ * end-caps — the ellipse's X-extremes, at angle 0 and π — are ever free.
+ * Placing seats around the FULL ellipse (as computeSeatLayout does for the
+ * head square, which has no neighbor to worry about) put chairs on those
+ * occupied long edges too, which is what let an appended table's own
+ * chairs collide with the head square's real deployed layout once
+ * TABLE_TOP_JOIN_DEPTH tightened the row spacing.
+ *
+ * APPENDED_TABLE_ENDCAP_HALF_WIDTH_DEG is the half-width of each of the two
+ * usable end-cap arcs (one centered on angle 0, one on angle π), a plain,
+ * symmetric "quarter circle per end" (2×45°) rather than an
+ * opaquely-optimized number — checked, not just assumed, against
+ * SINGLE_TABLE_SEAT_CAPACITY's own exhaustive search below to confirm it
+ * actually clears every real collision case at a real capacity (an
+ * exhaustive sweep of the half-width itself found the true optimum at 43°,
+ * a single seat's difference in the resulting capacity — not worth the
+ * extra opacity of a non-round number for one seat).
+ */
+const APPENDED_TABLE_ENDCAP_HALF_WIDTH_DEG = 45;
+
+/**
+ * The angles (radians) for `n` seats split across an appended table's two
+ * free end-cap arcs — as evenly as possible between the two ends (the
+ * larger half, if n is odd, goes to the first/"left" end), each end's own
+ * share spread evenly across its own
+ * [-APPENDED_TABLE_ENDCAP_HALF_WIDTH_DEG, +HALF_WIDTH] arc, centered on
+ * angle 0 (first end) or angle π (second end). A single seat on one end
+ * sits at that end's exact center (0 or π) rather than an arbitrary edge of
+ * its own arc.
+ */
+function appendedTableAngles(n: number): number[] {
+  const halfWidth = (APPENDED_TABLE_ENDCAP_HALF_WIDTH_DEG * Math.PI) / 180;
+  const leftCount = Math.ceil(n / 2);
+  const rightCount = n - leftCount;
+  const angles: number[] = [];
+  for (let i = 0; i < leftCount; i++) {
+    angles.push(leftCount === 1 ? 0 : -halfWidth + (i / (leftCount - 1)) * (2 * halfWidth));
+  }
+  for (let i = 0; i < rightCount; i++) {
+    angles.push(Math.PI + (rightCount === 1 ? 0 : -halfWidth + (i / (rightCount - 1)) * (2 * halfWidth)));
+  }
+  return angles;
+}
+
+/**
+ * computeSeatLayout's counterpart for an appended single table: same
+ * seatAtAngle placement math, but angles come from appendedTableAngles's
+ * two-end-cap split instead of a full-circle sweep (this table's own doc
+ * comment above has the reasoning), and the whole result is translated by
+ * `offsetZ` (table.ts's singleTableOffsetZ) into this table's actual
+ * world-space row position. No DM reordering: an appended table never
+ * seats the DM (computeCampaignSeatLayout always keeps it on the head
+ * square), so members are placed in their given (join) order as-is.
+ */
+function computeAppendedTableSeatLayout(members: readonly SeatMember[], offsetZ: number): Seat[] {
+  const angles = appendedTableAngles(members.length);
+  return members.map((member, index) => {
+    const seat = seatAtAngle(TABLE_TOP, angles[index]);
     return {
       member,
-      position: [x, 0, z],
-      rotationY: Math.atan2(x, z),
-      cameraPosition: [
-        (semiX + CAMERA_SETBACK) * Math.cos(angle),
-        CAMERA_EYE_HEIGHT,
-        (semiZ + CAMERA_SETBACK) * Math.sin(angle),
-      ],
+      position: [seat.position[0], seat.position[1], seat.position[2] + offsetZ],
+      rotationY: seat.rotationY,
+      cameraPosition: [seat.cameraPosition[0], seat.cameraPosition[1], seat.cameraPosition[2] + offsetZ],
     };
   });
+}
+
+/**
+ * How many seats fit at one appended single table before either its own
+ * chairs collide with each other OR with a neighboring table's — checked
+ * against THREE real cases, not just the single-table-in-isolation case
+ * maxSeatCapacity covers:
+ *  1. Within this table's own two end-cap arcs (adjacent seats on the same
+ *     arc, and the two arcs against each other).
+ *  2. Against a full head square (HEAD_SQUARE_SEAT_CAPACITY seats, the DM
+ *     included) at table.ts's singleTableOffsetZ(0) — the case for the
+ *     FIRST appended table, which always has exactly this as its neighbor
+ *     (an appended table only ever exists once the head square is
+ *     completely full — computeCampaignSeatLayout's own bucketing).
+ *  3. Against ANOTHER appended table at the very next row slot
+ *     (singleTableOffsetZ(1)), holding just as many seats — the worst case
+ *     for an "interior" table in a row of 3+ appended tables, which has an
+ *     occupied neighbor on BOTH sides, not just one.
+ * Whichever of these three fails first caps the capacity — checked at every
+ * candidate n, not assumed safe just because ONE of the three happens to
+ * clear.
+ */
+function maxAppendedTableCapacity(): number {
+  const buildSeats = (n: number, offsetZ: number) =>
+    appendedTableAngles(n).map((angle) => {
+      const { position } = seatAtAngle(TABLE_TOP, angle);
+      return { x: position[0], z: position[2] + offsetZ, frontage: PLAYER_CHAIR_FRONTAGE };
+    });
+  const headSeats = () =>
+    Array.from({ length: HEAD_SQUARE_SEAT_CAPACITY }, (_, i) => {
+      const { position } = seatAtAngle(
+        COMBINED_TABLE_TOP,
+        FIRST_SEAT_ANGLE + (i / HEAD_SQUARE_SEAT_CAPACITY) * Math.PI * 2
+      );
+      return {
+        x: position[0],
+        z: position[2],
+        frontage: i === dmSeatIndex(HEAD_SQUARE_SEAT_CAPACITY) ? DM_CHAIR_FRONTAGE : PLAYER_CHAIR_FRONTAGE,
+      };
+    });
+  const worstPairRatio = (as: { x: number; z: number; frontage: number }[], bs: typeof as) => {
+    let worst = Infinity;
+    for (const a of as) {
+      for (const b of bs) {
+        const dist = Math.hypot(a.x - b.x, a.z - b.z);
+        worst = Math.min(worst, dist / (a.frontage / 2 + b.frontage / 2));
+      }
+    }
+    return worst;
+  };
+
+  const worstWithinPairRatio = (seats: { x: number; z: number; frontage: number }[]) => {
+    let worst = Infinity;
+    for (let i = 0; i < seats.length; i++) {
+      for (let j = i + 1; j < seats.length; j++) {
+        const a = seats[i];
+        const b = seats[j];
+        const dist = Math.hypot(a.x - b.x, a.z - b.z);
+        worst = Math.min(worst, dist / (a.frontage / 2 + b.frontage / 2));
+      }
+    }
+    return worst;
+  };
+
+  let best = 0;
+  for (let n = 1; n <= 100; n++) {
+    const table0 = buildSeats(n, singleTableOffsetZ(0));
+    const table1 = buildSeats(n, singleTableOffsetZ(1));
+    const withinOk = n < 2 || worstWithinPairRatio(table0) >= 1;
+    const crossHeadOk = worstPairRatio(headSeats(), table0) >= 1;
+    const crossNextOk = worstPairRatio(table0, table1) >= 1;
+    if (withinOk && crossHeadOk && crossNextOk) best = n;
+    else break;
+  }
+  return best;
+}
+
+/**
+ * How many seats fit at one appended single table — see
+ * maxAppendedTableCapacity's own doc comment for the three real collision
+ * cases this checks (within its own two arcs, against a full head square,
+ * and against a same-sized neighbor on its OTHER side too, the worst case
+ * for a 3+-table row's interior tables). Far smaller than
+ * HEAD_SQUARE_SEAT_CAPACITY — expected, not a bug: an appended table only
+ * has its two short end-caps free to seat anyone at all (its long edges are
+ * exactly where it joins its neighbors), so it was never going to seat
+ * anywhere near as many people as the head square's own full, unobstructed
+ * perimeter.
+ */
+export const SINGLE_TABLE_SEAT_CAPACITY = maxAppendedTableCapacity();
+
+/** One plain single table appended beside the fixed head square. */
+export interface AppendedTable {
+  /** 0-based: 0 is the first table appended beside the head square. */
+  index: number;
+  /** World-space Z offset of this table's own center — table.ts's
+   * singleTableOffsetZ, the same formula GameTableScene positions the
+   * physical table mesh with. Every seat at this table (in the sibling
+   * `seats` array) has already been offset by this same amount. */
+  offsetZ: number;
+}
+
+/** A Seat plus which physical table it landed on — a superset of Seat, so
+ * anywhere that renders a plain Seat (GameTableScene's TableSeat) still
+ * accepts these unchanged. `tableIndex` is -1 for the fixed head square, or
+ * an AppendedTable's own 0-based `index` — exposed as real data rather than
+ * left for a caller to reverse-engineer from raw position (the two
+ * ellipses' Z ranges can overlap for a nearly-full head square, since
+ * TABLE_TOP shares COMBINED_TABLE_TOP's own width and only differs in
+ * depth, so inferring table membership from position alone is unreliable;
+ * this field is the authoritative answer). */
+export interface CampaignSeat extends Seat {
+  tableIndex: number;
+}
+
+export interface CampaignSeatLayout {
+  /** The fixed head square is always present (even for an empty/solo
+   * party) and always at offsetZ 0 — it isn't included in this list, only
+   * plain appended single tables, in the order they were added. */
+  appendedTables: readonly AppendedTable[];
+  /** Every seat across every table, head square first, already offset into
+   * final world-space position — a flat list a renderer can map over
+   * exactly the way computeSeatLayout's own output already was. */
+  seats: CampaignSeat[];
+}
+
+/**
+ * Generalizes computeSeatLayout to a party that may outgrow the fixed head
+ * square: keeps the head square's own ellipse/seats completely untouched
+ * (computeSeatLayout(headMembers, COMBINED_TABLE_TOP), DM included, at
+ * world origin) for as long as the party fits inside
+ * HEAD_SQUARE_SEAT_CAPACITY, then appends plain single tables one at a
+ * time — each with computeAppendedTableSeatLayout(tableMembers, offsetZ)'s
+ * own end-cap-only arcs (never a full ellipse sweep — that table's own doc
+ * comment has the reasoning), offset into world space along the row
+ * (table.ts's singleTableOffsetZ) — for every SINGLE_TABLE_SEAT_CAPACITY
+ * more members beyond that. An appended table never seats the DM: the DM
+ * is always pulled out of the input list first and reinserted into the
+ * head bucket, where placeDmAtNorthSlot (inside the head square's own
+ * computeSeatLayout call) keeps it pinned to the north slot regardless of
+ * overall party size — exactly the project owner's confirmed requirement
+ * that the DM never moves off the head square as more tables get appended
+ * elsewhere.
+ *
+ * Member→table assignment is a stable, append-only bucketing over the
+ * caller's already-joined_at-ordered list, DM aside: the remaining players
+ * fill the head bucket up to HEAD_SQUARE_SEAT_CAPACITY - 1 (one head slot
+ * reserved for the DM), then each appended table up to
+ * SINGLE_TABLE_SEAT_CAPACITY apiece, in that same join order. Because join
+ * order only ever grows by appending, and every bucket boundary is a fixed
+ * threshold over that same order, a member already inside a bucket stays in
+ * that exact bucket as more members join later — nobody already seated is
+ * ever bumped to a different table by a new arrival; only members joining
+ * beyond the current total capacity land at a (possibly brand new) table of
+ * their own.
+ *
+ * (A member's angle WITHIN their own table's ring can still shift slightly
+ * as that specific table's own occupancy grows — computeSeatLayout always
+ * spaces its own bucket's seats evenly by count, exactly like it always
+ * has for a single-table campaign — but that's the same pre-existing,
+ * previously-accepted behavior every campaign already had before this
+ * function existed; nobody moves to a meaningfully different seat, let
+ * alone a different table, just because someone else joined.)
+ */
+export function computeCampaignSeatLayout(members: readonly SeatMember[]): CampaignSeatLayout {
+  const dmIndex = members.findIndex((member) => member.role === "dm");
+  const dm = dmIndex === -1 ? null : members[dmIndex];
+  const players = members.filter((_, index) => index !== dmIndex);
+
+  const headPlayerCapacity = HEAD_SQUARE_SEAT_CAPACITY - (dm ? 1 : 0);
+  const headPlayers = players.slice(0, headPlayerCapacity);
+  const overflowPlayers = players.slice(headPlayerCapacity);
+
+  // computeSeatLayout's own placeDmAtNorthSlot finds the DM by role and
+  // reorders around it, so where the DM lands in this input array doesn't
+  // matter — appending it keeps headPlayers in their existing join order.
+  const headMembers = dm ? [...headPlayers, dm] : headPlayers;
+  const seats: CampaignSeat[] = computeSeatLayout(headMembers, COMBINED_TABLE_TOP).map((seat) => ({
+    ...seat,
+    tableIndex: -1,
+  }));
+
+  const appendedTables: AppendedTable[] = [];
+  let cursor = 0;
+  let tableIndex = 0;
+  while (cursor < overflowPlayers.length) {
+    const tableMembers = overflowPlayers.slice(cursor, cursor + SINGLE_TABLE_SEAT_CAPACITY);
+    cursor += SINGLE_TABLE_SEAT_CAPACITY;
+    const offsetZ = singleTableOffsetZ(tableIndex);
+    appendedTables.push({ index: tableIndex, offsetZ });
+    // computeAppendedTableSeatLayout (not computeSeatLayout): an appended
+    // table's own two long edges are exactly where it joins its
+    // neighbor(s), so its seats only ever use the two short end-caps — see
+    // APPENDED_TABLE_ENDCAP_HALF_WIDTH_DEG's own doc comment. It already
+    // applies offsetZ internally.
+    for (const seat of computeAppendedTableSeatLayout(tableMembers, offsetZ)) {
+      seats.push({ ...seat, tableIndex });
+    }
+    tableIndex++;
+  }
+
+  return { appendedTables, seats };
 }

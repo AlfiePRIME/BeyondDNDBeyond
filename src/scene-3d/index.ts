@@ -46,15 +46,23 @@ export { DiceTumble, type DiceTumbleHandle, type DiceTumbleProps, type DiceTumbl
 export { DmBookProp, type DmBookPropProps } from "./DmBookProp";
 export {
   computeSeatLayout,
+  computeCampaignSeatLayout,
   seatEllipseSemiAxes,
+  HEAD_SQUARE_SEAT_CAPACITY,
+  SINGLE_TABLE_SEAT_CAPACITY,
   type CameraMode,
   type Seat,
   type SeatMember,
+  type CampaignSeatLayout,
+  type CampaignSeat,
+  type AppendedTable,
 } from "./seating";
 // Phase 3: GameRoom derives the DM's private dice tray position from the
 // DM's own seat, in table-surface-relative terms — the one table constant
 // the app layer needs, alongside the seat layout itself.
-// COMBINED_TABLE_TOP (the two-table combined footprint) is exported too — a
-// later prompt's seating-capacity generalization needs these exact numbers
-// for its own capacity math.
+// COMBINED_TABLE_TOP (the two-table combined footprint) is exported too —
+// the dynamic-table-capacity generalization (computeCampaignSeatLayout
+// above) needs these exact numbers for its own capacity math, and
+// GameRoom.tsx mirrors the same call for its own DM-seat-relative prop
+// positions.
 export { TABLE_SURFACE_Y, COMBINED_TABLE_TOP } from "./table";

@@ -101,7 +101,7 @@ import {
 } from "@/rules-engine";
 import { Button, Modal } from "@/ui-components";
 import {
-  computeSeatLayout,
+  computeCampaignSeatLayout,
   DiceTumble,
   DmBookProp,
   GameTableScene,
@@ -563,11 +563,18 @@ export function GameRoom({
   }
 
   // The same seat layout GameTableScene computes internally from this exact
-  // roster (computeSeatLayout is a pure function of the ordered member
-  // list — see seating.ts), recomputed here too so this component can
-  // derive the DM's own seat position for the private dice tray below
-  // without reaching into the 3D scene's internals.
-  const seats = useMemo(() => computeSeatLayout(roster), [roster]);
+  // roster (computeCampaignSeatLayout is a pure function of the ordered
+  // member list — see seating.ts), recomputed here too so this component
+  // can derive the DM's own seat position for the private dice tray below
+  // without reaching into the 3D scene's internals. Using the campaign
+  // (multi-table-aware) layout here, not the older single-table
+  // computeSeatLayout, matters once a party outgrows the head square: the
+  // DM's own seat is always still on the head square (computeSeatLayout's
+  // placeDmAtNorthSlot, applied to just the head bucket), but a
+  // single-ellipse fit over the WHOLE (possibly-overflowing) roster would
+  // compute a different angle for it than what actually renders once
+  // there's overflow.
+  const { seats, appendedTables } = useMemo(() => computeCampaignSeatLayout(roster), [roster]);
   const dmSeat = useMemo<Seat | null>(
     () => seats.find((seat) => seat.member.role === "dm") ?? null,
     [seats]
@@ -2882,20 +2889,34 @@ export function GameRoom({
         {selectionDebug}
       </div>
       {/* Hidden render-state mirror of the full seat layout (Prompt: doubling
-          the table along its long edge) — same "WebGL has no DOM of its own"
-          reasoning as every other mirror here, added specifically so
-          verify-table-geometry.mjs can confirm objectively (not just by eye)
-          that seats spread around the FULL combined two-table perimeter
-          rather than clustering as if only one table existed, without
-          re-deriving computeSeatLayout's own trigonometry. Present for every
-          member (not DM-only, unlike the book/tray mirrors above) since the
-          seat layout itself is identical across every client's roster. */}
+          the table along its long edge; extended for dynamic table
+          capacity) — same "WebGL has no DOM of its own" reasoning as every
+          other mirror here, added specifically so verify-table-geometry.mjs
+          (and verify-table-capacity.mjs's own N-table checks) can confirm
+          objectively (not just by eye) that seats spread around the FULL
+          combined two-table perimeter rather than clustering as if only one
+          table existed, and — for the capacity work — exactly how many
+          tables are actually rendered and which one each seat belongs to,
+          without re-deriving computeCampaignSeatLayout's own trigonometry.
+          Present for every member (not DM-only, unlike the book/tray
+          mirrors above) since the seat layout itself is identical across
+          every client's roster. `tableCount` is 1 (the always-present head
+          square) plus however many plain tables got appended. */}
       <div data-testid="seat-layout-state" hidden>
         {JSON.stringify({
+          tableCount: 1 + appendedTables.length,
+          appendedTables,
           seats: seats.map((seat) => ({
             userId: seat.member.user_id,
             role: seat.member.role,
             position: seat.position,
+            // -1 = the fixed head square; otherwise an appendedTables[]
+            // entry's own 0-based index — see CampaignSeat's doc comment
+            // (seating.ts). Exposed directly rather than left for a script
+            // to reverse-engineer from raw position, since the head
+            // square's and an appended table's own ellipses can overlap in
+            // Z range once the head square is nearly full.
+            tableIndex: seat.tableIndex,
           })),
         })}
       </div>

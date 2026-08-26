@@ -64,3 +64,70 @@ export const COMBINED_TABLE_TOP = {
   width: TABLE_TOP.width,
   depth: TABLE_TOP.depth * TABLE_UNITS_LONG_EDGE,
 } as const;
+
+/**
+ * How far apart (center-to-center along Z) two adjacent tables' own local
+ * origins must sit so their TOP SURFACES form one continuous, gap-free
+ * plane — a real bug fix over the original doubling work's assumption that
+ * TABLE_TOP.depth (2.1) itself was that spacing.
+ *
+ * table.glb's mesh is a single fused blob (one mesh, not separable
+ * sub-meshes the way Chair.tsx's DM throne is), so "how wide do the legs
+ * splay vs. the tabletop" can't be read off node names — it was measured by
+ * binning every raw vertex by height (local Y) and comparing the raw
+ * local-X extent (the axis that becomes this scene's Z/"depth" after the
+ * existing 90° render rotation) of the model's very TOPMOST vertices (where
+ * only tabletop material exists — no leg geometry reaches that high)
+ * against its OVERALL bounding box. Stable across five different cutoff
+ * thresholds (top/bottom 0.1% through 5% of the model's height all agree
+ * exactly): the topmost slice's raw local-X extent is ~68.41, while the
+ * model's overall (leg-feet-inclusive) extent is ~77.76 — the exact number
+ * TABLE_TOP.depth's own 2.1 was derived from. The leg feet genuinely splay
+ * out wider than the tabletop's own edge in this specific model. Positioning
+ * two tables by half of TABLE_TOP.depth each (as CombinedTable originally
+ * did) therefore flushes the WIDER leg feet with no gap or overlap, while
+ * leaving the NARROWER tabletop surfaces short of each other — a real,
+ * visible gap in the one thing that actually matters (the continuous
+ * playing surface), even though the raw bounding boxes touch exactly.
+ *
+ * TABLE_TOP_JOIN_DEPTH is the tabletop's own real depth instead (raw ~68.41
+ * × the same TABLE_SURFACE_Y/rawHeight scale factor (1.4/51.8363) every
+ * other measurement in this file uses ⇒ ≈1.8476, rounded to 1.848) — used
+ * ONLY for this join spacing. TABLE_TOP.depth (and everything derived from
+ * it — COMBINED_TABLE_TOP, seatEllipseSemiAxes, the live map's fit, the
+ * fallback procedural table) is deliberately left untouched: chairs still
+ * need to clear the WIDE leg stance, not just the narrower visible top, so
+ * the generous leg-inclusive footprint remains the right one for seating/
+ * clearance purposes — only the mesh-to-mesh placement changes. Per the
+ * project owner's explicit instruction, the two tables' leg geometry is
+ * left to clip through each other underneath rather than re-modeling or
+ * re-spacing anything else — a perfectly flat, gap-free top surface is what
+ * matters, not what happens beneath it.
+ */
+export const TABLE_TOP_JOIN_DEPTH = 1.848;
+
+/**
+ * World-space Z offset for the center of the `index`-th (0-based) plain
+ * single table appended beside the fixed head square, once a campaign's
+ * party outgrows the head square's own seat capacity
+ * (seating.ts's HEAD_SQUARE_SEAT_CAPACITY/computeCampaignSeatLayout). The
+ * project owner's confirmed decision: the atomic unit added for extra
+ * capacity is a SINGLE table (this file's own plain TABLE_TOP), never
+ * another two-table square — and it lines up along ONE side of the head
+ * square only, continuing the exact same join axis CombinedTable already
+ * uses for its own two head-square tables (stacked along Z, sharing a
+ * WIDTH edge) — with the SAME gap-free TABLE_TOP_JOIN_DEPTH spacing
+ * CombinedTable uses between its own two tables, not TABLE_TOP.depth's
+ * wider leg-inclusive number (TABLE_TOP_JOIN_DEPTH's own doc comment) —
+ * every table in the row, however many there are, needs its own top flush
+ * against its neighbor's. The head square's own two tables occupy
+ * z ∈ [-TABLE_TOP_JOIN_DEPTH, +TABLE_TOP_JOIN_DEPTH] (CombinedTable's own
+ * halfJoinDepth offsets), so table 0 starts flush against that far (+Z)
+ * edge and each later one continues the row one more TABLE_TOP_JOIN_DEPTH
+ * further out — the row only ever grows to the +Z side, never both, keeping
+ * the head square itself, its map, and the DM's seat completely undisturbed
+ * by how many tables get appended.
+ */
+export function singleTableOffsetZ(index: number): number {
+  return (index + 1.5) * TABLE_TOP_JOIN_DEPTH;
+}
