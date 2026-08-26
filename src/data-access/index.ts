@@ -113,6 +113,8 @@ export {
   listMapCells,
   upsertMapCells,
   setLiveMap,
+  growMapGrid,
+  MAP_GROWTH_EDGES,
   listMapFolders,
   createMapFolder,
   renameMapFolder,
@@ -134,6 +136,7 @@ export {
   type NewMapCell,
   type NewMapObjectSeed,
   type LightLevel,
+  type MapGrowthEdge,
 } from "./maps";
 export {
   listMapObjects,
