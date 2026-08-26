@@ -259,3 +259,31 @@ both the reachable set and the ring just beyond it; difficult terrain shrinking 
 a void wall blocking passage to cells behind it, not just the wall cells; an elevation climb
 consuming the same extra cost `pathMovementCost` already charges for it; the origin always
 included at zero cost; and the occupied-cell pass-through-but-not-landing behavior.
+
+As of the pits-and-falling addition (post-roadmap — docs/design/pits-and-falling.md, not a
+numbered prompt): `TerrainType` widens again to `"normal" | "difficult" | "void" | "pit"`. A
+pit is a cell with a floor, just a lower one — its own `elevation` stores the pit's absolute
+floor height (negative permitted specifically for this terrain), and `cellMovementCost`
+prices it exactly like `"normal"` ground (no changes needed there, confirmed rather than
+assumed: descending or level movement was already free before this addition, which is
+exactly the SRD's "falling doesn't cost movement, you just fall"). The new pure module
+`falling.ts` carries the actual consequence: `fallDamageDiceCount(depthFeet)` is the SRD
+formula verbatim (1d6 per 10 ft, `Math.floor`, capped at `MAX_FALL_DAMAGE_DICE` = 20 at 200
+ft, zero below the first full 10 ft); `resolveFall(depthFeet, random)` rolls that many d6
+(reusing `dice.ts`'s `rollDice`, the same injectable-`RandomSource` seam) and sets `prone`
+whenever `diceCount > 0` — SRD prone "unless it avoids taking damage from the fall", which
+an Nd6 roll with N >= 1 can never do; `fallDepthFeet(fromElevationSteps, pitElevationSteps)`
+is relative to where the MOVER stood immediately before entering the pit, not global
+elevation 0, so a pit dug into a raised plateau reads correctly deeper from the plateau's
+own rim. `MIN_HAZARD_DEPTH_STEPS` (2 steps / 10 ft) names, for the authoring side, exactly
+the depth `fallDamageDiceCount` already stops returning zero at — the map editor's pit tool
+warns below it rather than a second DB-level enforcement point. `CONCEALED_PIT_SAVE_DC` = 15
+is the one new roll the design adds (a flat DC 15 Dexterity save for a pit a DM paints as
+ordinary-looking terrain), resolved through the existing "save" roll kind, not a new dice
+primitive. Production fall-damage rolls never call `resolveFall` with real randomness —
+consistent with this module's server-only-dice architecture (see the Prompt 48 entry above),
+the app layer (`GameRoom.tsx`) calls `fallDamageDiceCount` to size an ordinary "freeform"
+roll through the Route Handler instead, and applies the server-attested total via the
+existing `apply_hp_delta` RPC. Unit-tested in `falling.test.ts` at every SRD boundary (9/10/
+19/20/199/200/250 ft, zero and negative depth) plus fixed-`RandomSource` sequences asserting
+exact rolls and damage totals, the `resolveDeathSave`/`resolveAttackOutcome` rigor.

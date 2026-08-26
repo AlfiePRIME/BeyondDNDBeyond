@@ -40,4 +40,13 @@ describe("thumbnailCellColor", () => {
     expect(thumbnailCellColor("difficult", 6)).toBe("#e6ba86");
     expect(thumbnailCellColor("difficult", 10)).toBe("#e6ba86");
   });
+
+  it("paints a pit at its own flat base color regardless of (possibly negative) depth", () => {
+    // Unlike normal/difficult, a pit's elevation is a floor height, not
+    // "how high up" — the lightening axis is clamped at 0 (Math.max), so
+    // every depth reads identically, matching MapSurface's own cellColor.
+    expect(thumbnailCellColor("pit", 0)).toBe("#140f0c");
+    expect(thumbnailCellColor("pit", -1)).toBe("#140f0c");
+    expect(thumbnailCellColor("pit", -40)).toBe("#140f0c");
+  });
 });

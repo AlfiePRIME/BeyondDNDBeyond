@@ -6,9 +6,11 @@ import { Canvas } from "@react-three/fiber";
 import { Button, ChoiceCard, Select, TextInput } from "@/ui-components";
 import {
   clearMapReferenceImage,
+  createConcealedPit,
   createLightSource,
   createMapObject,
   createMapTransition,
+  deleteConcealedPit,
   deleteLightSource,
   deleteMapObject,
   deleteMapReferenceImageFile,
@@ -22,6 +24,7 @@ import {
   uploadMapReferenceImageFile,
   upsertMapCells,
   type CampaignMap,
+  type ConcealedPit,
   type LightLevel,
   type LightSource,
   type LightSourceAnchor,
@@ -40,12 +43,13 @@ import {
   type EditorRegion,
   type MapSurfaceObject,
 } from "@/scene-3d";
-import type { TerrainType } from "@/rules-engine";
+import { FEET_PER_ELEVATION_STEP, type TerrainType } from "@/rules-engine";
 import {
   applyTool,
   buildDenseCells,
   cellKey,
   DEFAULT_CELL,
+  MIN_PIT_ELEVATION_STEPS,
   overlayFromRows,
   parseCellKey,
   rowsForSave,
@@ -94,6 +98,8 @@ const VOID_OBJECT_MESSAGE = "There's no floor there — objects can't sit on a v
 const VOID_TRANSITION_MESSAGE =
   "A transition can't start on a void cell — no token can ever stand there.";
 const VOID_LIGHT_MESSAGE = "A light can't be anchored to a void cell — there's no floor there.";
+const VOID_CONCEALED_PIT_MESSAGE =
+  "A concealed pit can't hide under a void cell — there's no floor to disguise it as.";
 
 /** An AI-proposed object placement, client-side only until the DM accepts —
  * unlike normal placements it has no DB row yet, so it carries a temp id and
@@ -130,6 +136,7 @@ export function MapEditor({
   aiEnabled,
   campaignMaps,
   initialTransitions,
+  initialConcealedPits,
   initialTokens,
   initialLightSources,
   characterNameById,
@@ -143,6 +150,7 @@ export function MapEditor({
   aiEnabled: boolean;
   campaignMaps: CampaignMap[];
   initialTransitions: MapTransition[];
+  initialConcealedPits: ConcealedPit[];
   /** Tokens currently placed on this map — anchor options for token-carried
    * light sources; the editor never moves or creates tokens. */
   initialTokens: MapToken[];
@@ -177,6 +185,22 @@ export function MapEditor({
   const [destY, setDestY] = useState("0");
   const [transitionBusy, setTransitionBusy] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
+
+  // Concealed pits (docs/design/pits-and-falling.md §5): the transition
+  // tool's exact shape — pick a cell, fill in a small form, submit — for a
+  // DM-only-visible hidden trap instead of a DM-only-visible link. The DM
+  // paints the cell as ordinary-looking terrain with the normal tools
+  // FIRST (untouched here), then uses this tool only to record the trap's
+  // real depth; the public cell itself is never touched by this form.
+  const [concealedPits, setConcealedPits] = useState<ConcealedPit[]>(initialConcealedPits);
+  const [concealedPitCell, setConcealedPitCell] = useState<{ x: number; y: number } | null>(null);
+  // Entered as a depth in feet below the cell's own (fake) public elevation
+  // — the natural way a DM thinks about a trap ("this looks solid but it's
+  // actually a 15 ft drop"), converted to the stored absolute
+  // bottom_elevation_steps on submit. Defaults to the hazard threshold.
+  const [concealedPitDepthFeet, setConcealedPitDepthFeet] = useState("15");
+  const [concealedPitBusy, setConcealedPitBusy] = useState(false);
+  const [concealedPitError, setConcealedPitError] = useState<string | null>(null);
 
   // Light-source authoring (Prompt 55) — the transition tool's form-based
   // shape: pick an anchor, fill in radius/brightness, create; each existing
@@ -354,7 +378,13 @@ export function MapEditor({
   const handlePaintCell = useCallback(
     (x: number, y: number) => {
       const tool = toolRef.current;
-      if (tool === "object" || tool === "transition" || tool === "light-source") return;
+      if (
+        tool === "object" ||
+        tool === "transition" ||
+        tool === "light-source" ||
+        tool === "concealed-pit"
+      )
+        return;
       if (historyBusyRef.current) return;
 
       if (tool === "generate") {
@@ -954,6 +984,75 @@ export function MapEditor({
     }
   }
 
+  const handleConcealedPitCellClick = useCallback(
+    (x: number, y: number) => {
+      if (displayedTerrainAt(x, y) === "void") {
+        setConcealedPitError(VOID_CONCEALED_PIT_MESSAGE);
+        return;
+      }
+      setConcealedPitCell({ x, y });
+      setConcealedPitError(null);
+    },
+    [displayedTerrainAt]
+  );
+
+  // Concealed-pit authoring stays OUTSIDE undo/redo, like transitions: a
+  // deliberate, low-frequency act behind an explicit form submit, with its
+  // own immediate Remove — never a paint stroke to accidentally undo.
+  async function handleCreateConcealedPit() {
+    const cell = concealedPitCell;
+    const depthFeet = Number(concealedPitDepthFeet);
+    if (!cell || concealedPitBusy || !Number.isFinite(depthFeet) || depthFeet <= 0) return;
+    if (concealedPits.some((pit) => pit.x === cell.x && pit.y === cell.y)) {
+      setConcealedPitError("That cell already hides a pit — remove it first.");
+      return;
+    }
+    setConcealedPitBusy(true);
+    setConcealedPitError(null);
+    try {
+      // The trap's real bottom is relative to THIS cell's own current
+      // (fake) public elevation, the same "depth relative to where you
+      // stood" reasoning fallDepthFeet uses at resolution time — not
+      // relative to global elevation 0, so a concealed pit dug under a
+      // raised platform still gets a real, sensible floor.
+      const publicElevation = (overlayRef.current.get(cellKey(cell.x, cell.y)) ?? DEFAULT_CELL)
+        .elevation;
+      const depthSteps = Math.round(depthFeet / FEET_PER_ELEVATION_STEP);
+      const bottomElevationSteps = Math.max(
+        MIN_PIT_ELEVATION_STEPS,
+        publicElevation - depthSteps
+      );
+      const created = await createConcealedPit(createBrowserSupabaseClient(), {
+        mapId: map.id,
+        x: cell.x,
+        y: cell.y,
+        bottomElevationSteps,
+      });
+      setConcealedPits((prev) => [...prev, created]);
+      setConcealedPitCell(null);
+    } catch (err) {
+      setConcealedPitError(errorMessage(err) ?? "Could not hide a pit there.");
+    } finally {
+      setConcealedPitBusy(false);
+    }
+  }
+
+  async function handleRemoveConcealedPit(pit: ConcealedPit) {
+    if (concealedPitBusy) return;
+    setConcealedPitBusy(true);
+    setConcealedPitError(null);
+    try {
+      await deleteConcealedPit(createBrowserSupabaseClient(), pit.map_id, pit.x, pit.y);
+      setConcealedPits((prev) =>
+        prev.filter((candidate) => !(candidate.x === pit.x && candidate.y === pit.y))
+      );
+    } catch (err) {
+      setConcealedPitError(errorMessage(err) ?? "Could not remove that concealed pit.");
+    } finally {
+      setConcealedPitBusy(false);
+    }
+  }
+
   const handleLightSourceCellClick = useCallback(
     (x: number, y: number) => {
       if (displayedTerrainAt(x, y) === "void") {
@@ -1058,6 +1157,10 @@ export function MapEditor({
     if (next !== "transition") {
       setTransitionCell(null);
       setTransitionError(null);
+    }
+    if (next !== "concealed-pit") {
+      setConcealedPitCell(null);
+      setConcealedPitError(null);
     }
     if (next !== "light-source") resetLightForm();
     // The selection rectangle only outlives the generate tool while a draft
@@ -1226,6 +1329,13 @@ export function MapEditor({
         voidCells: cells
           .filter((cell) => cell.terrain === "void")
           .map((cell) => cellKey(cell.x, cell.y)),
+        // Pits and falling (verify-pits-and-falling.mjs's own precedent):
+        // key + the cell's own (possibly negative) floor elevation, so a
+        // real-browser check can confirm both that the pit brush marks the
+        // right cells AND that it actually sculpted the depth requested.
+        pitCells: cells
+          .filter((cell) => cell.terrain === "pit")
+          .map((cell) => ({ key: cellKey(cell.x, cell.y), elevation: cell.elevation })),
       }),
     [map.id, cells]
   );
@@ -1347,20 +1457,26 @@ export function MapEditor({
               ? handleCellClick
               : tool === "transition"
                 ? handleTransitionCellClick
-                : tool === "light-source" && lightAnchorKind === "cell" && !editingLightId
-                  ? handleLightSourceCellClick
-                  : undefined
+                : tool === "concealed-pit"
+                  ? handleConcealedPitCellClick
+                  : tool === "light-source" && lightAnchorKind === "cell" && !editingLightId
+                    ? handleLightSourceCellClick
+                    : undefined
           }
           region={
             tool === "transition"
               ? transitionCell
                 ? { x: transitionCell.x, y: transitionCell.y, width: 1, height: 1 }
                 : null
-              : tool === "light-source"
-                ? lightCell
-                  ? { x: lightCell.x, y: lightCell.y, width: 1, height: 1 }
+              : tool === "concealed-pit"
+                ? concealedPitCell
+                  ? { x: concealedPitCell.x, y: concealedPitCell.y, width: 1, height: 1 }
                   : null
-                : region
+                : tool === "light-source"
+                  ? lightCell
+                    ? { x: lightCell.x, y: lightCell.y, width: 1, height: 1 }
+                    : null
+                  : region
           }
           objects={sceneObjects}
           selectedObjectId={selectedObjectId}
@@ -1480,6 +1596,28 @@ export function MapEditor({
             Lower −1
           </Button>
         </div>
+        <span className={styles.toolbarLabel}>Pit</span>
+        <div className={styles.toolRow}>
+          <Button
+            size="sm"
+            variant={tool === "pit" ? "primary" : "ghost"}
+            onClick={() => switchTool("pit")}
+            data-testid="tool-pit"
+          >
+            Dig pit −1
+          </Button>
+        </div>
+        {tool === "pit" ? (
+          <p className={styles.hint} data-testid="pit-hint">
+            Each click drops this cell&rsquo;s floor by 5 ft and marks it a pit — a hole with
+            visible walls down to the floor, distinct from a void cell&rsquo;s total absence. A
+            token that steps into a pit at least 10 ft deep (2 clicks) automatically falls: SRD
+            fall damage and prone apply. Shallower dips are a mechanical no-op under that same
+            formula — consider painting Difficult terrain with Lower instead if you don&rsquo;t
+            want a hazard there at all. Link this cell to another map (below) to make falling in
+            transport the character there instead of leaving them at the bottom on this map.
+          </p>
+        ) : null}
         <span className={styles.toolbarLabel}>Terrain</span>
         <div className={styles.toolRow}>
           <Button
@@ -1774,6 +1912,99 @@ export function MapEditor({
             {transitionError ? (
               <p role="alert" className={styles.errorText} data-testid="transition-error">
                 {transitionError}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+        <span className={styles.toolbarLabel}>Concealed pits</span>
+        <div className={styles.toolRow}>
+          <Button
+            size="sm"
+            variant={tool === "concealed-pit" ? "primary" : "ghost"}
+            onClick={() => switchTool("concealed-pit")}
+            data-testid="tool-concealed-pit"
+          >
+            Hide a pit
+          </Button>
+        </div>
+        {tool === "concealed-pit" ? (
+          <>
+            {concealedPitCell ? (
+              <>
+                <span className={styles.selectedMeta} data-testid="concealed-pit-origin-label">
+                  Cell ({concealedPitCell.x},{concealedPitCell.y}) — still looks like ordinary
+                  floor to every player
+                </span>
+                <TextInput
+                  label="Real depth below this cell (ft)"
+                  type="number"
+                  min={1}
+                  value={concealedPitDepthFeet}
+                  onChange={(event) => setConcealedPitDepthFeet(event.target.value)}
+                  disabled={concealedPitBusy}
+                  data-testid="concealed-pit-depth"
+                />
+                <div className={styles.toolRow}>
+                  <Button
+                    size="sm"
+                    variant="teal"
+                    disabled={
+                      concealedPitBusy ||
+                      !Number.isFinite(Number(concealedPitDepthFeet)) ||
+                      Number(concealedPitDepthFeet) <= 0
+                    }
+                    onClick={handleCreateConcealedPit}
+                    data-testid="create-concealed-pit"
+                  >
+                    {concealedPitBusy ? "Hiding…" : "Hide pit here"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={concealedPitBusy}
+                    onClick={() => setConcealedPitCell(null)}
+                    data-testid="cancel-concealed-pit"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className={styles.hint}>
+                Paint this cell as ordinary-looking floor with the Terrain tool first, then click
+                it here to record how deep it really is. It stays invisible to players — a failed
+                DC 15 Dexterity save reveals it (and triggers the fall); a successful save stops
+                them at the edge and it stays hidden for the next mover.
+              </p>
+            )}
+            {concealedPits.length > 0 ? (
+              <div data-testid="concealed-pit-list">
+                {concealedPits.map((pit) => (
+                  <div
+                    key={`${pit.x},${pit.y}`}
+                    className={styles.toolRow}
+                    data-testid={`concealed-pit-${pit.x}-${pit.y}`}
+                  >
+                    <span className={styles.selectedMeta}>
+                      ({pit.x},{pit.y}) — real floor at elevation {pit.bottom_elevation_steps} (DC{" "}
+                      {pit.save_dc})
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      disabled={concealedPitBusy}
+                      onClick={() => void handleRemoveConcealedPit(pit)}
+                      data-testid={`remove-concealed-pit-${pit.x}-${pit.y}`}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {concealedPitError ? (
+              <p role="alert" className={styles.errorText} data-testid="concealed-pit-error">
+                {concealedPitError}
               </p>
             ) : null}
           </>

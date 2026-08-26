@@ -29,6 +29,12 @@ const NORMAL_BASE = "#463a70";
 const NORMAL_HIGH = "#cfc4ff";
 const DIFFICULT_BASE = "#a85a24";
 const DIFFICULT_HIGH = "#ffd9a0";
+// A pit reads as a dark hazard, not just "low ground" — a near-black,
+// slightly warm charcoal, distinct in HUE (not just brightness/depth) from
+// both normal and difficult terrain so it's legible even at a shallow
+// camera angle where the extruded shaft alone might read ambiguously.
+const PIT_BASE = "#140f0c";
+const PIT_HIGH = "#3a2a1e";
 
 const CELL_GAP_RATIO = 0.08;
 
@@ -85,7 +91,8 @@ const LIGHT_SCALE: Record<MapSurfaceLightLevel, number> = {
 
 // "void" terrain never reaches this function: MapSurface renders no
 // CellBlock for a void cell at all (see the cells map below), so the only
-// terrains with a color are normal and difficult.
+// terrains with a color are normal, difficult, and (as of pits-and-falling)
+// pit.
 function cellColor(
   terrain: TerrainType,
   elevation: number,
@@ -96,11 +103,18 @@ function cellColor(
   let hex = colorCache.get(key);
   if (!hex) {
     const [base, high] =
-      terrain === "difficult" ? [DIFFICULT_BASE, DIFFICULT_HIGH] : [NORMAL_BASE, NORMAL_HIGH];
+      terrain === "difficult"
+        ? [DIFFICULT_BASE, DIFFICULT_HIGH]
+        : terrain === "pit"
+          ? [PIT_BASE, PIT_HIGH]
+          : [NORMAL_BASE, NORMAL_HIGH];
     // Each step also lightens the block so distinct elevations stay
     // distinguishable even from directly overhead, where extruded height
-    // alone is invisible.
-    const color = new Color(base).lerp(new Color(high), Math.min(elevation * 0.11, 0.66));
+    // alone is invisible. Clamped at 0 (rather than fed negative) for a pit's
+    // own elevation: the lightening axis reads "how high up" for an ordinary
+    // plateau, which isn't a meaningful question for how DEEP a pit is —
+    // every pit reads at its flat base color regardless of depth.
+    const color = new Color(base).lerp(new Color(high), Math.min(Math.max(elevation, 0) * 0.11, 0.66));
     if (light) color.multiplyScalar(LIGHT_SCALE[light]);
     // Applied AFTER the light tint: a remembered cell renders its
     // remembered light level, then the whole result goes to memory-gray.
@@ -119,7 +133,14 @@ function cellColor(
 export interface MapSurfaceCell {
   x: number;
   y: number;
+  /** For terrain "pit" this is the pit's own FLOOR elevation — possibly
+   * negative — not a depth. See MapSurface's cells.map for how a pit's
+   * block is drawn from this down to (or up to) the y=0 datum. */
   elevation: number;
+  /** "void" renders no floor at all (see the cells.map branch below); "pit"
+   * renders a floor WITH visible walls down to it, at its own (possibly
+   * negative) elevation — visually and mechanically distinct from void's
+   * absence: a pit has a floor, you can stand on it once you're down there. */
   terrain: TerrainType;
   /** Renders the not-yet-committed tint — the editor's AI-generated preview
    * cells, distinct from both committed terrain and the hover glow. */
@@ -152,7 +173,17 @@ interface CellBlockProps {
   y: number;
   worldX: number;
   worldZ: number;
-  height: number;
+  /** The block's world-Y center. For ordinary terrain this is `blockHeight /
+   * 2` (the block rises from the y=0 datum up to its own top) — for a pit,
+   * whose top can sit BELOW y=0, this is `topY / 2` regardless of sign,
+   * which is what keeps the block spanning the right range either way (see
+   * MapSurface's cells.map for the derivation). */
+  centerY: number;
+  /** Always non-negative — the box's actual extent, never signed. Passing a
+   * negative dimension into BoxGeometry is unreliable (winding/normals can
+   * flip, silently making the mesh invisible from outside), so callers
+   * compute this with Math.abs rather than relying on a signed height. */
+  blockHeight: number;
   span: number;
   elevation: number;
   terrain: TerrainType;
@@ -173,7 +204,8 @@ const CellBlock = memo(function CellBlock({
   y,
   worldX,
   worldZ,
-  height,
+  centerY,
+  blockHeight,
   span,
   elevation,
   terrain,
@@ -189,7 +221,7 @@ const CellBlock = memo(function CellBlock({
   const hoverLit = interactive && hovered;
   return (
     <mesh
-      position={[worldX, height / 2, worldZ]}
+      position={[worldX, centerY, worldZ]}
       onPointerDown={onDown ? (event) => onDown(x, y, event) : undefined}
       onPointerOver={
         interactive
@@ -201,7 +233,7 @@ const CellBlock = memo(function CellBlock({
       }
       onPointerOut={interactive ? () => setHovered(false) : undefined}
     >
-      <boxGeometry args={[span, height, span]} />
+      <boxGeometry args={[span, blockHeight, span]} />
       {/* Hover glow gated on interactive too: when the handlers detach
           mid-hover (the table disarming token placement), no pointer-out
           ever fires, and an unguarded `hovered` would stay lit forever.
@@ -967,23 +999,50 @@ export function MapSurface({
             />
           ) : null
         ) : (
-          <CellBlock
-            key={`${cell.x},${cell.y}`}
-            x={cell.x}
-            y={cell.y}
-            worldX={cell.x * cellSize - offsetX}
-            worldZ={cell.y * cellSize - offsetZ}
-            height={baseHeight + cell.elevation * elevationStepHeight}
-            span={span}
-            elevation={cell.elevation}
-            terrain={cell.terrain}
-            preview={cell.preview ?? false}
-            light={cell.light}
-            visibility={cell.visibility}
-            highlighted={cell.highlighted ?? false}
-            onDown={onCellPointerDown}
-            onOver={onCellPointerOver}
-          />
+          (() => {
+            // topY is the cell's own floor-top world height — the same
+            // quantity gridOverlay.ts and TokenMarker's topY already use for
+            // outlines and standing tokens, so a pit's negative elevation
+            // positions everything consistently with zero further changes
+            // there. For ordinary terrain topY is always >= baseHeight > 0
+            // (raise/lower never go negative), so blockHeight = topY and the
+            // block rises from the y=0 datum up to it, exactly as before —
+            // unchanged rendering for every non-pit cell.
+            //
+            // A pit's topY can be negative (its floor sits BELOW the y=0
+            // datum). Math.abs, rather than passing topY straight through,
+            // guarantees BoxGeometry always receives a non-negative
+            // dimension (see CellBlockProps.blockHeight) while centerY =
+            // topY / 2 places it correctly either way: when topY is
+            // negative the block spans [topY, 0] (a shaft down to the
+            // floor, walled from the datum — the "floor with visible walls"
+            // this addition's design calls for, distinct from void's total
+            // absence); on the rarer non-negative pit (dug into a plateau
+            // without going below the global datum) it spans [0, topY],
+            // identical in shape to an ordinary raised cell at that height.
+            const topY = baseHeight + cell.elevation * elevationStepHeight;
+            const blockHeight = cell.terrain === "pit" ? Math.abs(topY) : topY;
+            return (
+              <CellBlock
+                key={`${cell.x},${cell.y}`}
+                x={cell.x}
+                y={cell.y}
+                worldX={cell.x * cellSize - offsetX}
+                worldZ={cell.y * cellSize - offsetZ}
+                centerY={topY / 2}
+                blockHeight={blockHeight}
+                span={span}
+                elevation={cell.elevation}
+                terrain={cell.terrain}
+                preview={cell.preview ?? false}
+                light={cell.light}
+                visibility={cell.visibility}
+                highlighted={cell.highlighted ?? false}
+                onDown={onCellPointerDown}
+                onOver={onCellPointerOver}
+              />
+            );
+          })()
         )
       )}
 

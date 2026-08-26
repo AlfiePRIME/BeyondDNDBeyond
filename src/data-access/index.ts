@@ -170,6 +170,12 @@ export {
   type MapTransition,
 } from "./mapTransitions";
 export {
+  listConcealedPits,
+  createConcealedPit,
+  deleteConcealedPit,
+  type ConcealedPit,
+} from "./concealedPits";
+export {
   listLightSources,
   createLightSource,
   updateLightSource,

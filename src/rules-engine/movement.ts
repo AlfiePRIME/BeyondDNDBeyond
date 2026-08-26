@@ -9,7 +9,17 @@ export const FEET_PER_CELL = 5;
 // which this module expresses as an infinite movement cost — any path that
 // includes a void cell sums to Infinity, so cost-based callers see
 // "impassable" without a special case.
-export type TerrainType = "normal" | "difficult" | "void";
+//
+// "pit" (docs/design/pits-and-falling.md) is a cell with a floor, just a
+// lower one — its own `elevation` stores the pit's absolute floor height,
+// negative permitted specifically for this terrain type. Deliberately NOT
+// costed as "difficult" here: cellMovementCost treats it exactly like
+// "normal" ground (a flat 5 ft, descending for free like any other downward
+// step — see this file's climbCost comment), because the SRD imposes no
+// entry-cost penalty for walking into a hole; the real consequence (fall
+// damage, prone) is a status-effect side effect resolved alongside the move
+// commit, in src/rules-engine/falling.ts, not a movement-cost concern.
+export type TerrainType = "normal" | "difficult" | "void" | "pit";
 
 export interface CellMovementParams {
   terrain: TerrainType;

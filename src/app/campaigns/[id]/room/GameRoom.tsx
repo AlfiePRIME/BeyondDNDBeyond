@@ -17,6 +17,7 @@ import {
   deleteMonsterStatBlock,
   createOpportunityAttacks,
   declareDisengage,
+  deleteConcealedPit,
   deleteHandout,
   deleteMapToken,
   endCombat,
@@ -29,6 +30,7 @@ import {
   listCharactersForCampaign,
   listCombatCombatants,
   listCombatantHiddenFrom,
+  listConcealedPits,
   listHandouts,
   listLightSources,
   listMapCells,
@@ -63,11 +65,13 @@ import {
   triggerMapObject,
   updateMonsterStatBlock,
   uploadHandoutFile,
+  upsertMapCells,
   DEFAULT_DICE_TRAY_PREFERENCE,
   type CampaignMap,
   type Character,
   type CombatCombatant,
   type CombatantEconomyFlag,
+  type ConcealedPit,
   type DayNightMode,
   type DiceTrayModelPreference,
   type DmNote,
@@ -95,6 +99,8 @@ import {
   computeOpportunityAttacks,
   computeReachableCells,
   computeVisibilityTiers,
+  fallDamageDiceCount,
+  fallDepthFeet,
   meleeReachFeet,
   pathMovementCost,
   straightCellPath,
@@ -173,6 +179,11 @@ const TRIGGER_EVENT = "map-object-triggered";
 const TOKEN_EVENT = "token-changed";
 const HANDOUT_EVENT = "handout-revealed";
 const COMBAT_EVENT = "combat-changed";
+// Pits and falling (docs/design/pits-and-falling.md §5): a concealed pit's
+// reveal on a failed save — persisted state (map_cells), the SEAT_MOVED_EVENT
+// shape (DB written first, then broadcast so already-connected clients update
+// immediately without their own extra read).
+const CELL_REVEALED_EVENT = "cell-revealed";
 // Click-select-to-move (replaces the old drag gesture): an ephemeral
 // "who's got a token picked up right now" poke, same non-persisted-state
 // shape as DICE_ROLLED_EVENT — nothing is ever read back from the DB, so
@@ -288,6 +299,17 @@ interface TriggerPayload {
 interface TokenPayload {
   tokenId: string;
   token: MapToken | null;
+}
+
+/** A concealed pit's reveal (docs/design/pits-and-falling.md §5), the
+ * TokenPayload shape: the DB is written first (map_cells upserted, the
+ * concealed_pits row deleted), then this carries the already-persisted new
+ * cell so every other connected client's table shows the pit the instant it
+ * appears, without a follow-up fetch. A dropped broadcast is recovered the
+ * same way TOKEN_EVENT's own live-map-changed reconnect handler already
+ * covers it — reconnecting re-reads the whole map fresh via refreshLiveMap. */
+interface CellRevealedPayload {
+  cell: MapCell;
 }
 
 /** Same shape as TokenPayload: the full new row on reveal, so receivers
@@ -1163,6 +1185,26 @@ export function GameRoom({
     };
   }, [currentUserIsDM, liveMapId]);
 
+  // Pits and falling (docs/design/pits-and-falling.md §5): concealed_pits'
+  // own RLS is DM-only-read, exactly the reasoning transitionsRef gives —
+  // this is the DM's own move-handling code checking a DM-only table, so a
+  // player's client would just get an empty list back anyway. Same ref (not
+  // state) shape: only handleTokenLanded consults it.
+  const concealedPitsRef = useRef<ConcealedPit[]>([]);
+  useEffect(() => {
+    concealedPitsRef.current = [];
+    if (!currentUserIsDM || !liveMapId) return;
+    let cancelled = false;
+    listConcealedPits(createBrowserSupabaseClient(), liveMapId)
+      .then((rows) => {
+        if (!cancelled) concealedPitsRef.current = rows;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserIsDM, liveMapId]);
+
   // The single point of authority for crossing a transition is the DM,
   // matching setLiveMap being DM-only everywhere else: whoever moved the
   // token (DM locally, or a player whose move arrives by broadcast), only
@@ -1181,6 +1223,25 @@ export function GameRoom({
     },
     [currentUserIsDM]
   );
+
+  // Live sync for a concealed pit's reveal (a player's OWN client never
+  // learns concealed_pits exists at all, per its RLS — this is purely for
+  // every OTHER connected client, DM included, to render the pit the
+  // instant it's revealed).
+  const applyCellChange = useCallback((cell: MapCell) => {
+    const current = liveMapRef.current;
+    if (!current || cell.map_id !== current.map.id) return;
+    const exists = current.cells.some((candidate) => candidate.x === cell.x && candidate.y === cell.y);
+    liveMapRef.current = {
+      ...current,
+      cells: exists
+        ? current.cells.map((candidate) =>
+            candidate.x === cell.x && candidate.y === cell.y ? cell : candidate
+          )
+        : [...current.cells, cell],
+    };
+    setLiveMapState(liveMapRef.current);
+  }, []);
 
   const [armedToken, setArmedToken] = useState<TokenArm | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
@@ -1251,6 +1312,161 @@ export function GameRoom({
     };
     setLiveMapState(liveMapRef.current);
   }, []);
+
+  // Same persist-then-broadcast ordering as triggering and map switching:
+  // the DB is the source of truth for anyone joining or reconnecting.
+  // Declared here (not alongside handleCellClick/commitTokenMove, its other
+  // two callers) because handleTokenLanded below — and the TOKEN_EVENT
+  // broadcast receiver further down, which calls it — both need it too.
+  const publishTokenChange = useCallback(async (tokenId: string, token: MapToken | null) => {
+    await campaignChannelRef.current?.publish<TokenPayload>(TOKEN_EVENT, { tokenId, token });
+  }, []);
+
+  /**
+   * The pit/fall resolution point (docs/design/pits-and-falling.md §6/§8):
+   * called after EVERY genuine token move (never a placement — see the two
+   * call sites below, plus the TOKEN_EVENT broadcast receiver just below
+   * this component's channel-join effect), on the token's FINAL landed
+   * cell, with the elevation the mover stood at immediately before this
+   * move. Mirrors maybeOfferTransition's own DM-gated shape exactly, for
+   * the same reason and the same safety property: called once from the
+   * committing client (direct, after its own local move) and once from
+   * every OTHER connected client's TOKEN_EVENT receiver — since this app's
+   * realtime channels don't echo a publisher's own broadcast back to
+   * itself, exactly ONE of those two call sites ever has BOTH
+   * currentUserIsDM true AND a live connection, so the HP/condition/roll
+   * side effects below can never double-apply.
+   *
+   * Scoped to character-linked tokens only (a bare NPC/monster token has no
+   * ability scores to save with, and no HP to damage outside an active
+   * combatant row) — a deliberate, documented limitation: an NPC token
+   * still lands on a pit cell exactly like today (the ordinary elevation
+   * snap), it just never takes fall damage or triggers a concealed-pit
+   * save. "Prone" is applied only when the mover is a tracked combatant in
+   * the CURRENTLY ACTIVE encounter (conditions are combatant-scoped, not
+   * character-scoped — there is nowhere to record it outside combat); the
+   * damage itself always applies, in or out of combat, since apply_hp_delta
+   * is character-scoped.
+   *
+   * Resolves BEFORE maybeOfferTransition is called, on whatever the token's
+   * true final resting position turns out to be (the pit cell on a failed
+   * concealed save or an ordinary visible pit; the last safe cell on a
+   * passed concealed save) — the design's required sequencing: fall
+   * damage/prone lands, THEN (if a link exists) the transition offer.
+   */
+  const handleTokenLanded = useCallback(
+    async (token: MapToken, fromElevationSteps: number, fromPosition: GridPoint) => {
+      let finalToken = token;
+      if (currentUserIsDM && token.character_id) {
+        try {
+          const supabase = createBrowserSupabaseClient();
+          const current = liveMapRef.current;
+          const destCell =
+            current?.cells.find((cell) => cell.x === token.x && cell.y === token.y) ?? null;
+          const concealed = concealedPitsRef.current.find(
+            (pit) => pit.x === token.x && pit.y === token.y
+          );
+          // Fall damage/prone change character HP and combatant conditions —
+          // the same combat-mutation shape runCombatAction already pairs
+          // with a refresh-then-poke everywhere else in this file (manual
+          // HP buttons, condition toggles, ...). Without it, NEITHER this
+          // DM client's own `combat` state nor any other connected client's
+          // would ever pick up the change (confirmed: real HP/condition
+          // writes landed in the database, but no open Game Room reflected
+          // them without a full reload) — set once below, after whichever
+          // branch actually changed something.
+          let combatChanged = false;
+
+          const resolveVisiblePitFall = async (pitElevationSteps: number) => {
+            const depthFeet = fallDepthFeet(fromElevationSteps, pitElevationSteps);
+            const diceCount = fallDamageDiceCount(depthFeet);
+            if (diceCount === 0 || !token.character_id) return; // shallow "pit" — a no-op, §4
+            const rollEntry = await postRoll(campaignId, {
+              kind: "freeform",
+              notation: `${diceCount}d6`,
+            });
+            await applyHpDelta(supabase, token.character_id, -rollEntry.total);
+            combatChanged = true;
+            const combatant = combat?.combatants.find((c) => c.token_id === token.id) ?? null;
+            if (combatant) await applyCondition(supabase, combatant.id, "prone");
+          };
+
+          if (concealed) {
+            const rollEntry = await postRoll(campaignId, {
+              kind: "save",
+              characterId: token.character_id,
+              ability: "dexterity",
+            });
+            if (rollEntry.total >= concealed.save_dc) {
+              // Success: catches itself at the edge — the move never really
+              // happened, so it's undone rather than left standing in a
+              // hole nobody can see. Not auto-revealed (§5): the trap stays
+              // in concealedPitsRef exactly as it was, ready to catch the
+              // next mover.
+              const reverted = await moveMapToken(supabase, token.id, {
+                x: fromPosition.x,
+                y: fromPosition.y,
+                elevation: fromElevationSteps,
+              });
+              applyTokenChange(reverted.id, reverted);
+              await publishTokenChange(reverted.id, reverted);
+              finalToken = reverted;
+            } else {
+              // Failure: the trap reveals itself — a real write, not a
+              // rendering flag — and falls through to the exact same
+              // resolution a visibly-painted pit gets.
+              const revealedCell: MapCell = {
+                map_id: token.map_id,
+                x: token.x,
+                y: token.y,
+                elevation: concealed.bottom_elevation_steps,
+                terrain_type: "pit",
+                light_level: destCell?.light_level ?? "bright",
+              };
+              await upsertMapCells(supabase, [revealedCell]);
+              await deleteConcealedPit(supabase, token.map_id, token.x, token.y);
+              // Locally prune the ref (no periodic re-fetch exists) so a
+              // second mover landing on this now-public pit is resolved as
+              // an ordinary visible pit, not re-rolled as still-concealed.
+              concealedPitsRef.current = concealedPitsRef.current.filter(
+                (pit) => !(pit.x === token.x && pit.y === token.y)
+              );
+              applyCellChange(revealedCell);
+              await campaignChannelRef.current?.publish<CellRevealedPayload>(CELL_REVEALED_EVENT, {
+                cell: revealedCell,
+              });
+              await resolveVisiblePitFall(concealed.bottom_elevation_steps);
+            }
+          } else if (destCell?.terrain_type === "pit") {
+            await resolveVisiblePitFall(destCell.elevation);
+          }
+          if (combatChanged) {
+            // The same refresh-then-poke every other combat mutation in
+            // this file pairs with (runCombatAction): this client's own
+            // `combat` state re-reads the new HP/condition immediately,
+            // and every other connected client (the affected player's
+            // included) picks it up via the same COMBAT_EVENT poke the
+            // manual damage/condition controls already use.
+            await refreshCombat(supabase).catch(() => undefined);
+            await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+          }
+        } catch (err) {
+          setTokenError(errorMessage(err) ?? "Could not resolve that fall.");
+        }
+      }
+      maybeOfferTransition(finalToken);
+    },
+    [
+      currentUserIsDM,
+      campaignId,
+      combat,
+      refreshCombat,
+      applyTokenChange,
+      publishTokenChange,
+      applyCellChange,
+      maybeOfferTransition,
+    ]
+  );
 
   // Two switches landing close together race their fetches — only the
   // latest requested map may win, whatever order the responses arrive in.
@@ -1398,16 +1614,28 @@ export function GameRoom({
     const unsubscribeToken = channel.subscribe<TokenPayload>(TOKEN_EVENT, (payload) => {
       // Position compared against the pre-update row so only genuine moves
       // (a player's click-confirmed move, or the DM acting in another
-      // window) can raise a transition offer — placements and allegiance
-      // flips never do.
+      // window) can raise a transition offer or resolve a fall — placements
+      // and allegiance flips never do either. previous.elevation is exactly
+      // the "elevation the mover stood at immediately before this move"
+      // handleTokenLanded needs (docs/design/pits-and-falling.md §3) — the
+      // pre-update row, read before applyTokenChange splices in the new one.
       const previous =
         liveMapRef.current?.tokens.find((candidate) => candidate.id === payload.tokenId) ?? null;
       applyTokenChange(payload.tokenId, payload.token);
       const token = payload.token;
       if (token && previous && (previous.x !== token.x || previous.y !== token.y)) {
-        maybeOfferTransition(token);
+        void handleTokenLanded(token, previous.elevation, { x: previous.x, y: previous.y });
       }
     });
+    // A concealed pit's reveal (docs/design/pits-and-falling.md §5) — see
+    // handleTokenLanded and CellRevealedPayload's own doc comments. No
+    // separate onReconnect pair: the live-map-changed reconnect handler just
+    // below already re-reads the whole map fresh, cells included, so a
+    // reveal broadcast dropped while disconnected is simply superseded.
+    const unsubscribeCellRevealed = channel.subscribe<CellRevealedPayload>(
+      CELL_REVEALED_EVENT,
+      (payload) => applyCellChange(payload.cell)
+    );
     const unsubscribeHandout = channel.subscribe<HandoutPayload>(HANDOUT_EVENT, (payload) => {
       const row = payload.handout;
       if (!row) {
@@ -1519,6 +1747,7 @@ export function GameRoom({
       unsubscribeLiveMap();
       unsubscribeTrigger();
       unsubscribeToken();
+      unsubscribeCellRevealed();
       unsubscribeHandout();
       unsubscribeReconnect();
       unsubscribeHandoutReconnect();
@@ -1534,7 +1763,18 @@ export function GameRoom({
       campaignChannelRef.current = null;
       void channel.leave();
     };
-  }, [campaignId, currentUserId, currentUserDisplayName, refreshLiveMap, applyTriggered, applyTokenChange, applyHandoutChange, maybeOfferTransition, refreshCombat]);
+  }, [
+    campaignId,
+    currentUserId,
+    currentUserDisplayName,
+    refreshLiveMap,
+    applyTriggered,
+    applyTokenChange,
+    applyCellChange,
+    applyHandoutChange,
+    handleTokenLanded,
+    refreshCombat,
+  ]);
 
   const triggeringRef = useRef(false);
   const handleTrigger = useCallback(
@@ -1593,12 +1833,6 @@ export function GameRoom({
     [campaignId, switching, refreshLiveMap]
   );
 
-  // Same persist-then-broadcast ordering as triggering and map switching:
-  // the DB is the source of truth for anyone joining or reconnecting.
-  const publishTokenChange = useCallback(async (tokenId: string, token: MapToken | null) => {
-    await campaignChannelRef.current?.publish<TokenPayload>(TOKEN_EVENT, { tokenId, token });
-  }, []);
-
   // The quick-add initiative prompt (Prompt 61): set after a
   // place-monster click lands while combat is active; cleared on add or
   // dismiss. Declared before handleCellClick, which sets it.
@@ -1625,6 +1859,18 @@ export function GameRoom({
         const supabase = createBrowserSupabaseClient();
         const elevation = cellElevation(current.cells, x, y);
         const mapId = current.map.id;
+        // Only meaningful for the "move" kind (a genuine reposition, the
+        // only armedToken kind that already offers transitions too — see
+        // below): the token's OWN position/elevation before this commit,
+        // for handleTokenLanded's fall-depth formula. Every OTHER kind is a
+        // placement, which this design deliberately never runs a fall
+        // check for (docs/design/pits-and-falling.md §3's "no antecedent
+        // position" edge case) — placement is an authorial act, not a
+        // physics event.
+        const moverBefore =
+          armedToken.kind === "move"
+            ? (current.tokens.find((candidate) => candidate.id === armedToken.tokenId) ?? null)
+            : null;
         const token =
           armedToken.kind === "place-character"
             ? await placeCharacterToken(supabase, {
@@ -1653,7 +1899,13 @@ export function GameRoom({
         applyTokenChange(token.id, token);
         setArmedToken(null);
         await publishTokenChange(token.id, token);
-        if (armedToken.kind === "move") maybeOfferTransition(token);
+        if (armedToken.kind === "move") {
+          await handleTokenLanded(
+            token,
+            moverBefore?.elevation ?? elevation,
+            moverBefore ? { x: moverBefore.x, y: moverBefore.y } : { x, y }
+          );
+        }
         // The quick-add flow's second half: with combat ACTIVE, the same
         // gesture continues into the initiative prompt so the monster is
         // seated in the current turn order via add_combatant — one
@@ -1670,7 +1922,7 @@ export function GameRoom({
         setTokenBusy(false);
       }
     },
-    [armedToken, tokenBusy, combat, applyTokenChange, publishTokenChange, maybeOfferTransition]
+    [armedToken, tokenBusy, combat, applyTokenChange, publishTokenChange, handleTokenLanded]
   );
 
   // The Roll button is a server-rolled plain d20 through the freeform
@@ -1816,10 +2068,41 @@ export function GameRoom({
       setTokenError(null);
       try {
         const supabase = createBrowserSupabaseClient();
+        const overlay = overlayFromRows(current.cells);
+        const stateAt = (point: GridPoint) => overlay.get(cellKey(point.x, point.y)) ?? DEFAULT_CELL;
+        const originElevationSteps =
+          current.tokens.find((candidate) => candidate.id === tokenId)?.elevation ??
+          stateAt(origin).elevation;
+        // Entering a pit ends the move there (docs/design/pits-and-falling.md
+        // §7): a straight drag that crosses a VISIBLE pit cell before
+        // reaching the originally-clicked destination stops AT the pit
+        // instead of continuing past it — "you fell in, you're not still
+        // walking this turn". Threaded the same cell-to-cell way
+        // pathMovementCost already walks a path, so fallFromElevationSteps
+        // is the elevation of whichever cell the mover stood on immediately
+        // before entering the pit (origin itself, if the pit is the very
+        // first step). A concealed pit can't truncate here by construction
+        // (its public terrain looks like ordinary floor) — handleTokenLanded
+        // below only ever checks the ACTUAL landed cell for those, the same
+        // destination-only shape maybeOfferTransition already has.
+        let landedAt = destination;
+        let fallFromElevationSteps = originElevationSteps;
+        {
+          let previousElevationSteps = originElevationSteps;
+          for (const point of straightCellPath(origin, destination)) {
+            const state = stateAt(point);
+            if (state.terrain === "pit") {
+              landedAt = point;
+              fallFromElevationSteps = previousElevationSteps;
+              break;
+            }
+            previousElevationSteps = state.elevation;
+          }
+        }
         const position = {
-          x: destination.x,
-          y: destination.y,
-          elevation: cellElevation(current.cells, destination.x, destination.y),
+          x: landedAt.x,
+          y: landedAt.y,
+          elevation: cellElevation(current.cells, landedAt.x, landedAt.y),
         };
         // The action-economy fork (Prompt 53): ONLY the current combatant's
         // own tracked turn goes through move_combat_token, which charges the
@@ -1828,9 +2111,10 @@ export function GameRoom({
         // moves, and the message lands in tokenError like any other failed
         // move). Every other move — no combat, a token not in the fight,
         // someone else's turn — keeps the existing untracked moveMapToken
-        // path unchanged. The cost is the same origin-to-destination
-        // dragPathCost the old readout displayed, charged against the same
-        // overlay the table renders from.
+        // path unchanged. The cost is the same origin-to-LANDED dragPathCost
+        // the old readout displayed for a plain destination, charged against
+        // the same overlay the table renders from — a pit-truncated move is
+        // only ever charged for the distance actually walked.
         const currentCombatant = currentCombatantOf(combat);
         const tracked = currentCombatant !== null && currentCombatant.token_id === tokenId;
         // A tracked move whose straight path crosses a void cell costs
@@ -1839,9 +2123,7 @@ export function GameRoom({
         // moves stay free-form and uncharged, exactly as before: outside a
         // tracked turn nothing walks the path, so only the destination-void
         // guard the caller already ran applies.
-        const cost = tracked
-          ? dragPathCost(overlayFromRows(current.cells), origin, destination)
-          : null;
+        const cost = tracked ? dragPathCost(overlay, origin, landedAt) : null;
         if (cost !== null && !Number.isFinite(cost)) {
           setTokenError("That walk would cross the void — there's no floor along the way.");
           return;
@@ -1908,7 +2190,9 @@ export function GameRoom({
             });
             const reactorIds = computeOpportunityAttacks({
               moverFrom: origin,
-              moverTo: destination,
+              // landedAt, not the originally-clicked destination: a pit
+              // crossed mid-path truncated the actual move there.
+              moverTo: landedAt,
               moverDisengaged: currentCombatant.disengaged,
               hostiles,
             });
@@ -1927,14 +2211,23 @@ export function GameRoom({
           await refreshCombat(supabase).catch(() => undefined);
           await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
         }
-        maybeOfferTransition(token);
+        await handleTokenLanded(token, fallFromElevationSteps, origin);
       } catch (err) {
         setTokenError(errorMessage(err) ?? "Could not move that token.");
       } finally {
         setTokenBusy(false);
       }
     },
-    [tokenBusy, combat, campaignId, characterRows, refreshCombat, applyTokenChange, publishTokenChange, maybeOfferTransition]
+    [
+      tokenBusy,
+      combat,
+      campaignId,
+      characterRows,
+      refreshCombat,
+      applyTokenChange,
+      publishTokenChange,
+      handleTokenLanded,
+    ]
   );
 
   // The click-to-confirm half of the click-select gesture, wired as
@@ -3142,12 +3435,20 @@ export function GameRoom({
   // and no grid outline for, for EVERY viewer — void is unconditional map
   // shape, unlike the per-viewer vision masking.
   const tableSurfaceDebug = useMemo(() => {
-    if (!liveMap) return JSON.stringify({ mapId: null, voidCells: [] });
+    if (!liveMap) return JSON.stringify({ mapId: null, voidCells: [], pitCells: [] });
     return JSON.stringify({
       mapId: liveMap.map.id,
       voidCells: liveMap.cells
         .filter((cell) => cell.terrain_type === "void")
         .map((cell) => cellKey(cell.x, cell.y)),
+      // Pits and falling (verify-pits-and-falling.mjs's own precedent): key
+      // + the cell's own (possibly negative) floor elevation — a concealed
+      // pit never appears here for a non-DM viewer until it's revealed,
+      // since it isn't in liveMap.cells at all until then (the whole point
+      // of §5's schema/RLS split).
+      pitCells: liveMap.cells
+        .filter((cell) => cell.terrain_type === "pit")
+        .map((cell) => ({ key: cellKey(cell.x, cell.y), elevation: cell.elevation })),
     });
   }, [liveMap]);
 

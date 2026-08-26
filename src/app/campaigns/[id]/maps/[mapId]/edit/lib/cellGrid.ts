@@ -15,22 +15,36 @@ export const DEFAULT_CELL: CellState = { elevation: 0, terrain: "normal", light:
 // a 50 ft cliff at the rules-engine's 5 ft per step.
 export const MAX_ELEVATION = 10;
 
+// Pits and falling (docs/design/pits-and-falling.md §8): the ONE sculpt
+// path allowed to push elevation negative — the ordinary raise/lower
+// tools' floor-at-0 clamp below is untouched. Chosen at exactly the SRD's
+// own fall-damage cap (200 ft / 40 steps at this app's 5 ft/step): depth
+// beyond it changes nothing mechanically (fallDamageDiceCount is already
+// capped there), so there is nothing to gain by permitting a deeper pit.
+export const MIN_PIT_ELEVATION_STEPS = -40;
+
 export type EditorTool =
   | "raise"
   | "lower"
+  | "pit"
   | "terrain"
   | "light"
   | "object"
   | "generate"
   | "transition"
-  | "light-source";
+  | "light-source"
+  | "concealed-pit";
 
 /** The paint-a-cell tools. "object" is excluded because it routes through
  * the discrete place/select/move flow, never through applyTool; "generate"
  * because its drag defines a selection rectangle, not per-cell edits;
- * "transition" and "light-source" because their clicks pick a cell for a
- * form (a link origin / a fixed light anchor), editing nothing. */
-export type SculptTool = Exclude<EditorTool, "object" | "generate" | "transition" | "light-source">;
+ * "transition", "light-source", and "concealed-pit" because their clicks
+ * pick a cell for a form (a link origin / a fixed light anchor / a hidden
+ * trap's real depth), editing nothing in the visible overlay directly. */
+export type SculptTool = Exclude<
+  EditorTool,
+  "object" | "generate" | "transition" | "light-source" | "concealed-pit"
+>;
 
 export function cellKey(x: number, y: number): string {
   return `${x},${y}`;
@@ -70,12 +84,30 @@ export function applyTool(
     if (current.elevation <= 0) return current;
     return { ...current, elevation: current.elevation - 1 };
   }
+  if (tool === "pit") {
+    // The one sculpt path that both deepens AND marks the terrain in a
+    // single click — a pit's depth and its terrain_type are authored
+    // together (docs/design/pits-and-falling.md §8), unlike ordinary
+    // plateaus where raise/lower and the terrain brush are independent
+    // axes. Floors at MIN_PIT_ELEVATION_STEPS, same shape as raise/lower's
+    // own clamp, just far lower.
+    if (current.elevation <= MIN_PIT_ELEVATION_STEPS) return current;
+    return { ...current, elevation: current.elevation - 1, terrain: "pit" };
+  }
   if (tool === "light") {
     if (current.light === lightBrush) return current;
     return { ...current, light: lightBrush };
   }
   if (current.terrain === brush) return current;
-  return { ...current, terrain: brush };
+  // Repainting a pit cell to any other terrain (the "un-pit" path — there is
+  // no dedicated tool for it, just the ordinary terrain brush) resets its
+  // elevation back to 0 rather than leaving a non-pit cell stuck at a
+  // negative elevation: negative elevation is only ever meaningful paired
+  // with terrain_type = 'pit' (see MIN_PIT_ELEVATION_STEPS's own comment
+  // and the original cellGrid.ts design note this addition builds on — "
+  // negative elevation would render as a hole through the ground plane").
+  const elevation = brush !== "pit" && current.elevation < 0 ? 0 : current.elevation;
+  return { ...current, terrain: brush, elevation };
 }
 
 /** The full dense grid the scene renders: defaults everywhere, overlaid

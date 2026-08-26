@@ -15,6 +15,8 @@ const NORMAL_BASE = "#463a70";
 const NORMAL_HIGH = "#cfc4ff";
 const DIFFICULT_BASE = "#a85a24";
 const DIFFICULT_HIGH = "#ffd9a0";
+const PIT_BASE = "#140f0c";
+const PIT_HIGH = "#3a2a1e";
 
 // tokens.css --surface, the app's darkest backdrop — reads as the void
 // around the map, like the editor's own scene background.
@@ -51,8 +53,15 @@ export function thumbnailCellColor(terrain: TerrainType, elevation: number): str
   // on a cell with no floor, so it never lightens.
   if (terrain === "void") return BACKDROP;
   const [base, high] =
-    terrain === "difficult" ? [DIFFICULT_BASE, DIFFICULT_HIGH] : [NORMAL_BASE, NORMAL_HIGH];
-  const t = Math.min(elevation * 0.11, 0.66);
+    terrain === "difficult"
+      ? [DIFFICULT_BASE, DIFFICULT_HIGH]
+      : terrain === "pit"
+        ? [PIT_BASE, PIT_HIGH]
+        : [NORMAL_BASE, NORMAL_HIGH];
+  // Clamped at 0 like MapSurface's own cellColor: a pit's elevation is a
+  // (possibly negative) floor height, not "how high up", so it never
+  // lightens past its flat base color.
+  const t = Math.min(Math.max(elevation, 0) * 0.11, 0.66);
   const from = hexToLinearRgb(base);
   const to = hexToLinearRgb(high);
   const bytes = from.map((channel, i) => {
