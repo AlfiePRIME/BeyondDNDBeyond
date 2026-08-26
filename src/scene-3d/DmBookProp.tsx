@@ -35,6 +35,13 @@ const HOVER_EMISSIVE = 2.6;
 // clicking it doesn't require pixel-perfect aim at the modeled geometry.
 const HIT_BOX: [number, number, number] = [0.66, 0.4, 0.56];
 
+// The book's own effective circular floor-plane footprint for the movable-
+// chair collision avoidance (GameRoom.tsx's resolveChairDrop obstacle list)
+// — half of HIT_BOX's larger horizontal dimension (0.66), rounded up
+// slightly for a small safety margin beyond the exact hit box itself, the
+// same "generous, not exact" reasoning HIT_BOX was already built with.
+export const DM_BOOK_FOOTPRINT_RADIUS = 0.35;
+
 // How far above the book's base the Html panel's anchor sits — well clear
 // of the open pages' peak (~0.11 at PAGE_TILT_RAD), and enough that the
 // panel (DmBook.module.css's `.book`, a fixed-height `min(400px, 50vh)`

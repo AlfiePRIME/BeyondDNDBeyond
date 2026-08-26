@@ -643,3 +643,184 @@ export function getEffectiveSeat(
   if (!seat) return null;
   return applySeatOffset(seat, offsets.get(userId));
 }
+
+// ---------------------------------------------------------------------------
+// Movable chairs (drag gesture): geometry for resolving a freely-dragged
+// chair's final position/orientation. GameTableScene.tsx (the raw pointer
+// gesture) and GameRoom.tsx (persistence + collision avoidance against
+// obstacles the scene doesn't know about — other chairs, the dice tray, the
+// DM's book) both call into this same pure math, so a real drag and this
+// file's own tests exercise identical logic.
+// ---------------------------------------------------------------------------
+
+/**
+ * The reasonable-radius clamp for a freely-dragged chair, measured from
+ * whichever table (the head square, or one of `appendedTables`) the chair
+ * currently sits nearest to (nearestTableCenter below) — not a single fixed
+ * point at world origin, so a long multi-table row is covered along its
+ * whole length rather than just around the head square.
+ *
+ * 6 (scene units) is a deliberately generous, round number: it clears the
+ * head square's OWN default seating ellipse — whose largest semi-axis,
+ * seatEllipseSemiAxes(COMBINED_TABLE_TOP), is ~3.48 — by roughly 2.5 more
+ * units of real "step back from the table" room, enough to shove a chair
+ * meaningfully further out to make space, or park it well clear of a
+ * cluttered stretch of the row, without ever landing so far out it reads as
+ * "abandoned in empty space" rather than "at this table, just not tight to
+ * the edge." An appended single table's own ellipse is considerably smaller
+ * (~1.88 semiZ — its two short end-caps are its only free seating arcs), so
+ * this SAME fixed radius gives even more relative roam there; that's
+ * intentional, not an oversight — a smaller table shouldn't feel MORE
+ * cramped for a dragged chair than the head square.
+ */
+export const CHAIR_DRAG_CLAMP_RADIUS = 6;
+
+// How much clearance (beyond the two obstacles' own summed radii) a nudged
+// chair drop keeps from whatever it was nudged away from — a small fixed
+// visual gap so a resolved drop reads as "parked next to" rather than
+// "touching." maxSeatCapacity's own default-layout check uses a hard >=
+// with no margin; a hand-dragged drop gets an intentionally visible buffer
+// instead, since a player chose this exact spot rather than an even,
+// pre-computed layout landing them there.
+const CHAIR_NUDGE_MARGIN = 0.05;
+
+// Bounded, not unbounded — pushing a chair clear of one obstacle can, in
+// principle, push it into a new overlap with another it wasn't checked
+// against yet. This is generous enough to settle for any realistic
+// obstacle count (a handful of nearby chairs plus the dice tray/DM's book)
+// well before it's ever exhausted.
+const MAX_CHAIR_NUDGE_PASSES = 8;
+
+/** One thing a dragged chair must not end up overlapping — another occupied
+ * chair, the shared dice tray, the DM's private tray, or the DM's book.
+ * GameRoom.tsx builds the real list (it alone knows where all of those
+ * currently are); this file only consumes it. `radius` is that obstacle's
+ * own effective circular footprint — the chair-frontage-as-a-circle proxy
+ * maxSeatCapacity's own doc comment already established for a chair, or a
+ * prop's own real measured footprint (the dice tray's TRAY_RADIUS, the DM's
+ * book's own DM_BOOK_FOOTPRINT_RADIUS). */
+export interface ChairObstacle {
+  x: number;
+  z: number;
+  radius: number;
+}
+
+/** The world-space center (x is always 0 — every table in this row shares
+ * the same X centerline, table.ts's own singleTableOffsetZ) of whichever
+ * table (the head square, at world origin, or one of `appendedTables`)
+ * `x, z` currently sits closest to — the same row geometry
+ * computeAppendedTableSeatLayout already assumes, reused here so a freely-
+ * dragged chair always re-orients toward SOME real table instead of a fixed
+ * single-table assumption. */
+export function nearestTableCenter(
+  x: number,
+  z: number,
+  appendedTables: readonly AppendedTable[]
+): { x: number; z: number } {
+  let best = { x: 0, z: 0 };
+  let bestDistance = Math.hypot(x, z);
+  for (const table of appendedTables) {
+    const distance = Math.hypot(x, z - table.offsetZ);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = { x: 0, z: table.offsetZ };
+    }
+  }
+  return best;
+}
+
+/** Clamps `x, z` to at most CHAIR_DRAG_CLAMP_RADIUS from whichever table it
+ * currently sits nearest to (nearestTableCenter) — see that constant's own
+ * doc comment for why the radius itself is measured this way. A point
+ * already inside the radius (including exactly at a table's own center,
+ * where "direction" is arbitrary and clamping is a no-op anyway) is
+ * returned untouched. */
+export function clampToTableArrangement(
+  x: number,
+  z: number,
+  appendedTables: readonly AppendedTable[]
+): { x: number; z: number } {
+  const center = nearestTableCenter(x, z, appendedTables);
+  const dx = x - center.x;
+  const dz = z - center.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance <= CHAIR_DRAG_CLAMP_RADIUS || distance < 1e-6) return { x, z };
+  const scale = CHAIR_DRAG_CLAMP_RADIUS / distance;
+  return { x: center.x + dx * scale, z: center.z + dz * scale };
+}
+
+/** seatAtAngle's own Math.atan2(x, z) "face the table center" convention,
+ * replayed around whichever table `x, z` sits nearest to (nearestTableCenter)
+ * instead of a fixed single-table assumption — so a freely-dragged chair
+ * faces the head square while it's parked there, and faces whichever
+ * appended table it's nearest to once dragged out along the row. */
+export function rotationYTowardNearestTable(
+  x: number,
+  z: number,
+  appendedTables: readonly AppendedTable[]
+): number {
+  const center = nearestTableCenter(x, z, appendedTables);
+  return Math.atan2(x - center.x, z - center.z);
+}
+
+/**
+ * The authoritative "where does this drop actually land" resolution for a
+ * freely-dragged chair — the one place clamping AND collision-avoidance
+ * both actually happen, so GameRoom.tsx's real onChairDragEnd handler and
+ * this file's own tests exercise identical logic. Two passes:
+ *
+ *  1. Radius clamp (clampToTableArrangement) — always applied first, and
+ *     re-applied after every nudging pass below, so an obstacle-driven push
+ *     can never leave the final point outside CHAIR_DRAG_CLAMP_RADIUS.
+ *  2. Obstacle nudging: whichever obstacle is violated worst (its own
+ *     radius plus `chairRadius` closer than the two centers' real distance)
+ *     gets pushed away from first, straight along the line from its own
+ *     center through the candidate point, out to just clear it
+ *     (CHAIR_NUDGE_MARGIN beyond exact tangency) — repeated (one worst
+ *     violation at a time, re-clamping to the radius after each) until
+ *     nothing is left overlapping or MAX_CHAIR_NUDGE_PASSES is reached,
+ *     whichever comes first.
+ *
+ * rotationY is always recomputed fresh from wherever the point actually
+ * finally lands (rotationYTowardNearestTable) — a nudge could in principle
+ * shift which table is nearest, so this never trusts a pre-nudge angle.
+ */
+export function resolveChairDrop(params: {
+  x: number;
+  z: number;
+  /** This chair's own effective circular footprint radius — PLAYER_CHAIR_
+   * FRONTAGE/2 or DM_CHAIR_FRONTAGE/2, per the seat's own role. */
+  chairRadius: number;
+  obstacles: readonly ChairObstacle[];
+  appendedTables: readonly AppendedTable[];
+}): { x: number; z: number; rotationY: number } {
+  const { chairRadius, obstacles, appendedTables } = params;
+  let point = clampToTableArrangement(params.x, params.z, appendedTables);
+
+  for (let pass = 0; pass < MAX_CHAIR_NUDGE_PASSES; pass++) {
+    let worst: { obstacle: ChairObstacle; distance: number; minDistance: number } | null = null;
+    for (const obstacle of obstacles) {
+      const distance = Math.hypot(point.x - obstacle.x, point.z - obstacle.z);
+      const minDistance = chairRadius + obstacle.radius + CHAIR_NUDGE_MARGIN;
+      if (distance < minDistance && (!worst || distance < worst.distance)) {
+        worst = { obstacle, distance, minDistance };
+      }
+    }
+    if (!worst) break;
+    const { obstacle, distance, minDistance } = worst;
+    if (distance < 1e-6) {
+      // Degenerate: dropped exactly on the obstacle's own center — push due
+      // +Z by convention, an arbitrary but stable direction.
+      point = { x: obstacle.x, z: obstacle.z + minDistance };
+    } else {
+      const scale = minDistance / distance;
+      point = {
+        x: obstacle.x + (point.x - obstacle.x) * scale,
+        z: obstacle.z + (point.z - obstacle.z) * scale,
+      };
+    }
+    point = clampToTableArrangement(point.x, point.z, appendedTables);
+  }
+
+  return { x: point.x, z: point.z, rotationY: rotationYTowardNearestTable(point.x, point.z, appendedTables) };
+}

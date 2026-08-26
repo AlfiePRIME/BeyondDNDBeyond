@@ -39,11 +39,25 @@ export { AVATAR_HEIGHT } from "./SeatAvatar";
 // AssetPalette.tsx's custom map-asset upload and AvatarPicker.tsx's custom
 // avatar upload via the shared app-layer ModelOrientationStep wrapper.
 export { OrientationPreview, type OrientationPreviewProps, type ModelNormalize } from "./OrientationPreview";
-export { DiceTumble, type DiceTumbleHandle, type DiceTumbleProps, type DiceTumbleSpec } from "./DiceTumble";
+export {
+  DiceTumble,
+  type DiceTumbleHandle,
+  type DiceTumbleProps,
+  type DiceTumbleSpec,
+  // Movable-chair collision avoidance (GameRoom.tsx's resolveChairDrop
+  // obstacle list) needs the shared tray's own real position/radius.
+  DEFAULT_TRAY_POSITION,
+  TRAY_RADIUS,
+} from "./DiceTumble";
 // Phase 5: the DM's book as a real 3D prop (replacing DmBook.tsx's old
 // screen-fixed 2D overlay) — see DmBookProp.tsx's doc comment for why it
 // takes the page content as `children` rather than importing DmBook itself.
-export { DmBookProp, type DmBookPropProps } from "./DmBookProp";
+export {
+  DmBookProp,
+  type DmBookPropProps,
+  // Same collision-avoidance reasoning as DiceTumble's own TRAY_RADIUS above.
+  DM_BOOK_FOOTPRINT_RADIUS,
+} from "./DmBookProp";
 export {
   computeSeatLayout,
   computeCampaignSeatLayout,
@@ -52,6 +66,17 @@ export {
   getEffectiveSeat,
   HEAD_SQUARE_SEAT_CAPACITY,
   SINGLE_TABLE_SEAT_CAPACITY,
+  PLAYER_CHAIR_FRONTAGE,
+  DM_CHAIR_FRONTAGE,
+  // Movable chairs (drag gesture): GameTableScene.tsx uses the clamp/
+  // reorient helpers live during a drag; GameRoom.tsx uses the full
+  // resolveChairDrop (clamp + collision-avoidance nudge) as the final
+  // authority once a drag ends — see seating.ts's own doc comments.
+  CHAIR_DRAG_CLAMP_RADIUS,
+  nearestTableCenter,
+  clampToTableArrangement,
+  rotationYTowardNearestTable,
+  resolveChairDrop,
   type CameraMode,
   type Seat,
   type SeatMember,
@@ -59,6 +84,7 @@ export {
   type CampaignSeatLayout,
   type CampaignSeat,
   type AppendedTable,
+  type ChairObstacle,
 } from "./seating";
 // Phase 3: GameRoom derives the DM's private dice tray position from the
 // DM's own seat, in table-surface-relative terms — the one table constant

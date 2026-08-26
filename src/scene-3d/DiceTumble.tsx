@@ -61,7 +61,11 @@ const DIE_SIZE = 0.13;
 const FALLBACK_COLOR = "#8f86ad"; // Same placeholder tone as SeatAvatar/PlacedObject.
 const DIE_COLOR = "#c9482f";
 const TRAY_COLOR = "#2a2140"; // Matches GameTableScene's seat-cushion tone.
-const TRAY_RADIUS = 0.55;
+// Exported: GameRoom.tsx's movable-chair collision avoidance
+// (seating.ts's resolveChairDrop) treats the shared tray as one of the
+// obstacles a dropped chair must clear, and needs this same real radius —
+// not a hand-copied guess that could silently drift from it.
+export const TRAY_RADIUS = 0.55;
 
 // How long a fully-settled roll's result stays legible before the next
 // queued roll takes over the tray.
@@ -228,8 +232,12 @@ function DiceTray() {
 // reasoning) inside the border of bare tabletop every live map leaves
 // visible around itself, so a tumble never sits on top of the map, tokens,
 // or camera controls. The shared tray's default; overridable per-instance
-// via the `trayPosition` prop (Phase 3's DM-private second tray).
-const DEFAULT_TRAY_POSITION: readonly [number, number, number] = [
+// via the `trayPosition` prop (Phase 3's DM-private second tray). Exported
+// alongside TRAY_RADIUS for the movable-chair collision avoidance
+// (GameRoom.tsx's resolveChairDrop obstacle list) — the shared tray always
+// sits exactly here, so this is the one real value to check a dropped
+// chair against, not a hand-copied duplicate of it.
+export const DEFAULT_TRAY_POSITION: readonly [number, number, number] = [
   TABLE_TOP.width / 2 - 0.85,
   TABLE_SURFACE_Y + 0.01,
   -(TABLE_TOP.depth / 2 - 0.85),

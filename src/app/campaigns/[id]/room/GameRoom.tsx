@@ -24,6 +24,7 @@ import {
   getActiveCombatEncounter,
   getCharacter,
   getMap,
+  getSeatOffsetsForCampaign,
   listCharactersForCampaign,
   listCombatCombatants,
   listCombatantHiddenFrom,
@@ -49,6 +50,7 @@ import {
   setDayNightMode,
   setHandoutRevealed,
   setLiveMap,
+  setSeatOffset,
   setTokenAllegiance,
   startCombat,
   stopConcentrating,
@@ -101,16 +103,25 @@ import {
 } from "@/rules-engine";
 import { Button, Modal } from "@/ui-components";
 import {
+  applySeatOffset,
   computeCampaignSeatLayout,
+  DEFAULT_TRAY_POSITION,
   DiceTumble,
   DmBookProp,
+  DM_BOOK_FOOTPRINT_RADIUS,
+  DM_CHAIR_FRONTAGE,
   GameTableScene,
+  PLAYER_CHAIR_FRONTAGE,
+  resolveChairDrop,
   TABLE_SURFACE_Y,
+  TRAY_RADIUS,
   type CameraMode,
+  type ChairObstacle,
   type DiceTumbleHandle,
   type DiceTumbleSpec,
   type MapSurfaceCell,
   type Seat,
+  type SeatOffset,
   type TableLiveMap,
   type TokenSlidePhase,
 } from "@/scene-3d";
@@ -171,6 +182,16 @@ const TOKEN_SELECTED_EVENT = "token-selected";
 // the roll_log postgres_changes feed (subscribeToRollLog, in DiceLogPanel)
 // is already the reconnect-safe source of truth for the numbers themselves.
 const DICE_ROLLED_EVENT = "dice-rolled";
+// Movable chairs: unlike DICE_ROLLED_EVENT/TOKEN_SELECTED_EVENT above, this
+// one carries genuinely persisted state (campaign_members.seat_offset, via
+// setSeatOffset) — the TOKEN_EVENT shape, not the ephemeral-poke shape: the
+// DB is written FIRST, then this broadcasts the exact same already-durable
+// value so every other already-connected client updates immediately without
+// its own extra read. A dropped broadcast (a client that was disconnected
+// when it fired) is recovered by the paired onReconnect below re-reading the
+// whole roster's offsets, the same "DB is the source of truth after a drop"
+// reasoning as TOKEN_EVENT's own live-map reconnect handler.
+const SEAT_MOVED_EVENT = "seat-moved";
 
 // Seen-cells memory writes (Prompt 58) are debounced this long past the
 // last newly-perceived cell — movement recomputes visibility far too often
@@ -297,6 +318,14 @@ interface CombatPayload {
  * write. */
 interface DiceRolledPayload {
   spec: DiceTumbleSpec;
+}
+
+/** SEAT_MOVED_EVENT's payload — the exact already-persisted offset
+ * (handleChairDragEnd's own resolveChairDrop result), the TokenPayload
+ * shape: a receiver applies it directly, no follow-up read needed. */
+interface SeatMovedPayload {
+  userId: string;
+  offset: SeatOffset;
 }
 
 /** The live map plus everything needed to render/interact with it. */
@@ -472,6 +501,7 @@ export function GameRoom({
   initialDmNotes,
   initialLorePages,
   initialLorePageLinks,
+  initialSeatOffsets,
 }: {
   campaignId: string;
   campaignName: string;
@@ -521,10 +551,30 @@ export function GameRoom({
    * listLorePageLinksForCampaign call the standalone /lore index makes) —
    * the book's Lore page's read-only "Linked to" chips render from this. */
   initialLorePageLinks: LorePageLink[];
+  /** Movable chairs: every member's own stored seat_offset at load time
+   * (data-access's getSeatOffsetsForCampaign), as a plain array of
+   * [user_id, offset] pairs rather than a Map — a Map isn't a serializable
+   * prop across the server/client component boundary (page.tsx is a Server
+   * Component; GameRoom is "use client"), so this reconstructs into a Map
+   * once below, the same shape getSeatOffsetsForCampaign itself returns. A
+   * member absent from this list has never moved their chair. */
+  initialSeatOffsets: readonly (readonly [string, SeatOffset])[];
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
   const [roster, setRoster] = useState<RoomMember[]>(members);
+  // Movable chairs: this campaign's roster of stored per-member chair
+  // offsets, keyed by user_id — data-access's getSeatOffsetsForCampaign's
+  // own Map shape, reconstructed here from the serializable array page.tsx
+  // passes instead (a plain Map can't cross the Server/Client component
+  // boundary). Kept live via SEAT_MOVED_EVENT below — the exact
+  // "broadcast carries the full new already-persisted state" shape
+  // TOKEN_EVENT already uses for tokens, not an ephemeral poke.
+  const [seatOffsets, setSeatOffsets] = useState<Map<string, SeatOffset>>(
+    () => new Map(initialSeatOffsets)
+  );
+  const [chairMoveError, setChairMoveError] = useState<string | null>(null);
+  const chairMoveBusyRef = useRef(false);
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState<string | null>(null);
   const channelRef = useRef<PresenceChannel | null>(null);
@@ -588,7 +638,17 @@ export function GameRoom({
   // single-ellipse fit over the WHOLE (possibly-overflowing) roster would
   // compute a different angle for it than what actually renders once
   // there's overflow.
-  const { seats, appendedTables } = useMemo(() => computeCampaignSeatLayout(roster), [roster]);
+  const layout = useMemo(() => computeCampaignSeatLayout(roster), [roster]);
+  const { appendedTables } = layout;
+  // Every seat, offset-applied — applySeatOffset's own doc comment: "where
+  // is this member actually sitting right now" must have exactly one
+  // answer everywhere, so dmSeat/dmPrivateTrayPosition/dmBookPosition below
+  // (and the seat-layout-state debug mirror) all reflect wherever a chair
+  // ACTUALLY currently sits, not just computeCampaignSeatLayout's default.
+  const seats = useMemo(
+    () => layout.seats.map((seat) => applySeatOffset(seat, seatOffsets.get(seat.member.user_id))),
+    [layout.seats, seatOffsets]
+  );
   const dmSeat = useMemo<Seat | null>(
     () => seats.find((seat) => seat.member.role === "dm") ?? null,
     [seats]
@@ -631,6 +691,97 @@ export function GameRoom({
   // comment) — verify-dm-book.mjs has no other way to find a WebGL mesh's
   // on-screen position to click.
   const [bookScreenPosition, setBookScreenPosition] = useState<[number, number] | null>(null);
+  // Movable chairs: this client's own draggable chair's live screen
+  // projection — GameTableScene's onOwnChairProjectedPosition, the same
+  // "WebGL has no DOM of its own for a test to find a click target"
+  // reasoning as bookScreenPosition above.
+  const [ownChairScreenPosition, setOwnChairScreenPosition] = useState<[number, number] | null>(null);
+  // Movable chairs: this client's own seated camera position, live — the
+  // direct proof for the "camera view updates live while dragging"
+  // acceptance criterion (GameTableScene's onOwnCameraDebug's own doc
+  // comment).
+  const [ownCameraPosition, setOwnCameraPosition] = useState<readonly [number, number, number] | null>(null);
+
+  // Movable chairs: the one place a dragged chair's position actually gets
+  // persisted — GameTableScene's own onChairDragEnd (wired below) hands
+  // back the raw clamped-and-reoriented offset from a live drag; this is
+  // where GameRoom's own resolveChairDrop call (the ONLY place this scene
+  // knows about every real obstacle — other chairs, the shared dice tray,
+  // the DM's private tray, the DM's book) resolves it to a final,
+  // non-overlapping position before persisting it at all. Persist-then-
+  // broadcast, the same ordering every other mutation in this file uses
+  // (triggerMapObject/setLiveMap/commitTokenMove): the DB is the source of
+  // truth for anyone joining or reconnecting, so it's written before this
+  // client's own local state updates or anyone else is told.
+  const handleChairDragEnd = useCallback(
+    (userId: string, offset: SeatOffset) => {
+      // Defense in depth, not the real gate: GameTableScene's own
+      // draggableUserId already never renders a grab handle for anyone but
+      // the current viewer's own PLAYER seat, so this should be
+      // unreachable with a mismatched userId or a DM's seat — but a stale
+      // closure racing a role change (a vanishingly rare DM-transfer edge
+      // case) is cheap to guard against directly rather than trust.
+      if (userId !== currentUserId || chairMoveBusyRef.current) return;
+      const defaultSeat = layout.seats.find((seat) => seat.member.user_id === userId);
+      if (!defaultSeat || defaultSeat.member.role !== "player") return;
+      chairMoveBusyRef.current = true;
+      setChairMoveError(null);
+      void (async () => {
+        try {
+          const supabase = createBrowserSupabaseClient();
+          const candidateX = defaultSeat.position[0] + offset.dx;
+          const candidateZ = defaultSeat.position[2] + offset.dz;
+          const chairRadius = PLAYER_CHAIR_FRONTAGE / 2;
+          // Every real obstacle a dropped chair must clear — see
+          // seating.ts's ChairObstacle/resolveChairDrop doc comments. Every
+          // OTHER seat's CURRENT (already offset-applied) position, not its
+          // raw default — another member may have already dragged theirs
+          // too. The DM's private tray and book are computed the same way
+          // for every client regardless of role (dmPrivateTrayPosition/
+          // dmBookPosition above are pure functions of dmSeat, which every
+          // client — not just the DM — already derives), so this stays
+          // correct even though only the DM's own client actually RENDERS
+          // either of them.
+          const obstacles: ChairObstacle[] = [];
+          for (const seat of seats) {
+            if (seat.member.user_id === userId) continue;
+            obstacles.push({
+              x: seat.position[0],
+              z: seat.position[2],
+              radius: (seat.member.role === "dm" ? DM_CHAIR_FRONTAGE : PLAYER_CHAIR_FRONTAGE) / 2,
+            });
+          }
+          obstacles.push({ x: DEFAULT_TRAY_POSITION[0], z: DEFAULT_TRAY_POSITION[2], radius: TRAY_RADIUS });
+          obstacles.push({ x: dmPrivateTrayPosition[0], z: dmPrivateTrayPosition[2], radius: TRAY_RADIUS });
+          obstacles.push({ x: dmBookPosition[0], z: dmBookPosition[2], radius: DM_BOOK_FOOTPRINT_RADIUS });
+
+          const resolved = resolveChairDrop({
+            x: candidateX,
+            z: candidateZ,
+            chairRadius,
+            obstacles,
+            appendedTables,
+          });
+          const finalOffset: SeatOffset = {
+            dx: resolved.x - defaultSeat.position[0],
+            dz: resolved.z - defaultSeat.position[2],
+            dRotationY: resolved.rotationY - defaultSeat.rotationY,
+          };
+          await setSeatOffset(supabase, campaignId, userId, finalOffset);
+          setSeatOffsets((current) => new Map(current).set(userId, finalOffset));
+          await campaignChannelRef.current?.publish<SeatMovedPayload>(SEAT_MOVED_EVENT, {
+            userId,
+            offset: finalOffset,
+          });
+        } catch (err) {
+          setChairMoveError(errorMessage(err) ?? "Could not save your new seat position.");
+        } finally {
+          chairMoveBusyRef.current = false;
+        }
+      })();
+    },
+    [currentUserId, layout.seats, seats, appendedTables, campaignId, dmPrivateTrayPosition, dmBookPosition]
+  );
 
   const [liveMap, setLiveMapState] = useState<LiveMapData | null>(initialLiveMap);
   const [switching, setSwitching] = useState(false);
@@ -1078,6 +1229,23 @@ export function GameRoom({
     const unsubscribeTokenSelectedReconnect = channel.onReconnect(() => {
       setRemoteSelectionByUser(new Map());
     });
+    // Movable chairs: SEAT_MOVED_EVENT's own doc comment — the payload IS
+    // the already-persisted value, so a receiver applies it directly, the
+    // same TOKEN_EVENT shape.
+    const unsubscribeSeatMoved = channel.subscribe<SeatMovedPayload>(SEAT_MOVED_EVENT, (payload) => {
+      setSeatOffsets((current) => {
+        const next = new Map(current);
+        next.set(payload.userId, payload.offset);
+        return next;
+      });
+    });
+    // Same dropped-broadcast reasoning as TOKEN_EVENT's own live-map
+    // reconnect above — a seat moved while disconnected is gone from the
+    // wire, so re-read the whole roster's offsets from the DB.
+    const unsubscribeSeatMovedReconnect = channel.onReconnect(async () => {
+      const fresh = await getSeatOffsetsForCampaign(supabase, campaignId).catch(() => null);
+      if (fresh) setSeatOffsets(fresh);
+    });
 
     return () => {
       unsubscribeLiveMap();
@@ -1091,6 +1259,8 @@ export function GameRoom({
       unsubscribeDiceRolled();
       unsubscribeTokenSelected();
       unsubscribeTokenSelectedReconnect();
+      unsubscribeSeatMoved();
+      unsubscribeSeatMovedReconnect();
       campaignChannelRef.current = null;
       void channel.leave();
     };
@@ -2766,6 +2936,10 @@ export function GameRoom({
           onTokenSlideDebug={handleTokenSlideDebug}
           onAvatarPoseDebug={handleAvatarPoseDebug}
           onObjectPoseDebug={handleObjectPoseDebug}
+          seatOffsets={seatOffsets}
+          onChairDragEnd={handleChairDragEnd}
+          onOwnChairProjectedPosition={setOwnChairScreenPosition}
+          onOwnCameraDebug={setOwnCameraPosition}
         />
         {/* A modest, fixed corner of the table (its own doc comment) — never
             full-screen, never over the map/tokens/camera controls. */}
@@ -2930,7 +3104,13 @@ export function GameRoom({
           Present for every member (not DM-only, unlike the book/tray
           mirrors above) since the seat layout itself is identical across
           every client's roster. `tableCount` is 1 (the always-present head
-          square) plus however many plain tables got appended. */}
+          square) plus however many plain tables got appended. Movable
+          chairs: `seats` here is the OFFSET-APPLIED array (this file's own
+          `seats` memo, via applySeatOffset) — wherever a chair actually
+          currently sits, on THIS client, not just its computed default —
+          so a moved chair (and its facing) shows up here identically on
+          the mover's own client, the DM's, and every other player's,
+          proving the realtime sync actually reaches everyone. */}
       <div data-testid="seat-layout-state" hidden>
         {JSON.stringify({
           tableCount: 1 + appendedTables.length,
@@ -2939,6 +3119,7 @@ export function GameRoom({
             userId: seat.member.user_id,
             role: seat.member.role,
             position: seat.position,
+            rotationY: seat.rotationY,
             // -1 = the fixed head square; otherwise an appendedTables[]
             // entry's own 0-based index — see CampaignSeat's doc comment
             // (seating.ts). Exposed directly rather than left for a script
@@ -2947,6 +3128,23 @@ export function GameRoom({
             // Z range once the head square is nearly full.
             tableIndex: seat.tableIndex,
           })),
+        })}
+      </div>
+      {/* Hidden render-state mirror for verify-chair-drag.mjs — same "WebGL
+          has no DOM of its own" reasoning as every other mirror on this
+          page. `ownChairScreen` is this client's own draggable chair's live
+          canvas-relative CSS-pixel projection (or null if this viewer has
+          no draggable seat, or it's off-screen), the only way a Playwright
+          drag simulation can find real pixel coordinates to press down on
+          and drag from — see GameTableSceneProps.onOwnChairProjectedPosition's
+          own doc comment. `error` mirrors the last failed chair-move
+          attempt, if any (the same "surface it in a hidden mirror,
+          nothing else reads it back" shape as switchError/tokenError). */}
+      <div data-testid="chair-drag-state" hidden>
+        {JSON.stringify({
+          ownChairScreen: ownChairScreenPosition,
+          ownCamera: ownCameraPosition,
+          error: chairMoveError,
         })}
       </div>
       {rulerReadout !== null ? (

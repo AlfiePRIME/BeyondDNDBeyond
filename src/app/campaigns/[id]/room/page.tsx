@@ -4,6 +4,7 @@ import {
   getActiveCombatEncounter,
   getMap,
   getProfile,
+  getSeatOffsetsForCampaign,
   listAssetsForCampaign,
   listCampaignMembers,
   listCharactersForCampaign,
@@ -89,6 +90,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     dmNoteRows,
     initialLorePages,
     initialLorePageLinks,
+    seatOffsetsMap,
   ] = await Promise.all([
     listAssetsForCampaign(supabase, campaignId),
     // Non-DM RLS only exposes the live map anyway, and only the DM gets the
@@ -118,6 +120,12 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // flash for the DM, same as every other "initial*" prop here.
     listLorePages(supabase, campaignId),
     listLorePageLinksForCampaign(supabase, campaignId),
+    // Movable chairs: every member's own stored chair offset, same
+    // DB-read-not-broadcast reasoning as the live map/roll log above — a
+    // fresh join or reload must land on wherever chairs currently ACTUALLY
+    // are, not their computed defaults, without having been connected for
+    // any of the seat-moved broadcasts that got them there.
+    getSeatOffsetsForCampaign(supabase, campaignId),
   ]);
   // listDmNotes orders oldest-first (matching every other narrative list);
   // reversed here since the book's Notes page reads better newest-on-top —
@@ -184,6 +192,10 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialDmNotes={initialDmNotes}
       initialLorePages={initialLorePages}
       initialLorePageLinks={initialLorePageLinks}
+      // A Map isn't a serializable Server → Client component prop — see
+      // GameRoom's own initialSeatOffsets doc comment for why this crosses
+      // as a plain array of pairs instead, reconstructed into a Map there.
+      initialSeatOffsets={[...seatOffsetsMap.entries()]}
     />
   );
 }
