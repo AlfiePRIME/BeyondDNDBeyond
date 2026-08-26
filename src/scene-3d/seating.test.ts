@@ -11,7 +11,13 @@ import {
   getEffectiveSeat,
   computeMemberTrayPosition,
   MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+  CHAIR_DRAG_CLAMP_RADIUS,
+  nearestTableCenter,
+  clampToTableArrangement,
+  rotationYTowardNearestTable,
+  resolveChairDrop,
   type SeatOffset,
+  type ChairObstacle,
 } from "./seating";
 
 // Imports the real constants rather than hardcoded copies so these tests can
@@ -715,6 +721,151 @@ describe("computeMemberTrayPosition", () => {
     expect(positionBefore).not.toEqual(positionAfter);
     expect(positionAfter).toEqual(
       expectedTrayPosition(getEffectiveSeat(after, userId, offsets)!.position)
+    );
+  });
+});
+
+describe("nearestTableCenter", () => {
+  it("returns the head square's own center (world origin) when there are no appended tables at all", () => {
+    expect(nearestTableCenter(2, 3, [])).toEqual({ x: 0, z: 0 });
+    expect(nearestTableCenter(-100, 100, [])).toEqual({ x: 0, z: 0 });
+  });
+
+  it("picks the head square when a point sits closer to it than to any appended table", () => {
+    const appended = [{ index: 0, offsetZ: singleTableOffsetZ(0) }];
+    expect(nearestTableCenter(0, 0.1, appended)).toEqual({ x: 0, z: 0 });
+  });
+
+  it("picks an appended table's own center once a point sits closer to it than to the head square", () => {
+    const appended = [{ index: 0, offsetZ: singleTableOffsetZ(0) }];
+    expect(nearestTableCenter(0, singleTableOffsetZ(0) + 0.1, appended)).toEqual({
+      x: 0,
+      z: singleTableOffsetZ(0),
+    });
+  });
+
+  it("picks whichever of several appended tables is genuinely nearest", () => {
+    const appended = [
+      { index: 0, offsetZ: singleTableOffsetZ(0) },
+      { index: 1, offsetZ: singleTableOffsetZ(1) },
+      { index: 2, offsetZ: singleTableOffsetZ(2) },
+    ];
+    const midpoint = (singleTableOffsetZ(1) + singleTableOffsetZ(2)) / 2;
+    expect(nearestTableCenter(0, midpoint - 0.01, appended)).toEqual({ x: 0, z: singleTableOffsetZ(1) });
+    expect(nearestTableCenter(0, midpoint + 0.01, appended)).toEqual({ x: 0, z: singleTableOffsetZ(2) });
+  });
+});
+
+describe("clampToTableArrangement", () => {
+  it("leaves a point already within CHAIR_DRAG_CLAMP_RADIUS of its nearest table untouched", () => {
+    expect(clampToTableArrangement(1, 1, [])).toEqual({ x: 1, z: 1 });
+  });
+
+  it("scales a too-far point back to exactly CHAIR_DRAG_CLAMP_RADIUS from its nearest table's center", () => {
+    const clamped = clampToTableArrangement(100, 0, []);
+    expect(Math.hypot(clamped.x, clamped.z)).toBeCloseTo(CHAIR_DRAG_CLAMP_RADIUS);
+    // Direction is preserved — still due +X from the head square's center.
+    expect(clamped.x).toBeCloseTo(CHAIR_DRAG_CLAMP_RADIUS);
+    expect(clamped.z).toBeCloseTo(0);
+  });
+
+  it("clamps relative to an appended table's own center once that's the nearest one, not world origin", () => {
+    const appended = [{ index: 0, offsetZ: singleTableOffsetZ(0) }];
+    const farZ = singleTableOffsetZ(0) + 100;
+    const clamped = clampToTableArrangement(0, farZ, appended);
+    expect(clamped.z).toBeCloseTo(singleTableOffsetZ(0) + CHAIR_DRAG_CLAMP_RADIUS);
+    const distanceFromNearestTable = Math.hypot(clamped.x - 0, clamped.z - singleTableOffsetZ(0));
+    expect(distanceFromNearestTable).toBeCloseTo(CHAIR_DRAG_CLAMP_RADIUS);
+  });
+});
+
+describe("rotationYTowardNearestTable", () => {
+  it("matches seatAtAngle's own atan2(x, z) convention around the head square when there's no appended table", () => {
+    expect(rotationYTowardNearestTable(0, 5, [])).toBeCloseTo(Math.atan2(0, 5));
+    expect(rotationYTowardNearestTable(5, 0, [])).toBeCloseTo(Math.atan2(5, 0));
+    expect(rotationYTowardNearestTable(3, -4, [])).toBeCloseTo(Math.atan2(3, -4));
+  });
+
+  it("faces the nearest appended table's own center once dragged out along the row", () => {
+    const appended = [{ index: 0, offsetZ: singleTableOffsetZ(0) }];
+    const z = singleTableOffsetZ(0) + 2;
+    expect(rotationYTowardNearestTable(1, z, appended)).toBeCloseTo(Math.atan2(1, z - singleTableOffsetZ(0)));
+  });
+});
+
+describe("resolveChairDrop", () => {
+  it("returns the candidate position and its nearest-table-facing rotation unchanged when nothing is violated", () => {
+    const resolved = resolveChairDrop({ x: 1, z: 1, chairRadius: 0.2, obstacles: [], appendedTables: [] });
+    expect(resolved.x).toBeCloseTo(1);
+    expect(resolved.z).toBeCloseTo(1);
+    expect(resolved.rotationY).toBeCloseTo(Math.atan2(1, 1));
+  });
+
+  it("clamps a too-far drop to CHAIR_DRAG_CLAMP_RADIUS even with no obstacles at all", () => {
+    const resolved = resolveChairDrop({ x: 1000, z: 0, chairRadius: 0.2, obstacles: [], appendedTables: [] });
+    expect(Math.hypot(resolved.x, resolved.z)).toBeCloseTo(CHAIR_DRAG_CLAMP_RADIUS);
+  });
+
+  it("nudges a drop away from a single overlapping obstacle to just clear it, preserving direction", () => {
+    const chairRadius = 0.25;
+    const obstacle: ChairObstacle = { x: 2, z: 0, radius: 0.3 };
+    // Dropped almost exactly on top of the obstacle, offset a hair along +X
+    // so the push direction is unambiguous.
+    const resolved = resolveChairDrop({
+      x: 2.01,
+      z: 0,
+      chairRadius,
+      obstacles: [obstacle],
+      appendedTables: [],
+    });
+    const distance = Math.hypot(resolved.x - obstacle.x, resolved.z - obstacle.z);
+    expect(distance).toBeGreaterThanOrEqual(chairRadius + obstacle.radius);
+    expect(resolved.x).toBeGreaterThan(2); // pushed further along +X, not flipped to the other side
+    expect(resolved.z).toBeCloseTo(0);
+  });
+
+  it("never leaves the final position overlapping ANY obstacle in a cluttered multi-obstacle drop", () => {
+    const chairRadius = 0.25;
+    const obstacles: ChairObstacle[] = [
+      { x: 0.3, z: 0, radius: 0.25 },
+      { x: 0, z: 0.3, radius: 0.25 },
+      { x: 0.2, z: 0.2, radius: 0.2 },
+    ];
+    const resolved = resolveChairDrop({ x: 0.1, z: 0.1, chairRadius, obstacles, appendedTables: [] });
+    for (const obstacle of obstacles) {
+      const distance = Math.hypot(resolved.x - obstacle.x, resolved.z - obstacle.z);
+      expect(distance).toBeGreaterThanOrEqual(chairRadius + obstacle.radius - 1e-6);
+    }
+  });
+
+  it("re-clamps after nudging, so a push near the clamp boundary never ends up outside it", () => {
+    const chairRadius = 0.25;
+    // An obstacle placed just inside the clamp radius, positioned so the
+    // only clear direction to push is further outward, past the boundary
+    // without the post-nudge re-clamp.
+    const obstacle: ChairObstacle = { x: CHAIR_DRAG_CLAMP_RADIUS - 0.1, z: 0, radius: 0.3 };
+    const resolved = resolveChairDrop({
+      x: CHAIR_DRAG_CLAMP_RADIUS - 0.09,
+      z: 0,
+      chairRadius,
+      obstacles: [obstacle],
+      appendedTables: [],
+    });
+    expect(Math.hypot(resolved.x, resolved.z)).toBeLessThanOrEqual(CHAIR_DRAG_CLAMP_RADIUS + 1e-6);
+  });
+
+  it("recomputes rotationY from wherever the point actually finally lands, toward the nearest table", () => {
+    const appended = [{ index: 0, offsetZ: singleTableOffsetZ(0) }];
+    const obstacle: ChairObstacle = { x: 0, z: singleTableOffsetZ(0), radius: 0.3 };
+    const resolved = resolveChairDrop({
+      x: 0.05,
+      z: singleTableOffsetZ(0),
+      chairRadius: 0.25,
+      obstacles: [obstacle],
+      appendedTables: appended,
+    });
+    expect(resolved.rotationY).toBeCloseTo(
+      rotationYTowardNearestTable(resolved.x, resolved.z, appended)
     );
   });
 });

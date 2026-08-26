@@ -2,16 +2,23 @@
 
 import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Clone, OrbitControls, PerspectiveCamera, RoundedBox, useGLTF } from "@react-three/drei";
+import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
-import { Box3, Vector3 } from "three";
-import type { Object3D } from "three";
+import { Box3, Plane, Raycaster, Vector2, Vector3 } from "three";
+import type { Camera, Object3D } from "three";
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y, TABLE_TOP_JOIN_DEPTH } from "./table";
 import {
+  applySeatOffset,
+  clampToTableArrangement,
   computeCampaignSeatLayout,
+  rotationYTowardNearestTable,
   seatEllipseSemiAxes,
+  type AppendedTable,
   type CameraMode,
+  type CampaignSeat,
   type Seat,
   type SeatMember,
+  type SeatOffset,
 } from "./seating";
 import { SeatAvatar } from "./SeatAvatar";
 import { Chair, SEAT_TOP_Y } from "./Chair";
@@ -84,6 +91,96 @@ const LOOK_TARGET = [0, TABLE_SURFACE_Y, 0] as const;
 // of their own) still comfortably frames the larger, roughly-square
 // combined surface instead of sitting proportionally too close to it.
 const FALLBACK_CAMERA_POSITION: readonly [number, number, number] = [0, 13, 10];
+
+// ---------------------------------------------------------------------------
+// Movable chairs (drag gesture): a player may grab and drag their OWN chair
+// (never another member's, never the DM's throne — see draggableUserId
+// below) anywhere near the table arrangement, with their own seated camera
+// following live. Reuses this same file's existing press-drag-release
+// pointer pattern (the ruler's own handleRulerPointerDown/handleRulerDragOver/
+// window-"pointerup" trio just below) rather than inventing a new gesture
+// shape: the scene owns the raw mechanics (which chair, where the pointer
+// currently is), the app layer (GameRoom.tsx's onChairDragEnd) owns what a
+// finished drag actually means — persistence, collision avoidance against
+// obstacles this file has no idea about (other chairs, the dice tray, the
+// DM's book), and broadcasting the result to every other client.
+//
+// Continuous world tracking (not the ruler's discrete per-cell hover) needs
+// a genuine floor-plane raycast, not react-three-fiber's own per-mesh
+// pointer events: those raycast against whatever's actually rendered, so
+// the instant the cursor's SCREEN position crosses in front of the table (or
+// another chair) on its way toward a further seat, an R3F pointer-move
+// handler on a floor mesh would simply stop firing — a dead zone a dragged
+// chair could never cross from plenty of ordinary seated-camera angles.
+// Raycasting a plain MATHEMATICAL plane at y=0 (matching every seat's own
+// "stool base on the floor" anchor — Seat's own doc comment) instead of any
+// real mesh sidesteps that scene-occlusion problem entirely — the standard
+// technique for a free "drag along the ground" gesture. Module-level scratch
+// objects, reused across calls rather than reallocated — DmBookProp.tsx's
+// own objectPos/cameraPos/delta/forward precedent for a WebGL-adjacent
+// coordinate computation frequent enough to be worth not reallocating.
+const chairDragPlane = new Plane(new Vector3(0, 1, 0), 0);
+const chairDragRaycaster = new Raycaster();
+const chairDragNdc = new Vector2();
+const chairDragHit = new Vector3();
+
+/** Projects a raw pointer event's canvas-relative client coordinates onto
+ * the floor plane (see the block comment above) — null only if the ray is
+ * parallel to that plane (looking exactly along the horizon), in which case
+ * callers simply skip that update and keep whatever position they already
+ * had. */
+function floorPointFromClientXY(
+  camera: Camera,
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number
+): { x: number; z: number } | null {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  chairDragNdc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  chairDragRaycaster.setFromCamera(chairDragNdc, camera);
+  const hit = chairDragRaycaster.ray.intersectPlane(chairDragPlane, chairDragHit);
+  return hit ? { x: chairDragHit.x, z: chairDragHit.z } : null;
+}
+
+// An oversized invisible grab handle over a draggable chair — DmBookProp's
+// own HIT_BOX precedent (bigger than the visible model, so grabbing it
+// doesn't need pixel-perfect aim), sized to comfortably enclose a player
+// chair plus its seated avatar (Chair.tsx's PLAYER_CHAIR_HEIGHT is 2.5) so a
+// drag can be grabbed anywhere on the chair's silhouette, not just its base.
+const CHAIR_DRAG_HIT_BOX: [number, number, number] = [1.1, 2.8, 1.1];
+const CHAIR_DRAG_HANDLE_Y = 1.4;
+
+// The Y sampled by the own-chair screen-projection debug callback (below) —
+// deliberately NOT the same as CHAIR_DRAG_HANDLE_Y above, despite both
+// needing to land somewhere on the very same hit box. A seated first-person
+// camera looks PAST its own seat toward the table center (LOOK_TARGET),
+// never straight down at it, so a point at the chair's own vertical middle
+// (1.4) sits right at — empirically, for some party sizes, just past — the
+// bottom edge of the 50°-vertical-FOV seated view (verified directly against
+// a live rendered scene: 1.4 projected to a Y coordinate below the viewport
+// entirely). CAMERA_SETBACK/CAMERA_EYE_HEIGHT (seating.ts) are fixed
+// constants shared by every seat regardless of party size or which table it
+// lands on, so this isn't a one-off for a particular seat — every player's
+// own chair has the exact same problem at that height. 2.6 (near the TOP of
+// the same hit box, still safely inside its own [0, 2.8] Y range, so a real
+// click there still lands on the identical mesh) was chosen by replaying
+// this scene's own camera trigonometry (camera position, LOOK_TARGET, fov)
+// for the real range of seat distances this table produces (the head
+// square's ~3.37–3.48 semi-axes, an appended table's own ~3.48 near its
+// end-cap seats) and picking a height with comfortable margin under the 25°
+// half-FOV at every one of them (roughly 8–11° off-axis, vs. 1.4's
+// razor-thin ~26° that clips some of them entirely).
+const CHAIR_DRAG_PROJECTION_Y = 2.6;
+
+// Scratch vectors for the own-chair screen-projection debug callback below
+// (verification-only — DmBookPropProps.onProjectedPosition's own "WebGL has
+// no DOM of its own for a test to find a click target" reasoning), reused
+// per frame the same way as the chairDrag* scratch objects above.
+const ownChairPoint = new Vector3();
+const ownChairCameraPos = new Vector3();
+const ownChairForward = new Vector3();
+const ownChairDelta = new Vector3();
 
 // The directional light's shadow-camera frustum must cover every
 // shadow-casting seat/chair around the table — whose furthest possible
@@ -256,11 +353,21 @@ function CombinedTable() {
 function TableSeat({
   seat,
   onAvatarPoseDebug,
+  draggable = false,
+  onDragPointerDown,
 }: {
   seat: Seat;
   /** Verification-only pass-through to SeatAvatar's onPoseDebug — see
    * GameTableSceneProps.onAvatarPoseDebug's doc comment. */
   onAvatarPoseDebug?: (userId: string, compatible: boolean) => void;
+  /** True only for the CURRENT viewer's own player seat (GameTableScene's
+   * own draggableUserId) — the movable-chair prompt's explicit "a player can
+   * drag their own chair... cannot drag another player's chair or the DM's
+   * chair." Enforced here by simply never rendering the grab handle at all
+   * for anyone else's seat — there's no gesture to intercept, not a runtime
+   * permission check a determined client could route around. */
+  draggable?: boolean;
+  onDragPointerDown?: (event: ThreeEvent<PointerEvent>) => void;
 }) {
   return (
     <group position={seat.position} rotation={[0, seat.rotationY, 0]}>
@@ -281,6 +388,15 @@ function TableSeat({
           }
         />
       </group>
+      {draggable ? (
+        <mesh position={[0, CHAIR_DRAG_HANDLE_Y, 0]} onPointerDown={onDragPointerDown}>
+          <boxGeometry args={CHAIR_DRAG_HIT_BOX} />
+          {/* opacity-0, not visible={false} — an invisible mesh is skipped
+              by the raycaster, which would defeat the hit box entirely
+              (DmBookProp's own precedent). */}
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ) : null}
     </group>
   );
 }
@@ -344,6 +460,79 @@ export interface GameTableSceneProps {
   /** Verification-only pass-through to MapSurface's onObjectPoseDebug —
    * see its own doc comment. */
   onObjectPoseDebug?: (id: string, compatible: boolean) => void;
+  /** This viewer's own visible chair offsets, keyed by user_id — scene-3d's
+   * own SeatOffset (seating.ts), not data-access's structurally-identical
+   * twin (the SeatMember/module-boundary convention already documented on
+   * that type). Applied via applySeatOffset to every seat before it's ever
+   * rendered — per that function's own doc comment, "where is this member
+   * actually sitting right now" must have exactly one answer everywhere, so
+   * this scene never reads a seat's raw computeCampaignSeatLayout position
+   * directly. Absent/empty means nobody has moved their chair — every seat
+   * renders at its computed default, byte-for-byte this prompt's pre-
+   * existing behavior. */
+  seatOffsets?: ReadonlyMap<string, SeatOffset>;
+  /** Fires once a chair drag genuinely ends WITH real movement — a plain
+   * click-and-release with no drag in between fires nothing at all, the
+   * same "press-and-release in place is a grab, not a move" convention the
+   * old token-drag gesture and the ruler both already use. Carries the
+   * final position/orientation already clamped to CHAIR_DRAG_CLAMP_RADIUS
+   * and re-oriented toward the nearest table (seating.ts's
+   * clampToTableArrangement/rotationYTowardNearestTable — the same math the
+   * live in-progress drag itself already used), expressed as an offset from
+   * that seat's own computed default — but NOT yet nudged clear of other
+   * chairs/the dice tray/the DM's book: this scene has no idea where those
+   * are. GameRoom.tsx's own onChairDragEnd handler is the actual final
+   * authority — it re-resolves through seating.ts's resolveChairDrop with
+   * the real obstacle list, persists via setSeatOffset, and broadcasts the
+   * (possibly further-nudged) result to every other client. Only ever
+   * fires for `currentUserId`'s own seat — see draggableUserId below for why
+   * nothing else can even start a drag to fire this. */
+  onChairDragEnd?: (userId: string, offset: SeatOffset) => void;
+  /** Verification-only: this client's own draggable chair's current on-
+   * screen projection (canvas-relative CSS pixels), or null while it isn't
+   * visible or doesn't exist — DmBookPropProps.onProjectedPosition's own
+   * "WebGL has no DOM of its own for a test to find a click target"
+   * reasoning, reused here so a Playwright drag simulation has real pixel
+   * coordinates to press down on and drag from. Not read by GameTableScene
+   * itself; changes nothing about how anything renders or drags. */
+  onOwnChairProjectedPosition?: (point: [number, number] | null) => void;
+  /** Verification-only: this client's own seated camera position, fired
+   * whenever it genuinely changes — the direct proof for "that player's own
+   * camera view updates live while dragging" rather than trusting
+   * applySeatOffset's own cameraPosition translation by inference alone.
+   * Not read by GameTableScene itself. */
+  onOwnCameraDebug?: (position: readonly [number, number, number]) => void;
+}
+
+// Stable empty-Map default for GameTableSceneProps.seatOffsets — a fresh
+// `new Map()` literal in the destructured default below would otherwise
+// allocate (and, worse, compare unequal to itself across renders in any
+// memo keyed on it) every single render for any caller that omits the prop.
+const EMPTY_SEAT_OFFSETS: ReadonlyMap<string, SeatOffset> = new Map();
+
+/** One in-progress chair drag's own fixed, per-session parameters —
+ * captured once at "pointerdown" and read (never re-derived) by the window
+ * "pointermove"/"pointerup" listeners for the rest of that same drag. */
+interface ChairDragSession {
+  userId: string;
+  /** The grabbed point's own fixed offset from the chair's anchor at the
+   * moment of the press — preserved through the whole drag so the chair
+   * doesn't jump to re-center itself under the cursor the instant it's
+   * grabbed (the ordinary "grab anywhere on it" drag convention). */
+  grabOffsetX: number;
+  grabOffsetZ: number;
+  defaultPosition: readonly [number, number, number];
+  defaultRotationY: number;
+  /** False for a plain click-and-release with no real movement in between —
+   * see GameTableSceneProps.onChairDragEnd's own doc comment for why that
+   * fires nothing at all in this case. */
+  moved: boolean;
+  /** The latest resolved (clamped + re-oriented) offset — read directly off
+   * this mutable session object on release rather than off React state,
+   * since the window "pointerup" listener's own closure only ever sees
+   * whatever state existed at the moment "pointerdown" registered it, not
+   * later updates from "pointermove". */
+  latestOffset: SeatOffset | null;
 }
 
 export function GameTableScene({
@@ -362,16 +551,216 @@ export function GameTableScene({
   onTokenSlideDebug,
   onAvatarPoseDebug,
   onObjectPoseDebug,
+  seatOffsets = EMPTY_SEAT_OFFSETS,
+  onChairDragEnd,
+  onOwnChairProjectedPosition,
+  onOwnCameraDebug,
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
+  const { camera, gl, size } = useThree();
 
-  const { seats, appendedTables } = useMemo(() => computeCampaignSeatLayout(members), [members]);
+  const layout = useMemo(() => computeCampaignSeatLayout(members), [members]);
+  const { appendedTables } = layout;
+
+  // Movable chairs: only the CURRENT viewer's own PLAYER seat may ever be
+  // dragged — never the DM's throne (out of scope for this prompt; the
+  // brief's own repeated "a player's own chair" framing) and never another
+  // member's chair (TableSeat below only ever renders a grab handle for
+  // this exact user_id — see its own doc comment).
+  const draggableUserId = useMemo(() => {
+    const mine = layout.seats.find((seat) => seat.member.user_id === currentUserId);
+    return mine && mine.member.role === "player" ? mine.member.user_id : null;
+  }, [layout.seats, currentUserId]);
+
+  const chairDragSessionRef = useRef<ChairDragSession | null>(null);
+  const [isDraggingChair, setIsDraggingChair] = useState(false);
+  // The seat currently overridden by purely LOCAL state — covers both the
+  // live in-progress drag (updated every "pointermove", see the effect
+  // below) and the brief window right after release before GameRoom.tsx's
+  // own seatOffsets prop (its persist-then-broadcast round trip) catches up
+  // to the value this same client just committed, so a chair never visibly
+  // snaps backward to its pre-drag spot for that gap. Cleared the instant
+  // `seatOffsets` itself changes at all (the effect just below it) — by
+  // then the prop IS current, whatever it settled on (the raw dragged
+  // value, or GameRoom.tsx's resolveChairDrop collision-nudged correction).
+  const [localChairOverride, setLocalChairOverride] = useState<{ userId: string; offset: SeatOffset } | null>(
+    null
+  );
+  // Render-time reset (not an effect) the moment `seatOffsets` itself
+  // changes reference at all — GameRoom.tsx's own prevMembers/prevCharacters
+  // precedent for "adjusting state when a prop changes" (react.dev's own
+  // documented pattern for exactly this shape, and this codebase's
+  // established convention for it — see GameRoom.tsx's own comment on
+  // prevMembers for the fuller reasoning).
+  const [prevSeatOffsets, setPrevSeatOffsets] = useState(seatOffsets);
+  if (prevSeatOffsets !== seatOffsets) {
+    setPrevSeatOffsets(seatOffsets);
+    setLocalChairOverride(null);
+  }
+
+  // Ref-mirrored the same way onRulerDragStartRef/onRulerDragOverCellRef/
+  // onRulerDragEndRef already are below: the window "pointermove"/"pointerup"
+  // listeners are registered once per drag session (not re-subscribed every
+  // render), so they need a way to see the LATEST appendedTables/callback
+  // without going stale mid-drag.
+  const appendedTablesRef = useRef<readonly AppendedTable[]>(appendedTables);
+  useEffect(() => {
+    appendedTablesRef.current = appendedTables;
+  }, [appendedTables]);
+  const onChairDragEndRef = useRef(onChairDragEnd);
+  useEffect(() => {
+    onChairDragEndRef.current = onChairDragEnd;
+  }, [onChairDragEnd]);
+
+  // Every seat, offset-applied — the one and only place this scene ever
+  // reads a seat's position from (applySeatOffset's own doc comment: "never
+  // a computed value in some call sites and an overridden one in others").
+  // The currently-dragged (or just-released) seat renders from
+  // localChairOverride instead of the `seatOffsets` prop — see that state's
+  // own doc comment above for why.
+  const seats = useMemo<CampaignSeat[]>(
+    () =>
+      layout.seats.map((seat) => {
+        if (localChairOverride && localChairOverride.userId === seat.member.user_id) {
+          return applySeatOffset(seat, localChairOverride.offset);
+        }
+        return applySeatOffset(seat, seatOffsets.get(seat.member.user_id));
+      }),
+    [layout.seats, seatOffsets, localChairOverride]
+  );
+
+  const handleChairPointerDown = useCallback(
+    (userId: string, event: ThreeEvent<PointerEvent>) => {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      const currentSeat = seats.find((seat) => seat.member.user_id === userId);
+      const defaultSeat = layout.seats.find((seat) => seat.member.user_id === userId);
+      if (!currentSeat || !defaultSeat) return;
+      const floorPoint = floorPointFromClientXY(camera, gl.domElement, event.clientX, event.clientY);
+      if (!floorPoint) return;
+      chairDragSessionRef.current = {
+        userId,
+        grabOffsetX: currentSeat.position[0] - floorPoint.x,
+        grabOffsetZ: currentSeat.position[2] - floorPoint.z,
+        defaultPosition: defaultSeat.position,
+        defaultRotationY: defaultSeat.rotationY,
+        moved: false,
+        latestOffset: null,
+      };
+      setIsDraggingChair(true);
+    },
+    [seats, layout.seats, camera, gl]
+  );
+
+  // The drag's own continuation, mirroring the ruler's window-"pointerup"
+  // precedent just below ("the release can land anywhere — off the map, off
+  // the canvas — so the pointerup listener lives on window") — except this
+  // gesture ALSO needs the pointer's live position between press and
+  // release, not just its final one, so "pointermove" is subscribed here
+  // too. Registered only while a drag is actually in progress, so an idle
+  // table costs nothing extra.
+  useEffect(() => {
+    if (!isDraggingChair) return;
+    const canvas = gl.domElement;
+    function handleMove(event: PointerEvent) {
+      const session = chairDragSessionRef.current;
+      if (!session) return;
+      const floorPoint = floorPointFromClientXY(camera, canvas, event.clientX, event.clientY);
+      if (!floorPoint) return;
+      const candidateX = floorPoint.x + session.grabOffsetX;
+      const candidateZ = floorPoint.z + session.grabOffsetZ;
+      const clamped = clampToTableArrangement(candidateX, candidateZ, appendedTablesRef.current);
+      const rotationY = rotationYTowardNearestTable(clamped.x, clamped.z, appendedTablesRef.current);
+      const offset: SeatOffset = {
+        dx: clamped.x - session.defaultPosition[0],
+        dz: clamped.z - session.defaultPosition[2],
+        dRotationY: rotationY - session.defaultRotationY,
+      };
+      session.moved = true;
+      session.latestOffset = offset;
+      setLocalChairOverride({ userId: session.userId, offset });
+    }
+    function handleUp() {
+      const session = chairDragSessionRef.current;
+      chairDragSessionRef.current = null;
+      setIsDraggingChair(false);
+      if (session?.moved && session.latestOffset) {
+        onChairDragEndRef.current?.(session.userId, session.latestOffset);
+      }
+    }
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+  }, [isDraggingChair, camera, gl]);
+
+  const mySeat = seats.find((seat) => seat.member.user_id === currentUserId);
+  const cameraPosition = mySeat ? mySeat.cameraPosition : FALLBACK_CAMERA_POSITION;
+
+  // Verification-only: this client's own seated camera position, reported
+  // whenever it genuinely changes value (not every frame regardless — a
+  // fresh array literal each render would otherwise look "changed" to a
+  // naive reference check 60 times a second even while sitting still).
+  // Lets a real drag simulation confirm the acceptance criterion directly —
+  // "that player's own camera view updates live while dragging" — rather
+  // than trusting applySeatOffset's own already-tested cameraPosition
+  // translation by inference alone.
+  const lastOwnCamera = useRef<readonly [number, number, number] | null>(null);
+  // Verification-only: this client's own draggable chair's live screen
+  // projection — DmBookProp's own useFrame/project-to-screen technique,
+  // reused here (see onOwnChairProjectedPosition's own doc comment) rather
+  // than duplicated as a shared hook, since exactly one call site needs it.
+  const lastOwnChairScreen = useRef<[number, number] | null>(null);
+  useFrame(() => {
+    if (onOwnCameraDebug) {
+      const last = lastOwnCamera.current;
+      const changed =
+        !last ||
+        Math.abs(last[0] - cameraPosition[0]) > 1e-4 ||
+        Math.abs(last[1] - cameraPosition[1]) > 1e-4 ||
+        Math.abs(last[2] - cameraPosition[2]) > 1e-4;
+      if (changed) {
+        lastOwnCamera.current = cameraPosition;
+        onOwnCameraDebug(cameraPosition);
+      }
+    }
+    if (!onOwnChairProjectedPosition) return;
+    const seat = draggableUserId ? seats.find((candidate) => candidate.member.user_id === draggableUserId) : undefined;
+    if (!seat) {
+      if (lastOwnChairScreen.current !== null) {
+        lastOwnChairScreen.current = null;
+        onOwnChairProjectedPosition(null);
+      }
+      return;
+    }
+    ownChairPoint.set(seat.position[0], seat.position[1] + CHAIR_DRAG_PROJECTION_Y, seat.position[2]);
+    camera.updateMatrixWorld();
+    ownChairCameraPos.setFromMatrixPosition(camera.matrixWorld);
+    ownChairDelta.copy(ownChairPoint).sub(ownChairCameraPos);
+    camera.getWorldDirection(ownChairForward);
+    if (ownChairDelta.angleTo(ownChairForward) > Math.PI / 2) {
+      if (lastOwnChairScreen.current !== null) {
+        lastOwnChairScreen.current = null;
+        onOwnChairProjectedPosition(null);
+      }
+      return;
+    }
+    ownChairPoint.project(camera);
+    const x = (ownChairPoint.x * size.width) / 2 + size.width / 2;
+    const y = -((ownChairPoint.y * size.height) / 2) + size.height / 2;
+    const last = lastOwnChairScreen.current;
+    if (!last || Math.abs(last[0] - x) > 0.5 || Math.abs(last[1] - y) > 0.5) {
+      lastOwnChairScreen.current = [x, y];
+      onOwnChairProjectedPosition([x, y]);
+    }
+  });
+
   const mapMetrics = useMemo(
     () => (liveMap ? computeTableMapMetrics(liveMap.gridWidth, liveMap.gridHeight) : null),
     [liveMap]
   );
-  const mySeat = seats.find((seat) => seat.member.user_id === currentUserId);
-  const cameraPosition = mySeat ? mySeat.cameraPosition : FALLBACK_CAMERA_POSITION;
 
   const handleCellPointerDown = useCallback(
     (x: number, y: number, event: ThreeEvent<PointerEvent>) => {
@@ -448,14 +837,14 @@ export function GameTableScene({
         onUpdate={(camera) => camera.lookAt(...LOOK_TARGET)}
       />
       {cameraMode === "orbit" && (
-        // Disabled mid-measurement so sweeping the ruler doesn't also orbit
-        // the camera — OrbitControls checks enabled per pointermove, so
-        // flipping it mid-gesture halts the rotation immediately. Token
-        // selection needs no such guard: it's a single press, not a
-        // held-down drag, so there's never a moment where the camera would
-        // fight it.
+        // Disabled mid-measurement (or mid-chair-drag) so sweeping the
+        // ruler/dragging a chair doesn't also orbit the camera —
+        // OrbitControls checks enabled per pointermove, so flipping it
+        // mid-gesture halts the rotation immediately. Token selection needs
+        // no such guard: it's a single press, not a held-down drag, so
+        // there's never a moment where the camera would fight it.
         <OrbitControls
-          enabled={!measuring}
+          enabled={!measuring && !isDraggingChair}
           target={[...LOOK_TARGET]}
           minDistance={1.5}
           // Re-tuned up from 22 (unchanged ratio over the old table's
@@ -553,7 +942,17 @@ export function GameTableScene({
       ) : null}
 
       {seats.map((seat) => (
-        <TableSeat key={seat.member.user_id} seat={seat} onAvatarPoseDebug={onAvatarPoseDebug} />
+        <TableSeat
+          key={seat.member.user_id}
+          seat={seat}
+          onAvatarPoseDebug={onAvatarPoseDebug}
+          draggable={seat.member.user_id === draggableUserId}
+          onDragPointerDown={
+            seat.member.user_id === draggableUserId
+              ? (event) => handleChairPointerDown(seat.member.user_id, event)
+              : undefined
+          }
+        />
       ))}
     </>
   );
