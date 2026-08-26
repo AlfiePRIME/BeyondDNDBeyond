@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeSeatLayout, seatEllipseSemiAxes, type SeatMember } from "@/scene-3d";
-import { COMBINED_TABLE_TOP, TABLE_TOP, singleTableOffsetZ } from "./table";
+import { COMBINED_TABLE_TOP, TABLE_TOP, TABLE_SURFACE_Y, singleTableOffsetZ } from "./table";
 import {
   computeCampaignSeatLayout,
   HEAD_SQUARE_SEAT_CAPACITY,
@@ -9,6 +9,8 @@ import {
   DM_CHAIR_FRONTAGE,
   applySeatOffset,
   getEffectiveSeat,
+  computeMemberTrayPosition,
+  MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
   type SeatOffset,
 } from "./seating";
 
@@ -585,5 +587,134 @@ describe("effective position tracks a reshaped default instead of going stale", 
       seatAfter.position[2] + offset.dz,
     ]);
     expect(effectiveAfter.position).not.toEqual(effectiveBefore.position);
+  });
+});
+
+// Prompt 8a: the per-member dice-tray-position data layer (no rendering —
+// Prompt 8b's concern). computeMemberTrayPosition is a pure function of
+// (layout, userId, offsets), so every case below re-derives its own
+// expected value from first principles (the outward-from-center formula,
+// not the function's own internals) rather than asserting against a
+// hand-copied literal that could silently drift from the real formula.
+describe("computeMemberTrayPosition", () => {
+  const offset: SeatOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
+
+  /** Replicates the outward-from-center formula independently of
+   * seating.ts's own (unexported) helper, so these assertions actually
+   * check the formula rather than just calling it twice. */
+  function expectedTrayPosition(
+    seatPosition: readonly [number, number, number],
+    center: readonly [number, number] = [0, 0]
+  ): [number, number, number] {
+    const dx = seatPosition[0] - center[0];
+    const dz = seatPosition[2] - center[1];
+    const dist = Math.hypot(dx, dz);
+    const [outX, outZ] = dist > 1e-6 ? [dx / dist, dz / dist] : [0, -1];
+    return [
+      center[0] + outX * MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+      TABLE_SURFACE_Y + 0.01,
+      center[1] + outZ * MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+    ];
+  }
+
+  it("returns null for a user_id not present in the layout at all", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(4));
+    expect(computeMemberTrayPosition(layout, "not-a-member", new Map())).toBeNull();
+  });
+
+  it("sits a fixed distance from the world origin, toward a head-square member's own default seat", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(4));
+    const userId = layout.seats[1].member.user_id;
+    const seat = findSeatByUserId(layout.seats, userId);
+    expect(seat.tableIndex).toBe(-1); // the head square
+
+    const position = computeMemberTrayPosition(layout, userId, new Map());
+    expect(position).not.toBeNull();
+    const [x, y, z] = position!;
+    expect(y).toBeCloseTo(TABLE_SURFACE_Y + 0.01);
+    expect(Math.hypot(x, z)).toBeCloseTo(MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER);
+    expect(position).toEqual(expectedTrayPosition(seat.position));
+  });
+
+  it("matches the DM's own private tray for the DM's seat specifically (the exact case GameRoom.tsx's dmPrivateTrayPosition already covers)", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(5));
+    const dmSeat = layout.seats.find((s) => s.member.role === "dm")!;
+    const position = computeMemberTrayPosition(layout, dmSeat.member.user_id, new Map());
+    expect(position).toEqual(expectedTrayPosition(dmSeat.position));
+  });
+
+  it("tracks a stored seat offset: writing an offset moves the derived tray position accordingly", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(5));
+    const userId = layout.seats[2].member.user_id;
+
+    const withoutOffset = computeMemberTrayPosition(layout, userId, new Map());
+    const withOffset = computeMemberTrayPosition(layout, userId, new Map([[userId, offset]]));
+
+    expect(withoutOffset).not.toBeNull();
+    expect(withOffset).not.toBeNull();
+    // A real move, not a no-op.
+    expect(withOffset).not.toEqual(withoutOffset);
+
+    // And it moves to EXACTLY where the offset-applied effective seat
+    // predicts, not just "somewhere different".
+    const effectiveSeat = getEffectiveSeat(layout, userId, new Map([[userId, offset]]));
+    expect(withOffset).toEqual(expectedTrayPosition(effectiveSeat!.position));
+  });
+
+  it("clearing a stored offset (back to null) moves the tray back to the un-offset default", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(5));
+    const userId = layout.seats[2].member.user_id;
+
+    const withOffset = computeMemberTrayPosition(layout, userId, new Map([[userId, offset]]));
+    const cleared = computeMemberTrayPosition(layout, userId, new Map());
+
+    expect(cleared).not.toEqual(withOffset);
+    expect(cleared).toEqual(computeMemberTrayPosition(layout, userId, new Map()));
+  });
+
+  it("offsets from the APPENDED table's own center, not the world origin, for a member seated there", () => {
+    const n = HEAD_SQUARE_SEAT_CAPACITY + 2;
+    const layout = computeCampaignSeatLayout(makeMembers(n));
+    const overflowSeat = layout.seats.find((s) => s.tableIndex === 0)!;
+    expect(overflowSeat.tableIndex).toBe(0);
+
+    const tableCenter: [number, number] = [0, singleTableOffsetZ(0)];
+    const position = computeMemberTrayPosition(layout, overflowSeat.member.user_id, new Map());
+    expect(position).toEqual(expectedTrayPosition(overflowSeat.position, tableCenter));
+
+    // Sanity: this is NOT the same as offsetting from the world origin —
+    // proves the appended-table branch is actually exercised, not
+    // accidentally falling back to the head-square formula.
+    expect(position).not.toEqual(expectedTrayPosition(overflowSeat.position, [0, 0]));
+  });
+
+  it("an appended-table member's tray also tracks a stored seat offset", () => {
+    const n = HEAD_SQUARE_SEAT_CAPACITY + 2;
+    const layout = computeCampaignSeatLayout(makeMembers(n));
+    const overflowSeat = layout.seats.find((s) => s.tableIndex === 0)!;
+    const userId = overflowSeat.member.user_id;
+    const tableCenter: [number, number] = [0, singleTableOffsetZ(0)];
+
+    const withoutOffset = computeMemberTrayPosition(layout, userId, new Map());
+    const withOffset = computeMemberTrayPosition(layout, userId, new Map([[userId, offset]]));
+    expect(withOffset).not.toEqual(withoutOffset);
+
+    const effectiveSeat = getEffectiveSeat(layout, userId, new Map([[userId, offset]]));
+    expect(withOffset).toEqual(expectedTrayPosition(effectiveSeat!.position, tableCenter));
+  });
+
+  it("stays correct as the underlying default reshapes (party growth), the same not-stale property getEffectiveSeat guarantees", () => {
+    const userId = "user-2";
+    const before = computeCampaignSeatLayout(makeMembers(3));
+    const after = computeCampaignSeatLayout(makeMembers(6));
+
+    const offsets = new Map([[userId, offset]]);
+    const positionBefore = computeMemberTrayPosition(before, userId, offsets);
+    const positionAfter = computeMemberTrayPosition(after, userId, offsets);
+
+    expect(positionBefore).not.toEqual(positionAfter);
+    expect(positionAfter).toEqual(
+      expectedTrayPosition(getEffectiveSeat(after, userId, offsets)!.position)
+    );
   });
 });

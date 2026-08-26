@@ -97,6 +97,14 @@ export {
   type SeatOffset,
 } from "./seatOffsets";
 export {
+  getDiceTrayPreference,
+  getDiceTrayPreferencesForCampaign,
+  setDiceTrayPreference,
+  DEFAULT_DICE_TRAY_PREFERENCE,
+  type DiceTrayModelSource,
+  type DiceTrayModelPreference,
+} from "./diceTrayPreference";
+export {
   createMap,
   createPopulatedMap,
   duplicateMap,

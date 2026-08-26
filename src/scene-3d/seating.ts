@@ -1,4 +1,4 @@
-import { COMBINED_TABLE_TOP, TABLE_TOP, singleTableOffsetZ } from "./table";
+import { COMBINED_TABLE_TOP, TABLE_TOP, TABLE_SURFACE_Y, singleTableOffsetZ } from "./table";
 
 /**
  * Structurally matches data-access's CampaignMember so callers can pass that
@@ -642,4 +642,105 @@ export function getEffectiveSeat(
   const seat = layout.seats.find((candidate) => candidate.member.user_id === userId);
   if (!seat) return null;
   return applySeatOffset(seat, offsets.get(userId));
+}
+
+/**
+ * Prompt 8a: the data layer for one personal dice tray per member (Prompt
+ * 8b mounts the actual DiceTumble instances; this file only computes WHERE
+ * each one sits). Fixed distance from a table's own center that a member's
+ * personal tray sits, along the direction toward their own seat — reusing,
+ * unchanged, the exact tuning GameRoom.tsx's DM_PRIVATE_TRAY_DISTANCE
+ * established for the DM's own private tray (see that constant's doc
+ * comment there for why a FIXED distance from the target surface's own
+ * center — not a fraction of the seat's own reach from center, and not a
+ * fixed step forward FROM the seat — is the only formula that stays correct
+ * regardless of how far a seat migrates as the seating ellipse resizes with
+ * party size).
+ */
+export const MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER = 0.2;
+
+/**
+ * World-space (x, z) center of the physical table a given CampaignSeat
+ * actually sits at: the world origin for the fixed head square
+ * (`tableIndex` -1), or an appended table's own center otherwise —
+ * table.ts's singleTableOffsetZ, the same formula every appended table's
+ * seats and GameTableScene's own table mesh are positioned with (see
+ * AppendedTable's own doc comment).
+ *
+ * GameRoom.tsx's existing DM-private-tray math never needed this
+ * distinction: the DM is always pinned to the head square
+ * (placeDmAtNorthSlot), so "the world origin" and "the DM's own table
+ * center" were always the same point there. A general member's tray can't
+ * make that assumption — once a party overflows the head square
+ * (computeCampaignSeatLayout's own bucketing), a member can be seated at an
+ * appended table whose own center sits away from the world origin along Z.
+ * Offsetting from the wrong (world-origin) center would walk that member's
+ * tray toward the head square instead of onto their own physical table.
+ */
+function tableCenterForSeat(
+  seat: CampaignSeat,
+  appendedTables: readonly AppendedTable[]
+): [number, number] {
+  if (seat.tableIndex === -1) return [0, 0];
+  const table = appendedTables.find((candidate) => candidate.index === seat.tableIndex);
+  return [0, table?.offsetZ ?? 0];
+}
+
+/** The same "unit vector pointing away from a center point, toward
+ * `position`" step GameRoom.tsx's own outwardFromOrigin established for the
+ * DM's private tray (hardcoded there to the world origin, since the DM's
+ * table center always IS the world origin) — generalized here to an
+ * arbitrary center so every table's own seats can reuse it, not just the
+ * head square's. Never actually hits the center (SEAT_MARGIN keeps every
+ * seat off of it), but a stable direction beats NaN if it ever were. */
+function outwardFromCenter(
+  position: readonly [number, number, number],
+  center: readonly [number, number]
+): [number, number] {
+  const dx = position[0] - center[0];
+  const dz = position[2] - center[1];
+  const dist = Math.hypot(dx, dz);
+  return dist > 1e-6 ? [dx / dist, dz / dist] : [0, -1];
+}
+
+/**
+ * Derives where `userId`'s own personal dice tray should sit: a point near
+ * the center of whichever physical table they're actually seated at, offset
+ * a fixed distance (MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER) toward their
+ * current EFFECTIVE seat position (getEffectiveSeat — includes any stored
+ * chair-drag override), at table-surface height. A pure function of
+ * (layout, userId, offsets) alone, so it automatically tracks whatever
+ * getEffectiveSeat currently reports: a stored SeatOffset change moves this
+ * derived position on the very next call, with no separate wiring of its
+ * own, and it needs no drag GESTURE to exist yet — only a stored offset (or
+ * none at all), exactly what getEffectiveSeat already handles either way.
+ *
+ * Generalizes GameRoom.tsx's existing dmPrivateTrayPosition derivation
+ * (outwardFromOrigin + DM_PRIVATE_TRAY_DISTANCE) to (a) any member, not just
+ * the DM, (b) whichever table that member is actually seated at
+ * (tableCenterForSeat), not always the world origin, and (c) the member's
+ * EFFECTIVE seat rather than the raw computed default — the DM's own
+ * existing tray never reads through a stored SeatOffset today, since it was
+ * written before that concept existed; a general per-member tray needs to
+ * from the start, so it stays attached to a relocated chair instead of the
+ * chair's un-offset default position.
+ *
+ * Returns null under the exact same "not actually seated" condition
+ * getEffectiveSeat does (a userId not present in this campaign's roster).
+ */
+export function computeMemberTrayPosition(
+  layout: CampaignSeatLayout,
+  userId: string,
+  offsets: ReadonlyMap<string, SeatOffset>
+): [number, number, number] | null {
+  const seat = getEffectiveSeat(layout, userId, offsets);
+  if (!seat) return null;
+
+  const center = tableCenterForSeat(seat, layout.appendedTables);
+  const [outX, outZ] = outwardFromCenter(seat.position, center);
+  return [
+    center[0] + outX * MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+    TABLE_SURFACE_Y + 0.01,
+    center[1] + outZ * MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+  ];
 }
