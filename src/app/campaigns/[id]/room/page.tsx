@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
   getActiveCombatEncounter,
+  getDiceTrayPreferencesForCampaign,
   getMap,
   getProfile,
   getSeatOffsetsForCampaign,
@@ -91,6 +92,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     initialLorePages,
     initialLorePageLinks,
     seatOffsetsMap,
+    diceTrayPreferencesMap,
   ] = await Promise.all([
     listAssetsForCampaign(supabase, campaignId),
     // Non-DM RLS only exposes the live map anyway, and only the DM gets the
@@ -126,6 +128,12 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // are, not their computed defaults, without having been connected for
     // any of the seat-moved broadcasts that got them there.
     getSeatOffsetsForCampaign(supabase, campaignId),
+    // Per-member dice-tray-model preference (Prompt 8a/8b) — same DB-read-
+    // not-broadcast reasoning as seatOffsetsMap above: a fresh join or
+    // reload must render every connected member's own chosen tray model
+    // without having been connected for the DICE_TRAY_PREFERENCE_EVENT
+    // broadcast that set it.
+    getDiceTrayPreferencesForCampaign(supabase, campaignId),
   ]);
   // listDmNotes orders oldest-first (matching every other narrative list);
   // reversed here since the book's Notes page reads better newest-on-top —
@@ -196,6 +204,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       // GameRoom's own initialSeatOffsets doc comment for why this crosses
       // as a plain array of pairs instead, reconstructed into a Map there.
       initialSeatOffsets={[...seatOffsetsMap.entries()]}
+      initialDiceTrayPreferences={[...diceTrayPreferencesMap.entries()]}
     />
   );
 }

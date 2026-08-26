@@ -23,6 +23,7 @@ import {
   endSession,
   getActiveCombatEncounter,
   getCharacter,
+  getDiceTrayPreferencesForCampaign,
   getMap,
   getSeatOffsetsForCampaign,
   listCharactersForCampaign,
@@ -48,6 +49,7 @@ import {
   setCombatantEconomyFlag,
   setCombatantInitiative,
   setDayNightMode,
+  setDiceTrayPreference,
   setHandoutRevealed,
   setLiveMap,
   setSeatOffset,
@@ -61,11 +63,13 @@ import {
   triggerMapObject,
   updateMonsterStatBlock,
   uploadHandoutFile,
+  DEFAULT_DICE_TRAY_PREFERENCE,
   type CampaignMap,
   type Character,
   type CombatCombatant,
   type CombatantEconomyFlag,
   type DayNightMode,
+  type DiceTrayModelPreference,
   type DmNote,
   type Handout,
   type LightSource,
@@ -105,21 +109,24 @@ import { Button, Modal } from "@/ui-components";
 import {
   applySeatOffset,
   computeCampaignSeatLayout,
-  DEFAULT_TRAY_POSITION,
+  computeMemberTrayPosition,
   DiceTumble,
   DmBookProp,
   DM_BOOK_FOOTPRINT_RADIUS,
   DM_CHAIR_FRONTAGE,
   GameTableScene,
+  PERSONAL_TRAY_RADIUS,
+  PERSONAL_TRAY_SCALE,
   PLAYER_CHAIR_FRONTAGE,
   resolveChairDrop,
+  resolveMemberTrayLayout,
   TABLE_SURFACE_Y,
-  TRAY_RADIUS,
   type CameraMode,
   type ChairObstacle,
   type DiceTumbleHandle,
   type DiceTumbleSpec,
   type MapSurfaceCell,
+  type MemberTraySeed,
   type Seat,
   type SeatOffset,
   type TableLiveMap,
@@ -147,6 +154,7 @@ import { buildDiceTumbleSpec } from "../roll/tumble";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { DraggablePanel, PanelLayoutProvider } from "./DraggablePanel";
 import { DiceLogPanel } from "./DiceLogPanel";
+import { DiceTrayPicker } from "./DiceTrayPicker";
 import { DmBook } from "./DmBook";
 import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
@@ -192,6 +200,12 @@ const DICE_ROLLED_EVENT = "dice-rolled";
 // whole roster's offsets, the same "DB is the source of truth after a drop"
 // reasoning as TOKEN_EVENT's own live-map reconnect handler.
 const SEAT_MOVED_EVENT = "seat-moved";
+// One member's own dice-tray-model choice — the exact SEAT_MOVED_EVENT
+// shape (genuinely persisted state, DB written first via
+// setDiceTrayPreference, then broadcast so every other already-connected
+// client updates immediately), with the same onReconnect-refetch pairing
+// for a dropped broadcast.
+const DICE_TRAY_PREFERENCE_EVENT = "dice-tray-preference-changed";
 
 // Seen-cells memory writes (Prompt 58) are debounced this long past the
 // last newly-perceived cell — movement recomputes visibility far too often
@@ -204,25 +218,24 @@ const SEEN_CELLS_FLUSH_MS = 1500;
 // COMBINED_TABLE_TOP/TABLE_UNITS_LONG_EDGE) made seating.ts's ellipse fit
 // the full two-table footprint, which put every seat — including the DM's —
 // noticeably further from the world origin than before (the ellipse's
-// depth-axis half-extent nearly doubled). The DM's book and private dice
-// tray both still need to land on the SAME physical surface as before: the
-// live map's own single-table-sized footprint, which per the project
-// owner's explicit call stays centered on the world origin (the seam
-// between the two tables — see GameTableScene's CombinedTable/the live
-// map's own group comment) rather than resized or moved to either table.
+// depth-axis half-extent nearly doubled). The DM's book still needs to land
+// on the SAME physical surface as before: the live map's own
+// single-table-sized footprint, which per the project owner's explicit call
+// stays centered on the world origin (the seam between the two tables — see
+// GameTableScene's CombinedTable/the live map's own group comment) rather
+// than resized or moved to either table.
 //
-// Both positions below are therefore expressed as a FIXED absolute
-// distance from that origin, in the direction of the DM's own seat — NOT a
-// fraction of the seat's own distance from center (the old formula) and
-// NOT a fixed step FORWARD FROM the seat (also tried; both broke down once
-// the seat moved much further out than the physical table itself stayed:
-// a step sized for the old, much-closer seat either stopped short of the
-// table or overshot past its far edge depending on which seat angle a
-// given party size produced). A fixed absolute distance from the target
-// surface's own fixed-size center is correct regardless of how far away
-// the seat migrates — a property this table needed for the seating-ellipse
-// growth it just got, and one that stays correct if a future prompt grows
-// the ellipse again.
+// The book's own position (dmBookPosition below) is therefore expressed as
+// a FIXED absolute distance from that origin, in the direction of the DM's
+// own seat — NOT a fraction of the seat's own distance from center and NOT
+// a fixed step FORWARD FROM the seat (both tried and rejected; see git
+// history for the fuller reasoning) — while every connected member's own
+// personal dice tray (including the DM's) now instead uses seating.ts's
+// computeMemberTrayPosition, a fraction-of-the-seat's-own-reach formula
+// that generalizes to N simultaneous trays across a multi-table
+// arrangement — see that function's own doc comment for why a fixed
+// distance from center, workable for exactly one tray, stopped being the
+// right shape the moment more than one needed to coexist.
 function outwardFromOrigin(position: readonly [number, number, number]): [number, number] {
   const [x, , z] = position;
   const dist = Math.hypot(x, z);
@@ -230,20 +243,6 @@ function outwardFromOrigin(position: readonly [number, number, number]): [number
   // origin — but a stable direction beats NaN if it ever were.
   return dist > 1e-6 ? [x / dist, z / dist] : [0, -1];
 }
-
-// How far from the table's center (the world origin) the private dice tray
-// sits, along the direction toward the DM's own seat — see
-// outwardFromOrigin's doc comment above for why this is a fixed distance,
-// not a fraction of the seat's own reach. 0.2 keeps a comfortable margin
-// inside the COMBINED two-table surface's real bounds (half-width 2.18 —
-// table.ts's TABLE_TOP; half-depth 2.1 — half of table.ts's
-// COMBINED_TABLE_TOP, since the tray only needs to sit on SOME real,
-// physical tabletop, not inside the live map's own narrower single-table-
-// sized fitted area) even after accounting for the tray's own physical disc
-// (DiceTumble.tsx's TRAY_RADIUS, 0.55) — verified numerically for every
-// party size from a solo DM through 8 (this file's own replay of
-// computeSeatLayout's math), and empirically against a live DM Room.
-const DM_PRIVATE_TRAY_DISTANCE = 0.2;
 
 // Phase 5: the DM's book (a real 3D prop, DmBookProp) sits at a different
 // spot near the table's center than the private dice tray above — offset
@@ -315,9 +314,23 @@ interface CombatPayload {
  * receiver can animate immediately with zero extra reads — the roll itself
  * is already persisted by the time this fires (handleRollLanded only ever
  * runs after postRoll's promise resolves), so this is pure broadcast, no
- * write. */
+ * write. `rollerUserId` (roll_log.roller_user_id) tells every receiver WHICH
+ * connected member's own personal tray to play it at — every public roll
+ * now animates at the roller's own tray, never a shared one, so a receiver
+ * needs to know whose tray that is; only ever broadcast for a PUBLIC roll
+ * (see handleRollLanded's own visibility branch), so a receiver never learns
+ * who made a private one this way. */
 interface DiceRolledPayload {
   spec: DiceTumbleSpec;
+  rollerUserId: string;
+}
+
+/** SEAT_MOVED_EVENT's own payload shape, reused here for
+ * DICE_TRAY_PREFERENCE_EVENT below: the exact already-persisted preference
+ * a receiver applies directly, no follow-up read needed. */
+interface DiceTrayPreferenceChangedPayload {
+  userId: string;
+  preference: DiceTrayModelPreference;
 }
 
 /** SEAT_MOVED_EVENT's payload — the exact already-persisted offset
@@ -479,6 +492,53 @@ function errorMessage(err: unknown): string | null {
     : null;
 }
 
+/**
+ * One connected member's own personal dice tray, wrapped in its own tiny
+ * component so its onQueueChange/ref callbacks can be properly memoized
+ * with `useCallback` per instance — the correct React shape for "a stable
+ * per-list-item callback" (one hook call per rendered component instance,
+ * not a loop of hook-like calls inside GameRoom's own single render, and
+ * no reading/writing a ref's `.current` during render, which React's rules
+ * disallow). GameRoom.tsx's own JSX maps `connectedMemberIds` to one of
+ * these each; `onQueueChange`/`registerRef` are GameRoom's own stable
+ * (useCallback, empty-deps) callbacks, closed over `userId` here instead of
+ * built fresh inline at each call site — see registerDiceTumbleRef's own
+ * doc comment for why a fresh inline callback here previously caused a
+ * genuine infinite render loop.
+ */
+function ConnectedMemberDiceTray({
+  userId,
+  trayPosition,
+  modelUrl,
+  modelForwardOffsetDeg,
+  onQueueChange,
+  registerRef,
+}: {
+  userId: string;
+  trayPosition: readonly [number, number, number];
+  modelUrl: string | null;
+  modelForwardOffsetDeg: number;
+  onQueueChange: (userId: string, queue: readonly string[]) => void;
+  registerRef: (userId: string, handle: DiceTumbleHandle | null) => void;
+}) {
+  const handleQueueChange = useCallback(
+    (queue: readonly string[]) => onQueueChange(userId, queue),
+    [userId, onQueueChange]
+  );
+  const handleRef = useCallback((handle: DiceTumbleHandle | null) => registerRef(userId, handle), [userId, registerRef]);
+
+  return (
+    <DiceTumble
+      ref={handleRef}
+      trayPosition={trayPosition}
+      scale={PERSONAL_TRAY_SCALE}
+      modelUrl={modelUrl}
+      modelForwardOffsetDeg={modelForwardOffsetDeg}
+      onQueueChange={handleQueueChange}
+    />
+  );
+}
+
 export function GameRoom({
   campaignId,
   campaignName,
@@ -502,6 +562,7 @@ export function GameRoom({
   initialLorePages,
   initialLorePageLinks,
   initialSeatOffsets,
+  initialDiceTrayPreferences,
 }: {
   campaignId: string;
   campaignName: string;
@@ -559,6 +620,13 @@ export function GameRoom({
    * once below, the same shape getSeatOffsetsForCampaign itself returns. A
    * member absent from this list has never moved their chair. */
   initialSeatOffsets: readonly (readonly [string, SeatOffset])[];
+  /** Per-member dice-tray-model preference (diceTrayPreference.ts) at load
+   * time — the same serializable-array-of-pairs shape as
+   * initialSeatOffsets, and for the identical reason (a Map can't cross the
+   * Server/Client component boundary). A member absent from this list
+   * renders with DEFAULT_DICE_TRAY_PREFERENCE (the built-in procedural
+   * tray). Kept live via DICE_TRAY_PREFERENCE_EVENT below. */
+  initialDiceTrayPreferences: readonly (readonly [string, DiceTrayModelPreference])[];
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
@@ -579,20 +647,98 @@ export function GameRoom({
   const [endError, setEndError] = useState<string | null>(null);
   const channelRef = useRef<PresenceChannel | null>(null);
   const campaignChannelRef = useRef<PresenceChannel | null>(null);
-  const diceTumbleRef = useRef<DiceTumbleHandle>(null);
+  // One connected member per personal dice tray (replacing the old single
+  // shared DiceTumble ref + a second DM-only private one): a plain mutable
+  // Map, keyed by user_id, populated by each mounted <DiceTumble>'s own
+  // callback ref below — React refs can't be created inside a loop with
+  // useRef itself, so this is the one-ref-holding-many-handles shape that
+  // pattern needs. handleRollLanded looks a roller's own ref up here to
+  // route play() to exactly their tray, never a shared one.
+  const diceTumbleRefs = useRef<Map<string, DiceTumbleHandle>>(new Map());
   // Mirrored into a hidden DOM node below (the visionDebug/tableSurfaceDebug
-  // precedent) purely so verify-dice-tumble.mjs's Playwright checks have
-  // something to read — see DiceTumbleProps.onQueueChange's doc comment.
-  const [diceQueueDebug, setDiceQueueDebug] = useState<readonly string[]>([]);
-  // Phase 3: the DM's own private dice tray — a second, independent
-  // DiceTumble instance (mounted only for the DM below), with its own ref
-  // and its own queue-debug mirror. A private roll plays ONLY here, never
-  // in the shared tray above, and is never broadcast — see
-  // handleRollLanded's visibility branch.
-  const privateDiceTumbleRef = useRef<DiceTumbleHandle>(null);
-  const [privateDiceQueueDebug, setPrivateDiceQueueDebug] = useState<readonly string[]>([]);
+  // precedent) purely so verify-*.mjs's Playwright checks have something to
+  // read — see DiceTumbleProps.onQueueChange's doc comment. Keyed by
+  // user_id so a test can read any specific connected member's own tray
+  // queue, not just "the" queue.
+  const [diceQueueDebugByUser, setDiceQueueDebugByUser] = useState<Record<string, readonly string[]>>({});
+  const handleDiceQueueDebug = useCallback((userId: string, queue: readonly string[]) => {
+    setDiceQueueDebugByUser((current) =>
+      current[userId] === queue ? current : { ...current, [userId]: queue }
+    );
+  }, []);
+  // Registers/unregisters one connected member's own DiceTumble handle —
+  // called from ConnectedMemberDiceTray's own ref callback below (an actual
+  // React ref callback, invoked during commit, not render), never from
+  // render itself.
+  const registerDiceTumbleRef = useCallback((userId: string, handle: DiceTumbleHandle | null) => {
+    if (handle) diceTumbleRefs.current.set(userId, handle);
+    else diceTumbleRefs.current.delete(userId);
+  }, []);
+  // Movable chairs: this client's own LIVE (mid-drag, pre-persist) chair
+  // offset — GameTableScene's own onLiveChairOffset, fired on every
+  // "pointermove" tick of an active drag (see that prop's own doc comment).
+  // null whenever nothing is actively being dragged on this client (the
+  // overwhelming majority of the time), in which case every tray position
+  // below falls back to the already-persisted seatOffsets exactly as
+  // before. This is what makes a member's own personal tray follow their
+  // chair LIVE while they're dragging it, not just once the drag ends and
+  // the persist-then-broadcast round trip catches up.
+  const [liveChairOverride, setLiveChairOverride] = useState<{ userId: string; offset: SeatOffset } | null>(
+    null
+  );
+  const handleLiveChairOffset = useCallback(
+    (override: { userId: string; offset: SeatOffset } | null) => {
+      setLiveChairOverride(override);
+    },
+    []
+  );
+  // The seatOffsets a tray-position computation should read RIGHT NOW: the
+  // persisted map, with the current client's own in-progress drag (if any)
+  // patched in on top — computeMemberTrayPosition's own doc comment on why
+  // reusing that exact function (fed a live-patched offsets Map) is enough
+  // to get "the tray follows the chair live" for free, with no separate
+  // tray-specific drag plumbing of its own.
+  const liveSeatOffsets = useMemo(() => {
+    if (!liveChairOverride) return seatOffsets;
+    const next = new Map(seatOffsets);
+    next.set(liveChairOverride.userId, liveChairOverride.offset);
+    return next;
+  }, [seatOffsets, liveChairOverride]);
+  // Per-member dice-tray-model preference (diceTrayPreference.ts), keyed by
+  // user_id — the exact seatOffsets shape/reasoning above, reconstructed
+  // from page.tsx's serializable array prop, kept live via
+  // DICE_TRAY_PREFERENCE_EVENT below. A member absent from this map renders
+  // with DEFAULT_DICE_TRAY_PREFERENCE (the procedural tray).
+  const [diceTrayPreferences, setDiceTrayPreferences] = useState<Map<string, DiceTrayModelPreference>>(
+    () => new Map(initialDiceTrayPreferences)
+  );
+  const [diceTrayPreferenceError, setDiceTrayPreferenceError] = useState<string | null>(null);
+  // A newly DM-uploaded custom tray model (DiceTrayPicker's own upload flow,
+  // reusing the exact AssetPalette.tsx pipeline) needs to show up in every
+  // connected client's own picker immediately, and this component's
+  // assetUrlById/assetForwardOffsetById memos below need its resolved URL
+  // the moment ANYONE picks it — the exact "roster prop, but appendable"
+  // shape `roster` itself already uses (see prevMembers below), applied
+  // here to the `assets` prop instead of trusting a stale server snapshot
+  // until the next full reload.
+  const [assetList, setAssetList] = useState<PaletteAsset[]>(assets);
+  const [prevAssets, setPrevAssets] = useState(assets);
+  if (prevAssets !== assets) {
+    setPrevAssets(assets);
+    setAssetList(assets);
+  }
+  // Movable chairs: which members are actually connected to THIS room right
+  // now (the room channel's own presence, joinCampaignRoomChannel below) —
+  // "Mount one DiceTumble instance per connected member" needs exactly this
+  // set, not the full (possibly much larger, possibly mostly-offline)
+  // campaign roster computeCampaignSeatLayout works from. Every roster
+  // member still gets a rendered CHAIR (GameTableScene renders every seat
+  // regardless of presence — an empty chair should still show where an
+  // offline party member "sits"), but only a currently-connected one also
+  // gets a personal dice tray mounted.
+  const [presentUserIds, setPresentUserIds] = useState<ReadonlySet<string>>(() => new Set([currentUserId]));
   // Mirrored into a hidden DOM node below, the exact same reasoning as
-  // diceQueueDebug above — see MapSurfaceProps.onTokenSlideDebug's doc
+  // diceQueueDebugByUser above — see MapSurfaceProps.onTokenSlideDebug's doc
   // comment. GameTableScene/MapSurface never see this set; it's populated
   // purely by MapSurface calling back out whenever a token's own slide
   // animation starts or settles.
@@ -640,41 +786,84 @@ export function GameRoom({
   // there's overflow.
   const layout = useMemo(() => computeCampaignSeatLayout(roster), [roster]);
   const { appendedTables } = layout;
-  // Every seat, offset-applied — applySeatOffset's own doc comment: "where
+  // Every seat, offset-applied, reading through liveSeatOffsets (not the
+  // bare persisted seatOffsets) — applySeatOffset's own doc comment: "where
   // is this member actually sitting right now" must have exactly one
-  // answer everywhere, so dmSeat/dmPrivateTrayPosition/dmBookPosition below
+  // answer everywhere, so dmSeat/dmBookPosition/memberTrayPositions below
   // (and the seat-layout-state debug mirror) all reflect wherever a chair
-  // ACTUALLY currently sits, not just computeCampaignSeatLayout's default.
+  // ACTUALLY currently sits RIGHT NOW — including this client's own
+  // in-progress drag, not just computeCampaignSeatLayout's default or the
+  // last-persisted value.
   const seats = useMemo(
-    () => layout.seats.map((seat) => applySeatOffset(seat, seatOffsets.get(seat.member.user_id))),
-    [layout.seats, seatOffsets]
+    () => layout.seats.map((seat) => applySeatOffset(seat, liveSeatOffsets.get(seat.member.user_id))),
+    [layout.seats, liveSeatOffsets]
   );
   const dmSeat = useMemo<Seat | null>(
     () => seats.find((seat) => seat.member.role === "dm") ?? null,
     [seats]
   );
-  // A point near the table's own center (the world origin — see
-  // outwardFromOrigin's doc comment above for why this targets the origin
-  // rather than the DM's own seat), offset toward the DM's seat by a FIXED
-  // distance (DM_PRIVATE_TRAY_DISTANCE) so the tray still reads as "the
-  // DM's own", at table-surface height.
-  const dmPrivateTrayPosition = useMemo<[number, number, number]>(() => {
+  // Movable chairs: which roster members are actually connected right now,
+  // in the roster's own stable join order — computeMemberTrayPosition/
+  // resolveMemberTrayLayout below only ever run over THIS set (an offline
+  // member's chair still renders, per presentUserIds' own doc comment, but
+  // never grows a personal tray of its own).
+  const connectedMemberIds = useMemo(
+    () => layout.seats.map((seat) => seat.member.user_id).filter((userId) => presentUserIds.has(userId)),
+    [layout.seats, presentUserIds]
+  );
+  // Every real seated chair (every roster member, connected or not) as a
+  // ChairObstacle — resolveMemberTrayLayout's own "clear every real chair"
+  // obstacle list, the exact shape handleChairDragEnd's own resolveChairDrop
+  // obstacle list below already builds for the reverse direction (a dragged
+  // chair avoiding trays).
+  const chairObstaclesForTrays = useMemo<ChairObstacle[]>(
+    () =>
+      seats.map((seat) => ({
+        x: seat.position[0],
+        z: seat.position[2],
+        radius: (seat.member.role === "dm" ? DM_CHAIR_FRONTAGE : PLAYER_CHAIR_FRONTAGE) / 2,
+      })),
+    [seats]
+  );
+  // One resolved, non-overlapping personal tray position per CONNECTED
+  // member — computeMemberTrayPosition's own ideal spot (reading through
+  // liveSeatOffsets, so it tracks a live chair drag with zero extra
+  // wiring), then resolveMemberTrayLayout's final nudge pass clear of every
+  // real chair and every other member's own tray. Recomputes on every
+  // roster/presence/seat-offset change, including every single
+  // "pointermove" tick of an active drag (liveSeatOffsets' own dependency),
+  // which is exactly what makes a dragged chair's own tray follow it live.
+  const memberTrayPositions = useMemo(() => {
+    const seeds: MemberTraySeed[] = [];
+    for (const userId of connectedMemberIds) {
+      const position = computeMemberTrayPosition(layout, userId, liveSeatOffsets);
+      if (position) seeds.push({ userId, position });
+    }
+    return resolveMemberTrayLayout(seeds, PERSONAL_TRAY_RADIUS, chairObstaclesForTrays);
+  }, [connectedMemberIds, layout, liveSeatOffsets, chairObstaclesForTrays]);
+  // Hidden-mirror/obstacle-list convenience: the DM's own resolved tray
+  // position specifically — every connected member (the DM included) has an
+  // entry in memberTrayPositions above, so this is just that one lookup,
+  // kept as its own memo purely so the dm-private-tray-state debug mirror
+  // (verify-dm-book.mjs/verify-table-geometry.mjs's own pre-existing
+  // "book vs. tray" checks) and DmBookProp's own obstacle spacing keep
+  // reading from one stable place.
+  const dmTrayPosition = useMemo<[number, number, number]>(() => {
     if (!dmSeat) return [0, TABLE_SURFACE_Y + 0.01, 0];
-    const [outX, outZ] = outwardFromOrigin(dmSeat.position);
-    return [outX * DM_PRIVATE_TRAY_DISTANCE, TABLE_SURFACE_Y + 0.01, outZ * DM_PRIVATE_TRAY_DISTANCE];
-  }, [dmSeat]);
+    return memberTrayPositions.get(dmSeat.member.user_id) ?? [0, TABLE_SURFACE_Y + 0.01, 0];
+  }, [dmSeat, memberTrayPositions]);
   // Phase 5: the DM's book prop's position — same outward-from-origin
-  // direction as the private tray above, PLUS a lateral component
-  // (perpendicular to that direction: (-outZ, outX) instead of (outX, outZ))
-  // so the book sits to one side of the tray rather than dead-center on top
-  // of it. The lateral magnitude (1.7) dominates the forward one (0.3) here
-  // — unlike the tray, the book's exact position is chosen to satisfy the
-  // on-screen click-safety constraint above, not to sit "further out toward
-  // the seat" — so the two offsets combined keep a real gap between the
-  // tray's own footprint (TRAY_RADIUS 0.55 in DiceTumble.tsx) and the
-  // book's own (visible geometry well under half a meter across —
-  // DmBookProp.tsx) regardless of party size or which side of the ellipse
-  // the DM's seat lands on.
+  // direction as the DM's own personal tray (dmTrayPosition above), PLUS a
+  // lateral component (perpendicular to that direction: (-outZ, outX)
+  // instead of (outX, outZ)) so the book sits to one side of the tray
+  // rather than dead-center on top of it. The lateral magnitude (1.7)
+  // dominates the forward one (0.3) here — unlike the tray, the book's
+  // exact position is chosen to satisfy the on-screen click-safety
+  // constraint above, not to sit "further out toward the seat" — so the two
+  // offsets combined keep a real gap between the tray's own footprint
+  // (PERSONAL_TRAY_RADIUS in DiceTumble.tsx) and the book's own (visible
+  // geometry well under half a meter across — DmBookProp.tsx) regardless of
+  // party size or which side of the ellipse the DM's seat lands on.
   const dmBookPosition = useMemo<[number, number, number]>(() => {
     if (!dmSeat) return [DM_BOOK_LATERAL_OFFSET, TABLE_SURFACE_Y, 0];
     const [outX, outZ] = outwardFromOrigin(dmSeat.position);
@@ -749,12 +938,11 @@ export function GameRoom({
           // seating.ts's ChairObstacle/resolveChairDrop doc comments. Every
           // OTHER seat's CURRENT (already offset-applied) position, not its
           // raw default — another member may have already dragged theirs
-          // too. The DM's private tray and book are computed the same way
-          // for every client regardless of role (dmPrivateTrayPosition/
-          // dmBookPosition above are pure functions of dmSeat, which every
-          // client — not just the DM — already derives), so this stays
-          // correct even though only the DM's own client actually RENDERS
-          // either of them.
+          // too. Every CONNECTED member's own personal tray (memberTrayPositions,
+          // computed the same way for every client regardless of role, so
+          // this stays correct even for a tray only the DM's own client
+          // actually renders), and the DM's book, round out the list — a
+          // chair must never land on top of any of them either.
           const obstacles: ChairObstacle[] = [];
           for (const seat of seats) {
             if (seat.member.user_id === userId) continue;
@@ -764,8 +952,10 @@ export function GameRoom({
               radius: (seat.member.role === "dm" ? DM_CHAIR_FRONTAGE : PLAYER_CHAIR_FRONTAGE) / 2,
             });
           }
-          obstacles.push({ x: DEFAULT_TRAY_POSITION[0], z: DEFAULT_TRAY_POSITION[2], radius: TRAY_RADIUS });
-          obstacles.push({ x: dmPrivateTrayPosition[0], z: dmPrivateTrayPosition[2], radius: TRAY_RADIUS });
+          for (const [trayUserId, trayPosition] of memberTrayPositions) {
+            if (trayUserId === userId) continue;
+            obstacles.push({ x: trayPosition[0], z: trayPosition[2], radius: PERSONAL_TRAY_RADIUS });
+          }
           obstacles.push({ x: dmBookPosition[0], z: dmBookPosition[2], radius: DM_BOOK_FOOTPRINT_RADIUS });
 
           const resolved = resolveChairDrop({
@@ -793,8 +983,44 @@ export function GameRoom({
         }
       })();
     },
-    [currentUserId, layout.seats, seats, appendedTables, campaignId, dmPrivateTrayPosition, dmBookPosition]
+    [currentUserId, layout.seats, seats, appendedTables, campaignId, memberTrayPositions, dmBookPosition]
   );
+
+  // A member's own dice-tray-model choice (DiceTrayPicker, embedded in
+  // DiceLogPanel below) — persist-then-broadcast, the exact SEAT_MOVED_EVENT
+  // shape handleChairDragEnd above already uses: the DB is the source of
+  // truth (setDiceTrayPreference), written before this client's own local
+  // state updates or anyone else is told.
+  const handleDiceTrayPreferenceChange = useCallback(
+    async (preference: DiceTrayModelPreference) => {
+      setDiceTrayPreferenceError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        await setDiceTrayPreference(supabase, campaignId, currentUserId, preference);
+        setDiceTrayPreferences((current) => new Map(current).set(currentUserId, preference));
+        await campaignChannelRef.current?.publish<DiceTrayPreferenceChangedPayload>(
+          DICE_TRAY_PREFERENCE_EVENT,
+          { userId: currentUserId, preference }
+        );
+      } catch (err) {
+        setDiceTrayPreferenceError(errorMessage(err) ?? "Could not save your dice tray preference.");
+      }
+    },
+    [campaignId, currentUserId]
+  );
+
+  // DiceTrayPicker's own DM-only upload flow (AssetPalette.tsx's exact
+  // pipeline, reused) hands the newly-created asset_library row straight
+  // back here — appended to assetList (this client's own live mirror of the
+  // `assets` prop) so the uploader can immediately pick it without a
+  // reload. Local-only, the same as AssetPalette.tsx's own existing upload
+  // flow: neither surface broadcasts a freshly-uploaded asset to other
+  // already-open clients today — those simply see it after their own next
+  // reload (asset_library's own read is otherwise a one-shot page-load
+  // fetch, never a live subscription), so this doesn't regress anything.
+  const handleAssetUploaded = useCallback((asset: PaletteAsset) => {
+    setAssetList((current) => [...current, asset]);
+  }, []);
 
   const [liveMap, setLiveMapState] = useState<LiveMapData | null>(initialLiveMap);
   const [switching, setSwitching] = useState(false);
@@ -1119,6 +1345,14 @@ export function GameRoom({
     let sawSelfPresent = false;
     const unsubscribePresence = channel.onPresenceChange((present) => {
       if (present.some((member) => member.userId === currentUserId)) sawSelfPresent = true;
+      // "Mount one DiceTumble instance per connected member" reads this
+      // exact presence snapshot — see presentUserIds' own doc comment.
+      // Always includes this client's own id even in the empty pre-join
+      // snapshot (unlike sawSelfPresent's own stricter gate above, which
+      // exists only for the session-lifecycle decision below), so this
+      // client's own tray never flickers away for the brief moment before
+      // its own presence has fully synced.
+      setPresentUserIds(new Set([currentUserId, ...present.map((member) => member.userId)]));
     });
 
     const unsubscribeEnded = channel.subscribe(SESSION_ENDED_EVENT, () => {
@@ -1211,9 +1445,17 @@ export function GameRoom({
     const unsubscribeCombat = channel.subscribe<CombatPayload>(COMBAT_EVENT, () => {
       void refreshCombat(supabase).catch(() => undefined);
     });
-    // No onReconnect pair — see DICE_ROLLED_EVENT's own comment.
+    // No onReconnect pair — see DICE_ROLLED_EVENT's own comment. Routes to
+    // the ROLLER's own personal tray (payload.rollerUserId) — every
+    // receiver renders that same member's tray at the same resolved
+    // position (memberTrayPositions is a pure function of already-synced
+    // roster/presence/offset state), so this always finds the right mesh;
+    // a roller who has since disconnected (their own ref entry removed on
+    // unmount, diceTumbleRefs' own doc comment) simply has nothing to
+    // play — a missed animation, never a crash, the same "ephemeral, drop
+    // it" posture DICE_ROLLED_EVENT already had.
     const unsubscribeDiceRolled = channel.subscribe<DiceRolledPayload>(DICE_ROLLED_EVENT, (payload) => {
-      diceTumbleRef.current?.play(payload.spec);
+      diceTumbleRefs.current.get(payload.rollerUserId)?.play(payload.spec);
     });
     // Same dropped-broadcast reasoning for combat — a start/advance/end sent
     // while disconnected is gone, so re-read the active encounter.
@@ -1259,6 +1501,19 @@ export function GameRoom({
       const fresh = await getSeatOffsetsForCampaign(supabase, campaignId).catch(() => null);
       if (fresh) setSeatOffsets(fresh);
     });
+    // A member's own dice-tray-model choice — the exact SEAT_MOVED_EVENT
+    // shape/reasoning above, reused for diceTrayPreferences instead of
+    // seatOffsets.
+    const unsubscribeDiceTrayPreference = channel.subscribe<DiceTrayPreferenceChangedPayload>(
+      DICE_TRAY_PREFERENCE_EVENT,
+      (payload) => {
+        setDiceTrayPreferences((current) => new Map(current).set(payload.userId, payload.preference));
+      }
+    );
+    const unsubscribeDiceTrayPreferenceReconnect = channel.onReconnect(async () => {
+      const fresh = await getDiceTrayPreferencesForCampaign(supabase, campaignId).catch(() => null);
+      if (fresh) setDiceTrayPreferences(fresh);
+    });
 
     return () => {
       unsubscribeLiveMap();
@@ -1274,6 +1529,8 @@ export function GameRoom({
       unsubscribeTokenSelectedReconnect();
       unsubscribeSeatMoved();
       unsubscribeSeatMovedReconnect();
+      unsubscribeDiceTrayPreference();
+      unsubscribeDiceTrayPreferenceReconnect();
       campaignChannelRef.current = null;
       void channel.leave();
     };
@@ -1880,22 +2137,27 @@ export function GameRoom({
       // onRollLanded today and so don't tumble yet — wiring those in is an
       // additive change to those specific handlers, not to this seam.
       const spec = buildDiceTumbleSpec(roll);
-      if (roll.visibility === "private") {
-        // Phase 3: a private roll plays ONLY in the DM's own tray, on THIS
-        // client alone — no DICE_ROLLED_EVENT broadcast at all, so no other
-        // connected client ever learns a roll happened (the "immediate
-        // local play, then broadcast" mechanic above simply skips its
-        // second half for a private roll). roll_log's own RLS (0042) is
-        // what keeps the persistent log hidden from players; this is the
-        // tumble's equivalent for the ephemeral animation. Only ever
-        // reachable for the DM in practice: a private roll only exists
-        // because the DM's own toggle (DiceLogPanel) set it, and RLS
-        // rejects anyone else's attempt to persist one at all.
-        privateDiceTumbleRef.current?.play(spec);
-      } else {
-        diceTumbleRef.current?.play(spec);
-        void campaignChannelRef.current?.publish<DiceRolledPayload>(DICE_ROLLED_EVENT, { spec });
+      // Prompt 8b: every roll — public or private — now plays at the
+      // ROLLER's own personal tray (one DiceTumble instance per connected
+      // member, replacing the old shared tray + separate DM-private tray).
+      // The visibility rule that keeps a private roll off every other
+      // client is UNCHANGED: it's still purely about whether the broadcast
+      // below ever fires, never about which mesh the roll animates at.
+      diceTumbleRefs.current.get(roll.roller_user_id)?.play(spec);
+      if (roll.visibility === "public") {
+        void campaignChannelRef.current?.publish<DiceRolledPayload>(DICE_ROLLED_EVENT, {
+          spec,
+          rollerUserId: roll.roller_user_id,
+        });
       }
+      // else: a private roll (Phase 3) plays ONLY on THIS client (the
+      // line above), at the roller's own tray — no DICE_ROLLED_EVENT
+      // broadcast at all, so no other connected client ever learns a roll
+      // happened. roll_log's own RLS (0042) is what keeps the persistent
+      // log hidden from players; this is the tumble's equivalent for the
+      // ephemeral animation. Only ever reachable for the DM in practice: a
+      // private roll only exists because the DM's own toggle (DiceLogPanel)
+      // set it, and RLS rejects anyone else's attempt to persist one at all.
 
       const attack = roll.breakdown.type === "d20" ? (roll.breakdown.attack ?? null) : null;
       if (!attack) return;
@@ -2309,15 +2571,25 @@ export function GameRoom({
     }
   }
 
-  const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
+  // Reads assetList (this client's own live-appendable mirror of the
+  // `assets` prop — see its own doc comment above), not the bare `assets`
+  // prop, so a dice-tray model a DM uploads mid-session (DiceTrayPicker's
+  // own upload flow) is immediately resolvable here too, not just after a
+  // reload.
+  const assetUrlById = useMemo(() => new Map(assetList.map((asset) => [asset.id, asset.url])), [assetList]);
   // Stored forward-direction correction per asset (model_orientation, see
   // docs/design/model-orientation-and-posing.md §8) — same id-keyed map
-  // shape as assetUrlById, read alongside it wherever a placed object's
-  // props are built below.
+  // shape as assetUrlById, read alongside it wherever a placed object's (or
+  // a personal dice tray's own custom model's) props are built below.
   const assetForwardOffsetById = useMemo(
-    () => new Map(assets.map((asset) => [asset.id, asset.forwardOffsetDeg])),
-    [assets]
+    () => new Map(assetList.map((asset) => [asset.id, asset.forwardOffsetDeg])),
+    [assetList]
   );
+  // Custom assets only — DiceTrayPicker's own selectable list; a preset
+  // model (a built-in map prop) was never meant to double as a dice tray's
+  // own appearance, the same distinction AssetPalette.tsx's own upload
+  // section already draws.
+  const customAssets = useMemo(() => assetList.filter((asset) => asset.source_type === "custom"), [assetList]);
 
   const ownCharacterIds = useMemo(
     () =>
@@ -3018,22 +3290,39 @@ export function GameRoom({
           onOwnCameraDebug={setOwnCameraPosition}
           onChairDraggingChange={handleChairDraggingChange}
           turnCameraActive={turnCameraActive}
+          onLiveChairOffset={handleLiveChairOffset}
         />
-        {/* A modest, fixed corner of the table (its own doc comment) — never
-            full-screen, never over the map/tokens/camera controls. */}
-        <DiceTumble ref={diceTumbleRef} onQueueChange={setDiceQueueDebug} />
-        {/* Phase 3: the DM's own private dice tray — mounted ONLY for the
-            DM, positioned just in front of their own seat (dmPrivateTrayPosition's
-            doc comment). A private roll (handleRollLanded's visibility
-            branch) plays here instead of the shared tray above, and never
-            reaches any other client at all. */}
-        {currentUserIsDM ? (
-          <DiceTumble
-            ref={privateDiceTumbleRef}
-            trayPosition={dmPrivateTrayPosition}
-            onQueueChange={setPrivateDiceQueueDebug}
-          />
-        ) : null}
+        {/* Prompt 8b: one personal dice tray per CONNECTED member —
+            replacing the old single shared corner tray plus the DM's
+            separate private tray. Each sits at that member's own resolved
+            spot (memberTrayPositions, already nudged clear of every real
+            chair and every other member's own tray) and renders that
+            member's own chosen model (diceTrayPreferences/DiceTrayPicker),
+            or the default procedural disc if they've never chosen one. A
+            member's roll (public or private alike — handleRollLanded's own
+            visibility branch) always plays here, never a shared spot; two
+            different members' rolls animate fully independently since each
+            has their own queue. */}
+        {connectedMemberIds.map((userId) => {
+          const trayPosition = memberTrayPositions.get(userId);
+          if (!trayPosition) return null;
+          const preference = diceTrayPreferences.get(userId) ?? DEFAULT_DICE_TRAY_PREFERENCE;
+          const modelUrl =
+            preference.source === "custom" ? (assetUrlById.get(preference.assetId ?? "") ?? null) : null;
+          const modelForwardOffsetDeg =
+            preference.source === "custom" ? (assetForwardOffsetById.get(preference.assetId ?? "") ?? 0) : 0;
+          return (
+            <ConnectedMemberDiceTray
+              key={userId}
+              userId={userId}
+              trayPosition={trayPosition}
+              modelUrl={modelUrl}
+              modelForwardOffsetDeg={modelForwardOffsetDeg}
+              onQueueChange={handleDiceQueueDebug}
+              registerRef={registerDiceTumbleRef}
+            />
+          );
+        })}
         {/* Phase 5: the DM's book — Enemies (MonsterPanel), DM Controls
             (DmOverridesPanel), Notes, Lore, and Day/Night, now a real 3D
             prop on the table (dmBookPosition's doc comment) instead of a
@@ -3093,11 +3382,38 @@ export function GameRoom({
       <div data-testid="day-night-state" hidden>
         {JSON.stringify({ mode: dayNightMode })}
       </div>
-      {/* Hidden render-state mirror for verify-dice-tumble.mjs — see
-          DiceTumbleProps.onQueueChange's doc comment. Index 0 is always the
-          currently-animating roll id; the rest are queued behind it. */}
-      <div data-testid="dice-tumble-state" hidden>
-        {JSON.stringify({ queue: diceQueueDebug })}
+      {/* Hidden render-state mirror for verify-per-member-dice-trays.mjs
+          (and the surviving parts of verify-dice-tumble.mjs/
+          verify-private-dice-rolls.mjs) — one entry per CONNECTED member's
+          own personal tray (Prompt 8b, replacing the old single shared
+          dice-tumble-state/private-dice-tumble-state pair): `position` is
+          that member's own resolved, non-overlapping spot
+          (memberTrayPositions); `modelSource` is "default" or "custom"
+          (diceTrayPreferences); `queue` is that specific tray's own FIFO
+          queue (DiceTumbleProps.onQueueChange's doc comment) — index 0 the
+          currently-animating roll id, the rest waiting their turn. Present
+          for every client (not DM-only) since every tray is a real,
+          visible prop everyone's own camera can see, same as
+          seat-layout-state below; a PRIVATE roll still only ever reaches
+          the ROLLER's own client's queue entry (handleRollLanded's own
+          visibility branch), so a player's own copy of this mirror never
+          shows a DM's private roll queued anywhere. */}
+      <div data-testid="dice-tray-layout-state" hidden>
+        {JSON.stringify({
+          radius: PERSONAL_TRAY_RADIUS,
+          trays: connectedMemberIds.flatMap((userId) => {
+            const position = memberTrayPositions.get(userId);
+            if (!position) return [];
+            return [
+              {
+                userId,
+                position,
+                modelSource: (diceTrayPreferences.get(userId) ?? DEFAULT_DICE_TRAY_PREFERENCE).source,
+                queue: diceQueueDebugByUser[userId] ?? [],
+              },
+            ];
+          }),
+        })}
       </div>
       {/* Hidden render-state mirror for verify-token-slide.mjs — see
           MapSurfaceProps.onTokenSlideDebug's doc comment. `sliding` lists the
@@ -3107,17 +3423,6 @@ export function GameRoom({
       <div data-testid="token-slide-state" hidden>
         {JSON.stringify({ sliding: slidingTokenIds })}
       </div>
-      {/* Hidden render-state mirror for the DM's private tray (Phase 3) —
-          same reasoning as dice-tumble-state above, but for
-          privateDiceTumbleRef's own independent queue. Absent from the DOM
-          entirely for a non-DM client, since the tray itself isn't mounted —
-          verify-private-dice-rolls.mjs's player-side check is exactly "this
-          testid doesn't exist / never changes for me". */}
-      {currentUserIsDM ? (
-        <div data-testid="private-dice-tumble-state" hidden>
-          {JSON.stringify({ queue: privateDiceQueueDebug })}
-        </div>
-      ) : null}
       {/* Hidden render-state mirror for the DM's book prop (Phase 5) — same
           "WebGL has no DOM" reasoning as every other mirror on this page.
           `open`/`position` mirror this client's own React state directly;
@@ -3131,14 +3436,17 @@ export function GameRoom({
           {JSON.stringify({ open: bookOpen, position: dmBookPosition, screen: bookScreenPosition })}
         </div>
       ) : null}
-      {/* Hidden render-state mirror of the private dice tray's own position
-          (Phase 5) — lets verify-dm-book.mjs/verify-private-dice-rolls.mjs
-          confirm the book and the private tray never land on the same spot,
-          without either script needing to re-derive the seat trigonometry
-          itself. */}
+      {/* Hidden render-state mirror of the DM's own personal dice tray's
+          position (Phase 5; generalized by Prompt 8b to memberTrayPositions'
+          own DM entry, dmTrayPosition) — lets verify-dm-book.mjs/
+          verify-table-geometry.mjs confirm the book and the DM's own tray
+          never land on the same spot, without either script needing to
+          re-derive the seat trigonometry itself. Kept under this same,
+          pre-existing test id (rather than renamed) so those two scripts'
+          own "book vs. tray" checks keep working unchanged. */}
       {currentUserIsDM ? (
         <div data-testid="dm-private-tray-state" hidden>
-          {JSON.stringify({ position: dmPrivateTrayPosition })}
+          {JSON.stringify({ position: dmTrayPosition })}
         </div>
       ) : null}
       {/* Hidden render-state mirror for verify-void-terrain.mjs — see the
@@ -3476,6 +3784,25 @@ export function GameRoom({
           members={roster}
           initialRolls={initialRolls}
           onRollLanded={handleRollLanded}
+        />
+      </DraggablePanel>
+      {/* Prompt 8b: a member's own personal-dice-tray-model picker — its
+          own INDEPENDENT panel (not folded into diceLog above), so growing
+          its own content (the upload form, a longer custom-asset grid)
+          never grows diceLog's own already-tuned footprint into covering
+          the 3D scene's own click targets (a real regression this file's
+          own history caught: it once did exactly that, silently breaking
+          the chair-drag gesture for smaller parties — see
+          DraggablePanel.tsx's own DEFAULT_ANCHOR_CLASS.diceTray comment). */}
+      <DraggablePanel panelId="diceTray">
+        <DiceTrayPicker
+          campaignId={campaignId}
+          canUpload={currentUserIsDM}
+          customAssets={customAssets}
+          preference={diceTrayPreferences.get(currentUserId) ?? DEFAULT_DICE_TRAY_PREFERENCE}
+          onChange={handleDiceTrayPreferenceChange}
+          error={diceTrayPreferenceError}
+          onAssetUploaded={handleAssetUploaded}
         />
       </DraggablePanel>
       <DraggablePanel panelId="handout">

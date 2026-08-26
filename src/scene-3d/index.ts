@@ -44,10 +44,15 @@ export {
   type DiceTumbleHandle,
   type DiceTumbleProps,
   type DiceTumbleSpec,
-  // Movable-chair collision avoidance (GameRoom.tsx's resolveChairDrop
-  // obstacle list) needs the shared tray's own real position/radius.
-  DEFAULT_TRAY_POSITION,
-  TRAY_RADIUS,
+  // One personal tray per connected member (replacing the old single
+  // shared tray + DM-private-tray pair) — GameRoom.tsx mounts one of these
+  // per member at seating.ts's computeMemberTrayPosition, sized by
+  // PERSONAL_TRAY_SCALE/PERSONAL_TRAY_RADIUS; trayRadiusForScale is the one
+  // real formula both this file and seating.ts's tray-spacing constants
+  // derive from, so neither can silently drift from the other.
+  trayRadiusForScale,
+  PERSONAL_TRAY_SCALE,
+  PERSONAL_TRAY_RADIUS,
 } from "./DiceTumble";
 // Phase 5: the DM's book as a real 3D prop (replacing DmBook.tsx's old
 // screen-fixed 2D overlay) — see DmBookProp.tsx's doc comment for why it
@@ -65,7 +70,9 @@ export {
   applySeatOffset,
   getEffectiveSeat,
   computeMemberTrayPosition,
-  MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+  HEAD_SQUARE_MEMBER_TRAY_FRACTION,
+  APPENDED_TABLE_MEMBER_TRAY_FRACTION,
+  resolveMemberTrayLayout,
   HEAD_SQUARE_SEAT_CAPACITY,
   SINGLE_TABLE_SEAT_CAPACITY,
   PLAYER_CHAIR_FRONTAGE,
@@ -87,6 +94,7 @@ export {
   type CampaignSeat,
   type AppendedTable,
   type ChairObstacle,
+  type MemberTraySeed,
 } from "./seating";
 // Phase 3: GameRoom derives the DM's private dice tray position from the
 // DM's own seat, in table-surface-relative terms — the one table constant

@@ -573,6 +573,20 @@ export interface GameTableSceneProps {
    * seated camera, exactly like every other optional prop here defaults to
    * "unchanged behavior". */
   turnCameraActive?: boolean;
+  /** Fires on every genuine change to this scene's own internal
+   * localChairOverride (its own doc comment below) — every single
+   * "pointermove" tick of an active drag, and once more (with `null`) the
+   * instant it clears (release, or the `seatOffsets` prop itself catching
+   * up). This is what lets the app layer's own derived state (GameRoom.tsx's
+   * memberTrayPositions) track a chair LIVE while it's being dragged, not
+   * just once the drag ends and the persist-then-broadcast round trip
+   * catches up — the same live-tracking guarantee onOwnCameraDebug already
+   * proves for the seated camera, generalized to any OTHER consumer of
+   * "where is this specific chair right now" (a personal dice tray, most
+   * immediately). Only ever fires for `currentUserId`'s own seat — nothing
+   * else can ever be mid-drag on this client (draggableUserId's own doc
+   * comment). */
+  onLiveChairOffset?: (override: { userId: string; offset: SeatOffset } | null) => void;
 }
 
 // Stable empty-Map default for GameTableSceneProps.seatOffsets — a fresh
@@ -628,6 +642,7 @@ export function GameTableScene({
   onOwnCameraDebug,
   onChairDraggingChange,
   turnCameraActive = false,
+  onLiveChairOffset,
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
   const { camera, gl, size } = useThree();
@@ -678,6 +693,18 @@ export function GameTableScene({
     setPrevSeatOffsets(seatOffsets);
     setLocalChairOverride(null);
   }
+
+  // Reports localChairOverride's own value upward on every genuine change —
+  // see GameTableSceneProps.onLiveChairOffset's own doc comment for why:
+  // this is the ONE piece of this scene's purely-local drag state the app
+  // layer has no other way to observe live (onOwnCameraDebug/
+  // onOwnChairProjectedPosition below already cover the seated camera and
+  // the screen projection, but neither hands back the raw offset a
+  // consumer like a personal dice tray's own position derivation actually
+  // needs).
+  useEffect(() => {
+    onLiveChairOffset?.(localChairOverride);
+  }, [localChairOverride, onLiveChairOffset]);
 
   // Ref-mirrored the same way onRulerDragStartRef/onRulerDragOverCellRef/
   // onRulerDragEndRef already are below: the window "pointermove"/"pointerup"

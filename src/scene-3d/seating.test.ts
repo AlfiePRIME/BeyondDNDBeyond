@@ -10,7 +10,9 @@ import {
   applySeatOffset,
   getEffectiveSeat,
   computeMemberTrayPosition,
-  MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+  HEAD_SQUARE_MEMBER_TRAY_FRACTION,
+  APPENDED_TABLE_MEMBER_TRAY_FRACTION,
+  resolveMemberTrayLayout,
   CHAIR_DRAG_CLAMP_RADIUS,
   nearestTableCenter,
   clampToTableArrangement,
@@ -18,7 +20,9 @@ import {
   resolveChairDrop,
   type SeatOffset,
   type ChairObstacle,
+  type MemberTraySeed,
 } from "./seating";
+import { PERSONAL_TRAY_RADIUS } from "./DiceTumble";
 
 // Imports the real constants rather than hardcoded copies so these tests can
 // never silently drift from table.ts's actual dimensions. TABLE is the
@@ -605,21 +609,18 @@ describe("effective position tracks a reshaped default instead of going stale", 
 describe("computeMemberTrayPosition", () => {
   const offset: SeatOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
 
-  /** Replicates the outward-from-center formula independently of
-   * seating.ts's own (unexported) helper, so these assertions actually
-   * check the formula rather than just calling it twice. */
+  /** Replicates the fraction-of-the-way-from-center formula independently
+   * of seating.ts's own internals, so these assertions actually check the
+   * formula rather than just calling it twice. */
   function expectedTrayPosition(
     seatPosition: readonly [number, number, number],
-    center: readonly [number, number] = [0, 0]
+    center: readonly [number, number] = [0, 0],
+    fraction: number = HEAD_SQUARE_MEMBER_TRAY_FRACTION
   ): [number, number, number] {
-    const dx = seatPosition[0] - center[0];
-    const dz = seatPosition[2] - center[1];
-    const dist = Math.hypot(dx, dz);
-    const [outX, outZ] = dist > 1e-6 ? [dx / dist, dz / dist] : [0, -1];
     return [
-      center[0] + outX * MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+      center[0] + (seatPosition[0] - center[0]) * fraction,
       TABLE_SURFACE_Y + 0.01,
-      center[1] + outZ * MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+      center[1] + (seatPosition[2] - center[1]) * fraction,
     ];
   }
 
@@ -628,7 +629,7 @@ describe("computeMemberTrayPosition", () => {
     expect(computeMemberTrayPosition(layout, "not-a-member", new Map())).toBeNull();
   });
 
-  it("sits a fixed distance from the world origin, toward a head-square member's own default seat", () => {
+  it("sits at HEAD_SQUARE_MEMBER_TRAY_FRACTION of the way from the world origin toward a head-square member's own default seat", () => {
     const layout = computeCampaignSeatLayout(makeMembers(4));
     const userId = layout.seats[1].member.user_id;
     const seat = findSeatByUserId(layout.seats, userId);
@@ -638,8 +639,26 @@ describe("computeMemberTrayPosition", () => {
     expect(position).not.toBeNull();
     const [x, y, z] = position!;
     expect(y).toBeCloseTo(TABLE_SURFACE_Y + 0.01);
-    expect(Math.hypot(x, z)).toBeCloseTo(MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER);
+    expect(Math.hypot(x, z)).toBeCloseTo(
+      Math.hypot(seat.position[0], seat.position[2]) * HEAD_SQUARE_MEMBER_TRAY_FRACTION
+    );
     expect(position).toEqual(expectedTrayPosition(seat.position));
+  });
+
+  it("stays within the physical head-square tabletop for every seat angle — never past the real table edge", () => {
+    // The per-axis bound this file's own doc comment on
+    // HEAD_SQUARE_MEMBER_TRAY_FRACTION relies on: |x| ≤ fraction × semiX and
+    // |z| ≤ fraction × semiZ for EVERY angle (|cosθ|, |sinθ| ≤ 1), checked
+    // here against a large sweep of party sizes rather than trusted by
+    // algebra alone.
+    for (let n = 2; n <= 16; n++) {
+      const layout = computeCampaignSeatLayout(makeMembers(n));
+      for (const seat of layout.seats.filter((s) => s.tableIndex === -1)) {
+        const position = computeMemberTrayPosition(layout, seat.member.user_id, new Map())!;
+        expect(Math.abs(position[0])).toBeLessThan(COMBINED_TABLE.width / 2 - PERSONAL_TRAY_RADIUS);
+        expect(Math.abs(position[2])).toBeLessThan(COMBINED_TABLE.depth / 2 - PERSONAL_TRAY_RADIUS);
+      }
+    }
   });
 
   it("matches the DM's own private tray for the DM's seat specifically (the exact case GameRoom.tsx's dmPrivateTrayPosition already covers)", () => {
@@ -678,7 +697,7 @@ describe("computeMemberTrayPosition", () => {
     expect(cleared).toEqual(computeMemberTrayPosition(layout, userId, new Map()));
   });
 
-  it("offsets from the APPENDED table's own center, not the world origin, for a member seated there", () => {
+  it("offsets from the APPENDED table's own center, not the world origin, for a member seated there, using that table's own (smaller) fraction", () => {
     const n = HEAD_SQUARE_SEAT_CAPACITY + 2;
     const layout = computeCampaignSeatLayout(makeMembers(n));
     const overflowSeat = layout.seats.find((s) => s.tableIndex === 0)!;
@@ -686,12 +705,29 @@ describe("computeMemberTrayPosition", () => {
 
     const tableCenter: [number, number] = [0, singleTableOffsetZ(0)];
     const position = computeMemberTrayPosition(layout, overflowSeat.member.user_id, new Map());
-    expect(position).toEqual(expectedTrayPosition(overflowSeat.position, tableCenter));
+    expect(position).toEqual(
+      expectedTrayPosition(overflowSeat.position, tableCenter, APPENDED_TABLE_MEMBER_TRAY_FRACTION)
+    );
 
     // Sanity: this is NOT the same as offsetting from the world origin —
     // proves the appended-table branch is actually exercised, not
     // accidentally falling back to the head-square formula.
-    expect(position).not.toEqual(expectedTrayPosition(overflowSeat.position, [0, 0]));
+    expect(position).not.toEqual(
+      expectedTrayPosition(overflowSeat.position, [0, 0], APPENDED_TABLE_MEMBER_TRAY_FRACTION)
+    );
+  });
+
+  it("stays within the physical appended-table tabletop for every end-cap seat angle", () => {
+    const n = HEAD_SQUARE_SEAT_CAPACITY + SINGLE_TABLE_SEAT_CAPACITY;
+    const layout = computeCampaignSeatLayout(makeMembers(n));
+    const overflowSeats = layout.seats.filter((s) => s.tableIndex === 0);
+    expect(overflowSeats.length).toBe(SINGLE_TABLE_SEAT_CAPACITY);
+    const tableCenterZ = singleTableOffsetZ(0);
+    for (const seat of overflowSeats) {
+      const [x, , z] = computeMemberTrayPosition(layout, seat.member.user_id, new Map())!;
+      expect(Math.abs(x)).toBeLessThan(TABLE.width / 2 - PERSONAL_TRAY_RADIUS);
+      expect(Math.abs(z - tableCenterZ)).toBeLessThan(TABLE.depth / 2 - PERSONAL_TRAY_RADIUS);
+    }
   });
 
   it("an appended-table member's tray also tracks a stored seat offset", () => {
@@ -706,7 +742,9 @@ describe("computeMemberTrayPosition", () => {
     expect(withOffset).not.toEqual(withoutOffset);
 
     const effectiveSeat = getEffectiveSeat(layout, userId, new Map([[userId, offset]]));
-    expect(withOffset).toEqual(expectedTrayPosition(effectiveSeat!.position, tableCenter));
+    expect(withOffset).toEqual(
+      expectedTrayPosition(effectiveSeat!.position, tableCenter, APPENDED_TABLE_MEMBER_TRAY_FRACTION)
+    );
   });
 
   it("stays correct as the underlying default reshapes (party growth), the same not-stale property getEffectiveSeat guarantees", () => {
@@ -722,6 +760,103 @@ describe("computeMemberTrayPosition", () => {
     expect(positionAfter).toEqual(
       expectedTrayPosition(getEffectiveSeat(after, userId, offsets)!.position)
     );
+  });
+});
+
+/** Every seated member's own real chair, as a ChairObstacle —
+ * resolveMemberTrayLayout's own "avoid every real chair" obstacle list,
+ * built the same way GameRoom.tsx's handleChairDragEnd already builds one
+ * for resolveChairDrop. */
+function chairObstaclesFor(seats: ReturnType<typeof computeCampaignSeatLayout>["seats"]): ChairObstacle[] {
+  return seats.map((seat) => ({
+    x: seat.position[0],
+    z: seat.position[2],
+    radius: (seat.member.role === "dm" ? DM_CHAIR_FRONTAGE : PLAYER_CHAIR_FRONTAGE) / 2,
+  }));
+}
+
+function minPairwiseDistance(points: readonly [number, number][]): number {
+  let min = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      min = Math.min(min, Math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1]));
+    }
+  }
+  return min;
+}
+
+describe("resolveMemberTrayLayout", () => {
+  it("returns each seed's own ideal position unchanged when there's only one connected member (nothing to conflict with)", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(4));
+    const seat = layout.seats[0];
+    const ideal = computeMemberTrayPosition(layout, seat.member.user_id, new Map())!;
+    const seeds: MemberTraySeed[] = [{ userId: seat.member.user_id, position: ideal }];
+    const resolved = resolveMemberTrayLayout(seeds, PERSONAL_TRAY_RADIUS, chairObstaclesFor(layout.seats));
+    expect(resolved.get(seat.member.user_id)).toEqual(ideal);
+  });
+
+  it("keeps every connected member's tray clear of every other one, for realistic party sizes at the head square", () => {
+    for (let n = 2; n <= 15; n++) {
+      const layout = computeCampaignSeatLayout(makeMembers(n));
+      const seeds: MemberTraySeed[] = layout.seats.map((seat) => ({
+        userId: seat.member.user_id,
+        position: computeMemberTrayPosition(layout, seat.member.user_id, new Map())!,
+      }));
+      const resolved = resolveMemberTrayLayout(seeds, PERSONAL_TRAY_RADIUS, chairObstaclesFor(layout.seats));
+      const points: [number, number][] = [...resolved.values()].map(([x, , z]) => [x, z]);
+      const minDist = minPairwiseDistance(points);
+      expect(minDist, `n=${n} minimum tray-tray distance`).toBeGreaterThanOrEqual(PERSONAL_TRAY_RADIUS * 2 - 1e-6);
+    }
+  });
+
+  it("keeps every connected member's tray clear of every seated chair, including its own neighbors", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(8));
+    const seeds: MemberTraySeed[] = layout.seats.map((seat) => ({
+      userId: seat.member.user_id,
+      position: computeMemberTrayPosition(layout, seat.member.user_id, new Map())!,
+    }));
+    const chairObstacles = chairObstaclesFor(layout.seats);
+    const resolved = resolveMemberTrayLayout(seeds, PERSONAL_TRAY_RADIUS, chairObstacles);
+    for (const seat of layout.seats) {
+      const [tx, , tz] = resolved.get(seat.member.user_id)!;
+      for (const other of layout.seats) {
+        if (other.member.user_id === seat.member.user_id) continue; // a member's own chair sits behind their own tray by construction
+        const otherRadius = (other.member.role === "dm" ? DM_CHAIR_FRONTAGE : PLAYER_CHAIR_FRONTAGE) / 2;
+        const dist = Math.hypot(tx - other.position[0], tz - other.position[2]);
+        expect(dist).toBeGreaterThanOrEqual(PERSONAL_TRAY_RADIUS + otherRadius - 1e-6);
+      }
+    }
+  });
+
+  it("still resolves a modest overflow party spanning the head square and one appended table with no overlap", () => {
+    // A party just past the head square's own capacity, spread across the
+    // head square plus a FEW seats on the first appended table — the
+    // realistic overflow shape this feature is meant to support cleanly
+    // (see PERSONAL_TRAY_RADIUS/HEAD_SQUARE_MEMBER_TRAY_FRACTION/
+    // APPENDED_TABLE_MEMBER_TRAY_FRACTION's own doc comments for the much
+    // more extreme densities where a perfect guarantee stops holding).
+    const n = HEAD_SQUARE_SEAT_CAPACITY + 3;
+    const layout = computeCampaignSeatLayout(makeMembers(n));
+    expect(layout.appendedTables.length).toBe(1);
+    const seeds: MemberTraySeed[] = layout.seats.map((seat) => ({
+      userId: seat.member.user_id,
+      position: computeMemberTrayPosition(layout, seat.member.user_id, new Map())!,
+    }));
+    const resolved = resolveMemberTrayLayout(seeds, PERSONAL_TRAY_RADIUS, chairObstaclesFor(layout.seats));
+    const points: [number, number][] = [...resolved.values()].map(([x, , z]) => [x, z]);
+    expect(minPairwiseDistance(points)).toBeGreaterThanOrEqual(PERSONAL_TRAY_RADIUS * 2 - 1e-6);
+  });
+
+  it("is deterministic: the same seeds/obstacles always resolve to the exact same layout", () => {
+    const layout = computeCampaignSeatLayout(makeMembers(10));
+    const seeds: MemberTraySeed[] = layout.seats.map((seat) => ({
+      userId: seat.member.user_id,
+      position: computeMemberTrayPosition(layout, seat.member.user_id, new Map())!,
+    }));
+    const obstacles = chairObstaclesFor(layout.seats);
+    const first = resolveMemberTrayLayout(seeds, PERSONAL_TRAY_RADIUS, obstacles);
+    const second = resolveMemberTrayLayout(seeds, PERSONAL_TRAY_RADIUS, obstacles);
+    expect([...first.entries()]).toEqual([...second.entries()]);
   });
 });
 

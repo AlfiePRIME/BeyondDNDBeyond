@@ -48,11 +48,10 @@ export const TABLE_SURFACE_Y = LEG.height + TABLE_TOP.thickness;
  * (mapFit.ts's computeTableMapMetrics is completely unchanged) and now
  * renders centered on the SEAM between the two tables (straddling both
  * equally) rather than flush against either one — a repositioning of its
- * existing anchor, not a rescale. The shared dice tray's fixed corner nook
- * (DiceTumble.tsx's DEFAULT_TRAY_POSITION) likewise still targets that same
- * origin-centered single-table-sized surface, unchanged, since it was
- * already tucked well inside a corner of it. The DM's book and private
- * dice tray (GameRoom.tsx) are looser: they just need to land on SOME real,
+ * existing anchor, not a rescale. Every connected member's own personal
+ * dice tray (seating.ts's computeMemberTrayPosition, replacing the old
+ * single shared corner tray) and the DM's book (GameRoom.tsx) are looser:
+ * they just need to land on SOME real,
  * solid part of the combined two-table surface (this constant's own width/
  * depth), not necessarily inside the map's narrower fitted area — the
  * book's exact position is additionally constrained by needing a safe,
