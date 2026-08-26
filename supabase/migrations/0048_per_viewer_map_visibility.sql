@@ -69,6 +69,7 @@ $$;
 -- plus the new "my own token is here" branch for free, and one fewer place
 -- for the "who can read a map" rule to ever drift out of sync.
 drop policy if exists "DM reads every map in their campaign, others only the live map" on public.campaign_maps;
+drop policy if exists "a map is readable per can_read_map" on public.campaign_maps;
 
 create policy "a map is readable per can_read_map"
   on public.campaign_maps for select
