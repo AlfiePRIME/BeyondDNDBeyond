@@ -17,6 +17,8 @@ const NORMAL_BASE = "#463a70";
 const NORMAL_HIGH = "#cfc4ff";
 const DIFFICULT_BASE = "#a85a24";
 const DIFFICULT_HIGH = "#ffd9a0";
+const PIT_BASE = "#140f0c";
+const PIT_HIGH = "#3a2a1e";
 
 // MapSurface's GROUND_COLORS, mirrored verbatim (the post-roadmap
 // ground-types addition) — same reasoning as the terrain palette above.
@@ -79,8 +81,13 @@ export function thumbnailCellColor(
       ? GROUND_COLORS[ground]
       : terrain === "difficult"
         ? [DIFFICULT_BASE, DIFFICULT_HIGH]
-        : [NORMAL_BASE, NORMAL_HIGH];
-  const t = Math.min(elevation * 0.11, 0.66);
+        : terrain === "pit"
+          ? [PIT_BASE, PIT_HIGH]
+          : [NORMAL_BASE, NORMAL_HIGH];
+  // Clamped at 0 like MapSurface's own cellColor: a pit's elevation is a
+  // (possibly negative) floor height, not "how high up", so it never
+  // lightens past its flat base color.
+  const t = Math.min(Math.max(elevation, 0) * 0.11, 0.66);
   const from = hexToLinearRgb(base);
   const to = hexToLinearRgb(high);
   const bytes = from.map((channel, i) => {

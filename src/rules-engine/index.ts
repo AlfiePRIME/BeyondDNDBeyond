@@ -114,6 +114,17 @@ export {
 export { usableAtRange, isUsableAtRange, type RangedAction } from "./range";
 
 export {
+  fallDamageDiceCount,
+  resolveFall,
+  fallDepthFeet,
+  FEET_PER_FALL_DAMAGE_DIE,
+  MAX_FALL_DAMAGE_DICE,
+  MIN_HAZARD_DEPTH_STEPS,
+  CONCEALED_PIT_SAVE_DC,
+  type FallOutcome,
+} from "./falling";
+
+export {
   computeVisibilityTier,
   computeVisibilityTiers,
   effectiveLightLevel,

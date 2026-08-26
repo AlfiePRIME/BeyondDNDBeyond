@@ -48,6 +48,24 @@ describe("cellMovementCost", () => {
     expect(cellMovementCost({ terrain: "void", elevationDeltaFeet: 25 })).toBe(Infinity);
     expect(cellMovementCost({ terrain: "void", elevationDeltaFeet: -25 })).toBe(Infinity);
   });
+
+  // Pits and falling (docs/design/pits-and-falling.md §7): entering a pit is
+  // costed exactly like ordinary ground — the SRD imposes no movement-cost
+  // penalty for walking into a hole, only a status-effect consequence
+  // (src/rules-engine/falling.ts) resolved alongside the move commit, not
+  // here. In particular a pit is NOT "difficult" terrain, and descending
+  // into one (the overwhelmingly common case — a pit's own elevation is
+  // usually lower than the mover's) is free, the same "descending or level
+  // adds no climbing cost" rule as any other downward step.
+  it("costs a flat 5 ft to enter a pit cell, same as normal ground", () => {
+    expect(cellMovementCost({ terrain: "pit", elevationDeltaFeet: 0 })).toBe(
+      cellMovementCost({ terrain: "normal", elevationDeltaFeet: 0 })
+    );
+  });
+
+  it("costs nothing extra to descend into a pit, regardless of depth", () => {
+    expect(cellMovementCost({ terrain: "pit", elevationDeltaFeet: -50 })).toBe(5);
+  });
 });
 
 describe("gridDistanceFeet", () => {
