@@ -164,40 +164,80 @@ const DICE_ROLLED_EVENT = "dice-rolled";
 // on remembering it, not instantly).
 const SEEN_CELLS_FLUSH_MS = 1500;
 
-// Phase 3: how far toward the table's center the private dice tray sits,
-// as a FRACTION of the DM seat's own distance from center — see
-// dmPrivateTrayPosition's doc comment for why this must be proportional,
-// not a fixed absolute distance. 0.6 keeps a comfortable margin inside
-// even the tightest axis (a seat sitting exactly on the depth axis, the
-// ellipse's shorter one) — verified against this table's real measured
-// dimensions (table.ts's TABLE_TOP): the worst case (a single-occupant
-// room, where the DM's seat sits exactly on the depth axis at its own
-// FIRST_SEAT_ANGLE) lands the tray at roughly 72% of the way to that
-// axis's table edge, not past it.
-const DM_PRIVATE_TRAY_CENTER_FRACTION = 0.6;
-
-// Phase 5: the DM's book (now a real 3D prop, DmBookProp) sits at a
-// different spot in front of the DM's own seat than the private dice tray
-// above — offset to one side (lateral, perpendicular to "forward") AND
-// considerably further out (1.6 vs. the tray's 0.5), rather than
-// dead-center at the same distance the tray uses, so the two never compete
-// for the same patch of table (real clearance margin between the tray's own
-// footprint and the book's, at any party size — see dmBookPosition's doc
-// comment for the exact vector math).
+// Prompt: doubling the table along its long edge (table.ts's
+// COMBINED_TABLE_TOP/TABLE_UNITS_LONG_EDGE) made seating.ts's ellipse fit
+// the full two-table footprint, which put every seat — including the DM's —
+// noticeably further from the world origin than before (the ellipse's
+// depth-axis half-extent nearly doubled). The DM's book and private dice
+// tray both still need to land on the SAME physical surface as before: the
+// live map's own single-table-sized footprint, which per the project
+// owner's explicit call stays centered on the world origin (the seam
+// between the two tables — see GameTableScene's CombinedTable/the live
+// map's own group comment) rather than resized or moved to either table.
 //
-// The specific lateral distance (1.3) also keeps the book's projected
-// screen position (DmBookPropProps.onProjectedPosition) inside the gap
-// between DraggablePanel's CENTER-anchored panels (quickActions/diceLog,
-// ~34%-66% of viewport width) and its RIGHT-anchored ones (handout/map,
-// from ~75%), landing consistently around 69%-71% across party sizes —
-// verified numerically (computeSeatLayout's own math replayed for n=2..7)
-// and empirically against a live DM Room. This matters for
-// verify-dm-book.mjs, which clicks the book at that exact projected point
-// rather than blind-scanning the canvas — a point inside any
-// DraggablePanel's rendered footprint would eat the click instead of
-// reaching the WebGL raycaster underneath.
-const DM_BOOK_FORWARD_OFFSET = 1.6;
-const DM_BOOK_LATERAL_OFFSET = 1.3;
+// Both positions below are therefore expressed as a FIXED absolute
+// distance from that origin, in the direction of the DM's own seat — NOT a
+// fraction of the seat's own distance from center (the old formula) and
+// NOT a fixed step FORWARD FROM the seat (also tried; both broke down once
+// the seat moved much further out than the physical table itself stayed:
+// a step sized for the old, much-closer seat either stopped short of the
+// table or overshot past its far edge depending on which seat angle a
+// given party size produced). A fixed absolute distance from the target
+// surface's own fixed-size center is correct regardless of how far away
+// the seat migrates — a property this table needed for the seating-ellipse
+// growth it just got, and one that stays correct if a future prompt grows
+// the ellipse again.
+function outwardFromOrigin(position: readonly [number, number, number]): [number, number] {
+  const [x, , z] = position;
+  const dist = Math.hypot(x, z);
+  // Never actually hit — SEAT_MARGIN (seating.ts) keeps every seat off the
+  // origin — but a stable direction beats NaN if it ever were.
+  return dist > 1e-6 ? [x / dist, z / dist] : [0, -1];
+}
+
+// How far from the table's center (the world origin) the private dice tray
+// sits, along the direction toward the DM's own seat — see
+// outwardFromOrigin's doc comment above for why this is a fixed distance,
+// not a fraction of the seat's own reach. 0.2 keeps a comfortable margin
+// inside the COMBINED two-table surface's real bounds (half-width 2.18 —
+// table.ts's TABLE_TOP; half-depth 2.1 — half of table.ts's
+// COMBINED_TABLE_TOP, since the tray only needs to sit on SOME real,
+// physical tabletop, not inside the live map's own narrower single-table-
+// sized fitted area) even after accounting for the tray's own physical disc
+// (DiceTumble.tsx's TRAY_RADIUS, 0.55) — verified numerically for every
+// party size from a solo DM through 8 (this file's own replay of
+// computeSeatLayout's math), and empirically against a live DM Room.
+const DM_PRIVATE_TRAY_DISTANCE = 0.2;
+
+// Phase 5: the DM's book (a real 3D prop, DmBookProp) sits at a different
+// spot near the table's center than the private dice tray above — offset
+// to one side (lateral, perpendicular to the tray's own "toward the DM's
+// seat" direction) AND further from center (0.3 vs. the tray's 0.2), so
+// the two never compete for the same patch of table (verified numerically:
+// their centers stay over 1.6 units apart for every party size, well clear
+// of either prop's own footprint).
+//
+// UNLIKE the tray, this position is NOT free to land anywhere on the real
+// tabletop: verify-dm-book.mjs clicks the book at its own live-projected
+// screen position (DmBookPropProps.onProjectedPosition), and a click only
+// ever reaches the WebGL canvas if that point ISN'T covered by one of
+// DraggablePanel's own screen-anchored panels (quickActions/diceLog sit
+// CENTERED on the viewport — DraggablePanel.module.css's anchorTopCenter/
+// anchorBottomCenter — while handout/map anchor to the right edge). The
+// negative lateral value below (mirrored from Phase 5's original positive
+// one) deliberately projects the book to the RIGHT of center, in the real
+// measured gap between those two panel groups — re-derived from this
+// table's actual bigger seating ellipse and re-tuned camera (a fixed
+// lateral/forward step sized for the OLD, much-closer seat no longer lands
+// in a safe screen position once the seat moves this much further out —
+// this doesn't degrade gracefully the way the tray's origin-relative
+// distance does, so it needed a fresh empirical check, not just a
+// footprint-margin one). Confirmed both analytically (a plain perspective-
+// projection replay of this exact camera/seat math, for every party size
+// 2 through 8) AND empirically against a live DM Room with
+// verify-dm-book.mjs's own click search.
+const DM_BOOK_FORWARD_OFFSET = 0.3;
+const DM_BOOK_LATERAL_OFFSET = -1.7;
 
 interface LiveMapPayload {
   mapId: string | null;
@@ -424,54 +464,37 @@ export function GameRoom({
     () => seats.find((seat) => seat.member.role === "dm") ?? null,
     [seats]
   );
-  // A point between the DM's own seat and the table's center, at table-
-  // surface height. Interpolated as a FRACTION of the seat's own distance
-  // from center (DM_PRIVATE_TRAY_CENTER_FRACTION) rather than a fixed
-  // absolute offset — a fixed distance is only ever correct for the exact
-  // table size it was tuned against: this table's real dimensions come
-  // from a loaded, owner-provided glTF model (table.ts's TABLE_TOP), not a
-  // fixed procedural constant, so a hardcoded offset would silently start
-  // landing the tray off the table's edge the moment that model's measured
-  // size changes (confirmed happening in practice when the table was
-  // re-measured smaller than the original procedural placeholder — a fixed
-  // 0.5-unit offset left the tray floating past the new, shorter depth
-  // axis for a single-occupant room). The table and the seating ellipse
-  // are both centered on the world origin (every other system in this
-  // file already assumes this), so "a fraction of the way to center" is
-  // just scaling the seat's own position — no separate forward-vector
-  // trigonometry needed, and it degrades gracefully to any future table
-  // size without re-tuning.
+  // A point near the table's own center (the world origin — see
+  // outwardFromOrigin's doc comment above for why this targets the origin
+  // rather than the DM's own seat), offset toward the DM's seat by a FIXED
+  // distance (DM_PRIVATE_TRAY_DISTANCE) so the tray still reads as "the
+  // DM's own", at table-surface height.
   const dmPrivateTrayPosition = useMemo<[number, number, number]>(() => {
     if (!dmSeat) return [0, TABLE_SURFACE_Y + 0.01, 0];
-    const keep = 1 - DM_PRIVATE_TRAY_CENTER_FRACTION;
-    return [
-      dmSeat.position[0] * keep,
-      TABLE_SURFACE_Y + 0.01,
-      dmSeat.position[2] * keep,
-    ];
+    const [outX, outZ] = outwardFromOrigin(dmSeat.position);
+    return [outX * DM_PRIVATE_TRAY_DISTANCE, TABLE_SURFACE_Y + 0.01, outZ * DM_PRIVATE_TRAY_DISTANCE];
   }, [dmSeat]);
-  // Phase 5: the DM's book prop's position — same forward-from-seat vector
-  // as the private tray above, PLUS a lateral component (perpendicular to
-  // "forward", i.e. "forward" rotated 90°: (cos, -sin) instead of
-  // (-sin, -cos)) so the book sits to one side of the tray rather than
-  // dead-center in front of the seat. DM_BOOK_FORWARD_OFFSET (1.6) is also
-  // considerably further out than the tray's 0.5, so the two offsets
-  // combined (further forward AND to one side) keep a real gap between the
-  // tray's footprint (TRAY_RADIUS 0.55 in DiceTumble.tsx) and the book's own
-  // (visible geometry well under half a meter across — DmBookProp.tsx) —
-  // roughly 1.25 units center-to-center vs. their combined radii of well
-  // under 1 — regardless of party size or which side of the ellipse the
-  // DM's fixed seat lands on.
+  // Phase 5: the DM's book prop's position — same outward-from-origin
+  // direction as the private tray above, PLUS a lateral component
+  // (perpendicular to that direction: (-outZ, outX) instead of (outX, outZ))
+  // so the book sits to one side of the tray rather than dead-center on top
+  // of it. The lateral magnitude (1.7) dominates the forward one (0.3) here
+  // — unlike the tray, the book's exact position is chosen to satisfy the
+  // on-screen click-safety constraint above, not to sit "further out toward
+  // the seat" — so the two offsets combined keep a real gap between the
+  // tray's own footprint (TRAY_RADIUS 0.55 in DiceTumble.tsx) and the
+  // book's own (visible geometry well under half a meter across —
+  // DmBookProp.tsx) regardless of party size or which side of the ellipse
+  // the DM's seat lands on.
   const dmBookPosition = useMemo<[number, number, number]>(() => {
     if (!dmSeat) return [DM_BOOK_LATERAL_OFFSET, TABLE_SURFACE_Y, 0];
-    const forwardX = -Math.sin(dmSeat.rotationY);
-    const forwardZ = -Math.cos(dmSeat.rotationY);
-    const lateralX = Math.cos(dmSeat.rotationY);
-    const lateralZ = -Math.sin(dmSeat.rotationY);
+    const [outX, outZ] = outwardFromOrigin(dmSeat.position);
+    const lateralX = -outZ;
+    const lateralZ = outX;
     return [
-      dmSeat.position[0] + forwardX * DM_BOOK_FORWARD_OFFSET + lateralX * DM_BOOK_LATERAL_OFFSET,
+      outX * DM_BOOK_FORWARD_OFFSET + lateralX * DM_BOOK_LATERAL_OFFSET,
       TABLE_SURFACE_Y,
-      dmSeat.position[2] + forwardZ * DM_BOOK_FORWARD_OFFSET + lateralZ * DM_BOOK_LATERAL_OFFSET,
+      outZ * DM_BOOK_FORWARD_OFFSET + lateralZ * DM_BOOK_LATERAL_OFFSET,
     ];
   }, [dmSeat]);
   const [bookOpen, setBookOpen] = useState(false);
@@ -2452,6 +2475,24 @@ export function GameRoom({
           tableSurfaceDebug memo. */}
       <div data-testid="table-surface-state" hidden>
         {tableSurfaceDebug}
+      </div>
+      {/* Hidden render-state mirror of the full seat layout (Prompt: doubling
+          the table along its long edge) — same "WebGL has no DOM of its own"
+          reasoning as every other mirror here, added specifically so
+          verify-table-geometry.mjs can confirm objectively (not just by eye)
+          that seats spread around the FULL combined two-table perimeter
+          rather than clustering as if only one table existed, without
+          re-deriving computeSeatLayout's own trigonometry. Present for every
+          member (not DM-only, unlike the book/tray mirrors above) since the
+          seat layout itself is identical across every client's roster. */}
+      <div data-testid="seat-layout-state" hidden>
+        {JSON.stringify({
+          seats: seats.map((seat) => ({
+            userId: seat.member.user_id,
+            role: seat.member.role,
+            position: seat.position,
+          })),
+        })}
       </div>
       {rulerReadout !== null ? (
         <div className={`${styles.moveReadout} ${styles.rulerReadout}`} data-testid="ruler-readout">

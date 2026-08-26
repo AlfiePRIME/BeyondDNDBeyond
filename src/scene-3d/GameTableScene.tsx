@@ -6,7 +6,7 @@ import type { ThreeEvent } from "@react-three/fiber";
 import { Box3, Vector3 } from "three";
 import type { Object3D } from "three";
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y } from "./table";
-import { computeSeatLayout, type CameraMode, type Seat, type SeatMember } from "./seating";
+import { computeSeatLayout, seatEllipseSemiAxes, type CameraMode, type Seat, type SeatMember } from "./seating";
 import { SeatAvatar } from "./SeatAvatar";
 import { Chair, SEAT_TOP_Y } from "./Chair";
 import {
@@ -69,7 +69,30 @@ const DAY_NIGHT_PRESETS = {
 export type DayNightMode = keyof typeof DAY_NIGHT_PRESETS;
 
 const LOOK_TARGET = [0, TABLE_SURFACE_Y, 0] as const;
-const FALLBACK_CAMERA_POSITION: readonly [number, number, number] = [0, 10.5, 7.5];
+// World origin is the COMBINED two-table footprint's own center (both
+// tables sit symmetrically astride it — see CombinedTable below), so this
+// stays the right look target/fallback-camera anchor completely unchanged
+// by the doubled table; only its distance needed re-tuning (10.5/7.5 →
+// 13/10) so the fallback view (used whenever the current user has no seat
+// of their own) still comfortably frames the larger, roughly-square
+// combined surface instead of sitting proportionally too close to it.
+const FALLBACK_CAMERA_POSITION: readonly [number, number, number] = [0, 13, 10];
+
+// The directional light's shadow-camera frustum must cover every
+// shadow-casting seat/chair around the table — whose furthest possible
+// anchor point is the seating ellipse's OWN semi-axes (seatEllipseSemiAxes,
+// seating.ts's real seat-fit formula, not a hand-copied guess), so this
+// stays correct even if a later prompt changes the ellipse's fit again.
+// CHAIR_SHADOW_MARGIN covers a real chair model's own physical width/depth
+// beyond its point anchor, plus headroom for an avatar sitting in it — the
+// DM's book/private dice tray both sit much closer to center than any
+// chair (GameRoom.tsx's dmBookPosition/dmPrivateTrayPosition), so they
+// never actually govern this bound. Symmetric on all four sides: a
+// directional light's orthographic shadow camera has no reason to favor
+// one axis over another.
+const { semiX: SHADOW_SEAT_SEMI_X, semiZ: SHADOW_SEAT_SEMI_Z } = seatEllipseSemiAxes();
+const CHAIR_SHADOW_MARGIN = 1.5;
+const SHADOW_FRUSTUM_EXTENT = Math.ceil(Math.max(SHADOW_SEAT_SEMI_X, SHADOW_SEAT_SEMI_Z) + CHAIR_SHADOW_MARGIN);
 
 function TableLeg({ x, z }: { x: number; z: number }) {
   return (
@@ -144,7 +167,11 @@ function TableModel() {
 
 /** Falls back to the procedural table on a load/parse failure — same
  * reasoning as Chair.tsx's ChairErrorBoundary, but for the shared table
- * (there's only ever one, so no per-instance URL to key a reset on). */
+ * model (there's only ever one URL, table.glb, so no per-instance URL to
+ * key a reset on — this same component is instantiated twice, once per
+ * physical table in CombinedTable below, each with its own independent
+ * boundary/Suspense so one table's load failure can't take the other
+ * down). */
 class TableErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
 
@@ -168,6 +195,40 @@ function Table() {
 }
 
 useGLTF.preload(TABLE_URL);
+
+/**
+ * The full physical surface the project owner asked for: two independent
+ * copies of the same table (model, fallback, and legs alike — Table above),
+ * offset along Z by exactly half a table's own depth each way so their long
+ * (width) edges meet precisely at the world-origin seam — no gap (each
+ * table's near edge sits exactly at z=0) and no overlap (their footprints
+ * don't intersect). table.ts's COMBINED_TABLE_TOP is the resulting combined
+ * footprint (width unchanged at 4.36, depth doubled to 4.2) that
+ * seating.ts's ellipse now fits around by default.
+ *
+ * Nothing here depends on which instance renders "first" — every position
+ * anchored to a specific spot on this combined surface (the live map's
+ * group below, DiceTumble's default shared-tray corner, GameRoom's
+ * dmBookPosition/dmPrivateTrayPosition) targets the SEAM/origin itself, per
+ * the project owner's explicit call to keep the map (and everything
+ * anchored the same way) centered on the seam rather than flush against
+ * either table — a repositioning of where that single-table-sized surface
+ * sits, not a rescale of it (mapFit.ts's computeTableMapMetrics is
+ * completely untouched).
+ */
+function CombinedTable() {
+  const halfDepth = TABLE_TOP.depth / 2;
+  return (
+    <>
+      <group position={[0, 0, -halfDepth]}>
+        <Table />
+      </group>
+      <group position={[0, 0, halfDepth]}>
+        <Table />
+      </group>
+    </>
+  );
+}
 
 // The Prompt 19 stool, then the cushion-disc-and-ring "dais" that replaced
 // it, are both gone — a real chair (Chair.tsx) now carries the role's
@@ -369,7 +430,12 @@ export function GameTableScene({
           enabled={!dragging && !measuring}
           target={[...LOOK_TARGET]}
           minDistance={1.5}
-          maxDistance={22}
+          // Re-tuned up from 22 (unchanged ratio over the old table's
+          // seated-camera reach) for the doubled table — orbit must be able
+          // to zoom out far enough to frame the FULL combined ~4.36×4.2
+          // surface plus its now-further-out seats without the table
+          // running off the edge of the view.
+          maxDistance={26}
           maxPolarAngle={Math.PI / 2 - 0.05}
         />
       )}
@@ -384,10 +450,15 @@ export function GameTableScene({
         position={lighting.sunPosition}
         castShadow
         shadow-mapSize={[1024, 1024]}
-        shadow-camera-left={-8}
-        shadow-camera-right={8}
-        shadow-camera-top={8}
-        shadow-camera-bottom={-8}
+        // Re-tuned from a fixed ±8 box (SHADOW_FRUSTUM_EXTENT's own doc
+        // comment) — derived from the real seat-fit ellipse plus a chair-
+        // footprint margin, so it's provably sized to the doubled table's
+        // actual seats/chairs rather than a number that happened to work
+        // for the old, smaller one.
+        shadow-camera-left={-SHADOW_FRUSTUM_EXTENT}
+        shadow-camera-right={SHADOW_FRUSTUM_EXTENT}
+        shadow-camera-top={SHADOW_FRUSTUM_EXTENT}
+        shadow-camera-bottom={-SHADOW_FRUSTUM_EXTENT}
       />
       <pointLight color={PURPLE} intensity={lighting.purpleIntensity} position={[-9, 4, -6]} distance={40} />
       <pointLight color={TEAL} intensity={lighting.tealIntensity} position={[9, 3.5, 6]} distance={40} />
@@ -397,11 +468,16 @@ export function GameTableScene({
         <meshStandardMaterial color="#1a1338" roughness={0.95} />
       </mesh>
 
-      <Table />
+      <CombinedTable />
 
       {liveMap && mapMetrics ? (
         // Nudged just above the tabletop so the map's base slab never
-        // z-fights the wood.
+        // z-fights the wood. x/z stay at the world origin — the seam
+        // between the two tables (CombinedTable's own doc comment) — on
+        // the project owner's explicit call to keep the live map's existing
+        // single-table-sized fit (mapFit.ts's computeTableMapMetrics,
+        // completely unchanged) centered on that seam, straddling both
+        // tables equally, rather than pushed flush against either one.
         <group position={[0, TABLE_SURFACE_Y + 0.002, 0]}>
           <MapSurface
             gridWidth={liveMap.gridWidth}
