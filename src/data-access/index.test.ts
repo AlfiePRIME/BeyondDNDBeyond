@@ -75,6 +75,9 @@ import {
   getForwardOffsetsForUrls,
   setForwardOffsetDeg,
   DEFAULT_FORWARD_OFFSET_DEG,
+  getSeatOffset,
+  getSeatOffsetsForCampaign,
+  setSeatOffset,
 } from "@/data-access";
 
 describe("data-access module", () => {
@@ -236,5 +239,11 @@ describe("data-access module", () => {
     expect(getForwardOffsetsForUrls).toBeTypeOf("function");
     expect(setForwardOffsetDeg).toBeTypeOf("function");
     expect(DEFAULT_FORWARD_OFFSET_DEG).toBe(0);
+  });
+
+  it("exports the seat offset functions from the main barrel", () => {
+    expect(getSeatOffset).toBeTypeOf("function");
+    expect(getSeatOffsetsForCampaign).toBeTypeOf("function");
+    expect(setSeatOffset).toBeTypeOf("function");
   });
 });
