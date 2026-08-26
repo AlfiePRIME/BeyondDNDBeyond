@@ -554,6 +554,20 @@ export function GameRoom({
       return has ? current.filter((id) => id !== tokenId) : current;
     });
   }, []);
+  // Skeleton-based posing (docs/design/model-orientation-and-posing.md
+  // §9): mirrored into a hidden DOM node below, same reasoning as
+  // slidingTokenIds above — GameTableScene/SeatAvatar/PlacedObject never
+  // read this back, it's populated purely by their own onPoseDebug/
+  // onAvatarPoseDebug/onObjectPoseDebug callbacks reporting whether each
+  // rendered model's skeleton matched the supported bone convention.
+  const [avatarPoseDebug, setAvatarPoseDebug] = useState<Record<string, boolean>>({});
+  const [objectPoseDebug, setObjectPoseDebug] = useState<Record<string, boolean>>({});
+  const handleAvatarPoseDebug = useCallback((userId: string, compatible: boolean) => {
+    setAvatarPoseDebug((current) => (current[userId] === compatible ? current : { ...current, [userId]: compatible }));
+  }, []);
+  const handleObjectPoseDebug = useCallback((id: string, compatible: boolean) => {
+    setObjectPoseDebug((current) => (current[id] === compatible ? current : { ...current, [id]: compatible }));
+  }, []);
   // Render-time reset (not an effect) when the server hands down a fresh
   // member list — react.dev's "adjusting state when a prop changes" pattern.
   const [prevMembers, setPrevMembers] = useState(members);
@@ -2743,6 +2757,8 @@ export function GameRoom({
           onRulerDragEnd={handleRulerDragEnd}
           dayNightMode={dayNightMode}
           onTokenSlideDebug={handleTokenSlideDebug}
+          onAvatarPoseDebug={handleAvatarPoseDebug}
+          onObjectPoseDebug={handleObjectPoseDebug}
         />
         {/* A modest, fixed corner of the table (its own doc comment) — never
             full-screen, never over the map/tokens/camera controls. */}
@@ -2875,6 +2891,19 @@ export function GameRoom({
           the modelOrientationDebug memo. */}
       <div data-testid="model-orientation-state" hidden>
         {modelOrientationDebug}
+      </div>
+      {/* Hidden render-state mirror for verify-posed-rendering.mjs — see
+          docs/design/model-orientation-and-posing.md §9 and
+          GameTableSceneProps.onAvatarPoseDebug/onObjectPoseDebug's own doc
+          comments. A key present with `true` means that member's avatar (or
+          that map object's model) has a skeleton matching the supported
+          bone-role convention and is actually posed/animated; `false` means
+          it fell back to today's exact static, unposed rendering; a key
+          absent entirely means that avatar/object hasn't finished loading
+          yet. WebGL has no DOM of its own for a test to inspect a skeleton
+          directly, same reasoning as every other mirror on this page. */}
+      <div data-testid="model-pose-state" hidden>
+        {JSON.stringify({ avatars: avatarPoseDebug, objects: objectPoseDebug })}
       </div>
       {/* Hidden render-state mirror for verify-token-click-select.mjs —
           see the selectionDebug memo. */}
