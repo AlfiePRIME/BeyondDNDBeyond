@@ -316,7 +316,13 @@ try {
   );
   check(
     "a member with no custom avatar at all still renders unposed — nothing changes for a member who hasn't uploaded a rigged model",
-    state?.avatars[player.id] === false,
+    // A player with no avatar never mounts AvatarModel at all (SeatAvatar
+    // returns the plain PlaceholderAvatar before onPoseDebug could ever
+    // fire), so the correct, expected state here is an ABSENT key
+    // (undefined), not an explicit `false` — onPoseDebug only ever fires
+    // for a model that actually loaded. `!== true` accepts both that
+    // absence and an explicit `false`, either of which means "not posed".
+    state?.avatars[player.id] !== true,
     JSON.stringify(state)
   );
 } finally {
