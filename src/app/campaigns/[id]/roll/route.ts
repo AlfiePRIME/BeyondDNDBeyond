@@ -4,7 +4,9 @@ import {
   clearHiddenAsHider,
   getActiveCombatEncounter,
   getCharacter,
+  getCharacterCurrentToken,
   getEncounterVisionStats,
+  getMapToken,
   isDM,
   listCharactersForCampaign,
   listCombatCombatants,
@@ -218,11 +220,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // RLS hides campaigns you're not a member of — same 404 reasoning as the
   // generate-draft route.
   // action_economy_strict rides along for the attack branch's economy
-  // gate below, and live_map for its perception check (Prompt 59) — one
-  // read either way.
+  // gate below. live_map itself is NOT read here (0046): every perception
+  // check below resolves its map context from the relevant token's own
+  // current map_id instead — see each branch's own comment for why that's
+  // both more correct and RLS-safe once a token can live on a map other
+  // than the campaign's shared one.
   const { data: campaign, error: campaignError } = await supabase
     .from("campaigns")
-    .select("id, action_economy_strict, live_map")
+    .select("id, action_economy_strict")
     .eq("id", campaignId)
     .maybeSingle();
   if (campaignError) throw campaignError;
@@ -560,39 +565,43 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const nameByCharacterId = new Map(readableCharacters.map((row) => [row.id, row.name]));
     const statBlockById = new Map(campaignStatBlocks.map((row) => [row.id, row]));
 
-    // The hider's position and the live map's lighting, for the "could
+    // The hider's position and their OWN map's lighting, for the "could
     // this observer perceive the hider AT ALL" check — exactly the attack
-    // branch's Prompt 59 perception context. Missing pieces (no live map,
-    // the hider's token no longer on it) mean there is nothing to compute
-    // perception FROM: the graceful fallback treats every non-blinded
-    // observer as able to perceive, so the Hide still resolves on passive
-    // Perception alone rather than erroring or silently hiding from no one.
+    // branch's Prompt 59 perception context. Resolved from the hider's own
+    // token's actual current map_id (0046), NOT campaign.live_map: once a
+    // player's token can sit on a map other than the campaign's shared one
+    // (a solo map-transition crossing), the hider's real position is
+    // whatever ITS OWN token row says, which may or may not be the live
+    // map. Missing pieces (the hider's token gone entirely) mean there is
+    // nothing to compute perception FROM: the graceful fallback treats
+    // every non-blinded observer as able to perceive, so the Hide still
+    // resolves on passive Perception alone rather than erroring or
+    // silently hiding from no one.
     let hiderContext: {
       position: { x: number; y: number };
       ambientLight: "bright" | "dim" | "dark";
       lightSources: ReturnType<typeof resolveLightSourcePositions>;
       tokens: Awaited<ReturnType<typeof listMapTokens>>;
     } | null = null;
-    if (campaign.live_map) {
-      const tokens = await listMapTokens(supabase, campaign.live_map);
-      const hiderToken = tokens.find((token) => token.id === combatant.token_id) ?? null;
-      if (hiderToken) {
-        const [cells, lightSources, objects] = await Promise.all([
-          listMapCells(supabase, campaign.live_map),
-          listLightSources(supabase, campaign.live_map),
-          listMapObjects(supabase, campaign.live_map),
-        ]);
-        const hiderCell = cells.find(
-          (cell) => cell.x === hiderToken.x && cell.y === hiderToken.y
-        );
-        hiderContext = {
-          position: { x: hiderToken.x, y: hiderToken.y },
-          // Sparse storage: a cell with no row is the bright default.
-          ambientLight: hiderCell?.light_level ?? "bright",
-          lightSources: resolveLightSourcePositions(lightSources, objects, tokens),
-          tokens,
-        };
-      }
+    const hiderToken = await getMapToken(supabase, combatant.token_id);
+    if (hiderToken) {
+      const mapId = hiderToken.map_id;
+      const [tokens, cells, lightSources, objects] = await Promise.all([
+        listMapTokens(supabase, mapId),
+        listMapCells(supabase, mapId),
+        listLightSources(supabase, mapId),
+        listMapObjects(supabase, mapId),
+      ]);
+      const hiderCell = cells.find(
+        (cell) => cell.x === hiderToken.x && cell.y === hiderToken.y
+      );
+      hiderContext = {
+        position: { x: hiderToken.x, y: hiderToken.y },
+        // Sparse storage: a cell with no row is the bright default.
+        ambientLight: hiderCell?.light_level ?? "bright",
+        lightSources: resolveLightSourcePositions(lightSources, objects, tokens),
+        tokens,
+      };
     }
 
     // The sweep: every OTHER combatant is an observer. An observer with no
@@ -885,18 +894,25 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
 
     // The perception check — the PC path's exact computation with the NPC
-    // defaults, the attacker's position resolved through its own token.
-    if (campaign.live_map && requestTargetTokenId) {
-      const tokens = await listMapTokens(supabase, campaign.live_map);
-      const attackerToken =
-        tokens.find((token) => token.id === attackerCombatant.token_id) ?? null;
-      const targetToken =
-        tokens.find((token) => token.id === requestTargetTokenId) ?? null;
-      if (attackerToken && targetToken) {
-        const [cells, lightSources, objects] = await Promise.all([
-          listMapCells(supabase, campaign.live_map),
-          listLightSources(supabase, campaign.live_map),
-          listMapObjects(supabase, campaign.live_map),
+    // defaults, both positions resolved through their own tokens' own
+    // current map_id (0046), NOT campaign.live_map — see the Hide branch's
+    // own comment above for why. Attacker and target must actually share a
+    // map for there to be anything to compute perception FROM; anything
+    // else (either token gone, or the two on different maps) is the same
+    // graceful "no visibility source added" fallback as a missing live map
+    // always was.
+    if (requestTargetTokenId) {
+      const [attackerToken, targetToken] = await Promise.all([
+        getMapToken(supabase, attackerCombatant.token_id),
+        getMapToken(supabase, requestTargetTokenId),
+      ]);
+      if (attackerToken && targetToken && attackerToken.map_id === targetToken.map_id) {
+        const mapId = attackerToken.map_id;
+        const [tokens, cells, lightSources, objects] = await Promise.all([
+          listMapTokens(supabase, mapId),
+          listMapCells(supabase, mapId),
+          listLightSources(supabase, mapId),
+          listMapObjects(supabase, mapId),
         ]);
         const targetCell = cells.find(
           (cell) => cell.x === targetToken.x && cell.y === targetToken.y
@@ -1230,23 +1246,32 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // target at all — computeVisibilityTier === "none" for the target's
     // cell, evaluated from the attacker's position/vision/blocked state
     // ("dim" deliberately does NOT qualify: RAW disadvantage is for an
-    // unseen target, not a dimly-lit one). Needs a live map with both
-    // tokens on it; anything missing means there is nothing to compute
-    // perception FROM, so no visibility source is added — a graceful
-    // fallback, never an error or a forced disadvantage. A blinded
-    // ATTACKER needs no special case: their vision-blocked tier is "none"
-    // for every cell, so this same check already lands the disadvantage.
-    if (campaign.live_map && requestTargetTokenId) {
-      const tokens = await listMapTokens(supabase, campaign.live_map);
-      const attackerToken =
-        tokens.find((token) => token.character_id === character.id) ?? null;
-      const targetToken =
-        tokens.find((token) => token.id === requestTargetTokenId) ?? null;
-      if (attackerToken && targetToken) {
-        const [cells, lightSources, objects] = await Promise.all([
-          listMapCells(supabase, campaign.live_map),
-          listLightSources(supabase, campaign.live_map),
-          listMapObjects(supabase, campaign.live_map),
+    // unseen target, not a dimly-lit one). Both positions resolved through
+    // their own tokens' own current map_id (0046), NOT campaign.live_map —
+    // see the Hide branch's own comment above for why. The attacker here is
+    // the ROLLING player's own character, resolved by character_id directly
+    // (getCharacterCurrentToken) rather than through attackerCombatant's
+    // token_id: a PC attacking doesn't always have a tracked combatant row
+    // (attackerCombatant is null outside an active encounter, or if this
+    // character was never added to it), so the token search can't route
+    // through combat state the way the Hide/NPC-attack branches do. Anything
+    // missing (either token gone, or the two on different maps) is the same
+    // graceful "no visibility source added" fallback as a missing live map
+    // always was. A blinded ATTACKER needs no special case: their
+    // vision-blocked tier is "none" for every cell, so this same check
+    // already lands the disadvantage.
+    if (requestTargetTokenId) {
+      const [attackerToken, targetToken] = await Promise.all([
+        getCharacterCurrentToken(supabase, character.id),
+        getMapToken(supabase, requestTargetTokenId),
+      ]);
+      if (attackerToken && targetToken && attackerToken.map_id === targetToken.map_id) {
+        const mapId = attackerToken.map_id;
+        const [tokens, cells, lightSources, objects] = await Promise.all([
+          listMapTokens(supabase, mapId),
+          listMapCells(supabase, mapId),
+          listLightSources(supabase, mapId),
+          listMapObjects(supabase, mapId),
         ]);
         const targetCell = cells.find(
           (cell) => cell.x === targetToken.x && cell.y === targetToken.y

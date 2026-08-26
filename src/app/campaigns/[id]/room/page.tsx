@@ -21,6 +21,7 @@ import {
   listMapObjects,
   listMapsForCampaign,
   listMapTokens,
+  listMapTokensForCampaign,
   listMonsterStatBlocks,
   listNpcs,
   listRollLog,
@@ -28,6 +29,7 @@ import {
 import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { resolveHandout } from "./handout-url";
+import { mostRecentOwnToken } from "./vision";
 import type { CombatState } from "./CombatPanel";
 import { GameRoom, type LiveMapData } from "./GameRoom";
 
@@ -93,10 +95,13 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     initialLorePageLinks,
     seatOffsetsMap,
     diceTrayPreferencesMap,
+    initialCampaignTokens,
   ] = await Promise.all([
     listAssetsForCampaign(supabase, campaignId),
-    // Non-DM RLS only exposes the live map anyway, and only the DM gets the
-    // picker — no point fetching a list for players.
+    // Non-DM RLS only exposes the live map (plus, as of 0046, whichever map
+    // their own character's token is currently on — but never a whole
+    // browsable LIST of every map), and only the DM gets the picker — no
+    // point fetching a list for players.
     currentUserIsDM ? listMapsForCampaign(supabase, campaignId) : Promise.resolve([]),
     // Characters RLS trims this per viewer: a player gets only their own,
     // the DM gets every campaign character — exactly who each may place.
@@ -134,6 +139,14 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // without having been connected for the DICE_TRAY_PREFERENCE_EVENT
     // broadcast that set it.
     getDiceTrayPreferencesForCampaign(supabase, campaignId),
+    // Per-viewer map transitions (0046): every map_token this viewer's own
+    // RLS lets them read, campaign-wide — for a player, always includes
+    // wherever their own character's token currently sits (even off the
+    // shared live map, after a solo transition), used just below to derive
+    // THIS viewer's own effective starting map; for the DM, every token on
+    // every map, used by GameRoom's own map-picker to show which maps
+    // currently have an active player token on them.
+    listMapTokensForCampaign(supabase, campaignId),
   ]);
   // listDmNotes orders oldest-first (matching every other narrative list);
   // reversed here since the book's Notes page reads better newest-on-top —
@@ -161,9 +174,29 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     initialCombat = { encounter: activeEncounter, combatants, conditions, hiddenFrom };
   }
 
+  // Per-viewer map transitions (0046): a player's own effective "current
+  // map" is wherever their own character's token actually is — NOT
+  // campaign.live_map — the moment those two diverge (a solo transition
+  // crossing). mostRecentOwnToken (vision.ts) is the same "which of my own
+  // placed characters is the one at the table" tie-break GameRoom's own
+  // visionMasking/turn-camera logic already uses, just run here at SSR time
+  // against every map_token this viewer's own RLS makes readable
+  // campaign-wide, not one single map's worth. Falls back to
+  // campaign.live_map — the shared default — when the viewer has no token
+  // of their own anywhere (nobody has placed one yet, or a spectator/DM):
+  // this is what makes an existing single-shared-map campaign, where
+  // nobody has ever split up, land on EXACTLY the same map it always did.
+  const ownCharacterIds = new Set(
+    characters.filter((character) => character.owner_id === user.id).map((character) => character.id)
+  );
+  const ownTokenMapId = currentUserIsDM
+    ? null
+    : (mostRecentOwnToken(initialCampaignTokens, ownCharacterIds)?.map_id ?? null);
+  const effectiveMapId = ownTokenMapId ?? campaign.live_map;
+
   let initialLiveMap: LiveMapData | null = null;
-  if (campaign.live_map) {
-    const map = await getMap(supabase, campaign.live_map);
+  if (effectiveMapId) {
+    const map = await getMap(supabase, effectiveMapId);
     if (map) {
       const [cells, objects, tokens, lightSources] = await Promise.all([
         listMapCells(supabase, map.id),
@@ -186,6 +219,14 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       currentUserIsDM={currentUserIsDM}
       currentUserDisplayName={currentMember?.display_name ?? null}
       initialLiveMap={initialLiveMap}
+      // The raw campaigns.live_map column (0046) — distinct from
+      // initialLiveMap above, which is whichever map's FULL bundle this
+      // VIEWER should start on. GameRoom needs the shared default
+      // separately: it's the fallback a token-less player's view still
+      // follows live, and the DM's own view starts there too (their own
+      // local pick from then on).
+      initialCampaignLiveMapId={campaign.live_map}
+      initialCampaignTokens={initialCampaignTokens}
       availableMaps={availableMaps}
       assets={paletteAssets}
       characters={characters}

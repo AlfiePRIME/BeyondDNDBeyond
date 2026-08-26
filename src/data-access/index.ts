@@ -157,6 +157,9 @@ export {
 } from "./mapObjects";
 export {
   listMapTokens,
+  listMapTokensForCampaign,
+  getMapToken,
+  getCharacterCurrentToken,
   placeCharacterToken,
   placeNpcToken,
   moveMapToken,
@@ -170,6 +173,7 @@ export {
 } from "./mapTokens";
 export {
   listMapTransitions,
+  listMapTransitionsForCampaign,
   createMapTransition,
   deleteMapTransition,
   type MapTransition,
