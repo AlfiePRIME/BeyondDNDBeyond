@@ -9,6 +9,42 @@ export interface PlacedObjectAsset {
   model_ref: string;
 }
 
+/**
+ * Bridges and stairs (a post-roadmap addition): a crossing structure is an
+ * ordinary placed map OBJECT, deliberately NOT a new terrain_type. A pit or
+ * a difficult water cell is still really there underneath — the object
+ * overlays it without replacing it, which is exactly "you can walk across
+ * without falling into (or paying full price for) what's still there",
+ * where a terrain_type would need CHECK-widening AND couldn't represent
+ * "the pit is still a pit, just crossable right here" without inventing a
+ * fifth terrain value that means "pit, but not really" for one cell at a
+ * time. src/rules-engine/movement.ts defines a structurally-identical
+ * CrossingType of its own (the MapSurfaceGroundType/GroundType decoupling
+ * precedent — rules-engine cannot import data-access) that this type's
+ * values must keep matching by hand.
+ *
+ * 'bridge' suppresses a pit's fall-trigger (GameRoom.tsx's
+ * handleTokenLanded) and water's difficult-terrain movement cost
+ * (movement.ts's cellMovementCost) for the cell it sits on. 'stairs'
+ * suppresses movement.ts's SRD climbing surcharge for the cell it sits on.
+ * null (the default, and every object placed before this addition) is an
+ * ordinary object with no effect on movement or falling.
+ *
+ * Fixed at PLACEMENT time from which built-in preset asset the DM selected
+ * (MapEditor.tsx's bridgeAssetId/stairsAssetId, resolved the same
+ * lookup-by-name-once way chestAssetId already is) — deliberately never
+ * inferred from an asset's mutable display NAME at movement-resolution
+ * time. Movement rules are load-bearing in a way the Chest quick-place
+ * shortcut's own name lookup never was: if this behavior were driven by
+ * asset.name, renaming a preset, or a campaign's own custom upload merely
+ * happening to be named "Bridge", would silently grant (or a rename would
+ * silently revoke) real gameplay behavior on every object using that
+ * asset. Storing the decision as its own column at creation time means it
+ * survives any later rename and can never be spoofed by an uploaded
+ * asset's chosen display name.
+ */
+export type CrossingType = "bridge" | "stairs";
+
 export interface MapObject {
   id: string;
   map_id: string;
@@ -26,6 +62,9 @@ export interface MapObject {
    * branches on its value yet — a future full-line-of-sight prompt reads
    * it. Do not add a consumer without that prompt's design. */
   blocks_line_of_sight: boolean;
+  /** See CrossingType's own doc comment. null for every object that isn't a
+   * bridge or stairs — every object placed before this addition included. */
+  crossing_type: CrossingType | null;
   created_at: string;
   asset: PlacedObjectAsset;
 }
@@ -92,10 +131,21 @@ export async function listMapObjects(supabase: SupabaseClient, mapId: string): P
 
 /** DM-only, enforced by map_objects' INSERT RLS policy (0015).
  * behavior_config starts at its DB default ('{}') — a fresh placement is
- * inert until the DM assigns a behavior via setMapObjectBehavior. */
+ * inert until the DM assigns a behavior via setMapObjectBehavior.
+ * `crossingType` defaults to null (an ordinary object) — see CrossingType's
+ * own doc comment for why this is fixed here, at creation, rather than
+ * settable later like rotate/move. */
 export async function createMapObject(
   supabase: SupabaseClient,
-  params: { mapId: string; assetId: string; x: number; y: number; elevation: number; rotation: number }
+  params: {
+    mapId: string;
+    assetId: string;
+    x: number;
+    y: number;
+    elevation: number;
+    rotation: number;
+    crossingType?: CrossingType | null;
+  }
 ): Promise<MapObject> {
   const { data, error } = await supabase
     .from("map_objects")
@@ -106,6 +156,7 @@ export async function createMapObject(
       y: params.y,
       elevation: params.elevation,
       rotation: params.rotation,
+      crossing_type: params.crossingType ?? null,
     })
     .select(OBJECT_COLUMNS)
     .single();
@@ -137,6 +188,7 @@ export async function restoreMapObject(
       rotation: object.rotation,
       behavior_config: object.behavior_config,
       blocks_line_of_sight: object.blocks_line_of_sight,
+      crossing_type: object.crossing_type,
       created_at: object.created_at,
     })
     .select(OBJECT_COLUMNS)

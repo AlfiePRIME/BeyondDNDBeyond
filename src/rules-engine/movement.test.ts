@@ -66,6 +66,65 @@ describe("cellMovementCost", () => {
   it("costs nothing extra to descend into a pit, regardless of depth", () => {
     expect(cellMovementCost({ terrain: "pit", elevationDeltaFeet: -50 })).toBe(5);
   });
+
+  // Bridges and stairs (a post-roadmap addition): both are placed map
+  // OBJECTS (mapObjects.ts's crossing_type), never a terrain_type — see
+  // this file's own CrossingType doc comment. `crossing` is optional and
+  // every test above already exercises the omitted-field default; this
+  // block is the one place that pins down what each value actually does.
+  describe("crossing (bridges and stairs)", () => {
+    it("a bridge waives the difficult-terrain doubling — costs the plain 5 ft instead", () => {
+      expect(
+        cellMovementCost({ terrain: "difficult", elevationDeltaFeet: 0, crossing: "bridge" })
+      ).toBe(5);
+    });
+
+    it("a bridge on normal or pit terrain changes nothing — both already cost the plain 5 ft", () => {
+      expect(cellMovementCost({ terrain: "normal", elevationDeltaFeet: 0, crossing: "bridge" })).toBe(
+        5
+      );
+      expect(cellMovementCost({ terrain: "pit", elevationDeltaFeet: 0, crossing: "bridge" })).toBe(5);
+    });
+
+    it("a bridge never overrides void — still Infinity", () => {
+      expect(cellMovementCost({ terrain: "void", elevationDeltaFeet: 0, crossing: "bridge" })).toBe(
+        Infinity
+      );
+    });
+
+    it("a bridge does not touch the climbing surcharge — only stairs do", () => {
+      expect(
+        cellMovementCost({ terrain: "difficult", elevationDeltaFeet: 5, crossing: "bridge" })
+      ).toBe(15); // 5 ft (bridge-waived difficult) + 10 ft climb (unwaived), same as normal+climb
+    });
+
+    it("stairs waive the SRD climbing surcharge entirely", () => {
+      expect(cellMovementCost({ terrain: "normal", elevationDeltaFeet: 5, crossing: "stairs" })).toBe(
+        5
+      );
+      expect(cellMovementCost({ terrain: "normal", elevationDeltaFeet: 50, crossing: "stairs" })).toBe(
+        5
+      );
+    });
+
+    it("stairs do not touch the difficult-terrain doubling — only bridges do", () => {
+      expect(
+        cellMovementCost({ terrain: "difficult", elevationDeltaFeet: 5, crossing: "stairs" })
+      ).toBe(10); // 10 ft (difficult, unwaived) + 0 ft climb (waived)
+    });
+
+    it("stairs change nothing when there is no elevation change to waive", () => {
+      expect(cellMovementCost({ terrain: "normal", elevationDeltaFeet: 0, crossing: "stairs" })).toBe(
+        cellMovementCost({ terrain: "normal", elevationDeltaFeet: 0 })
+      );
+    });
+
+    it("a null crossing behaves exactly like an omitted one", () => {
+      expect(cellMovementCost({ terrain: "difficult", elevationDeltaFeet: 5, crossing: null })).toBe(
+        cellMovementCost({ terrain: "difficult", elevationDeltaFeet: 5 })
+      );
+    });
+  });
 });
 
 describe("gridDistanceFeet", () => {
@@ -148,6 +207,26 @@ describe("pathMovementCost", () => {
   it("stays Infinity even when the path descends after the void cell", () => {
     // Descending past a void cell can never 'refund' the impassable cost.
     expect(pathMovementCost(5, [voidCell(5), normal(0)])).toBe(Infinity);
+  });
+
+  it("threads a per-cell crossing structure through to cellMovementCost", () => {
+    // A bridged difficult cell mid-path costs the same as if it were plain
+    // normal ground either side of it.
+    const bridged = pathMovementCost(0, [
+      normal(0),
+      { terrain: "difficult" as const, elevationSteps: 0, crossing: "bridge" as const },
+      normal(0),
+    ]);
+    expect(bridged).toBe(pathMovementCost(0, [normal(0), normal(0), normal(0)]));
+
+    // Stairs onto a raised cell waive the climb; the very next cell (no
+    // stairs there) still pays for its OWN delta normally — the waiver is
+    // per-cell, not a blanket "no more climbing costs this path".
+    const staired = pathMovementCost(0, [
+      { terrain: "normal" as const, elevationSteps: 1, crossing: "stairs" as const },
+      normal(1),
+    ]);
+    expect(staired).toBe(10); // 5 ft (stairs, climb waived) + 5 ft (level with previous)
   });
 });
 
@@ -333,5 +412,55 @@ describe("computeReachableCells", () => {
       occupiedCells: [origin],
     });
     expect(result.some((p) => p.x === origin.x && p.y === origin.y)).toBe(true);
+  });
+
+  // Bridges and stairs: computeReachableCells is the exact sweep
+  // reachableCellSetForToken (GameRoom.tsx) feeds off the map's live
+  // objects, so this is the same guarantee the rules-engine README
+  // documents for cellMovementCost/pathMovementCost — a bridged/staired
+  // cell can never highlight as reachable and then turn out unaffordable
+  // (or vice versa) once the whole-grid sweep carries `crossing` too.
+  it("bridging every cell of a difficult grid restores the plain-terrain reach", () => {
+    // The exact grids the existing "difficult terrain shrinks the reachable
+    // set" test above already proved apart (square(1) vs. square(3)) — this
+    // proves a bridge on every cell erases that gap entirely, the same
+    // "identical mechanism, not a new one" structural proof
+    // verify-water-terrain.mjs uses for water+difficult vs. plain difficult.
+    const budgetFeet = 15;
+    const plainResult = computeReachableCells({ origin, cells: uniformGrid(6, "normal"), budgetFeet });
+    const difficultResult = computeReachableCells({
+      origin,
+      cells: uniformGrid(6, "difficult"),
+      budgetFeet,
+    });
+    const bridgedCells: MovementCellInput[] = uniformGrid(6, "difficult").map((cell) => ({
+      ...cell,
+      crossing: "bridge" as const,
+    }));
+    const bridgedResult = computeReachableCells({ origin, cells: bridgedCells, budgetFeet });
+
+    expect(keysOf(difficultResult)).not.toEqual(keysOf(plainResult));
+    expect(keysOf(bridgedResult)).toEqual(keysOf(plainResult));
+  });
+
+  it("stairs onto a raised cell reach exactly as far as if there were no climb at all", () => {
+    // Raise every x>=1 cell by 2 steps (10 ft): entering (1,0) from the
+    // origin costs 5 ft base + 20 ft climb (10 ft x2) = 25 ft, over the 15
+    // ft budget, so it's unreachable without help.
+    const raisedAtOne = uniformGrid(6).map((cell) =>
+      cell.position.x >= 1 ? { ...cell, elevationSteps: 2 } : cell
+    );
+    const budgetFeet = 15;
+    const unstairedResult = computeReachableCells({ origin, cells: raisedAtOne, budgetFeet });
+    expect(new Set(keysOf(unstairedResult)).has("1,0")).toBe(false);
+
+    // Stairs on (1,0) alone waive ONLY that cell's own climb — it now costs
+    // the flat 5 ft, same as ordinary level ground, and becomes reachable
+    // again despite still being a 10 ft-higher cell.
+    const stairedAtOne = raisedAtOne.map((cell) =>
+      cell.position.x === 1 && cell.position.y === 0 ? { ...cell, crossing: "stairs" as const } : cell
+    );
+    const stairedResult = computeReachableCells({ origin, cells: stairedAtOne, budgetFeet });
+    expect(new Set(keysOf(stairedResult)).has("1,0")).toBe(true);
   });
 });

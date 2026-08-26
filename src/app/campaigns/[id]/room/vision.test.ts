@@ -55,6 +55,7 @@ function mapObject(overrides: Partial<MapObject>): MapObject {
     rotation: 0,
     behavior_config: {},
     blocks_line_of_sight: false,
+    crossing_type: null,
     created_at: "2026-08-24T10:00:00.000Z",
     asset: { name: "Torch", source_type: "preset", model_ref: "torch.glb" },
     ...overrides,

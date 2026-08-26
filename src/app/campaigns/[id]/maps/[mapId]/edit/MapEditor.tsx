@@ -30,6 +30,7 @@ import {
   WATER_FLOW_DIRECTIONS,
   type CampaignMap,
   type ConcealedPit,
+  type CrossingType,
   type GroundType,
   type LightLevel,
   type LightSource,
@@ -757,6 +758,30 @@ export function MapEditor({
     [assets]
   );
 
+  // Bridges and stairs (a post-roadmap addition): the two built-in preset
+  // assets that carry real movement-rules behavior — see @/data-access's
+  // CrossingType doc comment for why this is resolved by matching a KNOWN
+  // preset id, the exact same lookup-by-name-once pattern chestAssetId
+  // above already uses, rather than trusting an asset's mutable display
+  // name at placement time (a custom upload could otherwise be named
+  // "Bridge" without ever granting bridge behavior — see crossingTypeForAsset
+  // below, which is what actually decides the behavior, once, at creation).
+  const bridgeAssetId = useMemo(
+    () =>
+      assets.find((asset) => asset.source_type === "preset" && asset.name === "Bridge")?.id ?? null,
+    [assets]
+  );
+  const stairsAssetId = useMemo(
+    () =>
+      assets.find((asset) => asset.source_type === "preset" && asset.name === "Stairs")?.id ?? null,
+    [assets]
+  );
+  const crossingTypeForAsset = useCallback(
+    (assetId: string): CrossingType | null =>
+      assetId === bridgeAssetId ? "bridge" : assetId === stairsAssetId ? "stairs" : null,
+    [bridgeAssetId, stairsAssetId]
+  );
+
   const handleCellClick = useCallback(
     (x: number, y: number, event?: ThreeEvent<PointerEvent>) => {
       if (toolRef.current !== "object") return;
@@ -872,6 +897,7 @@ export function MapEditor({
           y,
           elevation,
           rotation: 0,
+          crossingType: crossingTypeForAsset(assetId),
         });
         addObjectLocal(created);
         setSelectedObjectIds(new Set([created.id]));
@@ -881,6 +907,7 @@ export function MapEditor({
     [
       map.id,
       chestAssetId,
+      crossingTypeForAsset,
       inRegion,
       displayedTerrainAt,
       runObjectMutation,
@@ -1468,6 +1495,11 @@ export function MapEditor({
             y: object.y,
             elevation: ground.elevation,
             rotation: object.rotation,
+            // AI-generated drafts never intentionally pick the Bridge/Stairs
+            // preset (its own catalog draws from decorative dressing), but
+            // resolving this the same way as a manual placement means it's
+            // correct-if-it-ever-happens rather than a silent inconsistency.
+            crossingType: crossingTypeForAsset(object.assetId),
           })
         );
       }
@@ -2137,6 +2169,13 @@ export function MapEditor({
                   {(selectedLiveObject ?? selectedPreviewObject)!.rotation}°
                   {selectedPreviewObject ? " · AI draft" : ""}
                 </span>
+                {selectedLiveObject?.crossing_type ? (
+                  <p className={styles.hint} data-testid="object-crossing-hint">
+                    {selectedLiveObject.crossing_type === "bridge"
+                      ? "Bridge: tokens crossing this cell never fall into a pit, or pay the extra cost for difficult water, here."
+                      : "Stairs: tokens entering this cell never pay the climbing surcharge for an elevation change here."}
+                  </p>
+                ) : null}
                 <div className={styles.toolRow}>
                   <Button size="sm" variant="teal" onClick={handleRotate} data-testid="object-rotate">
                     Rotate 90°

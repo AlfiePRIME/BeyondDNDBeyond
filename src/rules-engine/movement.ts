@@ -21,24 +21,77 @@ export const FEET_PER_CELL = 5;
 // commit, in src/rules-engine/falling.ts, not a movement-cost concern.
 export type TerrainType = "normal" | "difficult" | "void" | "pit";
 
+// Bridges and stairs (a post-roadmap addition): both are placed map OBJECTS
+// (src/data-access/mapObjects.ts's own `crossing_type` column), never a
+// terrain_type — an object overlays a cell's existing terrain without
+// replacing it, which is exactly "you can walk across without falling into
+// (or paying full price for) what's still there underneath". Structurally
+// matches data-access's CrossingType — the same MapSurfaceGroundType/
+// GroundType decoupling precedent scene-3d already uses — so this module
+// stays data-access-free (see quickActions.ts's/perception.ts's own
+// "rules-engine cannot import data-access" notes); the two types are kept
+// in sync by hand rather than by an import.
+//
+// The `crossing` field below is OPTIONAL and defaults to no crossing
+// structure, so every pre-existing call site (movement.test.ts,
+// verify-water-terrain.mjs, every GameRoom.tsx call that predates this
+// addition) keeps compiling and behaving byte-for-byte identically without
+// ever mentioning it.
+//
+// 'bridge' waives the difficult-terrain doubling below (water's own
+// movement penalty, reused wholesale per water-terrain's design) for
+// whichever cell it sits on; it does NOT touch void (Infinity, still
+// returned unconditionally below — objects can never even be placed on a
+// void cell, so this never actually arises) and needs no pit-specific
+// branch here, since a pit ALREADY costs the plain 5 ft to enter (see this
+// file's own long-standing comment above `TerrainType` — the real pit
+// consequence, fall damage/prone, is a status-effect side effect resolved
+// in GameRoom.tsx's handleTokenLanded/falling.ts, never a movement COST
+// concern, so a bridge's fall-suppression lives entirely there, not here).
+//
+// 'stairs' waives the SRD climbing surcharge for whichever cell it sits on
+// — the destination-cell-only shape a pit's own fall-trigger already
+// established (keyed off the cell entered, not a stored two-cell
+// relationship), so a DM places Stairs on the higher cell of a climb the
+// same way they'd place a Bridge on the pit/water cell being crossed.
+export type CrossingType = "bridge" | "stairs";
+
 export interface CellMovementParams {
   terrain: TerrainType;
   // Feet climbed to enter this cell; 0 or negative (descending/level) adds
   // no climbing cost.
   elevationDeltaFeet: number;
+  /** Absent/null: no crossing structure on this cell — every cost behaves
+   * exactly as before this field existed. See CrossingType's own doc
+   * comment for what each value suppresses. */
+  crossing?: CrossingType | null;
 }
 
 // Difficult terrain and climbing are independent costs that stack: a cell
-// that is both difficult terrain and a climb pays both penalties.
-export function cellMovementCost({ terrain, elevationDeltaFeet }: CellMovementParams): number {
+// that is both difficult terrain and a climb pays both penalties. A bridge
+// waives only the terrain half; stairs waive only the climb half — the two
+// structures are deliberately orthogonal, so a cell carrying either one
+// (never both: the editor only ever places one object per cell) can't
+// silently do the other's job too.
+export function cellMovementCost({
+  terrain,
+  elevationDeltaFeet,
+  crossing,
+}: CellMovementParams): number {
   // A void cell cannot be entered at any price. Returning here (rather than
   // folding Infinity into horizontalCost) is just clarity — Infinity plus
   // any climb cost is still Infinity, so no elevation special-casing exists.
+  // A crossing structure never overrides this: objects can't be placed on a
+  // void cell in the first place (MapEditor.tsx's VOID_OBJECT_MESSAGE
+  // guard), so this is a documented non-issue, not a gap.
   if (terrain === "void") return Infinity;
-  const horizontalCost = terrain === "difficult" ? FEET_PER_CELL * 2 : FEET_PER_CELL;
+  const horizontalCost =
+    terrain === "difficult" && crossing !== "bridge" ? FEET_PER_CELL * 2 : FEET_PER_CELL;
   // SRD climbing rule: 1 extra foot of movement per foot climbed, i.e. the
-  // vertical portion costs double.
-  const climbCost = elevationDeltaFeet > 0 ? elevationDeltaFeet * 2 : 0;
+  // vertical portion costs double — waived entirely when stairs are
+  // present, ascending or descending alike (descending is already free
+  // below, so stairs only ever change the ascending case).
+  const climbCost = crossing === "stairs" ? 0 : elevationDeltaFeet > 0 ? elevationDeltaFeet * 2 : 0;
   return horizontalCost + climbCost;
 }
 
@@ -82,6 +135,10 @@ export function straightCellPath(from: GridPoint, to: GridPoint): GridPoint[] {
 export interface PathCell {
   terrain: TerrainType;
   elevationSteps: number;
+  /** See CrossingType's doc comment above — a bridge/stairs object sitting
+   * on THIS cell. Absent/null for every cell with no such object, which is
+   * every cell on every map that predates this addition. */
+  crossing?: CrossingType | null;
 }
 
 /** Total cost of entering each cell in sequence, starting from a cell at
@@ -97,6 +154,7 @@ export function pathMovementCost(
     total += cellMovementCost({
       terrain: cell.terrain,
       elevationDeltaFeet: (cell.elevationSteps - previousElevation) * FEET_PER_ELEVATION_STEP,
+      crossing: cell.crossing,
     });
     previousElevation = cell.elevationSteps;
   }
@@ -114,6 +172,8 @@ export interface MovementCellInput {
   position: GridPoint;
   terrain: TerrainType;
   elevationSteps: number;
+  /** See PathCell.crossing's own doc comment — same optional, same default. */
+  crossing?: CrossingType | null;
 }
 
 export interface ComputeReachableCellsParams {
@@ -213,6 +273,7 @@ export function computeReachableCells(params: ComputeReachableCellsParams): Grid
     cellByKey.set(pointKey(cell.position), {
       terrain: cell.terrain,
       elevationSteps: cell.elevationSteps,
+      crossing: cell.crossing,
     });
   }
   const cellAt = (point: GridPoint): PathCell => cellByKey.get(pointKey(point)) ?? OFF_GRID_CELL;
@@ -257,6 +318,7 @@ export function computeReachableCells(params: ComputeReachableCellsParams): Grid
           terrain: neighborCell.terrain,
           elevationDeltaFeet:
             (neighborCell.elevationSteps - currentElevationSteps) * FEET_PER_ELEVATION_STEP,
+          crossing: neighborCell.crossing,
         });
         const tentativeCostFeet = currentCostFeet + edgeCostFeet;
         if (!Number.isFinite(tentativeCostFeet) || tentativeCostFeet > budgetFeet) continue;

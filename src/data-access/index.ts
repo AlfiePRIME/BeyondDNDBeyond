@@ -156,6 +156,7 @@ export {
   type MapObjectAction,
   type MapObjectBehavior,
   type PlacedObjectAsset,
+  type CrossingType,
 } from "./mapObjects";
 export {
   listMapTokens,
