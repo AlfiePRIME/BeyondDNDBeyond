@@ -311,6 +311,8 @@ interface ObjectMarkerProps {
   active: boolean;
   dimmed: boolean;
   onSelect: (id: string, event: ThreeEvent<PointerEvent>) => void;
+  /** Verification-only: see MapSurfaceProps.onObjectPoseDebug's doc comment. */
+  onPoseDebug?: (id: string, compatible: boolean) => void;
 }
 
 // The invisible hit box exists because raycasting against the glTF's own
@@ -343,6 +345,7 @@ const ObjectMarker = memo(function ObjectMarker({
   active,
   dimmed,
   onSelect,
+  onPoseDebug,
 }: ObjectMarkerProps) {
   const [hovered, setHovered] = useState(false);
   return (
@@ -357,7 +360,11 @@ const ObjectMarker = memo(function ObjectMarker({
           <meshBasicMaterial wireframe color={PURPLE} transparent opacity={0.45} />
         </mesh>
       ) : (
-        <PlacedObject url={url} forwardOffsetDeg={forwardOffsetDeg} />
+        <PlacedObject
+          url={url}
+          forwardOffsetDeg={forwardOffsetDeg}
+          onPoseDebug={onPoseDebug ? (compatible) => onPoseDebug(id, compatible) : undefined}
+        />
       )}
       {dimmed ? (
         <mesh position={[0, HIT_BOX_HEIGHT / 2, 0]}>
@@ -899,6 +906,14 @@ export interface MapSurfaceProps {
    * slide's timing directly. Omit it (as every real caller does today) and
    * nothing changes about how tokens render or move. */
   onTokenSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
+  /** Verification-only: fires whenever a placed object's own skeleton-based
+   * posing (docs/design/model-orientation-and-posing.md §9) resolves
+   * compatible/incompatible — the same "mirror render state into a
+   * callback" precedent as onTokenSlideDebug above, so a caller can expose
+   * it to Playwright (WebGL has no DOM of its own to inspect a skeleton
+   * directly). Omit it (as every real caller does today) and nothing
+   * changes about how objects render or pose. */
+  onObjectPoseDebug?: (id: string, compatible: boolean) => void;
 }
 
 /**
@@ -921,6 +936,7 @@ export function MapSurface({
   onCellPointerOver,
   onTokenPointerDown,
   onTokenSlideDebug,
+  onObjectPoseDebug,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
   const offsetX = ((gridWidth - 1) / 2) * cellSize;
@@ -988,6 +1004,7 @@ export function MapSurface({
           active={object.active ?? false}
           dimmed={object.dimmed ?? false}
           onSelect={onSelectObject ?? NOOP_SELECT}
+          onPoseDebug={onObjectPoseDebug}
         />
       ))}
 

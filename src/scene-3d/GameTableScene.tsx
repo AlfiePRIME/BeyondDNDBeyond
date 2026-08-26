@@ -235,7 +235,15 @@ function CombinedTable() {
 // it, are both gone — a real chair (Chair.tsx) now carries the role's
 // accent color via its own trim, so a separate floor ring in the same
 // footprint would just be a redundant, competing signal.
-function TableSeat({ seat }: { seat: Seat }) {
+function TableSeat({
+  seat,
+  onAvatarPoseDebug,
+}: {
+  seat: Seat;
+  /** Verification-only pass-through to SeatAvatar's onPoseDebug — see
+   * GameTableSceneProps.onAvatarPoseDebug's doc comment. */
+  onAvatarPoseDebug?: (userId: string, compatible: boolean) => void;
+}) {
   return (
     <group position={seat.position} rotation={[0, seat.rotationY, 0]}>
       <Chair role={seat.member.role} />
@@ -250,6 +258,9 @@ function TableSeat({ seat }: { seat: Seat }) {
         <SeatAvatar
           url={seat.member.avatar_url ?? null}
           forwardOffsetDeg={seat.member.avatar_forward_offset_deg ?? 0}
+          onPoseDebug={
+            onAvatarPoseDebug ? (compatible) => onAvatarPoseDebug(seat.member.user_id, compatible) : undefined
+          }
         />
       </group>
     </group>
@@ -306,6 +317,15 @@ export interface GameTableSceneProps {
    * its own doc comment. Purely a mirror of each token's slide animation
    * state; omitting it changes nothing about how tokens move or render. */
   onTokenSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
+  /** Verification-only: fires whenever a seated member's skeleton-based
+   * posing (docs/design/model-orientation-and-posing.md §9) resolves
+   * compatible/incompatible — same reasoning as onTokenSlideDebug (WebGL
+   * has no DOM of its own for a test to inspect a skeleton directly).
+   * Omitting it changes nothing about how avatars render or pose. */
+  onAvatarPoseDebug?: (userId: string, compatible: boolean) => void;
+  /** Verification-only pass-through to MapSurface's onObjectPoseDebug —
+   * see its own doc comment. */
+  onObjectPoseDebug?: (id: string, compatible: boolean) => void;
 }
 
 export function GameTableScene({
@@ -322,6 +342,8 @@ export function GameTableScene({
   onRulerDragEnd,
   dayNightMode = "day",
   onTokenSlideDebug,
+  onAvatarPoseDebug,
+  onObjectPoseDebug,
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
 
@@ -493,12 +515,13 @@ export function GameTableScene({
               !rulerActive && onTokenClick ? handleTokenPointerDown : undefined
             }
             onTokenSlideDebug={onTokenSlideDebug}
+            onObjectPoseDebug={onObjectPoseDebug}
           />
         </group>
       ) : null}
 
       {seats.map((seat) => (
-        <TableSeat key={seat.member.user_id} seat={seat} />
+        <TableSeat key={seat.member.user_id} seat={seat} onAvatarPoseDebug={onAvatarPoseDebug} />
       ))}
     </>
   );
