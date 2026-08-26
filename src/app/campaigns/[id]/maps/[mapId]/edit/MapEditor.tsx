@@ -24,7 +24,9 @@ import {
   updateMapObject,
   uploadMapReferenceImageFile,
   upsertMapCells,
+  GROUND_TYPES,
   type CampaignMap,
+  type GroundType,
   type LightLevel,
   type LightSource,
   type LightSourceAnchor,
@@ -100,6 +102,22 @@ const VOID_TRANSITION_MESSAGE =
   "A transition can't start on a void cell — no token can ever stand there.";
 const VOID_LIGHT_MESSAGE = "A light can't be anchored to a void cell — there's no floor there.";
 
+// Display labels for the ground brush's buttons — GROUND_TYPES itself stays
+// the plain snake_case DB vocabulary (matches the stored column values one
+// for one, the terrain_type/light_level convention), this is presentation
+// only.
+const GROUND_TYPE_LABELS: Record<GroundType, string> = {
+  default: "Default",
+  grass: "Grass",
+  rock: "Rock",
+  forest: "Forest",
+  dense_forest: "Dense Forest",
+  path: "Path",
+  sand: "Sand",
+  swamp: "Swamp",
+  stone: "Stone",
+};
+
 /** An AI-proposed object placement, client-side only until the DM accepts —
  * unlike normal placements it has no DB row yet, so it carries a temp id and
  * a bare asset reference instead of a full MapObject. */
@@ -160,6 +178,7 @@ export function MapEditor({
   const [tool, setTool] = useState<EditorTool>("elevation");
   const [brush, setBrush] = useState<TerrainType>("difficult");
   const [lightBrush, setLightBrush] = useState<LightLevel>("dim");
+  const [groundBrush, setGroundBrush] = useState<GroundType>("grass");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -255,6 +274,7 @@ export function MapEditor({
   const toolRef = useRef(tool);
   const brushRef = useRef(brush);
   const lightBrushRef = useRef(lightBrush);
+  const groundBrushRef = useRef(groundBrush);
   const selectedAssetIdRef = useRef(selectedAssetId);
   const selectedObjectIdsRef = useRef(selectedObjectIds);
   const moveArmedRef = useRef(moveArmed);
@@ -263,11 +283,12 @@ export function MapEditor({
     toolRef.current = tool;
     brushRef.current = brush;
     lightBrushRef.current = lightBrush;
+    groundBrushRef.current = groundBrush;
     selectedAssetIdRef.current = selectedAssetId;
     selectedObjectIdsRef.current = selectedObjectIds;
     moveArmedRef.current = moveArmed;
     regionRef.current = region;
-  }, [tool, brush, lightBrush, selectedAssetId, selectedObjectIds, moveArmed, region]);
+  }, [tool, brush, lightBrush, groundBrush, selectedAssetId, selectedObjectIds, moveArmed, region]);
 
   // The last PERSISTED cell state: initialCells at mount, advanced whenever
   // cells actually reach the database (Save, AI-draft accept). Undo/redo
@@ -313,7 +334,8 @@ export function MapEditor({
         if (
           state.elevation === base.elevation &&
           state.terrain === base.terrain &&
-          state.light === base.light
+          state.light === base.light &&
+          state.ground === base.ground
         )
           next.delete(key);
         else next.add(key);
@@ -426,7 +448,13 @@ export function MapEditor({
       const preview = previewRef.current;
       if (preview && inRegion(x, y)) {
         const current = preview.cells.get(key) ?? DEFAULT_CELL;
-        const next = applyTool(current, sculptAction, brushRef.current, lightBrushRef.current);
+        const next = applyTool(
+          current,
+          sculptAction,
+          brushRef.current,
+          lightBrushRef.current,
+          groundBrushRef.current
+        );
         if (next === current) return;
         const cells = new Map(preview.cells);
         cells.set(key, next);
@@ -435,7 +463,13 @@ export function MapEditor({
       }
 
       const current = overlayRef.current.get(key) ?? DEFAULT_CELL;
-      const next = applyTool(current, sculptAction, brushRef.current, lightBrushRef.current);
+      const next = applyTool(
+        current,
+        sculptAction,
+        brushRef.current,
+        lightBrushRef.current,
+        groundBrushRef.current
+      );
       if (next === current) return;
       const changes = (strokeChangesRef.current ??= new Map());
       const touched = changes.get(key);
@@ -1234,12 +1268,14 @@ export function MapEditor({
         }
       }
       for (const cell of payload.area.cells) {
-        // Generated drafts don't author lighting — every draft cell starts
-        // bright, and the DM paints light afterwards like on any other cell.
+        // Generated drafts don't author lighting or ground type — every
+        // draft cell starts bright/default, and the DM paints both
+        // afterwards like on any other cell.
         cells.set(cellKey(bounds.x + cell.x, bounds.y + cell.y), {
           elevation: cell.elevation,
           terrain: cell.terrain,
           light: "bright",
+          ground: "default",
         });
       }
       const previewObjects = payload.area.objects.map((object) => ({
@@ -1275,6 +1311,7 @@ export function MapEditor({
           elevation: state.elevation,
           terrain_type: state.terrain,
           light_level: state.light,
+          ground_type: state.ground,
         };
       });
       await upsertMapCells(supabase, rows);
@@ -1345,11 +1382,13 @@ export function MapEditor({
     [map.grid_width, map.grid_height, overlay, preview]
   );
 
-  // Hidden render-state mirror for verify-void-terrain.mjs (the Game Room's
-  // vision-state precedent): the WebGL scene has no DOM to locate, and this
-  // cells array IS the render decision MapSurface executes deterministically
-  // — a listed void cell is one the editor preview draws no floor block and
-  // no grid outline for.
+  // Hidden render-state mirror for verify-void-terrain.mjs/
+  // verify-ground-types.mjs (the Game Room's vision-state precedent): the
+  // WebGL scene has no DOM to locate, and this cells array IS the render
+  // decision MapSurface executes deterministically — a listed void cell is
+  // one the editor preview draws no floor block and no grid outline for,
+  // and groundByCell mirrors exactly which cells carry a non-"default"
+  // ground type (and which one), live before Save is ever clicked.
   const editorSurfaceDebug = useMemo(
     () =>
       JSON.stringify({
@@ -1357,6 +1396,9 @@ export function MapEditor({
         voidCells: cells
           .filter((cell) => cell.terrain === "void")
           .map((cell) => cellKey(cell.x, cell.y)),
+        groundByCell: Object.fromEntries(
+          cells.filter((cell) => cell.ground).map((cell) => [cellKey(cell.x, cell.y), cell.ground])
+        ),
       }),
     [map.id, cells]
   );
@@ -1788,6 +1830,39 @@ export function MapEditor({
             </>
           ) : null}
         </div>
+        <span className={styles.toolbarLabel}>Ground</span>
+        <div className={styles.toolRow}>
+          <Button
+            size="sm"
+            variant={tool === "ground" ? "accent" : "ghost"}
+            onClick={() => switchTool("ground")}
+            data-testid="tool-ground"
+          >
+            Paint ground
+          </Button>
+          {tool === "ground" ? (
+            <>
+              {GROUND_TYPES.map((type) => (
+                <Button
+                  key={type}
+                  size="sm"
+                  variant={groundBrush === type ? "accent" : "ghost"}
+                  onClick={() => setGroundBrush(type)}
+                  data-testid={`brush-ground-${type}`}
+                >
+                  {GROUND_TYPE_LABELS[type]}
+                </Button>
+              ))}
+            </>
+          ) : null}
+        </div>
+        {tool === "ground" ? (
+          <p className={styles.hint}>
+            Ground type is a flat color only — a purely cosmetic layer independent of terrain.
+            Painting Forest here doesn&apos;t make a cell Difficult terrain, and painting
+            Difficult terrain doesn&apos;t change its ground color; set each separately.
+          </p>
+        ) : null}
         <span className={styles.toolbarLabel}>Objects</span>
         <div className={styles.toolRow}>
           <Button

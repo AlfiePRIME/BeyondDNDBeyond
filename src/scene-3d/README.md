@@ -239,3 +239,24 @@ imperative `play(spec)` handle rather than a props-driven list, and queues overl
 FIFO (remounting a fresh `ActiveTumble` per `spec.id`) rather than trying to lay simultaneous
 tumbles out in its small footprint — one roll's dice always get an uninterrupted
 tumble-settle-linger cycle before the next queued roll's dice ever mount.
+
+As of the ground-types addition (post-roadmap — "add real ground types (grass, rock, forest,
+dense forest, path, etc.) as flat colors", not a numbered prompt): `MapSurfaceCell` gained an
+optional `ground` field (`MapSurfaceGroundType`, the `MapSurfaceLightLevel` decoupling
+precedent — a structural copy of data-access's `GroundType`, so `scene-3d` stays
+data-access-free). This is a SEPARATE, purely cosmetic dimension layered on top of (never
+replacing) `terrain`: absent or `"default"` renders `cellColor`'s existing terrain-driven
+NORMAL/DIFFICULT pair exactly as before — so every cell painted no other way looks byte-for-
+byte identical to before this field existed — and any other value (`grass`, `rock`, `forest`,
+`dense_forest`, `path`, `sand`, `swamp`, `stone`) REPLACES that pair with its own flat
+`GROUND_COLORS` base/high pair, still lightened by elevation and darkened by light/visibility
+the identical way. `terrain` remains the only input to movement cost and void-ness (that lives
+in `@/rules-engine`, untouched by this addition) — a "forest" cell can independently be normal
+or difficult terrain, since the two are painted, stored, and rendered through completely
+separate props/columns. Deliberately on the SHARED surface (the HP-bar/condition-badge
+reasoning): both `MapEditorScene` and `GameTableScene` render it, since — unlike `light`,
+which is an editor-only authoring tint — ground type is real appearance the DM needs to see
+live on the actual game table, not just while painting. A REMEMBERED cell (Prompt 58) never
+carries `ground` — the seen-cells snapshot captures terrain/elevation/light only, unchanged
+from before — so a fogged-then-recalled cell renders its plain terrain color even if its live
+ground type is painted; this is the one place ground type doesn't show through.

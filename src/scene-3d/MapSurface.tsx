@@ -30,6 +30,43 @@ const NORMAL_HIGH = "#cfc4ff";
 const DIFFICULT_BASE = "#a85a24";
 const DIFFICULT_HIGH = "#ffd9a0";
 
+/** Structurally matches data-access's GroundType (the MapSurfaceLightLevel
+ * decoupling precedent below — scene-3d stays data-access-free). 'default'
+ * is the sparse-storage default: cellColor treats it (and an absent/
+ * undefined `ground` field) identically — a cell with no ground type
+ * painted renders from the terrain-driven palette above, exactly as every
+ * cell did before this type existed. */
+export type MapSurfaceGroundType =
+  | "default"
+  | "grass"
+  | "rock"
+  | "forest"
+  | "dense_forest"
+  | "path"
+  | "sand"
+  | "swamp"
+  | "stone";
+
+// One flat base/high pair per real ground type, the exact NORMAL/DIFFICULT
+// shape — each hue chosen to read apart from the others, from the terrain
+// palette above, and from the app's own accent colors (PURPLE/TEAL/
+// HIGHLIGHT_COLOR/allegiance hues below). Grass/forest/dense_forest/swamp
+// separate by hue and saturation (fresh green -> cooler woodland green ->
+// near-black canopy green -> muddy olive) rather than brightness alone,
+// since elevation already owns that axis; rock (natural, warm grey-brown)
+// and stone (worked masonry, cooler blue-grey) are the two earth tones kept
+// deliberately apart in hue so they don't read as the same material.
+const GROUND_COLORS: Record<Exclude<MapSurfaceGroundType, "default">, readonly [string, string]> = {
+  grass: ["#3d6b2f", "#b8e08a"],
+  forest: ["#204a2c", "#7bb37c"],
+  dense_forest: ["#122c19", "#4a7a4d"],
+  rock: ["#8a6f47", "#d8c39a"],
+  stone: ["#4a5a6e", "#c3ccd6"],
+  path: ["#7a5c3a", "#d9b988"],
+  sand: ["#c8b06a", "#f3e7bd"],
+  swamp: ["#414a2c", "#8b995a"],
+};
+
 const CELL_GAP_RATIO = 0.08;
 
 // Stable stand-in for an absent onSelectObject/onTokenPointerDown — an inline
@@ -86,17 +123,32 @@ const LIGHT_SCALE: Record<MapSurfaceLightLevel, number> = {
 // "void" terrain never reaches this function: MapSurface renders no
 // CellBlock for a void cell at all (see the cells map below), so the only
 // terrains with a color are normal and difficult.
+//
+// `ground` is a SEPARATE, purely cosmetic input layered on top of terrain
+// (the post-roadmap ground-types addition): 'default'/undefined falls
+// through to the terrain-driven NORMAL/DIFFICULT pair exactly as before,
+// and any other value REPLACES that pair with its own flat GROUND_COLORS
+// pair — still lightened by elevation and darkened by light/visibility the
+// identical way. Terrain remains the only input to movement cost and
+// void-ness (that lives in @/rules-engine, never here); this function is
+// simply the one place that decides which of the two independently-painted
+// values wins the pixel.
 function cellColor(
   terrain: TerrainType,
   elevation: number,
   light: MapSurfaceLightLevel | undefined,
-  visibility: MapSurfaceVisibility | undefined
+  visibility: MapSurfaceVisibility | undefined,
+  ground: MapSurfaceGroundType | undefined
 ): string {
-  const key = `${terrain}:${elevation}:${light ?? "none"}:${visibility ?? "full"}`;
+  const key = `${terrain}:${elevation}:${light ?? "none"}:${visibility ?? "full"}:${ground ?? "default"}`;
   let hex = colorCache.get(key);
   if (!hex) {
     const [base, high] =
-      terrain === "difficult" ? [DIFFICULT_BASE, DIFFICULT_HIGH] : [NORMAL_BASE, NORMAL_HIGH];
+      ground && ground !== "default"
+        ? GROUND_COLORS[ground]
+        : terrain === "difficult"
+          ? [DIFFICULT_BASE, DIFFICULT_HIGH]
+          : [NORMAL_BASE, NORMAL_HIGH];
     // Each step also lightens the block so distinct elevations stay
     // distinguishable even from directly overhead, where extruded height
     // alone is invisible.
@@ -145,6 +197,14 @@ export interface MapSurfaceCell {
    * void cell (computeReachableCells never returns one), so VoidCellPick
    * below has no matching prop. */
   highlighted?: boolean;
+  /** Purely cosmetic ground-type flat color (the post-roadmap addition) —
+   * see `cellColor`'s doc comment. Absent or "default" renders exactly as
+   * every cell did before this field existed; the map editor's
+   * buildDenseCells call and the game table's live (full/dim) cells both
+   * carry it unconditionally (unlike `light`, this is real appearance, not
+   * an editor-only authoring tint), while a REMEMBERED cell never carries
+   * it — the seen-cells snapshot captures terrain/elevation/light only. */
+  ground?: MapSurfaceGroundType;
 }
 
 interface CellBlockProps {
@@ -160,6 +220,7 @@ interface CellBlockProps {
   light: MapSurfaceLightLevel | undefined;
   visibility: MapSurfaceVisibility | undefined;
   highlighted: boolean;
+  ground: MapSurfaceGroundType | undefined;
   onDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
   onOver?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
 }
@@ -181,6 +242,7 @@ const CellBlock = memo(function CellBlock({
   light,
   visibility,
   highlighted,
+  ground,
   onDown,
   onOver,
 }: CellBlockProps) {
@@ -212,7 +274,7 @@ const CellBlock = memo(function CellBlock({
           gated on `interactive`: a highlighted cell glows whether or not
           THIS render also attached pointer handlers to it. */}
       <meshStandardMaterial
-        color={cellColor(terrain, elevation, light, visibility)}
+        color={cellColor(terrain, elevation, light, visibility, ground)}
         emissive={hoverLit ? TEAL : highlighted ? HIGHLIGHT_COLOR : PURPLE}
         emissiveIntensity={hoverLit ? 0.4 : highlighted ? 0.35 : preview ? 0.3 : 0}
         roughness={0.65}
@@ -984,6 +1046,7 @@ export function MapSurface({
             light={cell.light}
             visibility={cell.visibility}
             highlighted={cell.highlighted ?? false}
+            ground={cell.ground}
             onDown={onCellPointerDown}
             onOver={onCellPointerOver}
           />

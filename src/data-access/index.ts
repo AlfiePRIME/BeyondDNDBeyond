@@ -130,6 +130,7 @@ export {
   setMapReferenceImage,
   clearMapReferenceImage,
   LIGHT_LEVELS,
+  GROUND_TYPES,
   type CampaignMap,
   type MapCell,
   type MapFolder,
@@ -137,6 +138,7 @@ export {
   type NewMapObjectSeed,
   type LightLevel,
   type MapGrowthEdge,
+  type GroundType,
 } from "./maps";
 export {
   listMapObjects,

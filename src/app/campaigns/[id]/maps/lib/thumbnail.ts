@@ -3,6 +3,7 @@ import {
   deleteMapThumbnailFile,
   setMapThumbnail,
   uploadMapThumbnailFile,
+  type GroundType,
   type SupabaseClient,
 } from "@/data-access";
 import { cellKey, DEFAULT_CELL, type CellState } from "../[mapId]/edit/lib/cellGrid";
@@ -10,11 +11,25 @@ import { cellKey, DEFAULT_CELL, type CellState } from "../[mapId]/edit/lib/cellG
 // Same palette and lerp inputs as MapSurface's cellColor so a thumbnail and
 // the real 3D render agree visually — mirrored rather than imported because
 // that function is module-private and three.js-typed, and pulling a WebGL
-// library into a plain 2D canvas would be absurd for four hex constants.
+// library into a plain 2D canvas would be absurd for a handful of hex
+// constants.
 const NORMAL_BASE = "#463a70";
 const NORMAL_HIGH = "#cfc4ff";
 const DIFFICULT_BASE = "#a85a24";
 const DIFFICULT_HIGH = "#ffd9a0";
+
+// MapSurface's GROUND_COLORS, mirrored verbatim (the post-roadmap
+// ground-types addition) — same reasoning as the terrain palette above.
+const GROUND_COLORS: Record<Exclude<GroundType, "default">, readonly [string, string]> = {
+  grass: ["#3d6b2f", "#b8e08a"],
+  forest: ["#204a2c", "#7bb37c"],
+  dense_forest: ["#122c19", "#4a7a4d"],
+  rock: ["#8a6f47", "#d8c39a"],
+  stone: ["#4a5a6e", "#c3ccd6"],
+  path: ["#7a5c3a", "#d9b988"],
+  sand: ["#c8b06a", "#f3e7bd"],
+  swamp: ["#414a2c", "#8b995a"],
+};
 
 // tokens.css --surface, the app's darkest backdrop — reads as the void
 // around the map, like the editor's own scene background.
@@ -44,14 +59,27 @@ function hexToLinearRgb(hex: string): [number, number, number] {
   ];
 }
 
-export function thumbnailCellColor(terrain: TerrainType, elevation: number): string {
+// `ground` defaults to "default" so every pre-ground-types call site (and
+// every existing test) keeps working unchanged — the exact cellColor
+// fallback rule: 'default'/absent renders the terrain-driven pair below,
+// any other value replaces it with its own flat GROUND_COLORS pair.
+export function thumbnailCellColor(
+  terrain: TerrainType,
+  elevation: number,
+  ground: GroundType = "default"
+): string {
   // A void cell has no floor: it paints as the backdrop itself, so in the
   // snapshot it reads exactly like the space around the map — absent, the
   // same way the 3D render draws nothing for it. Elevation is meaningless
-  // on a cell with no floor, so it never lightens.
+  // on a cell with no floor, so it never lightens (and ground type, being
+  // purely a floor color, is moot too).
   if (terrain === "void") return BACKDROP;
   const [base, high] =
-    terrain === "difficult" ? [DIFFICULT_BASE, DIFFICULT_HIGH] : [NORMAL_BASE, NORMAL_HIGH];
+    ground !== "default"
+      ? GROUND_COLORS[ground]
+      : terrain === "difficult"
+        ? [DIFFICULT_BASE, DIFFICULT_HIGH]
+        : [NORMAL_BASE, NORMAL_HIGH];
   const t = Math.min(elevation * 0.11, 0.66);
   const from = hexToLinearRgb(base);
   const to = hexToLinearRgb(high);
@@ -89,7 +117,7 @@ export function renderMapThumbnail(
   for (let y = 0; y < gridHeight; y++) {
     for (let x = 0; x < gridWidth; x++) {
       const state = overlay.get(cellKey(x, y)) ?? DEFAULT_CELL;
-      ctx.fillStyle = thumbnailCellColor(state.terrain, state.elevation);
+      ctx.fillStyle = thumbnailCellColor(state.terrain, state.elevation, state.ground);
       ctx.fillRect(x * cellPx + gap / 2, y * cellPx + gap / 2, cellPx - gap, cellPx - gap);
     }
   }

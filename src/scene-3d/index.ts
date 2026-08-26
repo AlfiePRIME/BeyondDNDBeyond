@@ -21,6 +21,7 @@ export {
   type MapSurfaceCell,
   type MapSurfaceLightLevel,
   type MapSurfaceVisibility,
+  type MapSurfaceGroundType,
   type MapSurfaceObject,
   type MapSurfaceToken,
   type MapTokenAllegiance,
