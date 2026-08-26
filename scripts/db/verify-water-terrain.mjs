@@ -325,6 +325,9 @@ try {
   await editorPage.goto(`${APP_URL}/campaigns/${campaignId}/maps/${mapId}/edit`);
   await editorPage.waitForSelector('[data-testid="editor-surface-state"]', { state: "attached", timeout: 60000 });
 
+  // Map editor toolbar redesign: Ground now lives in Paint mode's context
+  // panel, not the old always-mounted flat toolbar.
+  await editorPage.click('[data-testid="mode-paint"]');
   await editorPage.click('[data-testid="tool-ground"]');
   await editorPage.waitForSelector('[data-testid="brush-ground-water"]', { timeout: 10000 });
   for (const type of ["default", "grass", "rock", "forest", "dense_forest", "path", "sand", "swamp", "stone", "water"]) {

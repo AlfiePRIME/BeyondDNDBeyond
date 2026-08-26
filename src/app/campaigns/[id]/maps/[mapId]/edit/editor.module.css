@@ -57,18 +57,115 @@
   letter-spacing: 0.08em;
 }
 
-.toolbar {
+/* Map editor toolbar redesign (docs/design/map-editor-toolbar-redesign.md
+   §5.1/§6): the old `.toolbar` was one unconstrained, unscrollable
+   absolute-positioned box — exactly the root cause of the reported
+   overflow bug (§3/§4.1 of the design doc: no max-height, no overflow-y,
+   so the box simply grew past the viewport's top edge with nothing able
+   to clip or scroll it). `.toolbarShell` replaces it as an outer frame
+   only; the real height constraint + scroll lives on `.contextPanel`
+   below, not here, so the mode rail and footer hint stay reachable no
+   matter how tall the active mode's own content gets. */
+.toolbarShell {
   position: absolute;
   left: 24px;
   bottom: 24px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px;
-  max-width: 340px;
+  max-width: 480px;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
   border-radius: 8px;
+  /* Keeps the rounded corners clean even though .contextPanel scrolls. */
+  overflow: hidden;
+}
+
+/* The rail + panel row. min-height: 0 lets .contextPanel actually shrink
+   and scroll inside a flex column ancestor (.toolbarShell) instead of the
+   row stretching to fit its tallest child's natural height — the same
+   "flex children don't shrink below content size by default" pitfall that
+   would otherwise silently defeat .contextPanel's own max-height below. */
+.toolbarMain {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.modeRail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 8px;
+  flex-shrink: 0;
+  border-right: 1px solid color-mix(in srgb, var(--purple) 25%, transparent);
+}
+
+.modeButton {
+  width: 100%;
+  white-space: nowrap;
+}
+
+/* The ONE CSS-level guarantee that actually prevents the overflow bug from
+   recurring (§6): no matter how many ground types, water directions, or
+   future brushes get added to any one mode, this panel scrolls instead of
+   silently growing past the viewport's edge. `100dvh` (not `100vh`) so
+   mobile browser chrome that shows/hides on scroll doesn't miscalculate
+   available height — this editor has no mobile support today, but `dvh`
+   costs nothing here and is strictly more correct. `overscroll-behavior:
+   contain` stops a scroll-to-the-end inside this panel from also
+   scrolling/zooming the WebGL canvas behind it. */
+.contextPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  flex: 1;
+  min-width: 0;
+  max-height: min(640px, calc(100dvh - 160px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Outside the scrolling box entirely (a sibling of .toolbarMain, not a
+   child of .contextPanel) — always reachable regardless of how tall the
+   active mode's content gets, mirroring the header's Undo/Redo/Save
+   already being outside the old .toolbar div. */
+.footerHint {
+  margin: 0;
+  padding: 10px 16px;
+  border-top: 1px solid color-mix(in srgb, var(--purple) 25%, transparent);
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  color: var(--dim);
+}
+
+/* The "Map" utility drawer (§5.1): Grid size/grow and Reference image,
+   relocated wholesale out of the mode rail into a small panel opened from
+   a header button — they're whole-map operations, not per-cell tools, so
+   they don't belong to any mode's workflow phase. Same scroll-safety
+   pattern as .contextPanel (max-height + overflow-y + overscroll-behavior)
+   even though its content is short today — cheap insurance against the
+   exact same class of bug if this drawer ever grows. */
+.mapDrawer {
+  position: absolute;
+  top: 64px;
+  right: 24px;
+  width: 320px;
+  max-height: min(480px, calc(100dvh - 100px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: color-mix(in srgb, var(--surface2) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
+  border-radius: 8px;
+  pointer-events: auto;
+  z-index: 5;
 }
 
 .toolbarLabel {

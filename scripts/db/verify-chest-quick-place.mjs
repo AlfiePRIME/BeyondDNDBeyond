@@ -268,6 +268,9 @@ try {
 
   // ── 1. Object tool, explicitly select the non-chest crate (not the
   //       default palette selection), plain click places THAT asset. ──
+  // Map editor toolbar redesign: Object now lives in Place mode's context
+  // panel, not the old always-mounted flat toolbar.
+  await editorPage.click('[data-testid="mode-place"]');
   await editorPage.click('[data-testid="tool-object"]');
   await editorPage.waitForSelector('[data-testid="asset-palette"]', { timeout: 10000 });
   await editorPage.click(`[data-testid="asset-${crateAssetId}"]`);
@@ -348,6 +351,8 @@ try {
   // ── 4. Ctrl+click in the terrain tool does nothing special: no object
   //       gets created, and the normal terrain paint still happens. ──
   const objectCountBeforeTerrain = (objectsAfterSecondPlain ?? []).length;
+  // Terrain lives in Sculpt mode — back out of Place mode first.
+  await editorPage.click('[data-testid="mode-sculpt"]');
   await editorPage.click('[data-testid="tool-terrain"]');
   await editorPage.waitForSelector('[data-testid="brush-difficult"]', { timeout: 10000 });
   const dirtyBeforeTerrain = await dirtyCount(editorPage);
@@ -365,7 +370,13 @@ try {
   );
 
   // ── 5. Ctrl+click in the raise tool: same — no object, normal raise. ──
-  await editorPage.click('[data-testid="tool-raise"]');
+  // Pre-existing stale testid fixed incidentally (flagged by the toolbar
+  // redesign's own verify-script audit, unrelated to this redesign): the
+  // separate "raise"/"lower" tools were folded into one "elevation" tool
+  // (direction read from the mouse button) well before this redesign —
+  // `tool-raise` hasn't existed since then. Already in Sculpt mode from
+  // the terrain step above, so no mode-rail click is needed here.
+  await editorPage.click('[data-testid="tool-elevation"]');
   const dirtyBeforeRaise = await dirtyCount(editorPage);
   const raiseCtrlClickAt = await scanClick(
     editorPage,

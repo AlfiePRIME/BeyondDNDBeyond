@@ -51,19 +51,24 @@ export type EditorTool =
   | "ground"
   | "object"
   | "generate"
+  | "fill"
   | "transition"
   | "light-source"
   | "concealed-pit";
 
 /** The paint-a-cell tools. "object" is excluded because it routes through
  * the discrete place/select/move flow, never through applyTool; "generate"
- * because its drag defines a selection rectangle, not per-cell edits;
- * "transition", "light-source", and "concealed-pit" because their clicks
- * pick a cell for a form (a link origin / a fixed light anchor / a hidden
- * trap's real depth), editing nothing in the visible overlay directly. */
+ * because its drag defines a selection rectangle, not per-cell edits; "fill"
+ * for the identical reason — its drag also defines a selection rectangle
+ * (Region mode's other tool, sharing the same region-drag mechanic as
+ * "generate"), applying `applyTool` in a batch over that rectangle rather
+ * than per dragged cell; "transition", "light-source", and "concealed-pit"
+ * because their clicks pick a cell for a form (a link origin / a fixed
+ * light anchor / a hidden trap's real depth), editing nothing in the
+ * visible overlay directly. */
 export type SculptTool = Exclude<
   EditorTool,
-  "object" | "generate" | "transition" | "light-source" | "concealed-pit"
+  "object" | "generate" | "fill" | "transition" | "light-source" | "concealed-pit"
 >;
 
 /** applyTool's two elevation branches. Formerly two separate EditorTool

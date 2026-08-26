@@ -276,6 +276,11 @@ try {
   await editorPage.goto(`${APP_URL}/campaigns/${campaignId}/maps/${mapId}/edit`);
   await editorPage.waitForSelector('[data-testid="editor-surface-state"]', { state: "attached", timeout: 60000 });
 
+  // Map editor toolbar redesign: Ground now lives in Paint mode's context
+  // panel, not the old always-mounted flat toolbar — one mode-rail click
+  // before this test's first tool interaction, per the redesign's own
+  // documented verify-script impact table.
+  await editorPage.click('[data-testid="mode-paint"]');
   await editorPage.click('[data-testid="tool-ground"]');
   await editorPage.waitForSelector('[data-testid="brush-ground-grass"]', { timeout: 10000 });
   check("the editor offers a Ground tool with a brush per GROUND_TYPES value", true);
@@ -322,6 +327,8 @@ try {
 
   // ── 5. Independence via the real UI: paint (3,3) Difficult terrain and
   //       confirm it does NOT appear in groundByCell (still "default"). ──
+  // Terrain lives in Sculpt mode — back out of Paint mode first.
+  await editorPage.click('[data-testid="mode-sculpt"]');
   await editorPage.click('[data-testid="tool-terrain"]');
   await editorPage.click('[data-testid="brush-difficult"]');
   const difficultPainted = await scanClick(

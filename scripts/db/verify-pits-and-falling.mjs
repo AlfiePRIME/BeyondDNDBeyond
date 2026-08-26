@@ -799,6 +799,14 @@ try {
   // the mechanic under test past this point is the runtime save/reveal
   // resolution, not the authoring form itself).
   await loadEditor(editorPage, mapConcealedId);
+  // Map editor toolbar redesign: Concealed pit now lives in Link mode's
+  // context panel (grouped with Transitions — both "pick a cell, fill a
+  // small form" DM-only-visible records), not the old always-mounted flat
+  // toolbar. loadEditor is a fresh page load, so this starts in the
+  // default Sculpt mode (matching the Pit tool used earlier at line ~425)
+  // and needs this explicit Sculpt → Link transition, unlike Pit/Terrain
+  // above which stayed in the default mode the whole time.
+  await editorPage.click('[data-testid="mode-link"]');
   await editorPage.click('[data-testid="tool-concealed-pit"]');
   const concealedUiPoint = await scanClick(
     editorPage,

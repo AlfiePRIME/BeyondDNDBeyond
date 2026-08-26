@@ -254,6 +254,11 @@ try {
   const editorPage = await dmContext.newPage();
   await editorPage.goto(`${APP_URL}/campaigns/${campaignId}/maps/${mapId}/edit`);
   await editorPage.waitForSelector('[data-testid="editor-surface-state"]', { state: "attached", timeout: 60000 });
+  // Map editor toolbar redesign: Terrain lives in Sculpt mode's context
+  // panel — the default mode on a fresh load, but click it explicitly
+  // rather than relying on that default, since it's incidental to what
+  // this line is actually testing.
+  await editorPage.click('[data-testid="mode-sculpt"]');
   await editorPage.click('[data-testid="tool-terrain"]');
   await editorPage.waitForSelector('[data-testid="brush-void"]', { timeout: 10000 });
   check("the terrain tool offers a third Void brush alongside Difficult/Normal", true);
@@ -295,6 +300,13 @@ try {
   // ── 6. Editor placement flow rejects a void cell with a clear message.
   //       (Objects are the editor's placement flow; tokens are Game Room
   //       territory by design — the editor never creates them.) ──
+  // Map editor toolbar redesign: Object lives in Place mode's context
+  // panel — the page above was freshly reloaded (step 5), landing back in
+  // the default Sculpt mode, so this needs an explicit mode switch (a gap
+  // the redesign's own verify-script audit table missed, since it only
+  // listed this script's tool-terrain/brush-void targets, not this later
+  // tool-object step).
+  await editorPage.click('[data-testid="mode-place"]');
   await editorPage.click('[data-testid="tool-object"]');
   await editorPage.waitForSelector('[data-testid="asset-palette"]', { timeout: 10000 });
   // Arm the seeded asset — placement only happens with a selected asset.
