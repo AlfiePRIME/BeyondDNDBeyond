@@ -509,7 +509,7 @@ describe("MAP_TEMPLATES structural invariants", () => {
       for (const id of TREASURE_IDS) {
         const template = findTemplate(id);
         expect(template.gridWidth * template.gridHeight).toBeLessThanOrEqual(100);
-        const doors = template.objects.filter((object) => object.asset_id === PRESET_DOOR);
+        const doors = template.objects.filter((object) => object.asset_id === PRESET_WALL_DOOR);
         const walls = template.objects.filter(
           (object) => object.asset_id === PRESET_WALL || object.asset_id === PRESET_WALL_CORNER
         );
