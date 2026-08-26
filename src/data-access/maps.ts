@@ -253,6 +253,42 @@ export async function setLiveMap(
   if (count === 0) throw new Error("Only the campaign's DM can change the live map.");
 }
 
+/** Which edge of the grid a growth call extends. */
+export const MAP_GROWTH_EDGES = ["north", "south", "east", "west"] as const;
+
+export type MapGrowthEdge = (typeof MAP_GROWTH_EDGES)[number];
+
+/**
+ * Grows a map's grid by `amount` cells along the chosen edge, mid-session.
+ * East/south growth is a pure grid_width/grid_height bump — every existing
+ * cell/object/token keeps its stored x/y exactly as-is. West/north growth
+ * shifts every existing cell/object/token's x (west) or y (north) coordinate
+ * by `amount` so the grid's new (0,0) origin lands correctly and nothing
+ * that already existed moves relative to the rest of the map, even though
+ * every one of its stored coordinates just changed. Both cases and the
+ * shift itself all happen inside the grow_map_grid RPC (0046) as one
+ * transaction, so a mid-operation failure can never leave the map in an
+ * inconsistent state — this function is a thin wrapper around it, not a
+ * caller-orchestrated multi-statement sequence. DM-only via the same RLS
+ * grow_map_grid itself runs under (no SECURITY DEFINER — see its own
+ * doc comment).
+ */
+export async function growMapGrid(
+  supabase: SupabaseClient,
+  mapId: string,
+  edge: MapGrowthEdge,
+  amount: number
+): Promise<CampaignMap> {
+  const { data, error } = await supabase.rpc("grow_map_grid", {
+    p_map_id: mapId,
+    p_edge: edge,
+    p_amount: amount,
+  });
+
+  if (error) throw error;
+  return data as CampaignMap;
+}
+
 /** DM-only in both directions — map_folders' RLS (0023) hides every row
  * from non-DMs, matching the DM-only map list this organizes. */
 export async function listMapFolders(

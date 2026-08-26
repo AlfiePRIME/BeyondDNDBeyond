@@ -15,6 +15,8 @@ import {
   deleteMapReferenceImageFile,
   deleteMapTransition,
   getMapReferenceImageSignedUrl,
+  growMapGrid,
+  MAP_GROWTH_EDGES,
   restoreMapObject,
   setMapObjectBehavior,
   setMapReferenceImage,
@@ -28,6 +30,7 @@ import {
   type LightSourceAnchor,
   type LightSourceBrightness,
   type MapCell,
+  type MapGrowthEdge,
   type MapObject,
   type MapObjectBehavior,
   type MapToken,
@@ -160,6 +163,19 @@ export function MapEditor({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Grid growth (mid-session grid resize) — deliberately its own tiny form,
+  // not a paint `tool`, since it acts on the map's dimensions rather than
+  // any cell. A full reload on success (see handleGrowGrid) is simplest and
+  // safest way to reflect it: growing west/north re-indexes every existing
+  // cell/object/token's stored x/y in the database, and this component's
+  // local overlay/objects/transitions/lights/undo-history state all key off
+  // the PRE-shift coordinates in ways that would be wrong (or, for undo
+  // history, actively dangerous) to patch up piecemeal client-side.
+  const [growEdge, setGrowEdge] = useState<MapGrowthEdge>("east");
+  const [growAmount, setGrowAmount] = useState("1");
+  const [growBusy, setGrowBusy] = useState(false);
+  const [growError, setGrowError] = useState<string | null>(null);
 
   const [objects, setObjects] = useState<MapObject[]>(initialObjects);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(assets[0]?.id ?? null);
@@ -1325,6 +1341,46 @@ export function MapEditor({
     }
   }
 
+  const growAmountNum = Number(growAmount);
+  const growAmountValid = Number.isInteger(growAmountNum) && growAmountNum > 0;
+
+  // Unsaved paint edits or an in-flight AI draft both hold LOCAL state keyed
+  // off today's coordinates — reloading out from under either (see
+  // growEdge's own doc comment above) would silently drop work rather than
+  // just being stale. Blocking the action (not just warning after the fact)
+  // is deliberate: there is no "resize anyway" that wouldn't lose something.
+  const growBlockedReason =
+    dirty.size > 0
+      ? "Save your changes first — growing the grid reloads the editor."
+      : preview
+        ? "Accept or discard the AI draft first."
+        : null;
+
+  async function handleGrowGrid() {
+    // The reactive checks above cover the common cases; these two refs catch
+    // an object edit or undo/redo step still in flight the instant Grow is
+    // clicked — same defensive-not-displayed shape as runObjectMutation's
+    // own mutatingRef gate.
+    if (growBusy || !growAmountValid || growBlockedReason || mutatingRef.current || historyBusyRef.current)
+      return;
+    setGrowBusy(true);
+    setGrowError(null);
+    try {
+      await growMapGrid(createBrowserSupabaseClient(), map.id, growEdge, growAmountNum);
+      // A full reload (not a state patch) is deliberate — see growEdge's own
+      // doc comment: every piece of this editor's client state (overlay,
+      // objects, transitions, lights, undo history) is keyed off the
+      // PRE-shift coordinates for a west/north grow, and the server is now
+      // the only source of truth for what they should be. Re-fetching via a
+      // real navigation is the one way to guarantee nothing here still
+      // points at a coordinate that just moved.
+      window.location.reload();
+    } catch (err) {
+      setGrowError(errorMessage(err) ?? "Could not grow the map.");
+      setGrowBusy(false);
+    }
+  }
+
   const regionCellCount = region ? region.width * region.height : 0;
 
   const mapNameById = useMemo(
@@ -1502,6 +1558,56 @@ export function MapEditor({
               </p>
             ) : null}
           </>
+        ) : null}
+        <span className={styles.toolbarLabel}>Grid size</span>
+        <span className={styles.selectedMeta} data-testid="grid-size-label">
+          {map.grid_width}×{map.grid_height}
+        </span>
+        <div className={styles.toolRow}>
+          <Select
+            label="Grow edge"
+            value={growEdge}
+            onChange={(event) => setGrowEdge(event.target.value as MapGrowthEdge)}
+            disabled={growBusy}
+            data-testid="grow-edge"
+          >
+            {MAP_GROWTH_EDGES.map((edge) => (
+              <option key={edge} value={edge}>
+                {edge[0].toUpperCase()}
+                {edge.slice(1)}
+              </option>
+            ))}
+          </Select>
+          <TextInput
+            label="Amount"
+            type="number"
+            min={1}
+            step={1}
+            value={growAmount}
+            onChange={(event) => setGrowAmount(event.target.value)}
+            disabled={growBusy}
+            data-testid="grow-amount"
+          />
+          <Button
+            size="sm"
+            variant="teal"
+            disabled={growBusy || !growAmountValid || Boolean(growBlockedReason)}
+            onClick={() => void handleGrowGrid()}
+            data-testid="grow-grid-button"
+          >
+            {growBusy ? "Growing…" : "Grow"}
+          </Button>
+        </div>
+        <p className={styles.hint}>
+          Adds cells to the chosen edge. Growing north or west shifts the map&apos;s existing
+          cells, objects, and tokens so nothing moves relative to the rest of the map — the
+          editor reloads afterward to reflect the new layout.
+        </p>
+        {growBlockedReason ? <p className={styles.hint}>{growBlockedReason}</p> : null}
+        {growError ? (
+          <p role="alert" className={styles.errorText} data-testid="grow-grid-error">
+            {growError}
+          </p>
         ) : null}
         <span className={styles.toolbarLabel}>Elevation</span>
         <div className={styles.toolRow}>
