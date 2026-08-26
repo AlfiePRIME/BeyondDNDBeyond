@@ -243,7 +243,7 @@ try {
   const { data: insertedObjects, error: objectsError } = await admin
     .from("map_objects")
     .insert(
-      objectSeeds.map(({ role: _role, ...seed }) => ({
+      objectSeeds.map((seed) => ({
         map_id: map.id,
         asset_id: seed.asset_id,
         x: seed.x,
@@ -349,23 +349,57 @@ try {
     check("no uncaught page errors rendering the wall-family test map", consoleErrors.length === 0, JSON.stringify(consoleErrors));
 
     // --- Real screenshots for visual confirmation (the corner/diagonal
-    // acceptance criteria explicitly ask for this, not just numbers). ---
-    await page.click('button:has-text("Free camera")');
-    await page.waitForTimeout(500);
-    const canvasBox = await page.locator("canvas").boundingBox();
-    if (canvasBox) {
-      const cx = canvasBox.x + canvasBox.width / 2;
-      const cy = canvasBox.y + canvasBox.height / 2;
-      await page.mouse.move(cx, cy);
-      // Zoom in close enough that the straight-run seam and the corner/
-      // diagonal geometry are all clearly legible in the screenshot.
-      for (let i = 0; i < 25; i++) {
-        await page.mouse.wheel(0, -120);
-        await page.waitForTimeout(20);
-      }
-      await page.waitForTimeout(300);
+    // acceptance criteria explicitly ask for this, not just numbers).
+    //
+    // Taken from the map EDITOR (not the game room's seated table view):
+    // GameTableScene's per-seat OrbitControls targets the physical table's
+    // own center ([0, TABLE_SURFACE_Y, 0]), which — once actually zoomed
+    // out far enough to fit the whole table — renders this map's small 8x8
+    // cells too small to read (confirmed by hand: the game room's own
+    // object-measure-state numeric proof above is real and load-bearing,
+    // but a same-session screenshot attempt there was illegible). The
+    // editor's own OrbitControls (MapEditorScene.tsx) targets [0, 0, 0] —
+    // this map's own grid center — and its default camera already frames
+    // the whole grid span, so a plain dolly-zoom (toward that fixed
+    // target) lands cleanly on this layout's own wall cluster without
+    // needing to fight a table-centric camera at all. ---
+    await page.goto(`${APP_URL}/campaigns/${campaignId}/maps/${map.id}/edit`);
+    await page.waitForSelector('[data-testid="editor-surface-state"]', { state: "attached", timeout: 30000 });
+    await page.waitForTimeout(2000);
+
+    // 1. The straight-run -> corner -> straight-run turn (turnStraight1 at
+    // (4,1) through turnStraight3 at (5,3)) sits close enough to this
+    // layout's own grid center [0,0,0] that a plain zoom-in, no pan, lands
+    // squarely on it.
+    const cornerFocus = { x: 950, y: 500 };
+    await page.mouse.move(cornerFocus.x, cornerFocus.y);
+    for (let i = 0; i < 18; i++) {
+      await page.mouse.wheel(0, -120);
+      await page.waitForTimeout(15);
     }
-    await page.screenshot({ path: join(SCREENSHOT_DIR, "wall-geometry-overview.png") });
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: join(SCREENSHOT_DIR, "wall-geometry-corner-closeup.png") });
+
+    // 2. The diagonal cell (1,6) is much further from grid center than the
+    // corner cluster, so it needs an explicit middle-drag PAN (the
+    // editor's own MIDDLE: MOUSE.PAN mapping) to bring it into frame
+    // before zooming — a plain dolly-zoom only ever zooms toward whatever
+    // OrbitControls' `target` already is, not toward the cursor.
+    await page.goto(`${APP_URL}/campaigns/${campaignId}/maps/${map.id}/edit`);
+    await page.waitForSelector('[data-testid="editor-surface-state"]', { state: "attached", timeout: 30000 });
+    await page.waitForTimeout(2000);
+    const diagonalFocus = { x: 950, y: 500 };
+    await page.mouse.move(diagonalFocus.x, diagonalFocus.y);
+    await page.mouse.down({ button: "middle" });
+    await page.mouse.move(diagonalFocus.x + 260, diagonalFocus.y - 200, { steps: 20 });
+    await page.mouse.up({ button: "middle" });
+    await page.waitForTimeout(300);
+    for (let i = 0; i < 16; i++) {
+      await page.mouse.wheel(0, -120);
+      await page.waitForTimeout(15);
+    }
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: join(SCREENSHOT_DIR, "wall-geometry-diagonal-closeup.png") });
 
     console.log(`\nScreenshots written to ${SCREENSHOT_DIR}`);
   } finally {
