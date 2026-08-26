@@ -40,4 +40,58 @@ describe("thumbnailCellColor", () => {
     expect(thumbnailCellColor("difficult", 6)).toBe("#e6ba86");
     expect(thumbnailCellColor("difficult", 10)).toBe("#e6ba86");
   });
+
+  // Ground type (the post-roadmap addition) is omittable/"default" — a
+  // third argument that defaults to "default" for every pre-existing call
+  // site above, none of which needed to change. These lock in the eight
+  // real ground types' own base/high pairs, independently cross-checked
+  // against MapSurface.tsx's real cellColor (three.js Color.lerp) the exact
+  // way the terrain cases above are, so the two stay pixel-identical.
+  it("a 'default' or omitted ground type falls back to the terrain-driven palette — no change from before ground types existed", () => {
+    expect(thumbnailCellColor("normal", 3, "default")).toBe(thumbnailCellColor("normal", 3));
+    expect(thumbnailCellColor("difficult", 3, "default")).toBe(thumbnailCellColor("difficult", 3));
+  });
+
+  it("matches MapSurface's cellColor exactly for every real ground type, overriding terrain's palette", () => {
+    expect(thumbnailCellColor("normal", 0, "grass")).toBe("#3d6b2f");
+    expect(thumbnailCellColor("normal", 1, "grass")).toBe("#577f41");
+    expect(thumbnailCellColor("normal", 3, "grass")).toBe("#789f5a");
+    expect(thumbnailCellColor("normal", 10, "grass")).toBe("#9cc275");
+    // Ground type wins over terrain's own palette — a DIFFICULT cell
+    // painted grass still renders grass, not the amber difficult pair.
+    expect(thumbnailCellColor("difficult", 0, "grass")).toBe("#3d6b2f");
+
+    expect(thumbnailCellColor("normal", 0, "forest")).toBe("#204a2c");
+    expect(thumbnailCellColor("normal", 3, "forest")).toBe("#4d7a52");
+    expect(thumbnailCellColor("normal", 10, "forest")).toBe("#679969");
+
+    expect(thumbnailCellColor("normal", 0, "dense_forest")).toBe("#122c19");
+    expect(thumbnailCellColor("normal", 3, "dense_forest")).toBe("#2d5031");
+    expect(thumbnailCellColor("normal", 10, "dense_forest")).toBe("#3d6741");
+
+    expect(thumbnailCellColor("normal", 0, "rock")).toBe("#8a6f47");
+    expect(thumbnailCellColor("normal", 3, "rock")).toBe("#a9926c");
+    expect(thumbnailCellColor("normal", 10, "rock")).toBe("#c2ac85");
+
+    expect(thumbnailCellColor("normal", 0, "stone")).toBe("#4a5a6e");
+    expect(thumbnailCellColor("normal", 3, "stone")).toBe("#838d9b");
+    expect(thumbnailCellColor("normal", 10, "stone")).toBe("#a6b0bb");
+
+    expect(thumbnailCellColor("normal", 0, "path")).toBe("#7a5c3a");
+    expect(thumbnailCellColor("normal", 3, "path")).toBe("#a2845d");
+    expect(thumbnailCellColor("normal", 10, "path")).toBe("#c0a175");
+
+    expect(thumbnailCellColor("normal", 0, "sand")).toBe("#c8b06a");
+    expect(thumbnailCellColor("normal", 3, "sand")).toBe("#d7c48d");
+    expect(thumbnailCellColor("normal", 10, "sand")).toBe("#e6d6a7");
+
+    expect(thumbnailCellColor("normal", 0, "swamp")).toBe("#414a2c");
+    expect(thumbnailCellColor("normal", 3, "swamp")).toBe("#616c40");
+    expect(thumbnailCellColor("normal", 10, "swamp")).toBe("#78854e");
+  });
+
+  it("a void cell paints as the backdrop regardless of ground type — no floor, no color", () => {
+    expect(thumbnailCellColor("void", 0, "grass")).toBe("#060012");
+    expect(thumbnailCellColor("void", 5, "stone")).toBe("#060012");
+  });
 });

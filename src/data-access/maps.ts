@@ -30,6 +30,28 @@ export const LIGHT_LEVELS = ["bright", "dim", "dark"] as const;
 
 export type LightLevel = (typeof LIGHT_LEVELS)[number];
 
+/** map_cells.ground_type's vocabulary (the post-roadmap ground-types
+ * addition, migration 0046) — defined here like LIGHT_LEVELS, since ground
+ * type is purely cosmetic and no rules calculation reads it (movement cost
+ * and void-ness come from terrain_type alone, forever). 'default' is the
+ * sparse-storage default: a cell painted no other way IS 'default', and
+ * renders with the plain terrain-driven color every cell always has. The
+ * other eight are the starter set — enough for the map-template pack and
+ * leaving room for a later "water" addition to extend this list. */
+export const GROUND_TYPES = [
+  "default",
+  "grass",
+  "rock",
+  "forest",
+  "dense_forest",
+  "path",
+  "sand",
+  "swamp",
+  "stone",
+] as const;
+
+export type GroundType = (typeof GROUND_TYPES)[number];
+
 export interface MapCell {
   map_id: string;
   x: number;
@@ -39,6 +61,12 @@ export interface MapCell {
   /** Ambient light (Prompt 55) — authored per cell exactly like
    * terrain_type; 'bright' is the sparse-storage default. */
   light_level: LightLevel;
+  /** Ground type (the post-roadmap addition) — authored per cell exactly
+   * like terrain_type/light_level, but SEPARATE from and independent of
+   * terrain_type: a cell's ground type never changes its movement cost or
+   * void-ness, and painting one never touches the other. 'default' is the
+   * sparse-storage default. */
+  ground_type: GroundType;
 }
 
 /**
@@ -79,6 +107,10 @@ export interface NewMapCell {
    * omitted value stores the 'bright' default, same as terrain omitting
    * nothing would. */
   light_level?: LightLevel;
+  /** Optional for the same reason as light_level — an omitted value stores
+   * the 'default' sparse-storage default, so pre-ground-types callers
+   * (existing starter templates) stay valid unchanged. */
+  ground_type?: GroundType;
 }
 
 export interface NewMapObjectSeed {
@@ -137,6 +169,7 @@ export async function createPopulatedMap(
     elevation: cell.elevation,
     terrain_type: cell.terrain_type,
     light_level: cell.light_level ?? "bright",
+    ground_type: cell.ground_type ?? "default",
   }));
   await upsertMapCells(supabase, cells);
 

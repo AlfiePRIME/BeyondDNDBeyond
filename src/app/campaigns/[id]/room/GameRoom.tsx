@@ -3137,19 +3137,29 @@ export function GameRoom({
     });
   }, [liveMap, visionMasking, seenCells, hiddenFromViewerTokenIds]);
 
-  // Hidden render-state mirror for verify-void-terrain.mjs (the visionDebug
-  // precedent below): a listed cell is one the table draws no floor block
-  // and no grid outline for, for EVERY viewer — void is unconditional map
-  // shape, unlike the per-viewer vision masking.
+  // Hidden render-state mirror for verify-void-terrain.mjs/
+  // verify-ground-types.mjs (the visionDebug precedent below): a listed
+  // void cell is one the table draws no floor block and no grid outline
+  // for, for EVERY viewer — void is unconditional map shape, unlike the
+  // per-viewer vision masking. groundByCell mirrors THIS viewer's actual
+  // rendered ground type per cell (sourced from tableMap, the same
+  // per-viewer dense array MapSurface renders from) — a remembered cell
+  // never carries one (the seen-cells schema captures terrain only), so it
+  // simply won't appear here even if its live ground type is painted.
   const tableSurfaceDebug = useMemo(() => {
-    if (!liveMap) return JSON.stringify({ mapId: null, voidCells: [] });
+    if (!liveMap || !tableMap) return JSON.stringify({ mapId: null, voidCells: [], groundByCell: {} });
+    const groundByCell: Record<string, string> = {};
+    for (const cell of tableMap.cells) {
+      if (cell.ground) groundByCell[cellKey(cell.x, cell.y)] = cell.ground;
+    }
     return JSON.stringify({
       mapId: liveMap.map.id,
       voidCells: liveMap.cells
         .filter((cell) => cell.terrain_type === "void")
         .map((cell) => cellKey(cell.x, cell.y)),
+      groundByCell,
     });
-  }, [liveMap]);
+  }, [liveMap, tableMap]);
 
   // Hidden render-state mirror for verify-model-orientation.mjs (the
   // visionDebug/tableSurfaceDebug precedent above) — mirrors the exact

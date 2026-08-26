@@ -54,6 +54,22 @@ to end by `scripts/db/verify-void-terrain.mjs` (hybrid RLS + real-browser shape,
 hidden `editor-surface-state`/`table-surface-state` render mirrors — the `vision-state`
 precedent).
 
+**Ground types (flat-color terrain dressing)** — another post-roadmap addition. A cell now
+carries a SEPARATE, purely cosmetic `ground_type` (migration `0046_ground_types.sql`, CHECK-
+constrained: `default`, `grass`, `rock`, `forest`, `dense_forest`, `path`, `sand`, `swamp`,
+`stone`), painted with its own brush in the map editor alongside terrain/light. This is layered
+ON TOP OF — never replacing — the existing mechanical `terrain_type`: a "forest" cell can
+independently be normal or difficult terrain, since ground type only changes the flat color
+`MapSurface` renders and never touches movement cost or void-ness. `default` (the sparse-
+storage default) renders exactly as every cell did before this column existed; any real ground
+type replaces the terrain-driven color pair with its own flat base/high pair, still lightened by
+elevation the identical way. Deliberately flat colors only, per the confirmed decision — no
+textures, materials, or decoration-object scattering. Chosen to leave room for a later "water"
+ground type to extend the same CHECK, and to give the upcoming map-template pack real terrain
+variety to paint with. Verified end to end by `scripts/db/verify-ground-types.mjs` (the
+void-terrain script's hybrid RLS + real-browser shape, reading the same render mirrors, now
+carrying a `groundByCell` map alongside `voidCells`).
+
 ## Stack
 
 - **Frontend:** Next.js (App Router) + TypeScript, React Three Fiber for the 3D scene, CanvasUI for WebGL UI effects
@@ -243,6 +259,7 @@ node scripts/db/verify-hide-stealth.mjs # verify Hide/Stealth: per-observer pass
 node scripts/db/verify-npc-stat-blocks.mjs # verify DM monster stat blocks: DM-only CRUD, quick-add before/mid-combat via add_combatant into the canonical turn order, stored-bonus/damage attacks through the roll route with the full death-save/instant-death/concentration bookkeeping, Strict economy gating, NPC HP clamps, stat-block AC auto-fill in a real browser, real passive Perception in Hide resolution (Prompt 61)
 node scripts/db/verify-character-edit.mjs # verify sheet-side race/class/level/speed editing: owner and DM edits persist through a real browser, a race change re-derives speed/darkvision in one call, imported characters are editable identically, class edits leave resources/spells untouched, non-owner RLS still holds
 node scripts/db/verify-void-terrain.mjs # verify void terrain: the editor's Void brush persisting through Save, paint authorization, the widened CHECK (0039), no-floor rendering in both the editor preview and the live table, clear placement/drag-to-move rejections, a normal move unaffected (post-roadmap: non-rectangular room shapes)
+node scripts/db/verify-ground-types.mjs # verify ground types: the CHECK constraint (0046), paint authorization, independence from terrain_type, the editor's Ground brush persisting through Save, live rendering on both the editor preview and the live table, an untouched map's rendering unchanged (post-roadmap: flat-color ground types)
 ```
 
 The first two connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`)
@@ -263,8 +280,8 @@ start one themselves, polling `/api/health`, if `:3000` isn't already serving).
 `verify-dice-ui.mjs`, `verify-quick-actions.mjs`, `verify-action-overrides.mjs`,
 `verify-action-economy.mjs`, `verify-opportunity-attacks.mjs`,
 `verify-vision-rendering.mjs`, `verify-hide-stealth.mjs`,
-`verify-npc-stat-blocks.mjs`, and `verify-void-terrain.mjs` go one step further and
-drive real Playwright browsers against the dev server, for the parts only a live UI can
+`verify-npc-stat-blocks.mjs`, `verify-void-terrain.mjs`, and `verify-ground-types.mjs` go one
+step further and drive real Playwright browsers against the dev server, for the parts only a live UI can
 exercise (the sheet's advantage toggle, the combat panel's Roll-initiative buttons, live
 sync landing in an actually-open Game Room, the quick-actions panel's
 surfacing/one-click-fire behavior, the flag → DM-approve → use-anyway override cycle, the

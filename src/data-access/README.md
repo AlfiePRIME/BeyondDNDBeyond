@@ -755,3 +755,26 @@ sitting in a DIFFERENT campaign's room, which no campaign-scoped broadcast chann
 do. The actual drag/collapse/z-index UI lives entirely in
 `src/app/campaigns/[id]/room/DraggablePanel.tsx` (Game-Room-specific layout behavior,
 not a data-access concern) — this module only stores and syncs the resulting document.
+
+As of the ground-types addition (post-roadmap — "add real ground types (grass, rock, forest,
+dense forest, path, etc.) as flat colors", not a numbered prompt): migration
+`0046_ground_types.sql` adds `map_cells.ground_type text not null default 'default' check
+(ground_type in ('default', 'grass', 'rock', 'forest', 'dense_forest', 'path', 'sand',
+'swamp', 'stone'))` — the exact `light_level` convention (0036): sibling CHECK-constrained
+column, sparse-storage default, no new RLS (the existing `can_read_map`/`can_write_map`
+row-level policies already cover every column on the row, this prompt's own read of
+`pg_policies` confirming it the 0031/0032/0037/void-terrain never-guess habit). `GROUND_TYPES`/
+`GroundType` are defined in `maps.ts` exactly like `LIGHT_LEVELS`/`LightLevel` (cosmetic only,
+no rules-engine calculation ever reads it, so it does NOT import from `@/rules-engine` the way
+`terrain_type` does). `MapCell` gains a required `ground_type: GroundType`; `NewMapCell` gains
+an optional `ground_type?: GroundType` (the `light_level?` precedent — omitted means the
+`'default'` DB default, so every pre-existing template/seed caller of `createPopulatedMap`
+stays valid unchanged). Deliberately independent of `terrain_type` in every direction: a
+"forest" cell can be normal or difficult terrain, set and read through two completely separate
+columns with two separate CHECKs — nothing here makes painting one touch the other. Painting
+ground type goes through the existing `upsertMapCells` under the existing `can_write_map` RLS,
+the void-terrain precedent's exact "no new authorization surface" reasoning. `map_seen_cells`
+(0036) is UNCHANGED and deliberately so: it still snapshots terrain/elevation/light only, never
+ground type, so a remembered (fogged-then-recalled) cell keeps rendering its plain terrain
+color regardless of what's live-painted underneath — consistent with that table's existing "no
+object-level memory either" scope, not something this addition widens.

@@ -13,49 +13,94 @@ import {
 
 describe("applyTool", () => {
   it("raise increments elevation one step at a time", () => {
-    const raised = applyTool(DEFAULT_CELL, "raise", "normal", "bright");
+    const raised = applyTool(DEFAULT_CELL, "raise", "normal", "bright", "default");
     expect(raised.elevation).toBe(1);
-    expect(applyTool(raised, "raise", "normal", "bright").elevation).toBe(2);
+    expect(applyTool(raised, "raise", "normal", "bright", "default").elevation).toBe(2);
   });
 
   it("raise clamps at MAX_ELEVATION and returns the same reference", () => {
-    const atMax: CellState = { elevation: MAX_ELEVATION, terrain: "normal", light: "bright" };
-    expect(applyTool(atMax, "raise", "normal", "bright")).toBe(atMax);
+    const atMax: CellState = {
+      elevation: MAX_ELEVATION,
+      terrain: "normal",
+      light: "bright",
+      ground: "default",
+    };
+    expect(applyTool(atMax, "raise", "normal", "bright", "default")).toBe(atMax);
   });
 
   it("lower decrements and clamps at ground level", () => {
-    const raised: CellState = { elevation: 2, terrain: "normal", light: "bright" };
-    expect(applyTool(raised, "lower", "normal", "bright").elevation).toBe(1);
-    expect(applyTool(DEFAULT_CELL, "lower", "normal", "bright")).toBe(DEFAULT_CELL);
+    const raised: CellState = { elevation: 2, terrain: "normal", light: "bright", ground: "default" };
+    expect(applyTool(raised, "lower", "normal", "bright", "default").elevation).toBe(1);
+    expect(applyTool(DEFAULT_CELL, "lower", "normal", "bright", "default")).toBe(DEFAULT_CELL);
   });
 
-  it("terrain paints the brush value without touching elevation", () => {
-    const raised: CellState = { elevation: 3, terrain: "normal", light: "bright" };
-    const painted = applyTool(raised, "terrain", "difficult", "bright");
-    expect(painted).toEqual({ elevation: 3, terrain: "difficult", light: "bright" });
+  it("terrain paints the brush value without touching elevation, light, or ground", () => {
+    const raised: CellState = { elevation: 3, terrain: "normal", light: "bright", ground: "grass" };
+    const painted = applyTool(raised, "terrain", "difficult", "bright", "grass");
+    expect(painted).toEqual({ elevation: 3, terrain: "difficult", light: "bright", ground: "grass" });
   });
 
   it("terrain is a no-op (same reference) when the brush matches", () => {
-    const difficult: CellState = { elevation: 0, terrain: "difficult", light: "bright" };
-    expect(applyTool(difficult, "terrain", "difficult", "bright")).toBe(difficult);
+    const difficult: CellState = {
+      elevation: 0,
+      terrain: "difficult",
+      light: "bright",
+      ground: "default",
+    };
+    expect(applyTool(difficult, "terrain", "difficult", "bright", "default")).toBe(difficult);
   });
 
-  it("light paints the light brush without touching terrain or elevation", () => {
-    const raised: CellState = { elevation: 3, terrain: "difficult", light: "bright" };
-    const painted = applyTool(raised, "light", "normal", "dark");
-    expect(painted).toEqual({ elevation: 3, terrain: "difficult", light: "dark" });
+  it("light paints the light brush without touching terrain, elevation, or ground", () => {
+    const raised: CellState = { elevation: 3, terrain: "difficult", light: "bright", ground: "rock" };
+    const painted = applyTool(raised, "light", "normal", "dark", "rock");
+    expect(painted).toEqual({ elevation: 3, terrain: "difficult", light: "dark", ground: "rock" });
   });
 
   it("light is a no-op (same reference) when the brush matches", () => {
-    const dim: CellState = { elevation: 0, terrain: "normal", light: "dim" };
-    expect(applyTool(dim, "light", "normal", "dim")).toBe(dim);
+    const dim: CellState = { elevation: 0, terrain: "normal", light: "dim", ground: "default" };
+    expect(applyTool(dim, "light", "normal", "dim", "default")).toBe(dim);
+  });
+
+  // Ground (the post-roadmap ground-types addition) mirrors light exactly:
+  // its own independent brush, touching nothing else on the cell — in
+  // particular never terrain, the confirmed "painting forest doesn't force
+  // difficult terrain" requirement.
+  it("ground paints the ground brush without touching terrain, elevation, or light", () => {
+    const raised: CellState = { elevation: 4, terrain: "difficult", light: "dim", ground: "default" };
+    const painted = applyTool(raised, "ground", "normal", "dim", "forest");
+    expect(painted).toEqual({ elevation: 4, terrain: "difficult", light: "dim", ground: "forest" });
+  });
+
+  it("ground is a no-op (same reference) when the brush matches", () => {
+    const grassy: CellState = { elevation: 0, terrain: "normal", light: "bright", ground: "grass" };
+    expect(applyTool(grassy, "ground", "normal", "bright", "grass")).toBe(grassy);
+  });
+
+  it("painting terrain difficult never changes an already-painted ground type, and vice versa", () => {
+    const forest: CellState = { elevation: 0, terrain: "normal", light: "bright", ground: "forest" };
+    const stillForest = applyTool(forest, "terrain", "difficult", "bright", "forest");
+    expect(stillForest.ground).toBe("forest");
+    expect(stillForest.terrain).toBe("difficult");
+
+    const difficult: CellState = { elevation: 0, terrain: "difficult", light: "bright", ground: "default" };
+    const stillDifficult = applyTool(difficult, "ground", "normal", "bright", "grass");
+    expect(stillDifficult.terrain).toBe("difficult");
+    expect(stillDifficult.ground).toBe("grass");
   });
 });
 
 describe("sparse grid reconstruction", () => {
   it("overlays stored rows onto defaults for every other cell", () => {
     const overlay = overlayFromRows([
-      { map_id: "m", x: 1, y: 2, elevation: 3, terrain_type: "difficult", light_level: "dim" },
+      {
+        map_id: "m",
+        x: 1,
+        y: 2,
+        elevation: 3,
+        terrain_type: "difficult",
+        light_level: "dim",
+        ground_type: "rock",
+      },
     ]);
     const dense = buildDenseCells(3, 3, overlay);
 
@@ -65,17 +110,27 @@ describe("sparse grid reconstruction", () => {
       y: 2,
       elevation: 3,
       terrain: "difficult",
+      ground: "rock",
     });
     for (const cell of dense) {
       if (cell.x === 1 && cell.y === 2) continue;
       expect(cell.elevation).toBe(0);
       expect(cell.terrain).toBe("normal");
+      expect(cell.ground).toBeUndefined();
     }
   });
 
   it("carries light only when asked (the editor's authoring tint)", () => {
     const overlay = overlayFromRows([
-      { map_id: "m", x: 0, y: 0, elevation: 0, terrain_type: "normal", light_level: "dark" },
+      {
+        map_id: "m",
+        x: 0,
+        y: 0,
+        elevation: 0,
+        terrain_type: "normal",
+        light_level: "dark",
+        ground_type: "default",
+      },
     ]);
 
     // The game table's call shape: no light on any cell.
@@ -87,17 +142,53 @@ describe("sparse grid reconstruction", () => {
     expect(withLight.find((cell) => cell.x === 1)?.light).toBe("bright");
   });
 
+  // Ground type is real appearance on BOTH surfaces (unlike light, which is
+  // an editor-only authoring tint) — it must come through unconditionally,
+  // with no includeLight-style opt-in flag.
+  it("carries ground type unconditionally — real appearance on every surface, not an authoring-only tint", () => {
+    const overlay = overlayFromRows([
+      {
+        map_id: "m",
+        x: 0,
+        y: 0,
+        elevation: 0,
+        terrain_type: "normal",
+        light_level: "bright",
+        ground_type: "swamp",
+      },
+    ]);
+
+    // The game table's call shape (includeLight omitted) still carries ground.
+    const denseForTable = buildDenseCells(2, 1, overlay);
+    expect(denseForTable.find((cell) => cell.x === 0)?.ground).toBe("swamp");
+    // A plain, never-painted cell carries no ground field at all — the
+    // exact object shape a pre-ground-types map always produced.
+    expect(denseForTable.find((cell) => cell.x === 1)?.ground).toBeUndefined();
+
+    // The editor's call shape carries it too, alongside light.
+    const denseForEditor = buildDenseCells(2, 1, overlay, undefined, true);
+    expect(denseForEditor.find((cell) => cell.x === 0)?.ground).toBe("swamp");
+  });
+
   it("round-trips keys", () => {
     expect(parseCellKey(cellKey(7, 19))).toEqual({ x: 7, y: 19 });
   });
 
   it("preview cells override the overlay and carry the preview flag", () => {
     const overlay = overlayFromRows([
-      { map_id: "m", x: 0, y: 0, elevation: 5, terrain_type: "difficult", light_level: "bright" },
+      {
+        map_id: "m",
+        x: 0,
+        y: 0,
+        elevation: 5,
+        terrain_type: "difficult",
+        light_level: "bright",
+        ground_type: "default",
+      },
     ]);
     const preview = new Map<string, CellState>([
-      [cellKey(0, 0), { elevation: 1, terrain: "normal", light: "bright" }],
-      [cellKey(1, 0), { elevation: 2, terrain: "difficult", light: "bright" }],
+      [cellKey(0, 0), { elevation: 1, terrain: "normal", light: "bright", ground: "default" }],
+      [cellKey(1, 0), { elevation: 2, terrain: "difficult", light: "bright", ground: "path" }],
     ]);
     const dense = buildDenseCells(2, 2, overlay, preview);
 
@@ -113,6 +204,7 @@ describe("sparse grid reconstruction", () => {
       y: 0,
       elevation: 2,
       terrain: "difficult",
+      ground: "path",
       preview: true,
     });
     const untouched = dense.find((cell) => cell.x === 0 && cell.y === 1);
@@ -123,9 +215,9 @@ describe("sparse grid reconstruction", () => {
 describe("rowsForSave", () => {
   it("emits one row per dirty cell, including cells edited back to default", () => {
     const overlay = new Map<string, CellState>([
-      [cellKey(0, 0), { elevation: 2, terrain: "normal", light: "bright" }],
-      [cellKey(4, 5), { elevation: 0, terrain: "difficult", light: "dim" }],
-      [cellKey(9, 9), { elevation: 0, terrain: "normal", light: "bright" }],
+      [cellKey(0, 0), { elevation: 2, terrain: "normal", light: "bright", ground: "grass" }],
+      [cellKey(4, 5), { elevation: 0, terrain: "difficult", light: "dim", ground: "default" }],
+      [cellKey(9, 9), { elevation: 0, terrain: "normal", light: "bright", ground: "default" }],
     ]);
     const rows = rowsForSave("map-1", overlay, new Set([cellKey(0, 0), cellKey(4, 5), cellKey(9, 9)]));
 
@@ -137,6 +229,7 @@ describe("rowsForSave", () => {
       elevation: 2,
       terrain_type: "normal",
       light_level: "bright",
+      ground_type: "grass",
     });
     expect(rows).toContainEqual({
       map_id: "map-1",
@@ -145,6 +238,7 @@ describe("rowsForSave", () => {
       elevation: 0,
       terrain_type: "difficult",
       light_level: "dim",
+      ground_type: "default",
     });
     expect(rows).toContainEqual({
       map_id: "map-1",
@@ -153,12 +247,13 @@ describe("rowsForSave", () => {
       elevation: 0,
       terrain_type: "normal",
       light_level: "bright",
+      ground_type: "default",
     });
   });
 
   it("ignores untouched overlay cells", () => {
     const overlay = new Map<string, CellState>([
-      [cellKey(0, 0), { elevation: 5, terrain: "normal", light: "bright" }],
+      [cellKey(0, 0), { elevation: 5, terrain: "normal", light: "bright", ground: "default" }],
     ]);
     expect(rowsForSave("map-1", overlay, new Set())).toEqual([]);
   });

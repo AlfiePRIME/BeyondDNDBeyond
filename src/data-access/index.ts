@@ -128,12 +128,14 @@ export {
   setMapReferenceImage,
   clearMapReferenceImage,
   LIGHT_LEVELS,
+  GROUND_TYPES,
   type CampaignMap,
   type MapCell,
   type MapFolder,
   type NewMapCell,
   type NewMapObjectSeed,
   type LightLevel,
+  type GroundType,
 } from "./maps";
 export {
   listMapObjects,
