@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, Suspense, useMemo, type ReactNode } from "react";
+import { Component, Suspense, useEffect, useMemo, type ReactNode } from "react";
 import { useGLTF } from "@react-three/drei";
 import { Box3, Vector3 } from "three";
 import type { Object3D } from "three";
@@ -9,6 +9,58 @@ import { PosedClone } from "./PosedClone";
 // A prop fits inside its cell footprint — matches CELL_SIZE - CELL_GAP in
 // MapEditorScene, so a normalized model never overhangs neighboring cells.
 export const PLACED_OBJECT_SIZE = 0.92;
+
+// Wall-family presets are the deliberate OPPOSITE of PLACED_OBJECT_SIZE's
+// inset: a wall run/corner/diagonal needs to reach its own cell's edges (or
+// even its own cell's diagonal corners), or adjacent segments never visually
+// touch — confirmed via real vertex-level measurement (this task's own
+// investigation): wall.glb's authored main box is 2 world-units wide, so
+// PLACED_OBJECT_SIZE's 0.92 target left a real, measured 0.08-unit gap
+// between two adjacent straight segments (each one centered in its own
+// 1-unit cell, 0.92/2 = 0.46 short of the shared edge on both sides).
+//
+// Keyed by model url, not asset_id: MapSurfaceObject/PropModel never see
+// asset identity, only a resolved model url (presets resolve straight to
+// their public path — see maps/[mapId]/edit/lib/assetUrl.ts's
+// resolvePaletteAssets) — matching PLACED_OBJECT_SIZE's own "well-known
+// preset, matched structurally" precedent (DiceTumble.tsx/AssetPalette.tsx
+// already import PLACED_OBJECT_SIZE itself the same way).
+//
+// wall.glb's OWN authored geometry is unchanged (still the legacy 2-unit-
+// wide box from generate-map-presets.mjs's buildWall()) — its fit target of
+// 1 (one full cell) yields scale 1/2 = 0.5, landing its run length on
+// exactly one cell (closing the gap) while its height/thickness grow the
+// same ~8.7% (1/0.92) as a side effect — the "if the gap fix changes
+// appearance, document exactly why" case this task's own acceptance
+// criteria anticipates.
+//
+// wall-corner.glb and wall-diagonal.glb (generate-wall-variants-
+// presets.mjs) are both authored FRESH, directly at their final target
+// size, so each one's own fit target is simply its own measured maxDim
+// (making scale exactly 1 — "render exactly as authored, no distortion"):
+//   - wall-corner.glb's arms are already exactly 1 cell-width long, but its
+//     merlon accent's OWN height (a decorative flourish, unrelated to the
+//     arms' span) is what the real Box3 measurement found to be the
+//     bounding box's largest axis (1.07, not the arms' 1.0) — using a naive
+//     1.0 fit target here would have scaled the whole model down by
+//     1/1.07, silently reopening a ~0.07-unit gap at every corner. Caught
+//     by measuring the actual round-tripped glTF, not by assuming the arms'
+//     own length was the bounding box's largest axis.
+//   - wall-diagonal.glb's beam is authored at Math.SQRT2 world-units long
+//     (a 1x1 cell's own corner-to-corner diagonal) baked at a 45° rotation
+//     — its axis-aligned bounding box (what maxDim measures) is smaller
+//     than the beam's own true length once rotated 45° off-axis, so a
+//     generic 1-unit fit target would fall meaningfully short of the
+//     opposite corner. Using its own exact measured maxDim (scale 1)
+//     instead preserves the authored Math.SQRT2 length exactly.
+// Both measured via scripts/assets/generate-wall-variants-presets.mjs's own
+// console output, the same Box3.setFromObject(realRoundTrippedGltf)
+// PropModel performs below — not hand-derived trigonometry.
+const WALL_FIT_TARGET_BY_URL: Record<string, number> = {
+  "/assets/presets/wall.glb": 1,
+  "/assets/presets/wall-corner.glb": 1.07,
+  "/assets/presets/wall-diagonal.glb": 1.190919,
+};
 
 const PLACEHOLDER_COLOR = "#8f86ad";
 
@@ -27,27 +79,45 @@ function PropModel({
   url,
   forwardOffsetDeg,
   onPoseDebug,
+  onMeasureDebug,
 }: {
   url: string;
   forwardOffsetDeg: number;
   onPoseDebug?: (compatible: boolean) => void;
+  /** Verification-only: mirrors this specific loaded model's own measured
+   * bounding-box maxDim and derived scale factor out to a caller — the same
+   * "WebGL has no DOM of its own for a test to inspect" reasoning as
+   * onPoseDebug (and SeatAvatar's own onMeasureDebug), used to confirm the
+   * procedural-wall gap fix actually lands on the REAL rendered object
+   * (not just in the WALL_FIT_TARGET_BY_URL formula in isolation). Omit it
+   * (as every real caller does) and nothing about rendering changes. */
+  onMeasureDebug?: (measurement: { maxDim: number; scale: number }) => void;
 }) {
   const { scene } = useGLTF(url);
-  const { scale, offset } = useMemo(() => {
+  const { scale, offset, maxDim } = useMemo(() => {
     const box = new Box3().setFromObject(scene as Object3D);
     const size = box.getSize(new Vector3());
     const center = box.getCenter(new Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
+    // Wall-family presets fit to WALL_FIT_TARGET_BY_URL's full-cell (or
+    // larger, for the diagonal) target instead of the ordinary props' inset
+    // — see that constant's own doc comment for the real-measurement-backed
+    // reasoning.
+    const fitSize = WALL_FIT_TARGET_BY_URL[url] ?? PLACED_OBJECT_SIZE;
     // Guard against degenerate (flat/empty) models rather than dividing by ~0.
-    const scale = maxDim > 1e-3 ? PLACED_OBJECT_SIZE / maxDim : 1;
+    const scale = maxDim > 1e-3 ? fitSize / maxDim : 1;
     // Recenter on x/z and put the model's base on the cell surface regardless
     // of where the export placed its origin. Unlike SeatAvatar's sitting
     // pose, the "idle" pose applied below doesn't fold the legs, so the
     // rest pose's feet-at-origin anchor stays correct even when posed —
     // no anchor override needed here.
     const offset: [number, number, number] = [-center.x * scale, -box.min.y * scale, -center.z * scale];
-    return { scale, offset };
-  }, [scene]);
+    return { scale, offset, maxDim };
+  }, [scene, url]);
+
+  useEffect(() => {
+    onMeasureDebug?.({ maxDim, scale });
+  }, [maxDim, scale, onMeasureDebug]);
 
   // PosedClone (SkeletonUtils-aware, via drei's Clone under the hood)
   // rather than rendering the cached scene directly — two placed objects
@@ -103,6 +173,7 @@ export function PlacedObject({
   url,
   forwardOffsetDeg = 0,
   onPoseDebug,
+  onMeasureDebug,
 }: {
   url: string | null;
   /** Stored forward-direction correction (degrees) — see
@@ -114,12 +185,14 @@ export function PlacedObject({
    * comment. Omit it (as every real caller except the verification
    * pass-through does) and nothing about rendering changes. */
   onPoseDebug?: (compatible: boolean) => void;
+  /** Verification-only: see PropModel's own onMeasureDebug doc comment. */
+  onMeasureDebug?: (measurement: { maxDim: number; scale: number }) => void;
 }) {
   if (!url) return <PlaceholderProp />;
   return (
     <PropErrorBoundary url={url}>
       <Suspense fallback={<PlaceholderProp />}>
-        <PropModel url={url} forwardOffsetDeg={forwardOffsetDeg} onPoseDebug={onPoseDebug} />
+        <PropModel url={url} forwardOffsetDeg={forwardOffsetDeg} onPoseDebug={onPoseDebug} onMeasureDebug={onMeasureDebug} />
       </Suspense>
     </PropErrorBoundary>
   );
