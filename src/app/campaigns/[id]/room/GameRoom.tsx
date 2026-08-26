@@ -812,6 +812,16 @@ export function GameRoom({
   const handleObjectPoseDebug = useCallback((id: string, compatible: boolean) => {
     setObjectPoseDebug((current) => (current[id] === compatible ? current : { ...current, [id]: compatible }));
   }, []);
+  // Investigation-only (teleport/mis-scale bug hunt): mirrors each seated
+  // member's own loaded avatar model's measured bounding-box height and
+  // derived scale factor — same reasoning as avatarPoseDebug above.
+  const [avatarMeasureDebug, setAvatarMeasureDebug] = useState<Record<string, { sizeY: number; scale: number }>>({});
+  const handleAvatarMeasureDebug = useCallback(
+    (userId: string, measurement: { sizeY: number; scale: number }) => {
+      setAvatarMeasureDebug((current) => ({ ...current, [userId]: measurement }));
+    },
+    []
+  );
   // Render-time reset (not an effect) when the server hands down a fresh
   // member list — react.dev's "adjusting state when a prop changes" pattern.
   const [prevMembers, setPrevMembers] = useState(members);
@@ -3855,6 +3865,7 @@ export function GameRoom({
           dayNightMode={dayNightMode}
           onTokenSlideDebug={handleTokenSlideDebug}
           onAvatarPoseDebug={handleAvatarPoseDebug}
+          onAvatarMeasureDebug={handleAvatarMeasureDebug}
           onObjectPoseDebug={handleObjectPoseDebug}
           seatOffsets={seatOffsets}
           onChairDragEnd={handleChairDragEnd}
@@ -4063,6 +4074,13 @@ export function GameRoom({
           directly, same reasoning as every other mirror on this page. */}
       <div data-testid="model-pose-state" hidden>
         {JSON.stringify({ avatars: avatarPoseDebug, objects: objectPoseDebug })}
+      </div>
+      {/* Investigation-only hidden mirror for the intermittent teleport/
+          mis-scale bug hunt — see handleAvatarMeasureDebug's own doc
+          comment. Keyed by user_id; a key absent entirely means that
+          member's avatar hasn't finished loading yet. */}
+      <div data-testid="avatar-measure-state" hidden>
+        {JSON.stringify(avatarMeasureDebug)}
       </div>
       {/* Hidden render-state mirror for verify-token-click-select.mjs —
           see the selectionDebug memo. */}

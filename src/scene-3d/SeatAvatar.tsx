@@ -40,10 +40,17 @@ function AvatarModel({
   url,
   forwardOffsetDeg,
   onPoseDebug,
+  onMeasureDebug,
 }: {
   url: string;
   forwardOffsetDeg: number;
   onPoseDebug?: (compatible: boolean) => void;
+  /** Verification-only: mirrors this specific loaded model's own measured
+   * bounding-box height and derived scale factor out to a caller — the same
+   * "WebGL has no DOM of its own for a test to inspect" reasoning as
+   * onPoseDebug, used to confirm/rule out an intermittent mis-scaling race.
+   * Omit it (as every real caller does) and nothing about rendering changes. */
+  onMeasureDebug?: (measurement: { sizeY: number; scale: number }) => void;
 }) {
   const { scene } = useGLTF(url);
   // Skeleton-based posing (docs/design/model-orientation-and-posing.md §9):
@@ -59,7 +66,7 @@ function AvatarModel({
     onPoseDebug?.(resolvedPose !== null);
   }, [resolvedPose, onPoseDebug]);
 
-  const { scale, offset } = useMemo(() => {
+  const { scale, offset, sizeY } = useMemo(() => {
     const box = new Box3().setFromObject(scene as Object3D);
     const size = box.getSize(new Vector3());
     const center = box.getCenter(new Vector3());
@@ -77,8 +84,12 @@ function AvatarModel({
     // Recenter on x/z and put the model's feet (or, when posed, hips) on
     // the ground regardless of where the export placed its origin.
     const offset: [number, number, number] = [-center.x * scale, -groundY * scale, -center.z * scale];
-    return { scale, offset };
+    return { scale, offset, sizeY: size.y };
   }, [scene, resolvedPose]);
+
+  useEffect(() => {
+    onMeasureDebug?.({ sizeY, scale });
+  }, [sizeY, scale, onMeasureDebug]);
 
   // PosedClone (SkeletonUtils-aware, via drei's Clone under the hood)
   // rather than rendering the cached scene directly — two members with the
@@ -128,6 +139,7 @@ export function SeatAvatar({
   url,
   forwardOffsetDeg = 0,
   onPoseDebug,
+  onMeasureDebug,
 }: {
   url: string | null;
   /** Stored forward-direction correction (degrees) — see
@@ -139,12 +151,14 @@ export function SeatAvatar({
    * comment. Omit it (as every real caller except the verification
    * pass-through does) and nothing about rendering changes. */
   onPoseDebug?: (compatible: boolean) => void;
+  /** Verification-only: see AvatarModel's own onMeasureDebug doc comment. */
+  onMeasureDebug?: (measurement: { sizeY: number; scale: number }) => void;
 }) {
   if (!url) return <PlaceholderAvatar />;
   return (
     <AvatarErrorBoundary url={url}>
       <Suspense fallback={<PlaceholderAvatar />}>
-        <AvatarModel url={url} forwardOffsetDeg={forwardOffsetDeg} onPoseDebug={onPoseDebug} />
+        <AvatarModel url={url} forwardOffsetDeg={forwardOffsetDeg} onPoseDebug={onPoseDebug} onMeasureDebug={onMeasureDebug} />
       </Suspense>
     </AvatarErrorBoundary>
   );
