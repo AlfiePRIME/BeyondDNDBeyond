@@ -877,7 +877,10 @@ export interface MapSurfaceProps {
   metrics?: MapSurfaceMetrics;
   /** Placed objects to render; absent/empty renders none. */
   objects?: readonly MapSurfaceObject[];
-  selectedObjectId?: string | null;
+  /** Every currently-selected object id — a Set rather than a single id so
+   * the editor's shift-click multi-select can highlight more than one
+   * object at once; absent/empty selects none. */
+  selectedObjectIds?: ReadonlySet<string> | null;
   /** Placed tokens to render; absent/empty renders none. */
   tokens?: readonly MapSurfaceToken[];
   /** Draws the per-cell top-face grid outline — the game table turns this
@@ -928,7 +931,7 @@ export function MapSurface({
   cells,
   metrics = EDITOR_MAP_METRICS,
   objects,
-  selectedObjectId,
+  selectedObjectIds,
   tokens,
   gridOverlay = false,
   onSelectObject,
@@ -998,7 +1001,7 @@ export function MapSurface({
           rotation={object.rotation}
           url={object.url}
           forwardOffsetDeg={object.forwardOffsetDeg ?? 0}
-          selected={object.id === selectedObjectId}
+          selected={selectedObjectIds?.has(object.id) ?? false}
           selectable={Boolean(onSelectObject) && object.selectable !== false}
           ghost={object.ghost ?? false}
           active={object.active ?? false}

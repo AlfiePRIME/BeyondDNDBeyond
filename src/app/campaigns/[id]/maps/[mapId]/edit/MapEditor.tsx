@@ -179,7 +179,14 @@ export function MapEditor({
 
   const [objects, setObjects] = useState<MapObject[]>(initialObjects);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(assets[0]?.id ?? null);
-  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  // A Set rather than a single id: shift-click accumulates a multi-selection
+  // (add-or-toggle), a plain click replaces it with just the clicked object
+  // — the confirmed decision for bulk delete over a marquee/rubber-band
+  // drag-select, matching every other click-based interaction this editor
+  // already has.
+  const [selectedObjectIds, setSelectedObjectIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
   const [moveArmed, setMoveArmed] = useState(false);
   const [objectError, setObjectError] = useState<string | null>(null);
 
@@ -249,7 +256,7 @@ export function MapEditor({
   const brushRef = useRef(brush);
   const lightBrushRef = useRef(lightBrush);
   const selectedAssetIdRef = useRef(selectedAssetId);
-  const selectedObjectIdRef = useRef(selectedObjectId);
+  const selectedObjectIdsRef = useRef(selectedObjectIds);
   const moveArmedRef = useRef(moveArmed);
   const regionRef = useRef(region);
   useEffect(() => {
@@ -257,10 +264,10 @@ export function MapEditor({
     brushRef.current = brush;
     lightBrushRef.current = lightBrush;
     selectedAssetIdRef.current = selectedAssetId;
-    selectedObjectIdRef.current = selectedObjectId;
+    selectedObjectIdsRef.current = selectedObjectIds;
     moveArmedRef.current = moveArmed;
     regionRef.current = region;
-  }, [tool, brush, lightBrush, selectedAssetId, selectedObjectId, moveArmed, region]);
+  }, [tool, brush, lightBrush, selectedAssetId, selectedObjectIds, moveArmed, region]);
 
   // The last PERSISTED cell state: initialCells at mount, advanced whenever
   // cells actually reach the database (Save, AI-draft accept). Undo/redo
@@ -496,8 +503,13 @@ export function MapEditor({
   const removeObjectLocal = useCallback((id: string) => {
     objectsRef.current = objectsRef.current.filter((object) => object.id !== id);
     setObjects(objectsRef.current);
-    if (selectedObjectIdRef.current === id) {
-      setSelectedObjectId(null);
+    if (selectedObjectIdsRef.current.has(id)) {
+      setSelectedObjectIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       setMoveArmed(false);
     }
   }, []);
@@ -601,8 +613,19 @@ export function MapEditor({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [runHistoryStep]);
 
-  const handleSelectObject = useCallback((id: string) => {
-    setSelectedObjectId(id);
+  // Plain click (no event, or a click without the shift key) replaces the
+  // selection with just this object — today's exact single-select behavior.
+  // Shift-click toggles this object in the current selection: adds it if
+  // absent, removes it if already selected (the standard toggle-in-set
+  // convention), building up the multi-selection one click at a time.
+  const handleSelectObject = useCallback((id: string, event?: { shiftKey: boolean }) => {
+    setSelectedObjectIds((prev) => {
+      if (!event?.shiftKey) return new Set([id]);
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
     setMoveArmed(false);
   }, []);
 
@@ -642,7 +665,11 @@ export function MapEditor({
       const preview = previewRef.current;
       const previewOccupant = preview?.objects.find((object) => object.x === x && object.y === y);
       const occupant = objectsRef.current.find((object) => object.x === x && object.y === y);
-      const selectedId = selectedObjectIdRef.current;
+      // Move only ever acts on a single object (bulk-move isn't part of this
+      // feature) — null out selectedId whenever more than one is selected so
+      // the move branch below can't run against an arbitrary set member.
+      const selectedIds = selectedObjectIdsRef.current;
+      const selectedId = selectedIds.size === 1 ? [...selectedIds][0] : null;
       const clickInPreview = Boolean(preview) && inRegion(x, y);
 
       if (moveArmedRef.current && selectedId) {
@@ -734,7 +761,7 @@ export function MapEditor({
           rotation: 0,
         };
         setPreviewState({ ...preview!, objects: [...preview!.objects, created] });
-        setSelectedObjectId(created.id);
+        setSelectedObjectIds(new Set([created.id]));
         return;
       }
 
@@ -749,7 +776,7 @@ export function MapEditor({
           rotation: 0,
         });
         addObjectLocal(created);
-        setSelectedObjectId(created.id);
+        setSelectedObjectIds(new Set([created.id]));
         pushHistory(makePlacementEntry(created));
       });
     },
@@ -769,9 +796,17 @@ export function MapEditor({
     ]
   );
 
-  const selectedLiveObject = objects.find((object) => object.id === selectedObjectId) ?? null;
-  const selectedPreviewObject =
-    preview?.objects.find((object) => object.id === selectedObjectId) ?? null;
+  // Rotate/Move/behavior-editing stay single-object operations (bulk-move
+  // wasn't asked for) — they only resolve to a real object when the
+  // selection has exactly one member, same as the solo-select move guard
+  // above.
+  const soloSelectedId = selectedObjectIds.size === 1 ? [...selectedObjectIds][0] : null;
+  const selectedLiveObject = soloSelectedId
+    ? (objects.find((object) => object.id === soloSelectedId) ?? null)
+    : null;
+  const selectedPreviewObject = soloSelectedId
+    ? (preview?.objects.find((object) => object.id === soloSelectedId) ?? null)
+    : null;
 
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
 
@@ -811,7 +846,7 @@ export function MapEditor({
         ...preview,
         objects: preview.objects.filter((object) => object.id !== selectedPreviewObject.id),
       });
-      setSelectedObjectId(null);
+      setSelectedObjectIds(new Set());
       setMoveArmed(false);
       return;
     }
@@ -820,9 +855,52 @@ export function MapEditor({
     void runObjectMutation(async (supabase) => {
       await deleteMapObject(supabase, removed.id);
       removeObjectLocal(removed.id);
-      setSelectedObjectId(null);
+      setSelectedObjectIds(new Set());
       setMoveArmed(false);
       pushHistory(makeRemovalEntry(removed));
+    });
+  }
+
+  // Bulk delete: the whole selection set, one click. Deliberately reuses the
+  // exact same per-object primitives handleRemove uses above (the preview
+  // filter-by-id predicate, and deleteMapObject + removeObjectLocal +
+  // makeRemovalEntry for live objects) rather than a separate bulk-delete
+  // code path — so whatever handleRemove already does for a single object
+  // (including the DB's own on-delete-cascade for anything anchored to it,
+  // e.g. a light source) happens identically per object here. Each live
+  // object gets its own undo entry, same as a single Remove would, rather
+  // than one combined entry — so a delete that fails partway through still
+  // leaves every object actually removed independently undoable.
+  function handleRemoveSelected() {
+    const ids = selectedObjectIds;
+    if (ids.size === 0) return;
+
+    if (preview) {
+      const draftIds = new Set(
+        preview.objects.filter((object) => ids.has(object.id)).map((object) => object.id)
+      );
+      if (draftIds.size > 0) {
+        setPreviewState({
+          ...preview,
+          objects: preview.objects.filter((object) => !draftIds.has(object.id)),
+        });
+        setSelectedObjectIds((prev) => {
+          const next = new Set(prev);
+          for (const id of draftIds) next.delete(id);
+          return next;
+        });
+        setMoveArmed(false);
+      }
+    }
+
+    const liveTargets = objects.filter((object) => ids.has(object.id));
+    if (liveTargets.length === 0) return;
+    void runObjectMutation(async (supabase) => {
+      for (const target of liveTargets) {
+        await deleteMapObject(supabase, target.id);
+        removeObjectLocal(target.id);
+        pushHistory(makeRemovalEntry(target));
+      }
     });
   }
 
@@ -1106,7 +1184,7 @@ export function MapEditor({
 
   function switchTool(next: EditorTool) {
     setTool(next);
-    setSelectedObjectId(null);
+    setSelectedObjectIds(new Set());
     setMoveArmed(false);
     if (next !== "transition") {
       setTransitionCell(null);
@@ -1172,7 +1250,7 @@ export function MapEditor({
         rotation: object.rotation,
       }));
       setPreviewState({ cells, objects: previewObjects });
-      setSelectedObjectId(null);
+      setSelectedObjectIds(new Set());
       setMoveArmed(false);
     } catch {
       setGenerateError("Couldn't generate the area — try again.");
@@ -1241,7 +1319,7 @@ export function MapEditor({
       setPreviewState(null);
       setRegion(null);
       setAreaPrompt("");
-      setSelectedObjectId(null);
+      setSelectedObjectIds(new Set());
       setMoveArmed(false);
     } catch (err) {
       setGenerateError(errorMessage(err) ?? "Couldn't apply the generated area — try again.");
@@ -1255,7 +1333,7 @@ export function MapEditor({
     setRegion(null);
     setAreaPrompt("");
     setGenerateError(null);
-    setSelectedObjectId(null);
+    setSelectedObjectIds(new Set());
     setMoveArmed(false);
   }
 
@@ -1461,7 +1539,7 @@ export function MapEditor({
                 : region
           }
           objects={sceneObjects}
-          selectedObjectId={selectedObjectId}
+          selectedObjectIds={selectedObjectIds}
           onSelectObject={tool === "object" ? handleSelectObject : undefined}
           referenceImage={referenceImage}
         />
@@ -1736,7 +1814,32 @@ export function MapEditor({
                 />
               ))}
             </div>
-            {selectedLiveObject || selectedPreviewObject ? (
+            {selectedObjectIds.size > 1 ? (
+              <>
+                {/* Multi-selection: rotate/move/behavior-editing stay
+                    single-object operations (bulk-move wasn't asked for),
+                    so this branch offers only what was asked for — bulk
+                    delete — rather than trying to make those apply across
+                    a set. */}
+                <span className={styles.selectedMeta} data-testid="selected-object">
+                  {selectedObjectIds.size} objects selected
+                </span>
+                <div className={styles.toolRow}>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={handleRemoveSelected}
+                    data-testid="delete-selected-objects"
+                  >
+                    Delete selected ({selectedObjectIds.size})
+                  </Button>
+                </div>
+                <p className={styles.hint}>
+                  Shift-click to add or remove objects from the selection, or click any cell to
+                  start a new one.
+                </p>
+              </>
+            ) : selectedLiveObject || selectedPreviewObject ? (
               <>
                 <span className={styles.selectedMeta} data-testid="selected-object">
                   {selectedLiveObject
@@ -1804,6 +1907,7 @@ export function MapEditor({
             ) : (
               <p className={styles.hint}>
                 Click an empty cell to place the picked asset · click a placed object to select it
+                · shift-click to select more than one
               </p>
             )}
             {objectError ? (

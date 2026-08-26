@@ -171,11 +171,16 @@ export interface MapEditorSceneProps {
   region?: EditorRegion | null;
   /** Placed objects to render; absent/empty renders none. */
   objects?: readonly MapSurfaceObject[];
-  selectedObjectId?: string | null;
+  /** Every currently-selected object id — see MapSurfaceProps for why this
+   * is a Set rather than a single id. */
+  selectedObjectIds?: ReadonlySet<string> | null;
   /** When provided, placed objects become click targets that intercept the
    * cell beneath; when absent they're inert and clicks fall through to the
-   * cell, so sculpt tools still paint occupied cells. */
-  onSelectObject?: (id: string) => void;
+   * cell, so sculpt tools still paint occupied cells. The event carries just
+   * the modifier the caller needs (shiftKey) to decide whether this click
+   * adds to/toggles the selection or replaces it — plain click vs shift-click
+   * multi-select. */
+  onSelectObject?: (id: string, event: { shiftKey: boolean }) => void;
   /** The DM's guide art rendered under the grid; null/absent renders none.
    * Deliberately an editor-scene prop, NOT a MapSurface one — see
    * ReferenceImagePlane. */
@@ -191,7 +196,7 @@ export function MapEditorScene({
   onCellClick,
   region,
   objects,
-  selectedObjectId,
+  selectedObjectIds,
   onSelectObject,
   referenceImage,
 }: MapEditorSceneProps) {
@@ -250,8 +255,8 @@ export function MapEditorScene({
     [paint]
   );
 
-  const handleSelectObject = useCallback((id: string) => {
-    onSelectObjectRef.current?.(id);
+  const handleSelectObject = useCallback((id: string, event: ThreeEvent<PointerEvent>) => {
+    onSelectObjectRef.current?.(id, { shiftKey: event.shiftKey });
   }, []);
 
   const handleOver = useCallback(
@@ -322,7 +327,7 @@ export function MapEditorScene({
         gridHeight={gridHeight}
         cells={cells}
         objects={objects}
-        selectedObjectId={selectedObjectId}
+        selectedObjectIds={selectedObjectIds}
         onSelectObject={onSelectObject ? handleSelectObject : undefined}
         onCellPointerDown={handleDown}
         onCellPointerOver={handleOver}
