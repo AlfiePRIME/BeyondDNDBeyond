@@ -34,32 +34,31 @@ export const PLACED_OBJECT_SIZE = 0.92;
 // appearance, document exactly why" case this task's own acceptance
 // criteria anticipates.
 //
-// wall-corner.glb and wall-diagonal.glb (generate-wall-variants-
-// presets.mjs) are both authored FRESH, directly at their final target
-// size, so each one's own fit target is simply its own measured maxDim
-// (making scale exactly 1 — "render exactly as authored, no distortion"):
-//   - wall-corner.glb's arms are already exactly 1 cell-width long, but its
-//     merlon accent's OWN height (a decorative flourish, unrelated to the
-//     arms' span) is what the real Box3 measurement found to be the
-//     bounding box's largest axis (1.07, not the arms' 1.0) — using a naive
-//     1.0 fit target here would have scaled the whole model down by
-//     1/1.07, silently reopening a ~0.07-unit gap at every corner. Caught
-//     by measuring the actual round-tripped glTF, not by assuming the arms'
-//     own length was the bounding box's largest axis.
-//   - wall-diagonal.glb's beam is authored at Math.SQRT2 world-units long
-//     (a 1x1 cell's own corner-to-corner diagonal) baked at a 45° rotation
-//     — its axis-aligned bounding box (what maxDim measures) is smaller
-//     than the beam's own true length once rotated 45° off-axis, so a
-//     generic 1-unit fit target would fall meaningfully short of the
-//     opposite corner. Using its own exact measured maxDim (scale 1)
-//     instead preserves the authored Math.SQRT2 length exactly.
-// Both measured via scripts/assets/generate-wall-variants-presets.mjs's own
-// console output, the same Box3.setFromObject(realRoundTrippedGltf)
-// PropModel performs below — not hand-derived trigonometry.
+// wall-corner.glb, wall-diagonal.glb, and wall-door.glb (generate-wall-
+// variants-presets.mjs) are all authored FRESH, directly at their final
+// target size, so each one's own fit target is simply its own measured
+// maxDim (making scale exactly 1 — "render exactly as authored, no
+// distortion").
+//
+// All three now measure maxDim ≈ 1.0 exactly, matching wall.glb's own fit
+// target — NOT a coincidence: this task's own real Box3 measurement (BEFORE
+// changing anything) found the ORIGINAL wall-corner.glb/wall-diagonal.glb
+// each measured a DIFFERENT maxDim (1.07 and 1.190919 respectively) because
+// their own cap/merlon accents were authored stacked ON TOP OF an already-
+// final peak height, and the diagonal's beam/cap were authored at their
+// bare centerline length (Math.SQRT2) with no allowance for their own
+// thickness once rotated 45° off-axis — both real, measured overshoots
+// past a straight run's own true 0.85 peak / 1x1 footprint (see
+// generate-wall-variants-presets.mjs's own top comment for the exact
+// numbers). Fixing the authored geometry itself (not just this fit target)
+// made every wall-family piece converge on the SAME maxDim as wall.glb —
+// confirmed via the generate script's own re-measurement of the actual
+// regenerated .glb files, not assumed from the geometry formulas alone.
 const WALL_FIT_TARGET_BY_URL: Record<string, number> = {
   "/assets/presets/wall.glb": 1,
-  "/assets/presets/wall-corner.glb": 1.07,
-  "/assets/presets/wall-diagonal.glb": 1.190919,
+  "/assets/presets/wall-corner.glb": 1,
+  "/assets/presets/wall-diagonal.glb": 1,
+  "/assets/presets/wall-door.glb": 1,
 };
 
 const PLACEHOLDER_COLOR = "#8f86ad";
