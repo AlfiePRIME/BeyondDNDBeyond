@@ -118,6 +118,35 @@ export function seatEllipseSemiAxes(
 }
 
 /**
+ * Rounds away sub-nanometer floating-point noise from a trig-derived
+ * coordinate/angle. `Math.cos`/`Math.sin`/`Math.atan2` are NOT specified to
+ * be bit-identical across JS engines (Node's V8 rendering this on the
+ * server vs. a browser's V8 recomputing the exact same call during
+ * hydration can differ in their last one or two ULPs) — and at an angle
+ * like π/2 the mathematically-exact-zero result instead lands on a tiny
+ * nonzero epsilon (e.g. `Math.cos(Math.PI / 2)` === 6.123233995736766e-17,
+ * a well-known JS quirk), whose LOW-ORDER digits are exactly where that
+ * cross-engine divergence shows up. GameRoom.tsx's seat-layout-state debug
+ * mirror renders a seat's position/rotationY into the page's initial HTML
+ * (server-computed) and then recomputes the identical
+ * computeCampaignSeatLayout call client-side during hydration — a value
+ * that differs from the client's own recompute in even its 16th significant
+ * digit is enough to fail React's exact hydration comparison ("Hydration
+ * failed because the server rendered text didn't match the client"),
+ * discarding and rebuilding that subtree client-side on every single Game
+ * Room load (confirmed via a real SSR page load: scripts/db/
+ * verify-table-capacity.mjs's own page-error check was catching exactly
+ * this). Rounding to 9 decimal places is nine orders of magnitude finer
+ * than anything a 3D scene measured in meters could ever visibly need (finer
+ * even than a GPU's own float32 precision), so this is a complete no-op for
+ * how anything actually renders — it only removes noise that was never
+ * meaningful to begin with.
+ */
+function roundCoord(value: number): number {
+  return Math.round(value * 1e9) / 1e9;
+}
+
+/**
  * The position/rotation/camera math for a single seat at a given angle
  * around a given table's ellipse — factored out of computeSeatLayout so a
  * DIFFERENT angle-generation scheme (appendedTableAngles below, for
@@ -132,15 +161,15 @@ function seatAtAngle(
   angle: number
 ): Pick<Seat, "position" | "rotationY" | "cameraPosition"> {
   const { semiX, semiZ } = seatEllipseSemiAxes(table);
-  const x = semiX * Math.cos(angle);
-  const z = semiZ * Math.sin(angle);
+  const x = roundCoord(semiX * Math.cos(angle));
+  const z = roundCoord(semiZ * Math.sin(angle));
   return {
     position: [x, 0, z],
-    rotationY: Math.atan2(x, z),
+    rotationY: roundCoord(Math.atan2(x, z)),
     cameraPosition: [
-      (semiX + CAMERA_SETBACK) * Math.cos(angle),
+      roundCoord((semiX + CAMERA_SETBACK) * Math.cos(angle)),
       CAMERA_EYE_HEIGHT,
-      (semiZ + CAMERA_SETBACK) * Math.sin(angle),
+      roundCoord((semiZ + CAMERA_SETBACK) * Math.sin(angle)),
     ],
   };
 }

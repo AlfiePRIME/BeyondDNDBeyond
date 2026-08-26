@@ -486,6 +486,7 @@ function CombinedTable() {
 function TableSeat({
   seat,
   onAvatarPoseDebug,
+  onAvatarMeasureDebug,
   draggable = false,
   onDragPointerDown,
 }: {
@@ -493,6 +494,9 @@ function TableSeat({
   /** Verification-only pass-through to SeatAvatar's onPoseDebug — see
    * GameTableSceneProps.onAvatarPoseDebug's doc comment. */
   onAvatarPoseDebug?: (userId: string, compatible: boolean) => void;
+  /** Verification-only pass-through to SeatAvatar's onMeasureDebug — see
+   * GameTableSceneProps.onAvatarMeasureDebug's doc comment. */
+  onAvatarMeasureDebug?: (userId: string, measurement: { sizeY: number; scale: number }) => void;
   /** True only for the CURRENT viewer's own player seat (GameTableScene's
    * own draggableUserId) — the movable-chair prompt's explicit "a player can
    * drag their own chair... cannot drag another player's chair or the DM's
@@ -518,6 +522,11 @@ function TableSeat({
           forwardOffsetDeg={seat.member.avatar_forward_offset_deg ?? 0}
           onPoseDebug={
             onAvatarPoseDebug ? (compatible) => onAvatarPoseDebug(seat.member.user_id, compatible) : undefined
+          }
+          onMeasureDebug={
+            onAvatarMeasureDebug
+              ? (measurement) => onAvatarMeasureDebug(seat.member.user_id, measurement)
+              : undefined
           }
         />
       </group>
@@ -590,6 +599,11 @@ export interface GameTableSceneProps {
    * has no DOM of its own for a test to inspect a skeleton directly).
    * Omitting it changes nothing about how avatars render or pose. */
   onAvatarPoseDebug?: (userId: string, compatible: boolean) => void;
+  /** Verification-only: mirrors each seated member's own loaded avatar
+   * model's measured bounding-box height and derived scale factor — same
+   * reasoning as onAvatarPoseDebug, used to confirm/rule out an intermittent
+   * mis-scaling race. Omitting it changes nothing about how avatars render. */
+  onAvatarMeasureDebug?: (userId: string, measurement: { sizeY: number; scale: number }) => void;
   /** Verification-only pass-through to MapSurface's onObjectPoseDebug —
    * see its own doc comment. */
   onObjectPoseDebug?: (id: string, compatible: boolean) => void;
@@ -729,6 +743,7 @@ export function GameTableScene({
   dayNightMode = "day",
   onTokenSlideDebug,
   onAvatarPoseDebug,
+  onAvatarMeasureDebug,
   onObjectPoseDebug,
   seatOffsets = EMPTY_SEAT_OFFSETS,
   onChairDragEnd,
@@ -1346,6 +1361,7 @@ export function GameTableScene({
           key={seat.member.user_id}
           seat={seat}
           onAvatarPoseDebug={onAvatarPoseDebug}
+          onAvatarMeasureDebug={onAvatarMeasureDebug}
           draggable={seat.member.user_id === draggableUserId}
           onDragPointerDown={
             seat.member.user_id === draggableUserId
