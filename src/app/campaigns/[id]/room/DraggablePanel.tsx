@@ -40,7 +40,8 @@ export type PanelId =
   | "opportunityAttack"
   | "quickActions"
   | "diceLog"
-  | "handout";
+  | "handout"
+  | "diceTray";
 
 /**
  * Each panel's default position, expressed as a CSS anchor class
@@ -65,6 +66,18 @@ const DEFAULT_ANCHOR_CLASS: Record<PanelId, string> = {
   map: styles.anchorBottomRight,
   tokens: styles.anchorBottomLeft,
   diceLog: styles.anchorBottomCenter,
+  // Prompt 8b: DiceTrayPicker's own panel — deliberately NOT folded into
+  // diceLog's own already-tall bottom-center panel (a real regression
+  // caught empirically: adding the tray-picker's grid/upload-form content
+  // there grew that panel tall enough to cover the exact screen point a
+  // seated player's own chair-drag grab handle projects to for smaller
+  // parties, silently breaking the pre-existing chair-drag gesture — see
+  // verify-per-member-dice-trays.mjs's own history). Stacked directly above
+  // diceLog instead (anchorTopCenterLow/anchorBottomCenter's own established
+  // "offset by the neighboring panel's own max-height" pattern), a
+  // genuinely separate, independently drag-repositionable panel so growing
+  // ITS content never grows diceLog's own already-tuned footprint.
+  diceTray: styles.anchorBottomCenterHigh,
 };
 
 /**

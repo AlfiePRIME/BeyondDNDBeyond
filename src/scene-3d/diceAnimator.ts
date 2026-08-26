@@ -51,6 +51,16 @@ export interface DiceAnimator {
 const TUMBLE_SECONDS = 0.55;
 const SETTLE_SECONDS = 0.85;
 
+// A die's starting point (before it eases toward its rest spot) sits this
+// far from the tray's own center, in tray-local units — exported (not just
+// module-private) so DiceTumble.tsx's trayRadiusForScale can derive a
+// tray's real physical footprint from the SAME two numbers this animator
+// actually uses, instead of a hand-copied duplicate of "0.42" that could
+// silently drift from them. See spinQuaternionAt/the tumble step below for
+// where these feed into the actual position math.
+export const DICE_START_RADIUS_BASE = 0.28;
+export const DICE_START_RADIUS_JITTER = 0.14;
+
 // Where a die's local origin sits once at rest, in tray-local units — half
 // a die's rendered size above the tray surface, roughly (exact per-shape
 // half-extents vary slightly; one constant reads fine at this scale).
@@ -103,7 +113,7 @@ export const scriptedDiceAnimator: DiceAnimator = {
     const seedC = seedFor(`${spec.id}:c`);
 
     const startAngle = seedA * Math.PI * 2;
-    const startRadius = 0.28 + seedB * 0.14;
+    const startRadius = DICE_START_RADIUS_BASE + seedB * DICE_START_RADIUS_JITTER;
     const startX = Math.cos(startAngle) * startRadius;
     const startZ = Math.sin(startAngle) * startRadius;
     const restX = (seedB - 0.5) * 0.16;

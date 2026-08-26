@@ -70,6 +70,17 @@
   transform: translateX(-50%);
 }
 
+/* Prompt 8b: DiceTrayPicker's own panel, stacked directly ABOVE
+   anchorBottomCenter (diceLog) — the exact anchorTopCenterLow precedent
+   above (a plain, independent calc() using diceLog's own real max-height,
+   .dicePanel's 42vh in room.module.css, not a live cross-reference to it),
+   so the two panels' own DEFAULT positions never overlap each other. */
+.anchorBottomCenterHigh {
+  bottom: calc(24px + 42vh + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 /* The wrapped panel's own root element's first child is its existing
    header/title row (see DraggablePanel.tsx's structural contract) —
    reused as the drag handle rather than adding a redundant new one. */

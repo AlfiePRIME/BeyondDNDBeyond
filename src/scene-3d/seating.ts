@@ -645,19 +645,74 @@ export function getEffectiveSeat(
 }
 
 /**
- * Prompt 8a: the data layer for one personal dice tray per member (Prompt
- * 8b mounts the actual DiceTumble instances; this file only computes WHERE
- * each one sits). Fixed distance from a table's own center that a member's
- * personal tray sits, along the direction toward their own seat — reusing,
- * unchanged, the exact tuning GameRoom.tsx's DM_PRIVATE_TRAY_DISTANCE
- * established for the DM's own private tray (see that constant's doc
- * comment there for why a FIXED distance from the target surface's own
- * center — not a fraction of the seat's own reach from center, and not a
- * fixed step forward FROM the seat — is the only formula that stays correct
- * regardless of how far a seat migrates as the seating ellipse resizes with
- * party size).
+ * Prompt 8a/8b: the data layer for one personal dice tray per CONNECTED
+ * member (GameRoom.tsx mounts the actual DiceTumble instances; this file
+ * only computes WHERE each one sits). A member's personal tray sits at this
+ * FRACTION of the way from their own table's center toward their current
+ * EFFECTIVE seat position — i.e. `center + fraction * (seatPosition -
+ * center)`, computeMemberTrayPosition's own formula below.
+ *
+ * This replaces an earlier, simpler "fixed 0.2 distance from center"
+ * formula that Prompt 8a reused unchanged from GameRoom.tsx's own
+ * DM_PRIVATE_TRAY_DISTANCE — correct for exactly ONE tray (there was only
+ * ever one DM), but far too small a hub for N simultaneous personal trays:
+ * every member's tray would land within a tiny 0.2-unit-radius circle
+ * around center, guaranteeing overlap the moment more than one or two
+ * members were seated. A FRACTION of each member's own seat vector instead
+ * spreads every table's own trays around a ring shaped exactly like that
+ * table's own seating ellipse (seatAtAngle's x = semiX·cosθ, z =
+ * semiZ·sinθ) — bigger table, bigger ring, proportionally more room between
+ * adjacent members' trays — while still always landing on that table's own
+ * REAL physical surface: for ANY angle θ, the resulting point's own
+ * |x|-coordinate is at most `fraction × semiX` and its |z|-coordinate at
+ * most `fraction × semiZ` (since |cosθ|,|sinθ| ≤ 1), so choosing a fraction
+ * that keeps `fraction × semiX` comfortably under that table's own real
+ * half-width (and `fraction × semiZ` under its own real half-depth) — see
+ * HEAD_SQUARE_MEMBER_TRAY_FRACTION/APPENDED_TABLE_MEMBER_TRAY_FRACTION's own
+ * doc comments for the exact numbers — guarantees every possible tray lands
+ * inside that table's own real tabletop, for every seat angle, not just the
+ * ones actually occupied today.
+ *
+ * A fixed fraction alone still isn't enough to guarantee non-overlap at
+ * every possible occupancy (an appended table crammed with several members
+ * on one short end-cap arc can still pack their SEATS closer together than
+ * two personal trays' own combined footprint) — resolveMemberTrayLayout
+ * below is the second, final pass that actually guarantees it, the same
+ * two-stage "compute an ideal spot, then nudge clear of real obstacles"
+ * shape resolveChairDrop already uses for chairs.
  */
-export const MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER = 0.2;
+
+/**
+ * Fraction of the way from the (fixed) head square's own center toward a
+ * seated member's own default position that their personal tray sits when
+ * they're seated at the head square (a CampaignSeat with tableIndex -1).
+ * 0.45 keeps `0.45 × semiX` and `0.45 × semiZ` (seatEllipseSemiAxes(
+ * COMBINED_TABLE_TOP), computeMemberTrayPosition's own doc comment on why
+ * this per-axis bound holds for every angle) comfortably inside
+ * COMBINED_TABLE_TOP's own real half-width/half-depth — margin ≥ 0.25 units
+ * on the tightest axis even before PERSONAL_TRAY_RADIUS's own footprint is
+ * subtracted — and keeps every ADJACENT pair of a realistic party's personal
+ * trays clear of each other up to at least a dozen simultaneous members at
+ * the head square (well past any real D&D table's size): see
+ * scripts/db/verify-per-member-dice-trays.mjs and seating.test.ts's own
+ * "computeMemberTrayPosition"/"resolveMemberTrayLayout" suites for the
+ * numeric verification.
+ */
+export const HEAD_SQUARE_MEMBER_TRAY_FRACTION = 0.45;
+
+/**
+ * Same idea as HEAD_SQUARE_MEMBER_TRAY_FRACTION, but smaller — an appended
+ * single table's own real depth (table.ts's TABLE_TOP.depth, 2.1) is far
+ * shallower than the head square's combined depth (COMBINED_TABLE_TOP.depth,
+ * 4.2, this file's own APPENDED_TABLE_ENDCAP_HALF_WIDTH_DEG doc comment has
+ * the fuller "why appended tables are cramped" reasoning), so the SAME 0.45
+ * fraction would push an appended table's own trays past its much shorter
+ * edge. 0.35 keeps `0.35 × semiZ` (seatEllipseSemiAxes(TABLE_TOP)) safely
+ * inside TABLE_TOP's own real half-depth with margin to spare for
+ * PERSONAL_TRAY_RADIUS's own footprint, at every seat angle an appended
+ * table's own end-cap arcs ever actually place a seat at.
+ */
+export const APPENDED_TABLE_MEMBER_TRAY_FRACTION = 0.35;
 
 /**
  * World-space (x, z) center of the physical table a given CampaignSeat
@@ -686,44 +741,28 @@ function tableCenterForSeat(
   return [0, table?.offsetZ ?? 0];
 }
 
-/** The same "unit vector pointing away from a center point, toward
- * `position`" step GameRoom.tsx's own outwardFromOrigin established for the
- * DM's private tray (hardcoded there to the world origin, since the DM's
- * table center always IS the world origin) — generalized here to an
- * arbitrary center so every table's own seats can reuse it, not just the
- * head square's. Never actually hits the center (SEAT_MARGIN keeps every
- * seat off of it), but a stable direction beats NaN if it ever were. */
-function outwardFromCenter(
-  position: readonly [number, number, number],
-  center: readonly [number, number]
-): [number, number] {
-  const dx = position[0] - center[0];
-  const dz = position[2] - center[1];
-  const dist = Math.hypot(dx, dz);
-  return dist > 1e-6 ? [dx / dist, dz / dist] : [0, -1];
-}
-
 /**
- * Derives where `userId`'s own personal dice tray should sit: a point near
- * the center of whichever physical table they're actually seated at, offset
- * a fixed distance (MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER) toward their
- * current EFFECTIVE seat position (getEffectiveSeat — includes any stored
- * chair-drag override), at table-surface height. A pure function of
- * (layout, userId, offsets) alone, so it automatically tracks whatever
- * getEffectiveSeat currently reports: a stored SeatOffset change moves this
- * derived position on the very next call, with no separate wiring of its
- * own, and it needs no drag GESTURE to exist yet — only a stored offset (or
- * none at all), exactly what getEffectiveSeat already handles either way.
+ * Derives where `userId`'s own personal dice tray should sit: a point
+ * between the center of whichever physical table they're actually seated at
+ * and their current EFFECTIVE seat position (getEffectiveSeat — includes
+ * any stored chair-drag override), at the fraction that table's own type
+ * calls for (HEAD_SQUARE_MEMBER_TRAY_FRACTION/
+ * APPENDED_TABLE_MEMBER_TRAY_FRACTION), at table-surface height. A pure
+ * function of (layout, userId, offsets) alone, so it automatically tracks
+ * whatever getEffectiveSeat currently reports: a stored SeatOffset change
+ * (including a LIVE in-progress chair drag a caller has folded into
+ * `offsets` — see GameRoom.tsx's own liveSeatOffsets) moves this derived
+ * position on the very next call, with no separate wiring of its own.
  *
- * Generalizes GameRoom.tsx's existing dmPrivateTrayPosition derivation
- * (outwardFromOrigin + DM_PRIVATE_TRAY_DISTANCE) to (a) any member, not just
- * the DM, (b) whichever table that member is actually seated at
- * (tableCenterForSeat), not always the world origin, and (c) the member's
- * EFFECTIVE seat rather than the raw computed default — the DM's own
- * existing tray never reads through a stored SeatOffset today, since it was
- * written before that concept existed; a general per-member tray needs to
- * from the start, so it stays attached to a relocated chair instead of the
- * chair's un-offset default position.
+ * Generalizes GameRoom.tsx's now-removed dmPrivateTrayPosition derivation to
+ * (a) any member, not just the DM, (b) whichever table that member is
+ * actually seated at (tableCenterForSeat), not always the world origin, and
+ * (c) the member's EFFECTIVE seat rather than the raw computed default.
+ *
+ * This is the ideal, uncontested spot only — resolveMemberTrayLayout below
+ * is the real, final authority once every connected member's own tray needs
+ * to coexist without overlapping (this function's own doc comment above has
+ * the fuller reasoning for why a second pass is necessary at all).
  *
  * Returns null under the exact same "not actually seated" condition
  * getEffectiveSeat does (a userId not present in this campaign's roster).
@@ -737,12 +776,112 @@ export function computeMemberTrayPosition(
   if (!seat) return null;
 
   const center = tableCenterForSeat(seat, layout.appendedTables);
-  const [outX, outZ] = outwardFromCenter(seat.position, center);
+  const fraction =
+    seat.tableIndex === -1 ? HEAD_SQUARE_MEMBER_TRAY_FRACTION : APPENDED_TABLE_MEMBER_TRAY_FRACTION;
   return [
-    center[0] + outX * MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+    center[0] + (seat.position[0] - center[0]) * fraction,
     TABLE_SURFACE_Y + 0.01,
-    center[1] + outZ * MEMBER_TRAY_DISTANCE_FROM_TABLE_CENTER,
+    center[1] + (seat.position[2] - center[1]) * fraction,
   ];
+}
+
+/** One connected member's own ideal (unresolved) personal tray spot —
+ * resolveMemberTrayLayout's own input shape, computeMemberTrayPosition's
+ * output paired with the userId it belongs to. */
+export interface MemberTraySeed {
+  userId: string;
+  position: readonly [number, number, number];
+}
+
+// A small, deliberately modest visible gap between two nudged-apart
+// personal trays — the CHAIR_NUDGE_MARGIN precedent, sized down: trays are
+// stationary props nobody manually aims (unlike a hand-dragged chair), so a
+// tighter, still clearly-separated gap reads fine.
+const TRAY_NUDGE_MARGIN = 0.03;
+
+// The same "generous enough for any realistic count, not unbounded"
+// reasoning as MAX_CHAIR_NUDGE_PASSES — a genuinely pathological density
+// (many more members crammed onto one small appended table than real D&D
+// play ever produces) can still legitimately fall short of a perfect
+// non-overlap once this budget is spent, the same honest, documented limit
+// HEAD_SQUARE_SEAT_CAPACITY's own doc comment already accepts for chairs at
+// extreme density.
+const MAX_TRAY_NUDGE_PASSES = 12;
+
+/**
+ * Resolves every connected member's own ideal personal tray spot
+ * (computeMemberTrayPosition's output, one MemberTraySeed per member) into a
+ * final, mutually non-overlapping arrangement that also clears every real
+ * chair — the tray equivalent of resolveChairDrop's own obstacle-nudging,
+ * generalized to resolve MANY points at once against a shared, growing
+ * obstacle list (a single dragged chair only ever needed to resolve ONE
+ * point; N simultaneously-rendered personal trays need all N resolved
+ * together, each against every seated chair AND every other tray already
+ * placed).
+ *
+ * Deterministic given the same inputs: every connected client computes this
+ * same pure function from the same already-synced state (the roster's own
+ * stable join order in `seeds`, seatOffsets' persisted+broadcast Map, and
+ * presence), so every connected client's own tray layout matches everyone
+ * else's byte for byte with no separate coordination needed — the same
+ * "no persistence needed, just recompute" property applySeatOffset's own
+ * default-reshaping already relies on.
+ *
+ * Processes `seeds` in the given (stable) order: each tray nudges clear of
+ * every chair obstacle and every tray already resolved EARLIER in the
+ * sequence — never a later one, so the outcome never depends on iteration
+ * order alone. Nudging pushes a violating tray straight along the line from
+ * whichever obstacle it violates worst, out to just clear it
+ * (TRAY_NUDGE_MARGIN beyond exact tangency) — resolveChairDrop's own nudge
+ * step, replayed here for trays instead of one dragged chair; see that
+ * function's own doc comment for the fuller "why straight-line nudging"
+ * reasoning. A deliberate, small amount of logic duplication rather than a
+ * shared refactor of resolveChairDrop itself — that function's own
+ * extensive existing test coverage (seating.test.ts) stays completely
+ * untouched by this addition.
+ */
+export function resolveMemberTrayLayout(
+  seeds: readonly MemberTraySeed[],
+  trayRadius: number,
+  chairObstacles: readonly ChairObstacle[]
+): Map<string, [number, number, number]> {
+  const placedTrays: ChairObstacle[] = [];
+  const result = new Map<string, [number, number, number]>();
+
+  for (const seed of seeds) {
+    let x = seed.position[0];
+    let z = seed.position[2];
+    const obstacles = [...chairObstacles, ...placedTrays];
+
+    for (let pass = 0; pass < MAX_TRAY_NUDGE_PASSES; pass++) {
+      let worst: { obstacle: ChairObstacle; distance: number; minDistance: number } | null = null;
+      for (const obstacle of obstacles) {
+        const distance = Math.hypot(x - obstacle.x, z - obstacle.z);
+        const minDistance = trayRadius + obstacle.radius + TRAY_NUDGE_MARGIN;
+        if (distance < minDistance && (!worst || distance < worst.distance)) {
+          worst = { obstacle, distance, minDistance };
+        }
+      }
+      if (!worst) break;
+      const { obstacle, distance, minDistance } = worst;
+      if (distance < 1e-6) {
+        // Degenerate: landed exactly on the obstacle's own center — push
+        // due +Z by convention, an arbitrary but stable direction (the
+        // same convention resolveChairDrop's own degenerate case uses).
+        x = obstacle.x;
+        z = obstacle.z + minDistance;
+      } else {
+        const scale = minDistance / distance;
+        x = obstacle.x + (x - obstacle.x) * scale;
+        z = obstacle.z + (z - obstacle.z) * scale;
+      }
+    }
+
+    placedTrays.push({ x, z, radius: trayRadius });
+    result.set(seed.userId, [x, seed.position[1], z]);
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------

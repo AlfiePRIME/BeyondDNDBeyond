@@ -494,6 +494,53 @@
   margin: 0;
 }
 
+.savedText {
+  color: var(--teal);
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+/* DiceTrayPicker: a member's own personal-tray-model choice — its own
+   standalone DraggablePanel (panelId "diceTray", DraggablePanel.tsx's own
+   DEFAULT_ANCHOR_CLASS comment has the "why a separate panel" reasoning),
+   so it needs its own full panel chrome (.dicePanel's own background/
+   border/radius/max-height-with-scroll treatment, reused verbatim) rather
+   than the plain unstyled section it was when embedded inside diceLog. */
+.diceTraySection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  width: 300px;
+  max-height: 42vh;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 8px;
+}
+
+.diceTrayGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px;
+}
+
+.diceTrayUploadForm {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.diceTrayUploadForm > button {
+  margin-top: 22px;
+}
+
+.diceTrayNameField {
+  flex: 1;
+}
+
 .moveReadout {
   position: absolute;
   top: 64px;
