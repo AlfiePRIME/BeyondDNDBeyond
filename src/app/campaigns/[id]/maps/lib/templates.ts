@@ -21,6 +21,22 @@ export const PRESET_WALL = "a55e7007-0000-4000-8000-000000000007";
 // corners, with no distinct corner geometry at all (this fix's root cause).
 export const PRESET_WALL_CORNER = "a55e7010-0000-4000-8000-000000000010";
 export const PRESET_WALL_DIAGONAL = "a55e7011-0000-4000-8000-000000000011";
+// Door-in-wall fix: a wall segment with an actual doorway cut into its own
+// mass (generate-wall-variants-presets.mjs's buildWallDoor) — replaces
+// PRESET_WALL (or PRESET_WALL_CORNER) at a door cell, INSTEAD of a
+// standalone PRESET_DOOR prop placed on an otherwise-plain ground-level
+// gap next to intact wall cells. Root cause (confirmed by inspecting
+// buildDoor() in generate-map-presets.mjs before changing anything):
+// PRESET_DOOR is a genuinely free-standing door frame with NO wall mass of
+// its own around it at all, and every template placed it at ground
+// elevation while its neighbors sat a full WALL_ELEVATION step higher — so
+// it always read as a floating frame standing in a sunken gap between two
+// cliffs, never as a doorway cut into a continuous wall, regardless of
+// where it was placed. PRESET_DOOR itself is UNCHANGED and still seeded
+// (kept available in the palette for a free-standing/interior door not set
+// into a raised perimeter wall) — it's just no longer what any of the 21
+// built-in templates place at a wall-perimeter door cell.
+export const PRESET_WALL_DOOR = "a55e7012-0000-4000-8000-000000000012";
 
 /**
  * A starter layout a DM can begin a new map from instead of a blank grid.
@@ -87,6 +103,21 @@ interface WallPlacement {
  * the vertical edge; everything else (a horizontal run, or an isolated
  * single-cell segment with no wall neighbors at all) uses the unrotated
  * horizontal orientation.
+ *
+ * Door-in-wall fix: does a NEIGHBOR of a door cell need special handling
+ * here, now that the door cell renders PRESET_WALL_DOOR instead of
+ * PRESET_WALL? Checked, not assumed — `isWall` (both callers below) is a
+ * PURE PERIMETER/POSITION predicate that already has no idea which asset
+ * ends up at a given cell; a door cell is still `isWall(x, y) === true` to
+ * its neighbors exactly as it was before this fix, so a wall cell next to
+ * a door is classified identically either way. What DOES need to change at
+ * the door cell ITSELF is its own rotation: walledRoom below used to
+ * hardcode a door's rotation to 0 regardless of which edge it sat on
+ * (harmless for the old free-standing, roughly rotation-agnostic
+ * PRESET_DOOR, but wrong for PRESET_WALL_DOOR, which — like PRESET_WALL —
+ * must run its own length along the wall line to connect flush with its
+ * neighbors) — so walledRoom now applies this function's own computed
+ * `rotation` to the door cell too, the same as every other perimeter cell.
  */
 export function classifyWallCell(x: number, y: number, isWall: (x: number, y: number) => boolean): WallPlacement {
   const north = isWall(x, y - 1);
@@ -100,8 +131,19 @@ export function classifyWallCell(x: number, y: number, isWall: (x: number, y: nu
 }
 
 /** A rectangular walled room: raised perimeter cells with a Wall Segment (or
- * a Wall Corner at each of the room's 4 real 90° turns) on each, one
- * ground-level Door cell as the entrance, flat interior. */
+ * a Wall Corner at each of the room's 4 real 90° turns) on each, and one
+ * Wall Doorway cell (PRESET_WALL_DOOR) as the entrance — a wall segment
+ * with its own walkable doorway cut into it, at the SAME WALL_ELEVATION as
+ * every other perimeter cell (door-in-wall fix: previously ground-level,
+ * one full elevation step below its neighbors, which is what made even a
+ * wall-shaped piece here read as sunken/disconnected rather than set into
+ * the wall line — see PRESET_WALL_DOOR's own doc comment). Movement is
+ * unaffected in kind, only in degree: entering ANY raised perimeter cell
+ * already cost the SRD's climbing surcharge before this fix (walls have no
+ * collision/blocking behavior in this app — confirmed in movement.ts,
+ * see this task's own notes — a token could always climb onto one); the
+ * door cell now simply pays that SAME existing rule instead of being
+ * arbitrarily exempted from it, rather than gaining any new mechanic. */
 function walledRoom(
   width: number,
   height: number,
@@ -115,14 +157,14 @@ function walledRoom(
     for (let x = 0; x < width; x++) {
       if (!isPerimeter(x, y, width, height)) continue;
       const isDoor = x === door.x && y === door.y;
-      cells.push({ x, y, elevation: isDoor ? 0 : WALL_ELEVATION, terrain_type: "normal" });
+      cells.push({ x, y, elevation: WALL_ELEVATION, terrain_type: "normal" });
       const placement = classifyWallCell(x, y, isWall);
       objects.push({
-        asset_id: isDoor ? PRESET_DOOR : placement.assetId,
+        asset_id: isDoor ? PRESET_WALL_DOOR : placement.assetId,
         x,
         y,
-        elevation: isDoor ? 0 : WALL_ELEVATION,
-        rotation: isDoor ? 0 : placement.rotation,
+        elevation: WALL_ELEVATION,
+        rotation: placement.rotation,
       });
     }
   }
@@ -226,11 +268,20 @@ function mergeCells(...groups: NewMapCell[][]): NewMapCell[] {
 
 /** Generalizes walledRoom to an arbitrary origin offset on a shared grid: a
  * small rectangular structure's raised perimeter walls plus (at most) one
- * ground-level door. Lets the town/stone themes place several distinct
- * structures on one map instead of one room filling it — same
- * isPerimeter/wallRotation this file already uses for walledRoom, just
- * parameterized by a local origin. Wall cells are ground_type 'stone'
- * (construction, not terrain) regardless of the theme around them. */
+ * door — a Wall Doorway cell (PRESET_WALL_DOOR) at the SAME WALL_ELEVATION
+ * as the rest of the structure's perimeter, matching walledRoom's own
+ * door-in-wall fix (see PRESET_WALL_DOOR's doc comment). Lets the
+ * town/stone themes place several distinct structures on one map instead
+ * of one room filling it — same isPerimeter/wallRotation this file already
+ * uses for walledRoom, just parameterized by a local origin. wallRotation
+ * (not classifyWallCell) is deliberately unchanged here — every door this
+ * file places via buildingOutline sits mid-edge, never at an actual 90°
+ * turn, and wallRotation already gives a mid-edge door cell the SAME
+ * edge-relative rotation a straight wall cell there would get (confirmed
+ * across every buildingOutline call site below), which is exactly what a
+ * full-cell-width PRESET_WALL_DOOR needs to connect flush with its
+ * neighbors. Wall cells are ground_type 'stone' (construction, not
+ * terrain) regardless of the theme around them. */
 function buildingOutline(
   x0: number,
   y0: number,
@@ -246,13 +297,12 @@ function buildingOutline(
       const isDoor = door !== null && lx === door.x && ly === door.y;
       const x = x0 + lx;
       const y = y0 + ly;
-      const elevation = isDoor ? 0 : WALL_ELEVATION;
-      cells.push({ x, y, elevation, terrain_type: "normal", ground_type: "stone" });
+      cells.push({ x, y, elevation: WALL_ELEVATION, terrain_type: "normal", ground_type: "stone" });
       objects.push({
-        asset_id: isDoor ? PRESET_DOOR : PRESET_WALL,
+        asset_id: isDoor ? PRESET_WALL_DOOR : PRESET_WALL,
         x,
         y,
-        elevation,
+        elevation: WALL_ELEVATION,
         rotation: wallRotation(lx, ly, width, height),
       });
     }
@@ -261,7 +311,9 @@ function buildingOutline(
 }
 
 /** A rectangular room with SEVERAL doors instead of walledRoom's one — used
- * once, for the stone theme's four-way corridor junction chamber. */
+ * once, for the stone theme's four-way corridor junction chamber. Same
+ * door-in-wall treatment as buildingOutline above: each door is a Wall
+ * Doorway cell at the room's own WALL_ELEVATION, not a ground-level gap. */
 function multiDoorRoom(
   width: number,
   height: number,
@@ -274,13 +326,12 @@ function multiDoorRoom(
     for (let x = 0; x < width; x++) {
       if (!isPerimeter(x, y, width, height)) continue;
       const isDoor = doors.some((door) => door.x === x && door.y === y);
-      const elevation = isDoor ? 0 : WALL_ELEVATION;
-      cells.push({ x, y, elevation, terrain_type: "normal", ground_type: groundType });
+      cells.push({ x, y, elevation: WALL_ELEVATION, terrain_type: "normal", ground_type: groundType });
       objects.push({
-        asset_id: isDoor ? PRESET_DOOR : PRESET_WALL,
+        asset_id: isDoor ? PRESET_WALL_DOOR : PRESET_WALL,
         x,
         y,
-        elevation,
+        elevation: WALL_ELEVATION,
         rotation: wallRotation(x, y, width, height),
       });
     }

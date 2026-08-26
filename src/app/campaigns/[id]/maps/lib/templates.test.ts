@@ -11,13 +11,17 @@ import {
   PRESET_TREE,
   PRESET_WALL,
   PRESET_WALL_CORNER,
+  PRESET_WALL_DOOR,
 } from "./templates";
 
-// The exact ids seeded by 0016_asset_library_presets.sql, plus the two new
-// wall-variant presets seeded by their own later migration (see
+// The exact ids seeded by 0016_asset_library_presets.sql, plus the wall-
+// variant presets seeded by their own later migrations (see
 // scripts/assets/generate-wall-variants-presets.mjs) — templates may only
 // reference these, since they're the assets guaranteed to exist in every
-// campaign.
+// campaign. PRESET_DOOR (a55e7003) stays seeded/importable (a free-standing
+// door remains a legitimate, if no longer template-placed, asset — see
+// PRESET_WALL_DOOR's own doc comment in templates.ts) even though no
+// template below places it anymore.
 const SEEDED_PRESET_IDS = new Set([
   "a55e7001-0000-4000-8000-000000000001",
   "a55e7002-0000-4000-8000-000000000002",
@@ -30,6 +34,7 @@ const SEEDED_PRESET_IDS = new Set([
   "a55e7009-0000-4000-8000-000000000009",
   "a55e7010-0000-4000-8000-000000000010",
   "a55e7011-0000-4000-8000-000000000011",
+  "a55e7012-0000-4000-8000-000000000012",
 ]);
 
 function findTemplate(id: string): MapTemplate {
@@ -122,7 +127,7 @@ describe("MAP_TEMPLATES structural invariants", () => {
     const room = MAP_TEMPLATES.find((template) => template.id === "empty-room")!;
     const walls = room.objects.filter((object) => object.asset_id === PRESET_WALL);
     const corners = room.objects.filter((object) => object.asset_id === PRESET_WALL_CORNER);
-    const doors = room.objects.filter((object) => object.asset_id === PRESET_DOOR);
+    const doors = room.objects.filter((object) => object.asset_id === PRESET_WALL_DOOR);
     // 10x8 perimeter = 32 cells: one door, 4 real 90°-turn corners (each of
     // a rectangle's own corners), the rest straight runs.
     expect(walls).toHaveLength(27);
@@ -133,6 +138,30 @@ describe("MAP_TEMPLATES structural invariants", () => {
     expect(new Set(corners.map((c) => `${c.x},${c.y}`))).toEqual(
       new Set(["0,0", "9,0", "0,7", "9,7"])
     );
+    // Door-in-wall fix: the door cell sits at the SAME elevation as its
+    // wall neighbors (not a ground-level gap one step below them) so a
+    // full-height Wall Doorway piece meets its neighbors flush, and it
+    // must span its own cell's run axis exactly like a plain wall would —
+    // its rotation matches classifyWallCell's own computation for that
+    // position (bottom edge => 0), not a hardcoded value.
+    const door = doors[0];
+    const doorCell = room.cells.find((cell) => cell.x === door.x && cell.y === door.y)!;
+    const wallCellNextToDoor = room.cells.find((cell) => cell.x === door.x - 1 && cell.y === door.y)!;
+    expect(doorCell.elevation).toBe(wallCellNextToDoor.elevation);
+    expect(door.rotation).toBe(0);
+  });
+
+  it("door-in-wall fix: no template places the free-standing Door prop anymore", () => {
+    // Every one of the 21 built-in templates that has a door places it via
+    // walledRoom/buildingOutline/multiDoorRoom, and all three now place
+    // PRESET_WALL_DOOR (a wall segment with its own doorway) instead of the
+    // old free-standing PRESET_DOOR — see PRESET_WALL_DOOR's own doc
+    // comment in templates.ts for why. PRESET_DOOR itself stays a valid,
+    // seeded asset (still importable/placeable by hand) — this only proves
+    // no BUILT-IN template still floats it next to an intact wall.
+    for (const template of MAP_TEMPLATES) {
+      expect(template.objects.some((object) => object.asset_id === PRESET_DOOR)).toBe(false);
+    }
   });
 
   it("shapes the corridor as two full-length wall lines with torches between", () => {
@@ -155,7 +184,7 @@ describe("MAP_TEMPLATES structural invariants", () => {
     // door + 2 torch sconces.
     expect(counts.get(PRESET_WALL)).toBe(41);
     expect(counts.get(PRESET_WALL_CORNER)).toBe(4);
-    expect(counts.get(PRESET_DOOR)).toBe(1);
+    expect(counts.get(PRESET_WALL_DOOR)).toBe(1);
     expect(counts.get(PRESET_TORCH)).toBe(2);
     expect(counts.get(PRESET_TABLE)).toBe(6);
     // Tables sit on the flat interior, inside the walls.
@@ -279,8 +308,18 @@ describe("MAP_TEMPLATES structural invariants", () => {
 
     it("the corridor junction chamber has a door on all four sides", () => {
       const template = findTemplate("stone-corridor-junction");
-      const doors = template.objects.filter((object) => object.asset_id === PRESET_DOOR);
+      const doors = template.objects.filter((object) => object.asset_id === PRESET_WALL_DOOR);
       expect(doors).toHaveLength(4);
+      // Two of the four doors sit on the LEFT/RIGHT edges (a vertical run) —
+      // regression guard that a Wall Doorway still gets a real edge-relative
+      // rotation (matching a plain wall there), not a single hardcoded value
+      // that would only happen to look right on a top/bottom edge.
+      const rotationAt = (x: number, y: number) =>
+        template.objects.find((object) => object.x === x && object.y === y)?.rotation;
+      expect(rotationAt(5, 0)).toBe(0);
+      expect(rotationAt(5, 9)).toBe(0);
+      expect(rotationAt(0, 5)).toBe(90);
+      expect(rotationAt(9, 5)).toBe(90);
     });
 
     it("swamp templates use only swamp/water ground, and pre-paint some difficult bog", () => {
@@ -295,7 +334,7 @@ describe("MAP_TEMPLATES structural invariants", () => {
       for (const id of ["town-market-square", "town-crossroads-hamlet", "town-tradesmans-row"]) {
         const template = findTemplate(id);
         expect(usesOnlyGroundTypes(template, ["path", "stone", "grass"])).toBe(true);
-        const doors = template.objects.filter((object) => object.asset_id === PRESET_DOOR);
+        const doors = template.objects.filter((object) => object.asset_id === PRESET_WALL_DOOR);
         // Several small structures, not a single enclosing room: more than
         // one door, one per building rather than one for the whole map.
         expect(doors.length).toBeGreaterThan(1);
