@@ -126,6 +126,41 @@ const DEFAULT_Z_INDEX: Partial<Record<PanelId, number>> = {
 // anyway (there's no DOM to inspect).
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
+/**
+ * Keeps a panel's own top-left corner (plus its CURRENT rendered width/
+ * height) fully on-screen — a real, reproduced bug this fixes: an explicit
+ * saved position (from a drag, OR from just clicking the collapse toggle
+ * once — see toggleCollapsed's own seeding of `currentPosition` below) is
+ * measured ONCE, from whatever the panel's content happens to be at that
+ * moment. A panel like MapPanel.tsx's own live-map picker keeps growing
+ * (every new map adds a row) — with no re-validation, a position that was
+ * perfectly on-screen when the list was short silently stops being so once
+ * the list grows past what fits below that same fixed top, pushing the
+ * newest rows (map_panel_scroll's own repro: the newest map is always
+ * LAST, since listMapsForCampaign orders by created_at ascending) below the
+ * bottom of the browser window. The panel's own internal `overflow-y: auto`
+ * (room.module.css's `.sidePanel`) genuinely still scrolls in this state —
+ * scrollTop reaches its real maximum — but the CONTAINER's own on-screen
+ * rect has itself drifted past the viewport edge, so whatever content
+ * lands in that clipped band is neither visible nor clickable no matter
+ * how it's scrolled. Clamping keeps the box's own rect inside the window
+ * instead, so its always-working internal scroll is what actually reaches
+ * every row. VIEWPORT_MARGIN mirrors this file's own anchor classes'
+ * 24px page-edge margin, just tight enough that a panel forced onto the
+ * opposite edge doesn't touch it exactly.
+ */
+const VIEWPORT_MARGIN = 12;
+
+function clampToViewport(x: number, y: number, width: number, height: number): { x: number; y: number } {
+  if (typeof window === "undefined") return { x, y };
+  const maxX = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN);
+  const maxY = Math.max(VIEWPORT_MARGIN, window.innerHeight - height - VIEWPORT_MARGIN);
+  return {
+    x: Math.min(Math.max(x, VIEWPORT_MARGIN), maxX),
+    y: Math.min(Math.max(y, VIEWPORT_MARGIN), maxY),
+  };
+}
+
 interface PanelLayoutContextValue {
   /** This panel's saved position/collapsed state, or null if the user has
    * never customized it (a fresh profile, or simply never touched this
@@ -387,6 +422,40 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
     return () => observer.disconnect();
   }, []);
 
+  // Re-clamps an EXPLICIT saved position (a real drag, or even just one
+  // click of the collapse toggle below — toggleCollapsed seeds x/y from
+  // wherever the panel happens to be rendered at that instant) whenever
+  // this panel's own rendered footprint actually changes size — see
+  // clampToViewport's own doc comment for the real bug this closes: a
+  // panel's saved top/left is only ever measured once, so it has no way to
+  // notice its own content (e.g. MapPanel.tsx's live-map picker gaining
+  // rows as maps get created) later growing enough to push its bottom edge
+  // below the browser window, silently stranding whatever now lands in
+  // that clipped band beyond any scroll's reach. A ResizeObserver (not the
+  // hasContent MutationObserver above, which only tracks presence/absence,
+  // never size) is what actually catches a same-element size change either
+  // way — content growing OR the viewport itself shrinking (`.sidePanel`'s
+  // own `max-height: 70vh` makes this wrapper's size track the window too).
+  // Deliberately skipped for anchor-class-positioned panels (no saved
+  // `entry` at all): bottom/right-anchored + max-height already keeps
+  // those self-adjusting without ever needing an explicit position.
+  useIsomorphicLayoutEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const recheck = () => {
+      const current = layout.getEntry(panelId);
+      if (!current) return;
+      const rect = wrapper.getBoundingClientRect();
+      const clamped = clampToViewport(current.x, current.y, rect.width, rect.height);
+      if (clamped.x !== current.x || clamped.y !== current.y) {
+        layout.setPosition(panelId, clamped.x, clamped.y);
+      }
+    };
+    const observer = new ResizeObserver(recheck);
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, [layout, panelId]);
+
   // The panel's CURRENT on-screen top-left corner, used to seed a fresh
   // saved position the first time this panel is dragged or collapsed
   // (before that, it has no x/y at all — it's rendered by a CSS anchor
@@ -433,7 +502,14 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
       if (!drag || drag.pointerId !== event.pointerId) return;
       const dx = event.clientX - drag.startX;
       const dy = event.clientY - drag.startY;
-      layout.setPosition(panelId, drag.originX + dx, drag.originY + dy);
+      // Clamped against this panel's own CURRENT rendered size (not a
+      // guess) — see clampToViewport's own doc comment: a panel dragged
+      // fully off-screen would be just as unreachable as one whose content
+      // later grew past a stale saved position.
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const target = { x: drag.originX + dx, y: drag.originY + dy };
+      const clamped = rect ? clampToViewport(target.x, target.y, rect.width, rect.height) : target;
+      layout.setPosition(panelId, clamped.x, clamped.y);
     },
     [layout, panelId]
   );
