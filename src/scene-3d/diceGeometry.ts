@@ -182,12 +182,105 @@ export const DIE_FACE_NORMALS: Record<DieKind, readonly (readonly [number, numbe
   ],
 };
 
+// Shared by faceNormalForResult and labelForResult below — both need to
+// agree on EXACTLY which face index a given result maps to, so a die's own
+// printed number (labelForResult) and whichever face physically ends up
+// pointing up (faceNormalForResult) can never disagree about which face
+// won. Clamped defensively — a malformed/out-of-range result (shouldn't
+// happen; the server is the only roller) just reads face 1 rather than
+// throwing mid-animation.
+function faceIndexForResult(faceCount: number, result: number): number {
+  return Math.min(Math.max(Math.round(result) - 1, 0), faceCount - 1);
+}
+
 /** The local-space normal that should point "up" (world +Y) for `kind` to
- * settle on `result`. Clamped defensively to a valid face index — a
- * malformed/out-of-range result (shouldn't happen; the server is the only
- * roller) just reads face 1 rather than throwing mid-animation. */
+ * settle on `result`. See faceIndexForResult's own doc comment for the
+ * clamping behavior. */
 export function faceNormalForResult(kind: DieKind, result: number): readonly [number, number, number] {
   const faces = DIE_FACE_NORMALS[kind];
-  const index = Math.min(Math.max(Math.round(result) - 1, 0), faces.length - 1);
-  return faces[index];
+  return faces[faceIndexForResult(faces.length, result)];
+}
+
+/**
+ * One printed label per face, index-aligned with DIE_FACE_NORMALS[kind] —
+ * DEFAULT_FACE_LABELS[kind][i] is the number printed on the exact face
+ * `faceNormalForResult(kind, i + 1)` points up for. Every standard die is
+ * simply "1" through "sides" in face order, including the d10, which prints
+ * "10" on its tenth face rather than the "0" some physical d10s use:
+ * `rollDie(10, random)` in rules-engine/dice.ts always returns an integer in
+ * [1, 10], so a face reading "0" could never correspond to any real result
+ * this app produces — printing one anyway would be actively confusing, not
+ * a neutral nod to physical-dice convention (docs/design/dice-numbers-and-
+ * physics.md §4). Numerals, not pips, on every face including the d6 — one
+ * shared "draw this string" renderer (DiceTumble.tsx's faceDecalTexture) for
+ * all six kinds is simpler than a second, pip-layout algorithm, and reads
+ * faster at this app's actual render scale (same section, in full).
+ */
+function sequentialLabels(sides: number): readonly string[] {
+  return Array.from({ length: sides }, (_, index) => String(index + 1));
+}
+
+export const DEFAULT_FACE_LABELS: Record<DieKind, readonly string[]> = {
+  d4: sequentialLabels(SIDES_BY_KIND.d4),
+  d6: sequentialLabels(SIDES_BY_KIND.d6),
+  d8: sequentialLabels(SIDES_BY_KIND.d8),
+  d10: sequentialLabels(SIDES_BY_KIND.d10),
+  d12: sequentialLabels(SIDES_BY_KIND.d12),
+  d20: sequentialLabels(SIDES_BY_KIND.d20),
+};
+
+/**
+ * The printed label the face `faceNormalForResult(kind, result)` points up
+ * for — routed through the exact same faceIndexForResult as
+ * faceNormalForResult itself, so a die's own newly-decaled face and
+ * whichever readout displays `result` (DiceTumble.tsx's ResultBadge) can
+ * never disagree about which face won, by construction rather than by
+ * convention. `labelSet` overrides the standard 1..sides numbering
+ * (DEFAULT_FACE_LABELS) — today's one real use is a percentile pair's own
+ * tens/ones face labels (src/app/campaigns/[id]/roll/tumble.ts's
+ * buildDiceTumbleSpec), where the synthetic 1-10 `result` fed in here is
+ * NOT the value actually printed on the face.
+ */
+export function labelForResult(kind: DieKind, result: number, labelSet?: readonly string[]): string {
+  const labels = labelSet ?? DEFAULT_FACE_LABELS[kind];
+  return labels[faceIndexForResult(labels.length, result)];
+}
+
+/**
+ * The perpendicular distance from a die's local origin out to any one of
+ * its own flat faces — by construction the same for every face of all six
+ * kinds here (this module's own doc comment on the isohedral/centrally-
+ * symmetric construction every DIE_FACE_NORMALS entry already relies on),
+ * so one scalar per kind is enough
+ * (docs/design/dice-numbers-and-physics.md §4's FACE_PLANE_DISTANCE).
+ * Measured directly off `buildDieGeometry`'s own real vertex data — the
+ * largest dot product any vertex has against face 0's own normal is exactly
+ * the vertices that lie ON that face's plane, for any convex solid — rather
+ * than a hand-derived analytic inradius formula per shape (five different
+ * Platonic-solid formulas plus the d10's own from-scratch trapezohedron is
+ * real surface area for a transcription mistake). Same "verify numerically,
+ * don't just trust the formula" approach this file's own D10 vertices used.
+ */
+export function facePlaneDistance(kind: DieKind, size: number): number {
+  const geometry = buildDieGeometry(kind, size);
+  const [nx, ny, nz] = DIE_FACE_NORMALS[kind][0];
+  const position = geometry.attributes.position;
+  let maxDot = 0;
+  for (let i = 0; i < position.count; i++) {
+    const dot = position.getX(i) * nx + position.getY(i) * ny + position.getZ(i) * nz;
+    if (dot > maxDot) maxDot = dot;
+  }
+  return maxDot;
+}
+
+/**
+ * Where face `index`'s own printed-number decal (DiceTumble.tsx's DieMesh)
+ * sits, before the small outward DECAL_EPSILON nudge that avoids z-fighting
+ * with the base mesh — exactly `DIE_FACE_NORMALS[kind][index] *
+ * facePlaneDistance(kind, size)`, the spike's own faceCenter formula (§4).
+ */
+export function faceCenter(kind: DieKind, index: number, size: number): readonly [number, number, number] {
+  const distance = facePlaneDistance(kind, size);
+  const [nx, ny, nz] = DIE_FACE_NORMALS[kind][index];
+  return [nx * distance, ny * distance, nz * distance];
 }

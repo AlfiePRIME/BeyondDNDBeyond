@@ -11,6 +11,14 @@ export interface DiceTumbleDieSpec {
   id: string;
   sides: number;
   result: number;
+  /** Overrides diceGeometry.ts's DEFAULT_FACE_LABELS[kind] for this one
+   * die's printed face decals AND its ResultBadge text (both read through
+   * labelForResult, so they stay in agreement regardless of this field).
+   * Absent for every ordinary die; today's one real user is a percentile
+   * pair's own synthetic-1-10-indexed tens/ones face labels
+   * (src/app/campaigns/[id]/roll/tumble.ts's buildDiceTumbleSpec) —
+   * see docs/design/dice-numbers-and-physics.md §5. */
+  labelSet?: readonly string[];
 }
 
 export type DiceAnimationPhase = "tumbling" | "settled";

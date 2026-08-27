@@ -139,6 +139,7 @@ import {
   TABLE_SURFACE_Y,
   type CameraMode,
   type ChairObstacle,
+  type DiceFaceSettledInfo,
   type DiceTumbleHandle,
   type DiceTumbleSpec,
   type MapSurfaceCell,
@@ -669,6 +670,7 @@ function ConnectedMemberDiceTray({
   modelForwardOffsetDeg,
   onQueueChange,
   registerRef,
+  onDieSettled,
 }: {
   userId: string;
   trayPosition: readonly [number, number, number];
@@ -676,12 +678,17 @@ function ConnectedMemberDiceTray({
   modelForwardOffsetDeg: number;
   onQueueChange: (userId: string, queue: readonly string[]) => void;
   registerRef: (userId: string, handle: DiceTumbleHandle | null) => void;
+  onDieSettled: (userId: string, info: DiceFaceSettledInfo) => void;
 }) {
   const handleQueueChange = useCallback(
     (queue: readonly string[]) => onQueueChange(userId, queue),
     [userId, onQueueChange]
   );
   const handleRef = useCallback((handle: DiceTumbleHandle | null) => registerRef(userId, handle), [userId, registerRef]);
+  const handleDieSettled = useCallback(
+    (info: DiceFaceSettledInfo) => onDieSettled(userId, info),
+    [userId, onDieSettled]
+  );
 
   return (
     <DiceTumble
@@ -691,6 +698,7 @@ function ConnectedMemberDiceTray({
       modelUrl={modelUrl}
       modelForwardOffsetDeg={modelForwardOffsetDeg}
       onQueueChange={handleQueueChange}
+      onDieSettled={handleDieSettled}
     />
   );
 }
@@ -846,6 +854,25 @@ export function GameRoom({
     setDiceQueueDebugByUser((current) =>
       current[userId] === queue ? current : { ...current, [userId]: queue }
     );
+  }, []);
+  // Mirrored into a hidden DOM node below (the diceQueueDebugByUser
+  // precedent immediately above) so verify-*.mjs's Playwright checks can
+  // confirm a real settled die's own face decal and its floating
+  // ResultBadge agree on the printed value, without needing to OCR a WebGL
+  // canvas — see DiceTumbleProps.onDieSettled's own doc comment. Keyed by
+  // user_id, then by that specific roll's own dieIndex, so a percentile
+  // pair's two dice (tens + ones) both land in the same rollId entry
+  // instead of clobbering each other.
+  const [diceFaceLabelsDebugByUser, setDiceFaceLabelsDebugByUser] = useState<
+    Record<string, { rollId: string; dice: Record<number, { sides: number; result: number; label: string }> }>
+  >({});
+  const handleDieSettledDebug = useCallback((userId: string, info: DiceFaceSettledInfo) => {
+    setDiceFaceLabelsDebugByUser((current) => {
+      const existing = current[userId];
+      const dice = existing && existing.rollId === info.rollId ? { ...existing.dice } : {};
+      dice[info.dieIndex] = { sides: info.sides, result: info.result, label: info.label };
+      return { ...current, [userId]: { rollId: info.rollId, dice } };
+    });
   }, []);
   // Registers/unregisters one connected member's own DiceTumble handle —
   // called from ConnectedMemberDiceTray's own ref callback below (an actual
@@ -4442,6 +4469,7 @@ export function GameRoom({
               modelForwardOffsetDeg={modelForwardOffsetDeg}
               onQueueChange={handleDiceQueueDebug}
               registerRef={registerDiceTumbleRef}
+              onDieSettled={handleDieSettledDebug}
             />
           );
         })}
@@ -4585,6 +4613,17 @@ export function GameRoom({
             ];
           }),
         })}
+      </div>
+      {/* Hidden render-state mirror for the dice-numbering feature's own
+          verify-dice-numbering.mjs — see handleDieSettledDebug's own doc
+          comment. One entry per connected member who has EVER settled a
+          die this session; `dice` is that member's own MOST RECENT roll's
+          per-dieIndex {sides, result, label} — `label` is the exact text
+          both that die's own face decal (DiceTumble.tsx's DieMesh) and its
+          floating ResultBadge show, so a script can assert the two never
+          disagree without needing to OCR a WebGL canvas. */}
+      <div data-testid="dice-face-labels-state" hidden>
+        {JSON.stringify(diceFaceLabelsDebugByUser)}
       </div>
       {/* Hidden render-state mirror for verify-token-slide.mjs — see
           MapSurfaceProps.onTokenSlideDebug's doc comment. `sliding` lists the
