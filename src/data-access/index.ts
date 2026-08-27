@@ -53,12 +53,14 @@ export {
   setHouseRules,
   setActionEconomyStrict,
   setDayNightMode,
+  setWeather,
   subscribeToCampaignChanges,
   type Campaign,
   type CampaignRole,
   type CampaignMembership,
   type CampaignMember,
   type DayNightMode,
+  type WeatherKind,
 } from "./campaigns";
 export {
   createCharacter,

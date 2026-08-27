@@ -99,6 +99,54 @@ const DAY_NIGHT_PRESETS = {
 
 export type DayNightMode = keyof typeof DAY_NIGHT_PRESETS;
 
+/** Every campaign weather value (Weather & Enemies C1) — mirrors
+ * data-access/campaigns.ts's own WeatherKind (a separate, independently-
+ * declared identical union, same DayNightMode-vs-DayNightMode split already
+ * established above: this file's own type is the scene's local vocabulary,
+ * not an import from data-access, so scene-3d never depends on it). Only
+ * 'fog' does anything visually as of C1 — 'rain'/'thunderstorm'/'firestorm'/
+ * 'acid_storm' are reserved for C2-C4's own separate overlay effects
+ * layered on TOP of this scene (Droplets, lightning, particles), not part
+ * of this file's own fog composition. */
+export type WeatherKind = "clear" | "fog" | "rain" | "thunderstorm" | "firestorm" | "acid_storm";
+
+/** Weather's own fog (Weather & Enemies C1), used only when weatherKind is
+ * 'fog' — deliberately NOT tied to either day/night preset's roomBg color
+ * (unlike their own fog, which always matches the room background so it
+ * reads as "the void fades to black/purple at distance" rather than a real
+ * weather effect): a distinct neutral grey-white mist. Pulled much closer
+ * than either preset's own fogNear/fogFar (day 16/34, night 12/28) so the
+ * haze is unmistakable well within normal seated/orbit viewing distance,
+ * not just a faint tint at the horizon — see resolveSceneFog's own doc
+ * comment for the exact composition rule with day/night. */
+const WEATHER_FOG_PRESET = {
+  color: "#9aa0ad",
+  near: 3,
+  far: 15,
+} as const;
+
+/**
+ * Composes day/night's own fog (DAY_NIGHT_PRESETS) with weather's fog: the
+ * exact rule from Weather & Enemies C1's own Notes — when weatherKind is
+ * 'fog', weather's fog near/far/color completely overrides day/night's own;
+ * for every other weatherKind (including 'clear', and every kind C1 doesn't
+ * render anything for yet), day/night's own fog stands exactly as it always
+ * has, so there's no fighting over fog values and zero regression to
+ * today's rendering. A pure function of the two enum inputs, with no scene
+ * state of its own, so callers outside the R3F tree (GameRoom.tsx's hidden
+ * weather-state debug mirror) can call it directly for a real fog-value
+ * read rather than needing anything off the live WebGL scene. */
+export function resolveSceneFog(
+  dayNightMode: DayNightMode,
+  weatherKind: WeatherKind
+): { color: string; near: number; far: number } {
+  if (weatherKind === "fog") {
+    return { color: WEATHER_FOG_PRESET.color, near: WEATHER_FOG_PRESET.near, far: WEATHER_FOG_PRESET.far };
+  }
+  const lighting = DAY_NIGHT_PRESETS[dayNightMode];
+  return { color: lighting.roomBg, near: lighting.fogNear, far: lighting.fogFar };
+}
+
 const LOOK_TARGET = [0, TABLE_SURFACE_Y, 0] as const;
 // World origin is the COMBINED two-table footprint's own center (both
 // tables sit symmetrically astride it — see CombinedTable below), so this
@@ -683,6 +731,11 @@ export interface GameTableSceneProps {
    * plan); defaults to "day" — today's original, unchanged values. Has no
    * effect on the per-cell vision/light-level system. */
   dayNightMode?: DayNightMode;
+  /** Current campaign weather (Weather & Enemies C1); defaults to "clear" —
+   * today's original, unchanged fog. Only 'fog' has any visual effect as of
+   * this prompt (see resolveSceneFog); every other value renders identically
+   * to 'clear' until C2-C4 add their own separate overlay effects. */
+  weatherKind?: WeatherKind;
   /** Verification-only pass-through to MapSurface's onTokenSlideDebug — see
    * its own doc comment. Purely a mirror of each token's slide animation
    * state; omitting it changes nothing about how tokens move or render. */
@@ -891,6 +944,7 @@ export function GameTableScene({
   onRulerDragOverCell,
   onRulerDragEnd,
   dayNightMode = "day",
+  weatherKind = "clear",
   onTokenSlideDebug,
   onAvatarPoseDebug,
   onAvatarMeasureDebug,
@@ -920,6 +974,7 @@ export function GameTableScene({
   onWhiteboardClearPersist,
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
+  const fog = useMemo(() => resolveSceneFog(dayNightMode, weatherKind), [dayNightMode, weatherKind]);
   const { camera, gl, size } = useThree();
 
   const layout = useMemo(() => computeCampaignSeatLayout(members), [members]);
@@ -1470,8 +1525,12 @@ export function GameTableScene({
         />
       )}
 
+      {/* Background stays day/night's own roomBg unconditionally — weather's
+          fog (resolveSceneFog) only ever overrides the FOG args below, never
+          the void color behind it; see resolveSceneFog's own doc comment
+          for the full composition rule. */}
       <color attach="background" args={[lighting.roomBg]} />
-      <fog attach="fog" args={[lighting.roomBg, lighting.fogNear, lighting.fogFar]} />
+      <fog attach="fog" args={[fog.color, fog.near, fog.far]} />
 
       <ambientLight color={lighting.ambientColor} intensity={lighting.ambientIntensity} />
       <directionalLight

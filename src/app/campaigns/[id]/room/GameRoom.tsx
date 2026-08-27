@@ -71,6 +71,7 @@ import {
   setMapObjectBehavior,
   setSeatOffset,
   setTokenAllegiance,
+  setWeather,
   startCombat,
   stopConcentrating,
   clearWhiteboard,
@@ -117,6 +118,7 @@ import {
   type SupabaseClient,
   type TokenAllegiance,
   type UiPreferences,
+  type WeatherKind,
   type WhiteboardTile,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
@@ -158,6 +160,7 @@ import {
   PLAYER_CHAIR_FRONTAGE,
   resolveChairDrop,
   resolveMemberTrayLayout,
+  resolveSceneFog,
   resolveWallMountOffset,
   TABLE_SURFACE_Y,
   type CameraMode,
@@ -836,6 +839,8 @@ export function GameRoom({
   initialChatMessages,
   initialActionEconomyStrict,
   initialDayNightMode,
+  initialWeatherKind,
+  initialWeatherMechanical,
   initialSessionActive,
   initialSessionStartedAt,
   initialUiPreferences,
@@ -907,6 +912,16 @@ export function GameRoom({
    * 3D-table lighting; unrelated to the per-cell vision/light-level
    * system. */
   initialDayNightMode: DayNightMode;
+  /** campaigns.weather_kind at load time (Weather & Enemies C1) — kept live
+   * below via the same campaigns postgres_changes feed as
+   * initialActionEconomyStrict/initialDayNightMode. Only 'clear'/'fog'
+   * render anything as of this prompt; every other value is a reserved
+   * value C2-C4 build their own separate effects on top of. */
+  initialWeatherKind: WeatherKind;
+  /** campaigns.weather_mechanical at load time — only meaningful for
+   * 'firestorm'/'acid_storm' (C4's periodic-damage toggle); always false
+   * and inert for every weather kind this prompt actually renders. */
+  initialWeatherMechanical: boolean;
   /** campaigns.session_active at load time (Chat & Summary B6) — kept live
    * below via the same campaigns postgres_changes feed as
    * initialActionEconomyStrict/initialDayNightMode. Whether the room's
@@ -1796,6 +1811,14 @@ export function GameRoom({
   const [dayNightMode, setDayNightModeState] = useState<DayNightMode>(initialDayNightMode);
   const [dayNightBusy, setDayNightBusy] = useState(false);
   const [dayNightError, setDayNightError] = useState<string | null>(null);
+  // The DM's weather control (Weather & Enemies C1), live-synced below via
+  // the same campaigns postgres_changes feed as dayNightMode/economyStrict.
+  // Only 'clear'/'fog' actually change anything rendered as of this prompt
+  // — see GameTableScene's resolveSceneFog.
+  const [weatherKind, setWeatherKindState] = useState<WeatherKind>(initialWeatherKind);
+  const [weatherMechanical, setWeatherMechanicalState] = useState(initialWeatherMechanical);
+  const [weatherBusy, setWeatherBusy] = useState(false);
+  const [weatherError, setWeatherError] = useState<string | null>(null);
   // Chat & Summary B6: pause/resume, live-synced below via the same
   // campaigns postgres_changes feed as economyStrict/dayNightMode.
   // sessionPaused (derived, not its own state) is the "stopped for a break,
@@ -2562,15 +2585,18 @@ export function GameRoom({
     setTransitionOffer(null);
   }, []);
 
-  // Live strictness + day/night sync: the campaigns postgres_changes feed
-  // (0034 added campaigns to the publication) — a mid-combat mode flip, or
-  // a DM's lighting toggle, must reach every connected player, including
-  // the flipping DM's other windows.
+  // Live strictness + day/night + weather sync: the campaigns
+  // postgres_changes feed (0034 added campaigns to the publication) — a
+  // mid-combat mode flip, a DM's lighting toggle, or a weather change must
+  // reach every connected player, including the flipping DM's other
+  // windows.
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
     return subscribeToCampaignChanges(supabase, campaignId, (campaign) => {
       setEconomyStrict(campaign.action_economy_strict);
       setDayNightModeState(campaign.day_night_mode);
+      setWeatherKindState(campaign.weather_kind);
+      setWeatherMechanicalState(campaign.weather_mechanical);
       setSessionActive(campaign.session_active);
       setSessionStartedAt(campaign.session_started_at);
     });
@@ -4246,6 +4272,32 @@ export function GameRoom({
     }
   }, [campaignId, dayNightBusy, dayNightMode]);
 
+  // The DM's weather control handler (Weather & Enemies C1) — the
+  // handleToggleDayNight/handleSetEconomyStrict shape exactly: persist
+  // first, then reflect locally; other clients (and this one's own
+  // subscription echo) pick up the change through the campaigns
+  // postgres_changes feed. Takes both kind and mechanical together (rather
+  // than two separate setters) so the book's single control never has to
+  // sequence two writes — see setWeather's own doc comment on why
+  // `mechanical` always travels with `kind`.
+  const handleSetWeather = useCallback(
+    async (kind: WeatherKind, mechanical: boolean) => {
+      if (weatherBusy) return;
+      setWeatherBusy(true);
+      setWeatherError(null);
+      try {
+        await setWeather(createBrowserSupabaseClient(), campaignId, kind, mechanical);
+        setWeatherKindState(kind);
+        setWeatherMechanicalState(mechanical);
+      } catch (err) {
+        setWeatherError(errorMessage(err) ?? "Could not change the weather.");
+      } finally {
+        setWeatherBusy(false);
+      }
+    },
+    [campaignId, weatherBusy]
+  );
+
   // The d20 is rolled by the roll Route Handler (server-side randomness,
   // same as initiative), which applies the outcome via apply_death_save_roll
   // and logs it; this client then does the usual refresh + combat-changed
@@ -5437,6 +5489,7 @@ export function GameRoom({
           onRulerDragOverCell={handleRulerDragOverCell}
           onRulerDragEnd={handleRulerDragEnd}
           dayNightMode={dayNightMode}
+          weatherKind={weatherKind}
           onTokenSlideDebug={handleTokenSlideDebug}
           onAvatarPoseDebug={handleAvatarPoseDebug}
           onAvatarMeasureDebug={handleAvatarMeasureDebug}
@@ -5540,6 +5593,10 @@ export function GameRoom({
               dayNightBusy={dayNightBusy}
               dayNightError={dayNightError}
               onToggleDayNight={() => void handleToggleDayNight()}
+              weatherKind={weatherKind}
+              weatherBusy={weatherBusy}
+              weatherError={weatherError}
+              onSetWeather={(kind, mechanical) => void handleSetWeather(kind, mechanical)}
               initialInteractionEvents={initialInteractionEvents}
               initialRolls={initialRolls}
             />
@@ -5607,6 +5664,19 @@ export function GameRoom({
           client, i.e. the mode GameTableScene was told to render. */}
       <div data-testid="day-night-state" hidden>
         {JSON.stringify({ mode: dayNightMode })}
+      </div>
+      {/* Hidden render-state mirror for verify-weather.mjs (Weather &
+          Enemies C1) — same "WebGL has no DOM" reasoning as day-night-state
+          above. Includes a REAL fog-value read (resolveSceneFog, the exact
+          same pure function GameTableScene's own <fog> element calls) so a
+          Playwright check can confirm 'clear' vs 'fog' actually differ
+          without pixel-diffing a screenshot. */}
+      <div data-testid="weather-state" hidden>
+        {JSON.stringify({
+          kind: weatherKind,
+          mechanical: weatherMechanical,
+          fog: resolveSceneFog(dayNightMode, weatherKind),
+        })}
       </div>
       {/* Hidden render-state mirror for verify-per-viewer-map.mjs (0046):
           no DOM otherwise exposes campaignDefaultMapId/dmSelectedMapId/
