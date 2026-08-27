@@ -6,21 +6,24 @@ import type {
   Character,
   DayNightMode,
   DmNote,
+  InteractionEvent,
   LorePage,
   LorePageLink,
   MonsterAttack,
   MonsterStatBlock,
   Npc,
+  RollLogEntry,
 } from "@/data-access";
 import { DmNotes } from "../dm-notes/DmNotes";
 import type { RoomMember } from "./avatar-url";
 import { MonsterPanel } from "./MonsterPanel";
 import { DmOverridesPanel } from "./DmOverridesPanel";
 import { DmBookLorePage } from "./DmBookLorePage";
+import { DmBookActivityPage } from "./DmBookActivityPage";
 import roomStyles from "./room.module.css";
 import styles from "./DmBook.module.css";
 
-type BookPage = "enemies" | "dmControls" | "notes" | "lore" | "dayNight";
+type BookPage = "enemies" | "dmControls" | "notes" | "lore" | "dayNight" | "activity";
 
 const PAGES: { id: BookPage; label: string }[] = [
   { id: "enemies", label: "Enemies" },
@@ -28,11 +31,12 @@ const PAGES: { id: BookPage; label: string }[] = [
   { id: "notes", label: "Notes" },
   { id: "lore", label: "Lore" },
   { id: "dayNight", label: "Day/Night" },
+  { id: "activity", label: "Activity" },
 ];
 
 /**
- * The DM's book's real page content: the five-tab Enemies/DM Controls/
- * Notes/Lore/Day-Night book, switching pages via a short CSS crossfade
+ * The DM's book's real page content: the six-tab Enemies/DM Controls/
+ * Notes/Lore/Day-Night/Activity book, switching pages via a short CSS crossfade
  * (DmBook.module.css's `bookPageIn` keyframe). As of Phase 5 (the Game Room
  * ambiance/tools plan's move to a physical 3D book), this is pure,
  * prop-driven presentational content with no opinion on where it's hosted —
@@ -58,6 +62,11 @@ const PAGES: { id: BookPage; label: string }[] = [
  * Mounted by GameRoom only for the DM — a player's client never renders
  * this component (or DmBookProp's `<Html>` at all): no book content, no
  * page state, nothing in the DOM to find.
+ *
+ * Chat & Summary B5 adds the Activity tab (DmBookActivityPage): a live,
+ * DM-only feed of interaction_events (who triggered/took which tagged
+ * object) and recent roll_log damage events — never shown to players, same
+ * as every other tab in this book.
  */
 export function DmBook({
   // Closing back to the 3D book's closed state.
@@ -91,6 +100,9 @@ export function DmBook({
   dayNightBusy,
   dayNightError,
   onToggleDayNight,
+  // Activity (DmBookActivityPage)
+  initialInteractionEvents,
+  initialRolls,
 }: {
   onClose: () => void;
   statBlocks: MonsterStatBlock[];
@@ -132,6 +144,13 @@ export function DmBook({
   dayNightBusy: boolean;
   dayNightError: string | null;
   onToggleDayNight: () => void;
+  /** interaction_events at load time (DM-only per its RLS) — see
+   * DmBookActivityPage's own doc comment for how this stays live. */
+  initialInteractionEvents: InteractionEvent[];
+  /** roll_log at load time — the same initial snapshot DiceLogPanel seeds
+   * from, handed here too so the Activity page's damage feed opens with no
+   * loading flash. */
+  initialRolls: RollLogEntry[];
 }) {
   const [page, setPage] = useState<BookPage>("enemies");
 
@@ -243,6 +262,14 @@ export function DmBook({
               </p>
             ) : null}
           </div>
+        ) : null}
+        {page === "activity" ? (
+          <DmBookActivityPage
+            campaignId={campaignId}
+            members={members}
+            initialInteractionEvents={initialInteractionEvents}
+            initialRolls={initialRolls}
+          />
         ) : null}
       </div>
     </div>

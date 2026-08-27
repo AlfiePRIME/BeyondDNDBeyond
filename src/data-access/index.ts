@@ -195,6 +195,7 @@ export {
 export {
   createInteractionEvent,
   listInteractionEvents,
+  subscribeToInteractionEvents,
   type InteractionEvent,
 } from "./interactionEvents";
 export {

@@ -97,6 +97,7 @@ import {
   type DiceTrayModelPreference,
   type DmNote,
   type Handout,
+  type InteractionEvent,
   type LightSource,
   type LorePage,
   type LorePageLink,
@@ -838,6 +839,7 @@ export function GameRoom({
   initialLorePageLinks,
   initialSeatOffsets,
   initialDiceTrayPreferences,
+  initialInteractionEvents,
 }: {
   campaignId: string;
   campaignName: string;
@@ -932,6 +934,12 @@ export function GameRoom({
    * renders with DEFAULT_DICE_TRAY_PREFERENCE (the built-in procedural
    * tray). Kept live via DICE_TRAY_PREFERENCE_EVENT below. */
   initialDiceTrayPreferences: readonly (readonly [string, DiceTrayModelPreference])[];
+  /** Chat & Summary B5: interaction_events at load time, DM-only per its RLS
+   * (0059) — an empty array for a player, since GameRoom never fetches them
+   * for one (see page.tsx). Handed unmodified to the book's new Activity
+   * page (DmBookActivityPage), kept live there via
+   * subscribeToInteractionEvents. */
+  initialInteractionEvents: InteractionEvent[];
 }) {
   const router = useRouter();
   const [cameraMode, setCameraMode] = useState<CameraMode>("seat");
@@ -5469,6 +5477,8 @@ export function GameRoom({
               dayNightBusy={dayNightBusy}
               dayNightError={dayNightError}
               onToggleDayNight={() => void handleToggleDayNight()}
+              initialInteractionEvents={initialInteractionEvents}
+              initialRolls={initialRolls}
             />
           </DmBookProp>
         ) : null}

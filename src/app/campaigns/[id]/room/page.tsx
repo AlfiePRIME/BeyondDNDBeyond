@@ -15,6 +15,7 @@ import {
   listCombatantHiddenFrom,
   listDmNotes,
   listHandouts,
+  listInteractionEvents,
   listItemsForMapObjects,
   listLightSources,
   listLorePages,
@@ -100,6 +101,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     seatOffsetsMap,
     diceTrayPreferencesMap,
     initialCampaignTokens,
+    initialInteractionEvents,
   ] = await Promise.all([
     listAssetsForCampaign(supabase, campaignId),
     // Non-DM RLS only exposes the live map (plus, as of 0046, whichever map
@@ -159,6 +161,12 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // every map, used by GameRoom's own map-picker to show which maps
     // currently have an active player token on them.
     listMapTokensForCampaign(supabase, campaignId),
+    // Chat & Summary B5: interaction_events at load time, DM-only per its
+    // RLS (0059) — the same "empty array for a player, GameRoom never
+    // fetches for one" convention as rosterNpcs/initialDmNotes above. Feeds
+    // the book's new Activity page (DmBookActivityPage), kept live via
+    // subscribeToInteractionEvents.
+    currentUserIsDM ? listInteractionEvents(supabase, campaignId) : Promise.resolve([]),
   ]);
   // listDmNotes orders oldest-first (matching every other narrative list);
   // reversed here since the book's Notes page reads better newest-on-top —
@@ -265,6 +273,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialDmNotes={initialDmNotes}
       initialLorePages={initialLorePages}
       initialLorePageLinks={initialLorePageLinks}
+      initialInteractionEvents={initialInteractionEvents}
       // A Map isn't a serializable Server → Client component prop — see
       // GameRoom's own initialSeatOffsets doc comment for why this crosses
       // as a plain array of pairs instead, reconstructed into a Map there.
