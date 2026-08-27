@@ -9,6 +9,7 @@ import {
   listAssetsForCampaign,
   listCampaignMembers,
   listCharactersForCampaign,
+  listChatMessages,
   listCombatCombatants,
   listCombatantConditions,
   listCombatantHiddenFrom,
@@ -90,6 +91,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     characters,
     handoutRows,
     initialRolls,
+    initialChatMessages,
     initialStatBlocks,
     rosterNpcs,
     dmNoteRows,
@@ -114,6 +116,14 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // Same DB-read reasoning as the live map: fresh joins see recent rolls
     // without having been subscribed when they landed.
     listRollLog(supabase, campaignId),
+    // Chat & Summary B4: same DB-read-not-broadcast reasoning as
+    // listRollLog immediately above — a fresh join or reload sees the
+    // campaign's full chat history without having been subscribed to
+    // chat_messages' own postgres_changes feed when any of it was sent.
+    // Every member's own RLS-readable rows (0067's SELECT policy is
+    // whole-campaign, matching roll_log), so this is never trimmed per
+    // viewer.
+    listChatMessages(supabase, campaignId),
     // Monster stat blocks (Prompt 61), member-readable — AC auto-fill
     // for stat-blocked NPC targets needs them on every client.
     listMonsterStatBlocks(supabase, campaignId),
@@ -248,6 +258,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialHandouts={initialHandouts}
       initialCombat={initialCombat}
       initialRolls={initialRolls}
+      initialChatMessages={initialChatMessages}
       initialActionEconomyStrict={campaign.action_economy_strict}
       initialDayNightMode={campaign.day_night_mode}
       initialUiPreferences={currentUserProfile?.ui_preferences ?? { panelLayout: {} }}

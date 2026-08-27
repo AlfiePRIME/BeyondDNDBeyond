@@ -110,6 +110,17 @@
   transform: translateX(-50%);
 }
 
+/* Chat & Summary Batch B4: ChatLogPanel's own default position — a fresh
+   vertically-centered right-edge anchor rather than a third tier stacked
+   below anchorTopRight/anchorTopRightLow (handout/hp) — see
+   DEFAULT_ANCHOR_CLASS.chatLog's own doc comment (DraggablePanel.tsx) for
+   why stacking further there repeats the liveObjects over-stack bug. */
+.anchorMidRight {
+  top: 50%;
+  right: 24px;
+  transform: translateY(-50%);
+}
+
 /* The wrapped panel's own root element's first child is its existing
    header/title row (see DraggablePanel.tsx's structural contract) —
    reused as the drag handle rather than adding a redundant new one. */

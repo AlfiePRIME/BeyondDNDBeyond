@@ -86,6 +86,7 @@ import {
   DEFAULT_DICE_TRAY_PREFERENCE,
   type CampaignMap,
   type Character,
+  type ChatMessage,
   type CombatCombatant,
   type CombatantEconomyFlag,
   type ConcealedPit,
@@ -191,6 +192,7 @@ import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
 import { buildDiceTumbleSpec } from "../roll/tumble";
 import { CombatPanel, type CombatState } from "./CombatPanel";
+import { ChatLogPanel } from "./ChatLogPanel";
 import { ContainerPanel } from "./ContainerPanel";
 import { DraggablePanel, PanelLayoutProvider } from "./DraggablePanel";
 import { DiceLogPanel } from "./DiceLogPanel";
@@ -822,6 +824,7 @@ export function GameRoom({
   initialHandouts,
   initialCombat,
   initialRolls,
+  initialChatMessages,
   initialActionEconomyStrict,
   initialDayNightMode,
   initialUiPreferences,
@@ -876,6 +879,13 @@ export function GameRoom({
   initialHandouts: RoomHandout[];
   initialCombat: CombatState | null;
   initialRolls: RollLogEntry[];
+  /** Chat & Summary B4: chat_messages at load time (chat.ts's own
+   * listChatMessages, newest-first) — the same "DB read for SSR, then
+   * subscribe" shape as initialRolls above, handed unmodified to
+   * ChatLogPanel. Every campaign member's own RLS-readable rows (0067's
+   * SELECT policy is whole-campaign, matching roll_log), so this is never
+   * trimmed per viewer the way e.g. initialHandouts is. */
+  initialChatMessages: ChatMessage[];
   /** campaigns.action_economy_strict at load time — kept live below via
    * the campaigns postgres_changes feed. */
   initialActionEconomyStrict: boolean;
@@ -5886,6 +5896,22 @@ export function GameRoom({
           tokens={liveMap?.tokens ?? []}
           strict={economyStrict}
           onRollLanded={handleRollLanded}
+        />
+      </DraggablePanel>
+      {/* Chat & Summary B4: the persistent chat log — its own standalone
+          panel (not folded into diceLog), the exact "genuinely separate
+          concern" call diceTray/hp/liveObjects already made. Coexists with
+          B3's floating chat bubbles: both read the same live
+          subscribeToChatMessages feed off the same sendChatMessage call, so
+          sending from here (or from B3's own input, if still mounted) shows
+          up in both places with no direct wiring between the two
+          components. */}
+      <DraggablePanel panelId="chatLog">
+        <ChatLogPanel
+          campaignId={campaignId}
+          currentUserId={currentUserId}
+          members={roster}
+          initialMessages={initialChatMessages}
         />
       </DraggablePanel>
       <DraggablePanel panelId="diceLog">

@@ -47,7 +47,11 @@ export type PanelId =
   // panel — its own standalone panel (LiveObjectsPanel.tsx) rather than a
   // section bolted onto MapPanel, the same "genuinely separate concern gets
   // its own draggable panel" call diceTray/hp already made.
-  | "liveObjects";
+  | "liveObjects"
+  // Chat & Summary Batch B4: the persistent chat log panel (ChatLogPanel.tsx)
+  // — its own standalone panel, not folded into diceLog, matching every
+  // other "genuinely separate concern" call this file already made.
+  | "chatLog";
 
 /**
  * Each panel's default position, expressed as a CSS anchor class
@@ -95,6 +99,18 @@ const DEFAULT_ANCHOR_CLASS: Record<PanelId, string> = {
   // the real overflow-off-the-top-of-the-viewport bug this position fixes
   // versus the first (wrong) attempt of stacking above map's own 70vh.
   liveObjects: styles.anchorTopLeftLow,
+  // Chat & Summary Batch B4: every existing corner/center anchor already
+  // carries at least one stacked pair (topLeft+topLeftLow, topRight+
+  // topRightLow, topCenter+topCenterLow, bottomCenter+bottomCenterHigh) —
+  // stacking a THIRD tier below any of them repeats the exact over-stack
+  // bug liveObjects' own DEFAULT_ANCHOR_CLASS comment documents (a sibling
+  // tall enough to push the new panel off the bottom of a realistic
+  // viewport, with no clamping safety net for a still-on-its-default-anchor
+  // panel). A fresh, vertically-centered right-edge anchor sidesteps that
+  // entirely rather than adding a fourth tier to an already-tall stack;
+  // like every other panel here, drag-to-reposition remains the escape
+  // hatch for a layout this doesn't suit.
+  chatLog: styles.anchorMidRight,
 };
 
 /**

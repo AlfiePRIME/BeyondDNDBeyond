@@ -375,5 +375,12 @@ export {
   type Handout,
   type DmNote,
 } from "./narrative";
+export {
+  listChatMessages,
+  sendChatMessage,
+  editChatMessage,
+  subscribeToChatMessages,
+  type ChatMessage,
+} from "./chat";
 
 export const MODULE_NAME = "data-access" as const;

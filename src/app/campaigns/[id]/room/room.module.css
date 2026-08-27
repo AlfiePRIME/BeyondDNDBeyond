@@ -929,3 +929,123 @@
   gap: 10px;
   padding: 16px;
 }
+
+/* Chat & Summary Batch B4: ChatLogPanel — the .dicePanel shape (its own
+   direct structural precedent), a hair taller since this is the primary
+   running conversation surface rather than a supplementary roll history.
+   Positioned by DraggablePanel's own new .anchorMidRight default (see that
+   class's doc comment for why it isn't stacked with an existing corner). */
+.chatPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  width: 360px;
+  max-height: 46vh;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
+  border-radius: 8px;
+}
+
+/* The scrollable message history — its own inner flex column (rather than
+   the panel root itself) so auto-scroll-to-bottom (ChatLogPanel.tsx's own
+   scrollTop assignment) has a single, stable scroll container regardless of
+   whatever else the panel eventually grows above/below it (the input row,
+   an error line). */
+.chatList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* One message — the .rollEntry shape, reused for visual consistency between
+   this app's two chronological-log panels. */
+.chatEntry {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--surface2) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dim) 18%, transparent);
+  border-radius: 6px;
+}
+
+/* A DM's own message — the .overrideEntry precedent's "accent-tinted card"
+   treatment, but in the DM's own purple (this app's established DM accent,
+   see tokens.css) rather than the general UI accent, so a DM's line reads
+   apart from a player's at a glance even before reading the sender name. */
+.chatEntryDm {
+  background: color-mix(in srgb, var(--purple) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--purple) 45%, transparent);
+}
+
+.chatEntryHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chatSenderDm {
+  color: var(--purple);
+}
+
+.chatTimestamp {
+  font-family: var(--font-m);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.chatEditedMarker {
+  font-family: var(--font-m);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  font-style: italic;
+  color: var(--dim);
+}
+
+.chatEditButton {
+  margin-left: auto;
+}
+
+.chatBody {
+  font-size: 13px;
+  line-height: 1.5;
+  /* Player-authored text (unlike every other span in this file) must wrap
+     — a long message or an unbroken run with no spaces should never force
+     this panel wider or spill past its own edge. */
+  overflow-wrap: anywhere;
+}
+
+.chatEditRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* .initiativeInput's own look (padding/font/color/background/border), but
+   flexible-width rather than that class's fixed 90px — both the edit-row
+   and send-row inputs need to fill whatever space the panel's own fixed
+   360px width leaves after its buttons, not a short numeric-entry box. */
+.chatEditInput,
+.chatInput {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-family: var(--font-m);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
+  border-radius: 6px;
+}
+
+.chatInputRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
