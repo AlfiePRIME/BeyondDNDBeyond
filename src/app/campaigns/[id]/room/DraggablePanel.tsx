@@ -42,7 +42,12 @@ export type PanelId =
   | "diceLog"
   | "handout"
   | "diceTray"
-  | "hp";
+  | "hp"
+  // Map Editor Batch A10: the DM-only live-object-placement/reveal/behavior
+  // panel — its own standalone panel (LiveObjectsPanel.tsx) rather than a
+  // section bolted onto MapPanel, the same "genuinely separate concern gets
+  // its own draggable panel" call diceTray/hp already made.
+  | "liveObjects";
 
 /**
  * Each panel's default position, expressed as a CSS anchor class
@@ -85,6 +90,11 @@ const DEFAULT_ANCHOR_CLASS: Record<PanelId, string> = {
   // room.module.css's .handoutPanel, so the two panels' default positions
   // never overlap).
   hp: styles.anchorTopRightLow,
+  // Map Editor Batch A10: stacked directly BELOW anchorTopLeft (combat) —
+  // see anchorTopLeftLow's own doc comment (DraggablePanel.module.css) for
+  // the real overflow-off-the-top-of-the-viewport bug this position fixes
+  // versus the first (wrong) attempt of stacking above map's own 70vh.
+  liveObjects: styles.anchorTopLeftLow,
 };
 
 /**

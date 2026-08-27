@@ -53,6 +53,25 @@
   right: 24px;
 }
 
+/* Map Editor Batch A10: LiveObjectsPanel. A real, reproduced bug: this was
+   first stacked ABOVE anchorBottomRight (map, .sidePanel's 70vh) the exact
+   anchorBottomCenterHigh way — but map's own max-height is so tall that
+   "above map's full height" leaves under 30vh of headroom before running
+   off the TOP of the viewport entirely, and DraggablePanel's own
+   clampToViewport re-clamp only ever applies to an EXPLICIT saved position
+   (a drag, or a collapse-toggle) — never to a panel still sitting on its
+   plain default anchor class (see clampToViewport's own doc comment), so a
+   never-touched LiveObjectsPanel had no safety net at all. Confirmed live:
+   Playwright reported its own "+ Add object" asset grid as "outside of the
+   viewport" the moment it opened. Stacked below anchorTopLeft (combat,
+   .combatPanel's real 26vh) instead — the anchorTopRightLow precedent (a
+   plain, independent calc() using combat's own real max-height), which
+   leaves comfortable headroom below on any realistic viewport height. */
+.anchorTopLeftLow {
+  top: calc(64px + 26vh + 12px);
+  left: 24px;
+}
+
 .anchorTopCenter {
   /* .quickActionsPanel's old position */
   top: 64px;
