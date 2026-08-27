@@ -25,6 +25,15 @@ export interface MapObjectItem {
    * on this table, copied into interaction_events.tag when the item is
    * taken (createInteractionEvent's own `tag` param). */
   tag: string | null;
+  /** Map Editor Batch A5: null (A4's original shape, and every pre-A5 row)
+   * means not hidden — always visible once the container is opened, exactly
+   * A4's behavior. A number is the passive-Perception DC a VIEWING
+   * character's own passive Perception must meet or beat, computed
+   * per-viewer in the Game Room (see vision.ts's isItemVisibleToCharacter),
+   * NOT a stored per-viewer reveal flag — see this column's own migration
+   * comment for why nothing needs to be persisted per (item, character)
+   * pair. */
+  hidden_dc: number | null;
   /** Unpopulated as of Batch A4 — a later prompt (A9) defines the real
    * shape (kind/resolution/effect/telegraphed) and starts writing here. */
   curse_blessing: Record<string, unknown> | null;
@@ -89,6 +98,9 @@ export async function addContainerItem(
     description?: string | null;
     icon?: string | null;
     tag?: string | null;
+    /** Map Editor Batch A5 — omitted/undefined and null both mean "not
+     * hidden", matching every other optional field here. */
+    hiddenDc?: number | null;
   }
 ): Promise<MapObjectItem> {
   const { data, error } = await supabase
@@ -101,6 +113,7 @@ export async function addContainerItem(
       description: params.description ?? null,
       icon: params.icon ?? null,
       tag: params.tag ?? null,
+      hidden_dc: params.hiddenDc ?? null,
     })
     .select()
     .single();
@@ -113,7 +126,14 @@ export async function addContainerItem(
 export async function updateContainerItem(
   supabase: SupabaseClient,
   itemId: string,
-  patch: { name?: string; description?: string | null; icon?: string | null; tag?: string | null }
+  patch: {
+    name?: string;
+    description?: string | null;
+    icon?: string | null;
+    tag?: string | null;
+    /** Map Editor Batch A5 — null clears it back to not-hidden. */
+    hidden_dc?: number | null;
+  }
 ): Promise<MapObjectItem> {
   const { data, error } = await supabase
     .from("map_object_items")
