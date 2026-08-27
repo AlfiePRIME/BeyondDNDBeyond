@@ -75,6 +75,30 @@ export function isWallFamilyUrl(url: string | null): boolean {
   return url !== null && Object.hasOwn(WALL_FIT_TARGET_BY_URL, url);
 }
 
+// Map Editor Batch A8a's 8 exterior-facade presets (0066_building_presets.sql)
+// — matched structurally by model url, the same isWallFamilyUrl precedent
+// just above, rather than any asset_library category column (none exists).
+// Used by Map Editor Batch A8b to decide which placed objects are eligible
+// for the building-to-transition link badge; every one of these already
+// auto-normalizes to a single cell footprint (see 0066's own comment), so
+// "the building's cell" below is unambiguous — no multi-cell math needed.
+const BUILDING_PRESET_URLS = new Set<string>([
+  "/assets/presets/cottage.glb",
+  "/assets/presets/timber-house.glb",
+  "/assets/presets/roundhouse.glb",
+  "/assets/presets/town-hall.glb",
+  "/assets/presets/tavern.glb",
+  "/assets/presets/shop.glb",
+  "/assets/presets/food-cart.glb",
+  "/assets/presets/farm-cart.glb",
+]);
+
+/** Map Editor Batch A8b: true for any of A8a's building presets, matched by
+ * model url — see BUILDING_PRESET_URLS' own doc comment. */
+export function isBuildingPresetUrl(url: string | null): boolean {
+  return url !== null && BUILDING_PRESET_URLS.has(url);
+}
+
 const PLACEHOLDER_COLOR = "#8f86ad";
 
 /** Shown while a model loads and when a load fails — a translucent crate,

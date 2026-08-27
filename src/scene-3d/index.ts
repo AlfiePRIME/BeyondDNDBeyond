@@ -40,7 +40,7 @@ export {
 } from "./MapSurface";
 export { computeTableMapMetrics } from "./mapFit";
 export { buildGridOverlayPositions } from "./gridOverlay";
-export { PlacedObject, PLACED_OBJECT_SIZE, isWallFamilyUrl } from "./PlacedObject";
+export { PlacedObject, PLACED_OBJECT_SIZE, isWallFamilyUrl, isBuildingPresetUrl } from "./PlacedObject";
 // Avatar's own normalization target — exported for the account/campaign
 // upload flows' rotate-and-confirm preview (OrientationPreview), which must
 // normalize a candidate avatar upload at the exact scale it will actually

@@ -487,6 +487,14 @@ export interface MapSurfaceObject {
    * all, just this plain numeric offset. */
   renderOffsetX?: number;
   renderOffsetZ?: number;
+  /** Map Editor Batch A8b: for a placed BUILDING-preset object only (see
+   * PlacedObject.tsx's isBuildingPresetUrl) — whether the DM has already
+   * authored a map_transition anchored at this object's own cell ("linked")
+   * or hasn't yet ("unlinked"). Absent/undefined for every non-building
+   * object (and for a ghost AI-preview object, which has no real cell
+   * commitment yet) renders no badge at all — the exact same rendering as
+   * before this feature for everything except a real placed building. */
+  linkStatus?: "linked" | "unlinked";
 }
 
 interface ObjectMarkerProps {
@@ -505,6 +513,8 @@ interface ObjectMarkerProps {
   dimmed: boolean;
   /** Map Editor Batch A3: see MapSurfaceObject.tint's own doc comment. */
   tint: string | null;
+  /** Map Editor Batch A8b: see MapSurfaceObject.linkStatus's own doc comment. */
+  linkStatus: "linked" | "unlinked" | null;
   onSelect: (id: string, event: ThreeEvent<PointerEvent>) => void;
   /** Verification-only: see MapSurfaceProps.onObjectPoseDebug's doc comment. */
   onPoseDebug?: (id: string, compatible: boolean) => void;
@@ -538,6 +548,20 @@ const BEACON_COLOR = "#ffbf47";
 // dimmed prop reads as "swallowed by the room's darkness", not tinted.
 const DIM_SHROUD_COLOR = "#0d0520";
 
+// Map Editor Batch A8b (building-to-transition link badges): reuses this
+// file's own established "good to go"/"needs attention" hues rather than
+// inventing new ones — HIGHLIGHT_COLOR already means "you may act here" for
+// the reachable-cell highlight, and BEACON_COLOR already means "draws the
+// eye" for an active toggle's beacon. Distinguished by SHAPE as well as
+// color (a flat ring vs. an upward spike) so the badge still reads for a
+// colorblind DM, not just by hue.
+const LINK_BADGE_LINKED_COLOR = HIGHLIGHT_COLOR;
+const LINK_BADGE_UNLINKED_COLOR = BEACON_COLOR;
+// Sits above HIT_BOX_HEIGHT and clear of the active-beacon sphere's own
+// (HIT_BOX_HEIGHT + 0.22) position/radius, so a building that happens to
+// also be an active toggle never visually collides with its own badge.
+const LINK_BADGE_HEIGHT = HIT_BOX_HEIGHT + 0.5;
+
 // The whole marker group scales uniformly with cell size, so a normalized
 // prop keeps the same fit-inside-its-cell proportions at any footprint.
 const ObjectMarker = memo(function ObjectMarker({
@@ -555,6 +579,7 @@ const ObjectMarker = memo(function ObjectMarker({
   active,
   dimmed,
   tint,
+  linkStatus,
   onSelect,
   onPoseDebug,
   onMeasureDebug,
@@ -591,6 +616,23 @@ const ObjectMarker = memo(function ObjectMarker({
         <mesh position={[0, HIT_BOX_HEIGHT + 0.22, 0]}>
           <sphereGeometry args={[0.11, 16, 16]} />
           <meshBasicMaterial color={BEACON_COLOR} />
+        </mesh>
+      ) : null}
+      {linkStatus === "linked" ? (
+        // A flat ring, laid horizontal (rotated off its default XY-plane
+        // orientation) so it reads as a "medal"/complete marker from the
+        // editor's own elevated camera angle.
+        <mesh position={[0, LINK_BADGE_HEIGHT, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.12, 0.035, 8, 20]} />
+          <meshBasicMaterial color={LINK_BADGE_LINKED_COLOR} toneMapped={false} />
+        </mesh>
+      ) : linkStatus === "unlinked" ? (
+        // An upward spike (apex up by default) — deliberately a DIFFERENT
+        // silhouette from the ring above, not just a different color, per
+        // this file's own LINK_BADGE color-constants comment.
+        <mesh position={[0, LINK_BADGE_HEIGHT, 0]}>
+          <coneGeometry args={[0.09, 0.22, 8]} />
+          <meshBasicMaterial color={LINK_BADGE_UNLINKED_COLOR} toneMapped={false} />
         </mesh>
       ) : null}
       {selectable ? (
@@ -1298,6 +1340,7 @@ export function MapSurface({
           active={object.active ?? false}
           dimmed={object.dimmed ?? false}
           tint={object.tint ?? null}
+          linkStatus={object.linkStatus ?? null}
           onSelect={onSelectObject ?? NOOP_SELECT}
           onPoseDebug={onObjectPoseDebug}
           onMeasureDebug={onObjectMeasureDebug}
