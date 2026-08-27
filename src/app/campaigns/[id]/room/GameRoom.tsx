@@ -29,6 +29,8 @@ import {
   deleteMapToken,
   endCombat,
   endSession,
+  pauseSession,
+  resumeSession,
   getActiveCombatantForCharacter,
   getActiveCombatEncounter,
   getCharacter,
@@ -136,7 +138,7 @@ import {
   type VisibilityCellInput,
   type VisibilityTier,
 } from "@/rules-engine";
-import { Button, computeChatBubbleDurationMs, Modal } from "@/ui-components";
+import { Badge, Button, computeChatBubbleDurationMs, Modal } from "@/ui-components";
 import {
   applySeatOffset,
   ChatBubble,
@@ -204,6 +206,7 @@ import { DraggablePanel, PanelLayoutProvider } from "./DraggablePanel";
 import { DiceLogPanel } from "./DiceLogPanel";
 import { DiceTrayPicker } from "./DiceTrayPicker";
 import { DmBook } from "./DmBook";
+import { EndSessionSummaryModal } from "./EndSessionSummaryModal";
 import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
@@ -833,6 +836,8 @@ export function GameRoom({
   initialChatMessages,
   initialActionEconomyStrict,
   initialDayNightMode,
+  initialSessionActive,
+  initialSessionStartedAt,
   initialUiPreferences,
   initialDmNotes,
   initialLorePages,
@@ -902,6 +907,19 @@ export function GameRoom({
    * 3D-table lighting; unrelated to the per-cell vision/light-level
    * system. */
   initialDayNightMode: DayNightMode;
+  /** campaigns.session_active at load time (Chat & Summary B6) — kept live
+   * below via the same campaigns postgres_changes feed as
+   * initialActionEconomyStrict/initialDayNightMode. Whether the room's
+   * "live" signal is currently on; false while paused (pauseSession) OR
+   * after a genuine end (endSession) — initialSessionStartedAt below is
+   * what tells the two apart. */
+  initialSessionActive: boolean;
+  /** campaigns.session_started_at at load time — non-null exactly while a
+   * session is open (live or paused); null once genuinely ended or never
+   * started. Paired with initialSessionActive to derive sessionPaused
+   * (`!sessionActive && sessionStartedAt !== null`) for the Pause/Resume
+   * controls below. */
+  initialSessionStartedAt: string | null;
   /** profiles.ui_preferences at load time (Phase B) — the current user's,
    * not any other member's; handed to PanelLayoutProvider below so a
    * returning user's saved Game Room panel layout renders on first paint
@@ -956,8 +974,6 @@ export function GameRoom({
   );
   const [chairMoveError, setChairMoveError] = useState<string | null>(null);
   const chairMoveBusyRef = useRef(false);
-  const [ending, setEnding] = useState(false);
-  const [endError, setEndError] = useState<string | null>(null);
   const channelRef = useRef<PresenceChannel | null>(null);
   const campaignChannelRef = useRef<PresenceChannel | null>(null);
   // One connected member per personal dice tray (replacing the old single
@@ -1780,6 +1796,18 @@ export function GameRoom({
   const [dayNightMode, setDayNightModeState] = useState<DayNightMode>(initialDayNightMode);
   const [dayNightBusy, setDayNightBusy] = useState(false);
   const [dayNightError, setDayNightError] = useState<string | null>(null);
+  // Chat & Summary B6: pause/resume, live-synced below via the same
+  // campaigns postgres_changes feed as economyStrict/dayNightMode.
+  // sessionPaused (derived, not its own state) is the "stopped for a break,
+  // not ended" reading of the two: session_active false alone used to mean
+  // "nothing in progress" pre-B6, but now also covers a genuine pause, which
+  // session_started_at (still set) distinguishes from a real end (cleared).
+  const [sessionActive, setSessionActive] = useState(initialSessionActive);
+  const [sessionStartedAt, setSessionStartedAt] = useState(initialSessionStartedAt);
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const [pauseError, setPauseError] = useState<string | null>(null);
+  const sessionPaused = !sessionActive && sessionStartedAt !== null;
+  const [endSessionModalOpen, setEndSessionModalOpen] = useState(false);
   // Monster stat blocks (Prompt 61): member-readable rows every panel's
   // AC/HP lookups ride. Kept fresh by the combat refresh below — a
   // quick-added monster's stat block reaches other clients on the same
@@ -2543,6 +2571,8 @@ export function GameRoom({
     return subscribeToCampaignChanges(supabase, campaignId, (campaign) => {
       setEconomyStrict(campaign.action_economy_strict);
       setDayNightModeState(campaign.day_night_mode);
+      setSessionActive(campaign.session_active);
+      setSessionStartedAt(campaign.session_started_at);
     });
   }, [campaignId]);
 
@@ -4394,17 +4424,50 @@ export function GameRoom({
     [handoutBusy, applyHandoutChange]
   );
 
-  async function handleEndSession() {
-    setEnding(true);
-    setEndError(null);
+  // Chat & Summary B6: "End session" no longer ends anything by itself — it
+  // opens EndSessionSummaryModal, which generates a preview, lets the DM
+  // edit it, and only calls the real endSession RPC (plus saves the
+  // recap/breakdown) once the DM confirms. Cancelling the modal leaves the
+  // session running untouched.
+  function handleOpenEndSessionModal() {
+    setEndSessionModalOpen(true);
+  }
+
+  function handleSessionEnded() {
+    setEndSessionModalOpen(false);
+    void channelRef.current?.publish(SESSION_ENDED_EVENT, { campaignId });
+    router.push("/");
+  }
+
+  // Persist first, then reflect locally — the handleSetEconomyStrict/
+  // handleToggleDayNight shape: other clients (and this one's own
+  // subscription echo) pick up the flip through the campaigns
+  // postgres_changes feed regardless.
+  async function handlePauseSession() {
+    if (pauseBusy) return;
+    setPauseBusy(true);
+    setPauseError(null);
     try {
-      const supabase = createBrowserSupabaseClient();
-      await endSession(supabase, campaignId);
-      await channelRef.current?.publish(SESSION_ENDED_EVENT, { campaignId });
-      router.push("/");
+      await pauseSession(createBrowserSupabaseClient(), campaignId);
+      setSessionActive(false);
     } catch (err) {
-      setEnding(false);
-      setEndError(errorMessage(err) ?? "Could not end the session.");
+      setPauseError(errorMessage(err) ?? "Could not pause the session.");
+    } finally {
+      setPauseBusy(false);
+    }
+  }
+
+  async function handleResumeSession() {
+    if (pauseBusy) return;
+    setPauseBusy(true);
+    setPauseError(null);
+    try {
+      await resumeSession(createBrowserSupabaseClient(), campaignId);
+      setSessionActive(true);
+    } catch (err) {
+      setPauseError(errorMessage(err) ?? "Could not resume the session.");
+    } finally {
+      setPauseBusy(false);
     }
   }
 
@@ -5851,15 +5914,45 @@ export function GameRoom({
           ← {campaignName}
         </Link>
         <div className={styles.overlayControls}>
+          {/* Chat & Summary B6: visible to every member, not just the DM —
+              a paused table should know why nothing's happening. */}
+          {sessionPaused ? (
+            <Badge tone="orange" pulse data-testid="session-paused-badge">
+              Session paused
+            </Badge>
+          ) : null}
+          {currentUserIsDM ? (
+            sessionPaused ? (
+              <Button
+                size="sm"
+                variant="teal"
+                disabled={pauseBusy}
+                onClick={() => void handleResumeSession()}
+                data-testid="resume-session-button"
+              >
+                {pauseBusy ? "Resuming…" : "Resume session"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={pauseBusy}
+                onClick={() => void handlePauseSession()}
+                data-testid="pause-session-button"
+              >
+                {pauseBusy ? "Pausing…" : "Pause session"}
+              </Button>
+            )
+          ) : null}
           {currentUserIsDM ? (
             <Button
               size="sm"
               variant="danger"
-              disabled={ending}
-              onClick={handleEndSession}
+              disabled={endSessionModalOpen}
+              onClick={handleOpenEndSessionModal}
               data-testid="end-session-button"
             >
-              {ending ? "Ending…" : "End session"}
+              End session
             </Button>
           ) : null}
           <Button
@@ -6320,10 +6413,18 @@ export function GameRoom({
           </div>
         ) : null}
       </Modal>
-      {endError ? (
-        <p role="alert" className={styles.endError} data-testid="end-session-error">
-          {endError}
+      {pauseError ? (
+        <p role="alert" className={styles.endError} data-testid="pause-session-error">
+          {pauseError}
         </p>
+      ) : null}
+      {currentUserIsDM ? (
+        <EndSessionSummaryModal
+          campaignId={campaignId}
+          open={endSessionModalOpen}
+          onClose={() => setEndSessionModalOpen(false)}
+          onSessionEnded={handleSessionEnded}
+        />
       ) : null}
     </div>
     </PanelLayoutProvider>

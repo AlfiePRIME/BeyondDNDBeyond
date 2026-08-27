@@ -52,6 +52,11 @@ import {
   createSessionLogEntry,
   updateSessionLogEntry,
   deleteSessionLogEntry,
+  pauseSession,
+  resumeSession,
+  listSessionSummaryHighlights,
+  createSessionSummaryHighlights,
+  SESSION_SUMMARY_HIGHLIGHT_CATEGORIES,
   listHandouts,
   createHandout,
   setHandoutRevealed,
@@ -228,6 +233,17 @@ describe("data-access module", () => {
     expect(createSessionLogEntry).toBeTypeOf("function");
     expect(updateSessionLogEntry).toBeTypeOf("function");
     expect(deleteSessionLogEntry).toBeTypeOf("function");
+  });
+
+  it("exports the pause/resume session functions from the main barrel (Chat & Summary B6)", () => {
+    expect(pauseSession).toBeTypeOf("function");
+    expect(resumeSession).toBeTypeOf("function");
+  });
+
+  it("exports the session summary highlight functions from the main barrel (Chat & Summary B6)", () => {
+    expect(listSessionSummaryHighlights).toBeTypeOf("function");
+    expect(createSessionSummaryHighlights).toBeTypeOf("function");
+    expect(SESSION_SUMMARY_HIGHLIGHT_CATEGORIES).toEqual(["damage", "interaction", "other"]);
   });
 
   it("exports the handout functions from the main barrel", () => {

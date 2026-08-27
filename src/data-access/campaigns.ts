@@ -6,6 +6,14 @@ export interface Campaign {
   creator: string;
   invite_code: string;
   session_active: boolean;
+  /** Real start time of the CURRENTLY OPEN session (Chat & Summary B6) — set
+   * by startSession on every successful start (fresh or reclaimed), left
+   * untouched by pauseSession/resumeSession so a break never resets or
+   * splits the window, and cleared back to null by endSession. Null means
+   * "no session currently open" — never started, or already ended. A
+   * session's AI-summary window is [session_started_at as read at end time,
+   * "now" at that same moment), regardless of any pauses in between. */
+  session_started_at: string | null;
   live_map: string | null;
   house_rules: string | null;
   /** Strict (default) hard-blocks over-budget actions/movement in combat;
@@ -228,6 +236,32 @@ export async function startSession(
  */
 export async function endSession(supabase: SupabaseClient, campaignId: string): Promise<void> {
   const { error } = await supabase.rpc("end_session", { p_campaign_id: campaignId });
+  if (error) throw error;
+}
+
+/**
+ * DM-only (the RPC checks is_campaign_dm), Chat & Summary B6: a genuine
+ * break, distinct from endSession — stops the same "live" signal endSession
+ * stops (session_active), but leaves session_started_at untouched, so the
+ * session's summary-eligible window keeps its original start and a pause
+ * never triggers a summary. Idempotent: pausing an already-paused (or never
+ * started) session is a no-op, not an error, matching endSession's own
+ * race-tolerant convention.
+ */
+export async function pauseSession(supabase: SupabaseClient, campaignId: string): Promise<void> {
+  const { error } = await supabase.rpc("pause_session", { p_campaign_id: campaignId });
+  if (error) throw error;
+}
+
+/**
+ * DM-only, the pauseSession counterpart: turns the live signal back on for
+ * the SAME session (session_started_at is left exactly as pauseSession left
+ * it) — a later endSession's summary still covers the entire span from the
+ * original startSession call. Throws when there is no paused session to
+ * resume (never started, or already properly ended via endSession).
+ */
+export async function resumeSession(supabase: SupabaseClient, campaignId: string): Promise<void> {
+  const { error } = await supabase.rpc("resume_session", { p_campaign_id: campaignId });
   if (error) throw error;
 }
 

@@ -46,6 +46,32 @@ export async function listChatMessages(
 }
 
 /**
+ * Every message sent within [startIso, endIso] (inclusive), oldest first —
+ * Chat & Summary B6's end-of-session summary window, unlike listChatMessages
+ * above (which is a most-recent-first, tail-limited feed for live reading).
+ * No `limit`: a single session's chat is bounded enough to fetch in full,
+ * and the AI summary generator does its own line-count capping on the
+ * result, not this query.
+ */
+export async function listChatMessagesInRange(
+  supabase: SupabaseClient,
+  campaignId: string,
+  startIso: string,
+  endIso: string
+): Promise<ChatMessage[]> {
+  const { data, error } = await supabase
+    .from("chat_messages")
+    .select()
+    .eq("campaign_id", campaignId)
+    .gte("created_at", startIso)
+    .lte("created_at", endIso)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []) as ChatMessage[];
+}
+
+/**
  * Sends a chat message as `senderUserId`. The chat_messages INSERT policy
  * (0067) independently re-checks `sender_user_id = auth.uid()` — this
  * parameter is never trusted on its own, so a caller can't send as anyone
