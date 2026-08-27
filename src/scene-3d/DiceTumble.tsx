@@ -11,8 +11,16 @@ import {
   useState,
 } from "react";
 import { Billboard } from "@react-three/drei";
-import { BufferGeometry, CanvasTexture, SRGBColorSpace } from "three";
-import { buildDieGeometry, dieKindForSides, type DieKind } from "./diceGeometry";
+import { BufferGeometry, CanvasTexture, Quaternion, SRGBColorSpace, Vector3 } from "three";
+import {
+  DEFAULT_FACE_LABELS,
+  DIE_FACE_NORMALS,
+  buildDieGeometry,
+  dieKindForSides,
+  facePlaneDistance,
+  labelForResult,
+  type DieKind,
+} from "./diceGeometry";
 import { useDiceTumble } from "./useDiceTumble";
 import {
   DICE_START_RADIUS_BASE,
@@ -32,13 +40,25 @@ import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
  * place a RollLogEntry gets translated into this. */
 export interface DiceTumbleSpec {
   id: string;
-  dice: readonly { sides: number; result: number }[];
+  dice: readonly { sides: number; result: number; labelSet?: readonly string[] }[];
 }
 
 export interface DiceTumbleHandle {
   /** Queues `spec` to tumble — plays immediately if nothing is currently
    * animating, otherwise waits its turn (see DiceTumble's doc comment). */
   play(spec: DiceTumbleSpec): void;
+}
+
+/** DiceTumbleProps.onDieSettled's own payload shape — see that prop's doc
+ * comment. `dieIndex` is the die's own position within the settled roll's
+ * `spec.dice` array (a percentile pair's tens die is index 0, ones die
+ * index 1). */
+export interface DiceFaceSettledInfo {
+  rollId: string;
+  dieIndex: number;
+  sides: number;
+  result: number;
+  label: string;
 }
 
 export interface DiceTumbleProps {
@@ -84,6 +104,16 @@ export interface DiceTumbleProps {
    * it identically to how the SAME asset would look placed on a map,
    * rather than silently dropping a correction the uploader dialed in. */
   modelForwardOffsetDeg?: number;
+  /** Fired once per die, the instant it settles — `dieIndex` is that die's
+   * own position within the active roll's `spec.dice` array, `label` is the
+   * exact printed value BOTH its own face decal and the floating
+   * ResultBadge show (both are computed by the same labelForResult call, so
+   * they can never disagree — see Die's own doc comment). Same
+   * observability-hook shape as onQueueChange above: not read by DiceTumble
+   * itself, purely so verify-*.mjs's Playwright checks (mirrored by
+   * GameRoom into a hidden DOM node) can confirm a real roll's die-face and
+   * badge stay in agreement without needing to OCR a WebGL canvas. */
+  onDieSettled?: (info: DiceFaceSettledInfo) => void;
 }
 
 const DIE_SIZE = 0.13;
@@ -155,24 +185,132 @@ function geometryFor(kind: DieKind): BufferGeometry {
   return geometry;
 }
 
+// A hair of outward offset for each face's printed-number decal, so its
+// quad never coplanar-z-fights with the base mesh's own triangle it sits
+// directly on top of — docs/design/dice-numbers-and-physics.md §4's
+// DECAL_EPSILON. Computed once per kind (every face of a fair die is
+// equidistant from center — diceGeometry.ts's facePlaneDistance), not
+// per-face, and cached the same way geometryCache caches buildDieGeometry.
+const DECAL_EPSILON = 0.002;
+const facePlaneDistanceCache = new Map<DieKind, number>();
+
+function facePlaneDistanceFor(kind: DieKind): number {
+  let distance = facePlaneDistanceCache.get(kind);
+  if (distance === undefined) {
+    distance = facePlaneDistance(kind, DIE_SIZE);
+    facePlaneDistanceCache.set(kind, distance);
+  }
+  return distance;
+}
+
+// Each decal quad's own on-screen size, tuned by eye per kind against that
+// kind's own real measured face size (diceGeometry.ts's facePlaneDistance
+// correlates with it, but face SHAPE matters too — d20's 20 small
+// triangular faces need a noticeably smaller decal than d6's 6 large square
+// ones, and d10's kite faces are narrow in one direction, or the numeral
+// would spill past the face's own edges onto a neighboring face). Verified
+// against real screenshots (scripts/db/screenshots/dice-numbering/), not
+// just eyeballed in isolation.
+const DECAL_SIZE: Record<DieKind, number> = {
+  d4: 0.1,
+  d6: 0.09,
+  d8: 0.075,
+  d10: 0.035,
+  d12: 0.075,
+  d20: 0.055,
+};
+
+const faceDecalTextureCache = new Map<string, CanvasTexture>();
+
+// Same cached-canvas-texture technique as resultBadgeTexture below, but
+// transparent-background (a decal sitting on the die's own color, not a
+// floating badge with its own backdrop) and a bolder glyph, since this is
+// the numeral itself, not a secondary readout. Two-character labels (d10's
+// "10", a percentile pair's "90"/"00") get a smaller font so they still fit
+// the same square canvas without shrinking the texture resolution itself —
+// a canvas-rendered numeral stays exactly as crisp as its texture
+// resolution regardless of glyph size (docs/design/dice-numbers-and-
+// physics.md §4).
+function faceDecalTexture(label: string): CanvasTexture {
+  let texture = faceDecalTextureCache.get(label);
+  if (!texture) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 128;
+    canvas.height = 128;
+    const context = canvas.getContext("2d");
+    if (context) {
+      context.fillStyle = "#fdf6e8";
+      context.font = `bold ${label.length > 1 ? 56 : 78}px sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(label, canvas.width / 2, canvas.height / 2 + 4);
+    }
+    texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    faceDecalTextureCache.set(label, texture);
+  }
+  return texture;
+}
+
+// Aligns a decal quad's default +Z-facing plane with an outward face
+// normal — the exact same Quaternion().setFromUnitVectors technique
+// diceAnimator.ts already uses to compute its settle-target orientation
+// (proven correct there by diceAnimator.test.ts's own settle-orientation
+// assertion), applied here to a STATIC decal instead of an animated pose.
+const DECAL_QUAD_NORMAL = new Vector3(0, 0, 1);
+
+/**
+ * One quad per face of `kind`, positioned/oriented directly off the
+ * already-computed DIE_FACE_NORMALS — the spike's recommended per-face
+ * canvas-texture-decal approach (docs/design/dice-numbers-and-physics.md
+ * §4): reuses DIE_FACE_NORMALS completely unmodified, never touches
+ * buildDieGeometry's own vertex/UV data, and needs no per-shape UV-atlas
+ * authoring. `labelSet` overrides the standard 1..sides numbering
+ * (DEFAULT_FACE_LABELS) — a percentile pair's own tens/ones faces are the
+ * one real user of that today (§5).
+ */
+function buildFaceDecals(kind: DieKind, labelSet: readonly string[] | undefined) {
+  const normals = DIE_FACE_NORMALS[kind];
+  const labels = labelSet ?? DEFAULT_FACE_LABELS[kind];
+  const distance = facePlaneDistanceFor(kind) + DECAL_EPSILON;
+  const size = DECAL_SIZE[kind];
+  return normals.map((normal, index) => {
+    const quaternion = new Quaternion().setFromUnitVectors(DECAL_QUAD_NORMAL, new Vector3(...normal));
+    const position: [number, number, number] = [normal[0] * distance, normal[1] * distance, normal[2] * distance];
+    return (
+      <mesh key={index} position={position} quaternion={quaternion}>
+        <planeGeometry args={[size, size]} />
+        <meshBasicMaterial map={faceDecalTexture(labels[index] ?? "")} transparent depthWrite={false} />
+      </mesh>
+    );
+  });
+}
+
 /** Renders the real modeled shape for one of the six standard dice (built
- * procedurally — see diceGeometry.ts), or a plain placeholder icosahedron
- * for anything else. A free-form roll can produce an odd side count (d100,
- * d3, d2, ...) with no matching shape, and rather than fail to render, it
- * still tumbles and still gets the billboarded result badge, just not a
- * faithful model. That's out of scope here because the quick-roll buttons
- * this phase adds only ever produce the six standard kinds. */
-function DieMesh({ sides }: { sides: number }) {
+ * procedurally — see diceGeometry.ts), with a printed-number decal on every
+ * face (buildFaceDecals above), or a plain placeholder icosahedron for
+ * anything else. A free-form roll can produce an odd side count (d3, d2,
+ * ...) with no matching shape, and rather than fail to render, it still
+ * tumbles and still gets the billboarded result badge, just not a faithful
+ * model or any face decals. (d100 is NOT such a case — tumble.ts's
+ * buildDiceTumbleSpec resolves it into two ordinary d10s, sides === 10,
+ * before this component ever sees it; see diceGeometry.ts's doc comments
+ * and docs/design/dice-numbers-and-physics.md §5.) */
+function DieMesh({ sides, labelSet }: { sides: number; labelSet?: readonly string[] }) {
   const kind = dieKindForSides(sides);
-  // Hooks must run unconditionally regardless of `kind`, so the memo itself
-  // stays a no-op (null) rather than being skipped — the fallback below
-  // branches on the VALUE, not on whether the hook ran.
+  // Hooks must run unconditionally regardless of `kind`, so the memos
+  // themselves stay no-ops (null) rather than being skipped — the fallback
+  // below branches on the VALUE, not on whether the hook ran.
   const geometry = useMemo(() => (kind ? geometryFor(kind) : null), [kind]);
+  const decals = useMemo(() => (kind ? buildFaceDecals(kind, labelSet) : null), [kind, labelSet]);
   if (!kind || !geometry) return <FallbackDieMesh />;
   return (
-    <mesh geometry={geometry} castShadow receiveShadow>
-      <meshStandardMaterial color={DIE_COLOR} roughness={0.45} />
-    </mesh>
+    <>
+      <mesh geometry={geometry} castShadow receiveShadow>
+        <meshStandardMaterial color={DIE_COLOR} roughness={0.45} />
+      </mesh>
+      {decals}
+    </>
   );
 }
 
@@ -208,15 +346,20 @@ function resultBadgeTexture(label: string): CanvasTexture {
 }
 
 /** Billboarded above a settled die so its result reads from every seat
- * around the table regardless of the die's final orientation — this, not
- * the mesh's own pose, is what actually carries the number unambiguously
- * (see diceGeometry.ts's doc comment on why the mesh alone can't). */
-const ResultBadge = memo(function ResultBadge({ value }: { value: number }) {
+ * around the table regardless of the die's final orientation — legible
+ * from any angle even now that the die's own face is ALSO printed (a face
+ * decal only reads correctly from roughly "above", the same as a real
+ * physical die). `label` is the exact printed value (Die's own
+ * labelForResult call) — a percentile pair's own synthetic 1-10 `result`
+ * would otherwise show the wrong text here (docs/design/dice-numbers-and-
+ * physics.md §5): a face reading "40" needs a badge reading "40", not the
+ * synthetic index "4" that drives its orientation. */
+const ResultBadge = memo(function ResultBadge({ label }: { label: string }) {
   return (
     <Billboard position={[0, 0.22, 0]}>
       <mesh>
         <planeGeometry args={[0.22, 0.15]} />
-        <meshBasicMaterial map={resultBadgeTexture(String(value))} transparent />
+        <meshBasicMaterial map={resultBadgeTexture(label)} transparent />
       </mesh>
     </Billboard>
   );
@@ -245,6 +388,19 @@ function scaledDiceAnimator(animator: DiceAnimator, scale: number): DiceAnimator
   };
 }
 
+/** `kind`'s null (a free-form roll's non-standard side count, e.g. a lone
+ * "d3") falls back to the raw numeric result, same text ResultBadge always
+ * showed before this feature existed — there's no DEFAULT_FACE_LABELS entry
+ * to look up for a shape that doesn't exist. Every standard kind (and every
+ * percentile tens/ones d10, via spec.labelSet) routes through
+ * diceGeometry.ts's labelForResult, the exact same face-index math
+ * faceNormalForResult itself uses, so this label and the physically settled
+ * face can never disagree. */
+function labelFor(spec: DiceTumbleDieSpec): string {
+  const kind = dieKindForSides(spec.sides);
+  return kind ? labelForResult(kind, spec.result, spec.labelSet) : String(spec.result);
+}
+
 function Die({
   spec,
   animator,
@@ -255,6 +411,7 @@ function Die({
   onSettled: (id: string) => void;
 }) {
   const { ref, phase } = useDiceTumble(spec, animator);
+  const label = labelFor(spec);
 
   useEffect(() => {
     if (phase === "settled") onSettled(spec.id);
@@ -262,8 +419,8 @@ function Die({
 
   return (
     <group ref={ref}>
-      <DieMesh sides={spec.sides} />
-      {phase === "settled" ? <ResultBadge value={spec.result} /> : null}
+      <DieMesh sides={spec.sides} labelSet={spec.labelSet} />
+      {phase === "settled" ? <ResultBadge label={label} /> : null}
     </group>
   );
 }
@@ -275,10 +432,12 @@ function ActiveTumble({
   spec,
   animator,
   onDone,
+  onDieSettled,
 }: {
   spec: DiceTumbleSpec;
   animator: DiceAnimator;
   onDone: () => void;
+  onDieSettled?: DiceTumbleProps["onDieSettled"];
 }) {
   const dice = useMemo<DiceTumbleDieSpec[]>(
     () => spec.dice.map((die, index) => ({ ...die, id: `${spec.id}:${index}` })),
@@ -287,12 +446,32 @@ function ActiveTumble({
   const settledIdsRef = useRef<Set<string>>(new Set());
   const [allSettled, setAllSettled] = useState(false);
 
+  // A single stable callback (not one fresh inline arrow function created
+  // per die, per render) — the registerDiceTumbleRef precedent in
+  // GameRoom.tsx flags exactly this shape's own past failure mode: a fresh
+  // callback identity on every render feeds Die's onSettled effect
+  // dependency array, retriggering the effect (and this component's own
+  // parent re-render, via onDieSettled bubbling up to GameRoom's own
+  // debug-mirror state) every single render, an infinite loop. Looking
+  // `dieIndex`/the die's own {sides, result, labelSet} up from `dice`
+  // (stable for this ActiveTumble instance's whole lifetime — a fresh
+  // roll always remounts via `key={spec.id}` in DiceTumble below, never
+  // swaps `spec` under an already-mounted instance) keeps this callback's
+  // own identity stable across re-renders too, same as `dice.length` alone
+  // already did for the settled-count tracking below.
   const handleSettled = useCallback(
     (id: string) => {
       settledIdsRef.current.add(id);
       if (settledIdsRef.current.size >= dice.length) setAllSettled(true);
+      if (onDieSettled) {
+        const dieIndex = dice.findIndex((die) => die.id === id);
+        const die = dice[dieIndex];
+        if (die) {
+          onDieSettled({ rollId: spec.id, dieIndex, sides: die.sides, result: die.result, label: labelFor(die) });
+        }
+      }
     },
-    [dice.length]
+    [dice, spec.id, onDieSettled]
   );
 
   useEffect(() => {
@@ -378,7 +557,14 @@ function CustomTrayModel({
  * roll's Three.js state.
  */
 export const DiceTumble = forwardRef<DiceTumbleHandle, DiceTumbleProps>(function DiceTumble(
-  { onQueueChange, trayPosition, scale = PERSONAL_TRAY_SCALE, modelUrl = null, modelForwardOffsetDeg = 0 },
+  {
+    onQueueChange,
+    trayPosition,
+    scale = PERSONAL_TRAY_SCALE,
+    modelUrl = null,
+    modelForwardOffsetDeg = 0,
+    onDieSettled,
+  },
   ref
 ) {
   const [queue, setQueue] = useState<DiceTumbleSpec[]>([]);
@@ -416,7 +602,9 @@ export const DiceTumble = forwardRef<DiceTumbleHandle, DiceTumbleProps>(function
       ) : (
         <DiceTray radius={radius} />
       )}
-      {active ? <ActiveTumble key={active.id} spec={active} animator={animator} onDone={handleDone} /> : null}
+      {active ? (
+        <ActiveTumble key={active.id} spec={active} animator={animator} onDone={handleDone} onDieSettled={onDieSettled} />
+      ) : null}
     </group>
   );
 });

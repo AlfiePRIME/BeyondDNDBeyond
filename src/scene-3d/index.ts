@@ -43,6 +43,7 @@ export { AVATAR_HEIGHT } from "./SeatAvatar";
 export { OrientationPreview, type OrientationPreviewProps, type ModelNormalize } from "./OrientationPreview";
 export {
   DiceTumble,
+  type DiceFaceSettledInfo,
   type DiceTumbleHandle,
   type DiceTumbleProps,
   type DiceTumbleSpec,
