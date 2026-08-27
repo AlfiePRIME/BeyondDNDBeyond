@@ -15,6 +15,7 @@ import { BufferGeometry, CanvasTexture, Quaternion, SRGBColorSpace, Vector3 } fr
 import {
   DEFAULT_FACE_LABELS,
   DIE_FACE_NORMALS,
+  DIE_SIZE,
   buildDieGeometry,
   dieKindForSides,
   facePlaneDistance,
@@ -25,7 +26,10 @@ import { useDiceTumble } from "./useDiceTumble";
 import {
   DICE_START_RADIUS_BASE,
   DICE_START_RADIUS_JITTER,
-  scriptedDiceAnimator,
+  disposeDicePhysicsRoll,
+  physicsDiceAnimator,
+  pickDiceAnimator,
+  preloadDicePhysics,
   type DiceAnimator,
   type DiceTumbleDieSpec,
 } from "./diceAnimator";
@@ -52,13 +56,23 @@ export interface DiceTumbleHandle {
 /** DiceTumbleProps.onDieSettled's own payload shape — see that prop's doc
  * comment. `dieIndex` is the die's own position within the settled roll's
  * `spec.dice` array (a percentile pair's tens die is index 0, ones die
- * index 1). */
+ * index 1). `usedPhysics` reflects the WHOLE ROLL's own animator choice
+ * (pickDiceAnimator, decided once per roll — docs/design/dice-numbers-and-
+ * physics.md §9) — true when this die's tumble was really
+ * physics-simulated, false when it fell back to scriptedDiceAnimator (a
+ * too-large roll, or the WASM engine not yet ready). Purely an
+ * observability field for scripts/db/verify-dice-physics.mjs and
+ * scripts/perf/dice-physics-benchmark.mjs to confirm real physics actually
+ * ran, not just that the (always-correct-either-way) result was right —
+ * the same "mirror it into a hidden DOM node for Playwright" precedent
+ * every other field on this interface already follows. */
 export interface DiceFaceSettledInfo {
   rollId: string;
   dieIndex: number;
   sides: number;
   result: number;
   label: string;
+  usedPhysics: boolean;
 }
 
 export interface DiceTumbleProps {
@@ -116,7 +130,6 @@ export interface DiceTumbleProps {
   onDieSettled?: (info: DiceFaceSettledInfo) => void;
 }
 
-const DIE_SIZE = 0.13;
 const FALLBACK_COLOR = "#8f86ad"; // Same placeholder tone as SeatAvatar/PlacedObject.
 const DIE_COLOR = "#c9482f";
 const TRAY_COLOR = "#2a2140"; // Matches GameTableScene's seat-cushion tone.
@@ -431,11 +444,18 @@ function Die({
 function ActiveTumble({
   spec,
   animator,
+  usingPhysics,
   onDone,
   onDieSettled,
 }: {
   spec: DiceTumbleSpec;
   animator: DiceAnimator;
+  /** Whether `animator` is (a scaled wrapper around) physicsDiceAnimator for
+   * this WHOLE roll — see DiceFaceSettledInfo.usedPhysics's own doc comment.
+   * Passed down as a plain boolean rather than re-derived by reference-
+   * checking `animator` here, since `animator` is usually scaledDiceAnimator's
+   * own wrapper object, not physicsDiceAnimator itself. */
+  usingPhysics: boolean;
   onDone: () => void;
   onDieSettled?: DiceTumbleProps["onDieSettled"];
 }) {
@@ -467,11 +487,18 @@ function ActiveTumble({
         const dieIndex = dice.findIndex((die) => die.id === id);
         const die = dice[dieIndex];
         if (die) {
-          onDieSettled({ rollId: spec.id, dieIndex, sides: die.sides, result: die.result, label: labelFor(die) });
+          onDieSettled({
+            rollId: spec.id,
+            dieIndex,
+            sides: die.sides,
+            result: die.result,
+            label: labelFor(die),
+            usedPhysics: usingPhysics,
+          });
         }
       }
     },
-    [dice, spec.id, onDieSettled]
+    [dice, spec.id, onDieSettled, usingPhysics]
   );
 
   useEffect(() => {
@@ -587,12 +614,41 @@ export const DiceTumble = forwardRef<DiceTumbleHandle, DiceTumbleProps>(function
     onQueueChange?.(queue.map((spec) => spec.id));
   }, [queue, onQueueChange]);
 
-  const active = queue[0] ?? null;
-  const handleDone = useCallback(() => {
-    setQueue((current) => current.slice(1));
+  // Kicks off loading the WASM physics engine as soon as a tray mounts
+  // (every connected member's own tray does this, harmlessly redundantly —
+  // preloadDicePhysics is idempotent) rather than waiting for this member's
+  // first actual roll, so real physics is already ready well before anyone
+  // clicks a roll button in ordinary play. See diceAnimator.ts's own doc
+  // comment on why a roll that starts before this resolves simply falls back
+  // to scriptedDiceAnimator for that one roll instead of blocking.
+  useEffect(() => {
+    preloadDicePhysics();
   }, []);
 
-  const animator = useMemo(() => scaledDiceAnimator(scriptedDiceAnimator, scale), [scale]);
+  const active = queue[0] ?? null;
+  const handleDone = useCallback(() => {
+    // Safe to call unconditionally even for a roll that never used physics
+    // (disposeDicePhysicsRoll is a no-op for a roll id with no physics world)
+    // — see diceAnimator.ts's own doc comment on why explicit disposal here,
+    // via ActiveTumble's existing onDone hook, is the one place a finished
+    // roll's Rapier World gets freed.
+    if (active) disposeDicePhysicsRoll(active.id);
+    setQueue((current) => current.slice(1));
+  }, [active]);
+
+  // Chosen PER ROLL (not once for the whole tray) — docs/design/dice-numbers-
+  // and-physics.md §9's own per-roll all-or-nothing fallback: a roll whose
+  // die count exceeds MAX_PHYSICS_DICE_PER_ROLL (or that starts before the
+  // physics engine has finished loading) uses scriptedDiceAnimator for its
+  // ENTIRE tumble, never a partial mix. Physics always simulates at the
+  // shared full-size tray's own physical scale — scaledDiceAnimator (below)
+  // is what shrinks a smaller personal tray's dice-motion footprint
+  // afterward, exactly the same "wrap the output, don't touch the step math"
+  // seam it already used for the scripted animator, so this needs no
+  // physics-specific scaling logic of its own.
+  const rawAnimator = useMemo(() => pickDiceAnimator(active?.dice.length ?? 0), [active]);
+  const usingPhysics = rawAnimator === physicsDiceAnimator;
+  const animator = useMemo(() => scaledDiceAnimator(rawAnimator, scale), [rawAnimator, scale]);
   const radius = useMemo(() => trayRadiusForScale(scale), [scale]);
 
   return (
@@ -603,7 +659,14 @@ export const DiceTumble = forwardRef<DiceTumbleHandle, DiceTumbleProps>(function
         <DiceTray radius={radius} />
       )}
       {active ? (
-        <ActiveTumble key={active.id} spec={active} animator={animator} onDone={handleDone} onDieSettled={onDieSettled} />
+        <ActiveTumble
+          key={active.id}
+          spec={active}
+          animator={animator}
+          usingPhysics={usingPhysics}
+          onDone={handleDone}
+          onDieSettled={onDieSettled}
+        />
       ) : null}
     </group>
   );
