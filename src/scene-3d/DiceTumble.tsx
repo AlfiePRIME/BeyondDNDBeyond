@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { Billboard } from "@react-three/drei";
-import { BufferGeometry, CanvasTexture, Quaternion, SRGBColorSpace, Vector3 } from "three";
+import { BufferGeometry, CanvasTexture, DoubleSide, Quaternion, SRGBColorSpace, Vector3 } from "three";
 import {
   DEFAULT_FACE_LABELS,
   DIE_FACE_NORMALS,
@@ -132,7 +132,20 @@ export interface DiceTumbleProps {
 
 const FALLBACK_COLOR = "#8f86ad"; // Same placeholder tone as SeatAvatar/PlacedObject.
 const DIE_COLOR = "#c9482f";
-const TRAY_COLOR = "#2a2140"; // Matches GameTableScene's seat-cushion tone.
+
+// The default procedural tray's own palette (DiceTray, below) — deliberately
+// mirrors the SAME wood-tone / purple-teal vocabulary GameTableScene's own
+// WOOD_TOP and Chair.tsx's PURPLE/TEAL trim already establish for every
+// other piece of furniture at this table, rather than inventing a new look
+// for the one remaining always-procedural prop (Chair.tsx/GameTableScene's
+// table both moved to real glTF models specifically because procedural
+// furniture reads as flat/generic without real detail — see this file's own
+// module doc comment on the pattern this pass borrows from them: real wood
+// material tones plus a canvas-drawn decorative motif, not just flat color).
+const TRAY_FELT = "#2a2140"; // Unchanged from the pre-existing TRAY_COLOR — matches GameTableScene's seat-cushion tone; still the felt playing surface's own base tone.
+const TRAY_WOOD = "#5a4028"; // Matches GameTableScene's WOOD_TOP / Chair's PLAYER_WOOD.
+const TRAY_ACCENT_TEAL = "#1ec8c8"; // --teal
+const TRAY_ACCENT_PURPLE = "#9b00ff"; // --purple
 
 /**
  * A tray's real physical footprint radius at a given dice-motion `scale`
@@ -516,12 +529,207 @@ function ActiveTumble({
   );
 }
 
+// The raised rim's own fixed absolute dimensions (world units, NOT scaled by
+// a personal tray's `scale`/`radius`) — the same reasoning DIE_SIZE itself
+// is a flat, unscaled constant: a real die stays the same physical size
+// regardless of which tray it lands in, so the rim built to visually contain
+// one should size itself off THAT (roughly DIE_SIZE-scale), not off however
+// large or small this particular tray's own landing footprint happens to be.
+// Tuned by eye against real screenshots (scripts/db/verify-dice-tray-design.mjs's
+// own before/after captures) to read as a real contained lip at both the
+// personal-tray scale GameRoom.tsx actually renders (PERSONAL_TRAY_SCALE) and
+// the full scale=1 size the /dev/dice-showcase page uses.
+const TRAY_RIM_HEIGHT = 0.075;
+// How far the rim's own TOP edge flares outward beyond the floor's own
+// radius — see DiceTray's own doc comment for why this can never intrude
+// on the floor's footprint (and can therefore never clip a tumbling die)
+// regardless of its value: the rim is a frustum whose BASE sits exactly at
+// `radius` (tangent to the floor's own edge), flaring outward only as it
+// rises, so its inner wall at any height is always >= `radius`.
+const TRAY_RIM_FLARE = 0.02;
+const TRAY_RIM_CAP_WIDTH = 0.015;
+const TRAY_ACCENT_BEAD_RADIUS = 0.006;
+
+const feltFloorTextureCache = new Map<string, CanvasTexture>();
+
+/**
+ * A procedurally-drawn "casting circle" motif for the tray's own felt
+ * floor — concentric rings, eight compass-style radiating ticks, and a
+ * small faceted center emblem, all in the app's own purple/teal accent
+ * colors (tokens.css's --purple/--teal) laid over the pre-existing felt
+ * tone. Uses the exact same cached-canvas-texture technique this file's own
+ * faceDecalTexture/resultBadgeTexture already establish (docs/design/
+ * dice-numbers-and-physics.md §4) — one canvas drawn once (not per
+ * instance, not per frame) and cached, so this "genuine decorative detail"
+ * the project owner asked for costs nothing ongoing and needs no new
+ * external asset or dependency. Deliberately restrained (thin, low-opacity
+ * strokes on the existing dark felt) so it reads as tasteful tabletop-prop
+ * detailing up close (the /dev/dice-showcase page's own tight camera) without
+ * ever competing with a settled die's own brighter, warmer color for
+ * attention — the same "never fight the game-state readout for legibility"
+ * principle this file's own ResultBadge/faceDecalTexture already follow.
+ */
+function feltFloorTexture(): CanvasTexture {
+  const cacheKey = "default";
+  const cached = feltFloorTextureCache.get(cacheKey);
+  if (cached) return cached;
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 512;
+  const context = canvas.getContext("2d");
+  if (context) {
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    context.fillStyle = TRAY_FELT;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Three concentric rings, alternating the two accent hues.
+    const ringRadii = [0.92, 0.78, 0.64].map((fraction) => fraction * cx);
+    ringRadii.forEach((ringRadius, index) => {
+      context.beginPath();
+      context.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+      context.strokeStyle = index % 2 === 0 ? TRAY_ACCENT_TEAL : TRAY_ACCENT_PURPLE;
+      context.globalAlpha = 0.32;
+      context.lineWidth = 3;
+      context.stroke();
+    });
+
+    // Eight compass-style ticks between the outer two rings.
+    context.globalAlpha = 0.4;
+    context.strokeStyle = TRAY_ACCENT_PURPLE;
+    context.lineWidth = 3;
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const inner = ringRadii[1];
+      const outer = ringRadii[0];
+      context.beginPath();
+      context.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner);
+      context.lineTo(cx + Math.cos(angle) * outer, cy + Math.sin(angle) * outer);
+      context.stroke();
+    }
+
+    // A small faceted center emblem — a hexagonal outline evoking a die's
+    // own polyhedral silhouette in general, rather than one specific shape
+    // (any roll could land any of the six standard kinds here).
+    context.globalAlpha = 0.55;
+    context.strokeStyle = TRAY_ACCENT_TEAL;
+    context.lineWidth = 3;
+    context.beginPath();
+    const emblemPoints = 6;
+    const emblemRadius = 0.14 * cx;
+    for (let i = 0; i <= emblemPoints; i++) {
+      const angle = (i / emblemPoints) * Math.PI * 2 - Math.PI / 2;
+      const x = cx + Math.cos(angle) * emblemRadius;
+      const y = cy + Math.sin(angle) * emblemRadius;
+      if (i === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    }
+    context.stroke();
+    context.globalAlpha = 1;
+  }
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  feltFloorTextureCache.set(cacheKey, texture);
+  return texture;
+}
+
+/**
+ * The default procedural dice tray — DiceTumble's own built-in look for a
+ * member who hasn't picked a custom uploaded model (diceTrayPreference.ts's
+ * "default" source). Previously a single flat, unmarked disc; this pass adds
+ * a real raised wooden rim (so it reads as a container dice can't roll out
+ * of, not a marked patch of table) plus genuine decorative detail — the
+ * procedurally-drawn felt motif above, a teal accent bead, and alternating
+ * purple/teal cardinal studs — all pulled from this app's own established
+ * wood-tone / purple-teal palette (GameTableScene's WOOD_TOP/PURPLE/TEAL,
+ * Chair.tsx's identical trim treatment on its own backrests) rather than an
+ * unstyled generic box.
+ *
+ * `radius` is `trayRadiusForScale(scale)` — the exact same value every
+ * NON-visual consumer relies on (GameRoom.tsx's chair-drag obstacle radius,
+ * seating.ts's tray-tray non-overlap math, both via the exported
+ * PERSONAL_TRAY_RADIUS) — and the felt FLOOR below keeps that footprint
+ * completely unchanged from before this pass: same circleGeometry radius,
+ * same position, same role as the one surface every die's landing math
+ * (diceAnimator.ts) already assumes it can reach out to. Only the texture
+ * mapped onto it is new.
+ *
+ * The raised rim is a FRUSTUM (CylinderGeometry with radiusTop > radiusBottom,
+ * openEnded) whose BASE radius is exactly `radius` — tangent to the floor's
+ * own edge at y=0 — flaring outward only as it rises to `radius +
+ * TRAY_RIM_FLARE` at its own top. That shape's inner wall at any height h is
+ * `radius + (h / TRAY_RIM_HEIGHT) * TRAY_RIM_FLARE`, algebraically always ≥
+ * `radius`, so it can never intrude into the floor's own footprint at ANY
+ * height — meaning a die tumbling anywhere within `radius` (the one
+ * guarantee trayRadiusForScale's own formula already makes, matching
+ * diceAnimator.ts's real worst-case travel distance) can never clip through
+ * this rim, no matter how high a bounce goes. Only the decorative cap/bead
+ * right at the rim's own TOP outer edge extends a small, fixed distance
+ * (TRAY_RIM_FLARE + TRAY_RIM_CAP_WIDTH) beyond `radius` — well above
+ * table-surface height, where no neighboring object in this scene (another
+ * member's own personal tray, a seated chair) actually occupies space — so
+ * that purely decorative overhang is deliberately NOT fed back into
+ * trayRadiusForScale/PERSONAL_TRAY_RADIUS the way the floor's own radius is;
+ * doing so would ripple into every seating.ts non-overlap guarantee for a
+ * few millimeters of glow-bead that nothing at table height ever actually
+ * touches.
+ */
 function DiceTray({ radius }: { radius: number }) {
+  const topRadius = radius + TRAY_RIM_FLARE;
+  const capOuterRadius = topRadius + TRAY_RIM_CAP_WIDTH;
+  const texture = useMemo(() => feltFloorTexture(), []);
   return (
-    <mesh position={[0, -0.005, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <circleGeometry args={[radius, 32]} />
-      <meshStandardMaterial color={TRAY_COLOR} roughness={0.85} />
-    </mesh>
+    <group>
+      {/* Felt playing surface — same footprint/position this tray has always
+          used; every die's own landing math is entirely independent of this
+          mesh, so nothing about where a die actually settles changes here. */}
+      <mesh position={[0, -0.005, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+        <circleGeometry args={[radius, 48]} />
+        <meshStandardMaterial map={texture} roughness={0.85} />
+      </mesh>
+
+      {/* Raised wooden rim — a hollow frustum, base tangent to the floor's
+          own edge, flaring outward as it rises (see this component's own
+          doc comment for why that shape can never clip a tumbling die). */}
+      <mesh position={[0, TRAY_RIM_HEIGHT / 2, 0]} castShadow receiveShadow>
+        <cylinderGeometry args={[topRadius, radius, TRAY_RIM_HEIGHT, 40, 1, true]} />
+        <meshStandardMaterial color={TRAY_WOOD} roughness={0.7} side={DoubleSide} />
+      </mesh>
+
+      {/* The rim's own flat top cap — a real, visible lip looking down onto
+          it from above, not just a paper-thin shell edge. */}
+      <mesh position={[0, TRAY_RIM_HEIGHT, 0]} rotation={[-Math.PI / 2, 0, 0]} castShadow receiveShadow>
+        <ringGeometry args={[topRadius - 0.006, capOuterRadius, 40]} />
+        <meshStandardMaterial color={TRAY_WOOD} roughness={0.6} side={DoubleSide} />
+      </mesh>
+
+      {/* A thin teal accent bead along the cap's own outer edge — the same
+          "glowing trim" treatment Chair.tsx's own backrest edge already
+          uses (teal for player chairs there); this tray isn't role-specific,
+          so it takes the teal accent by default. */}
+      <mesh position={[0, TRAY_RIM_HEIGHT, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[capOuterRadius, TRAY_ACCENT_BEAD_RADIUS, 8, 40]} />
+        <meshStandardMaterial color={TRAY_ACCENT_TEAL} emissive={TRAY_ACCENT_TEAL} emissiveIntensity={1.4} />
+      </mesh>
+
+      {/* Four small cardinal accent studs on the cap, alternating the app's
+          two accent hues — the "corner detailing" a round tray's own
+          compass points stand in for. */}
+      {[0, 1, 2, 3].map((index) => {
+        const angle = (index / 4) * Math.PI * 2;
+        const studRadius = (topRadius + capOuterRadius) / 2;
+        const color = index % 2 === 0 ? TRAY_ACCENT_PURPLE : TRAY_ACCENT_TEAL;
+        return (
+          <mesh
+            key={index}
+            position={[Math.cos(angle) * studRadius, TRAY_RIM_HEIGHT + 0.004, Math.sin(angle) * studRadius]}
+          >
+            <sphereGeometry args={[0.008, 10, 10]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.6} />
+          </mesh>
+        );
+      })}
+    </group>
   );
 }
 
