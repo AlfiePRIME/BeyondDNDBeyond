@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Canvas } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
-import { Badge, Button, ChoiceCard, Select, TextInput } from "@/ui-components";
+import { Badge, Button, Select, TextInput } from "@/ui-components";
 import {
   clearMapReferenceImage,
   createConcealedPit,
@@ -82,6 +82,8 @@ import { captureMapThumbnail } from "../../lib/thumbnail";
 import { BehaviorEditor } from "./BehaviorEditor";
 import { ObjectTagEditor } from "./ObjectTagEditor";
 import { ContainerItemsEditor } from "./ContainerItemsEditor";
+import { AssetPickerGrid } from "./AssetPickerGrid";
+import { QuickPlacePopover } from "./QuickPlacePopover";
 import styles from "./editor.module.css";
 
 // Structural message read, not instanceof — see GameRoom's note on the
@@ -302,6 +304,15 @@ export function MapEditor({
   );
   const [moveArmed, setMoveArmed] = useState(false);
   const [objectError, setObjectError] = useState<string | null>(null);
+  // Map Editor Batch A1: the Ctrl+click quick-place popover's own open
+  // state — screen coordinates (for positioning) plus the cell it should
+  // place into, captured once at click time. Null renders no popover.
+  const [quickPlacePopover, setQuickPlacePopover] = useState<{
+    x: number;
+    y: number;
+    cellX: number;
+    cellY: number;
+  } | null>(null);
 
   const otherMaps = useMemo(
     () => campaignMaps.filter((candidate) => candidate.id !== map.id),
@@ -932,27 +943,15 @@ export function MapEditor({
     [inRegion]
   );
 
-  // The built-in Chest preset (seeded by 0016_asset_library_presets.sql),
-  // resolved from the palette the same way the DM would pick it manually —
-  // looked up by name/source rather than the seed's fixed UUID so a
-  // reseeded environment with a different id still resolves correctly.
-  // Powers the object tool's Ctrl+click quick-place below; null only if a
-  // campaign's palette is somehow missing the preset entirely, in which
-  // case the shortcut is inert rather than throwing.
-  const chestAssetId = useMemo(
-    () =>
-      assets.find((asset) => asset.source_type === "preset" && asset.name === "Chest")?.id ?? null,
-    [assets]
-  );
-
   // Bridges and stairs (a post-roadmap addition): the two built-in preset
   // assets that carry real movement-rules behavior — see @/data-access's
   // CrossingType doc comment for why this is resolved by matching a KNOWN
-  // preset id, the exact same lookup-by-name-once pattern chestAssetId
-  // above already uses, rather than trusting an asset's mutable display
-  // name at placement time (a custom upload could otherwise be named
-  // "Bridge" without ever granting bridge behavior — see crossingTypeForAsset
-  // below, which is what actually decides the behavior, once, at creation).
+  // preset id, looked up by name/source rather than the seed's fixed UUID
+  // (so a reseeded environment with a different id still resolves
+  // correctly) rather than trusting an asset's mutable display name at
+  // placement time (a custom upload could otherwise be named "Bridge"
+  // without ever granting bridge behavior — see crossingTypeForAsset below,
+  // which is what actually decides the behavior, once, at creation).
   const bridgeAssetId = useMemo(
     () =>
       assets.find((asset) => asset.source_type === "preset" && asset.name === "Bridge")?.id ?? null,
@@ -973,8 +972,8 @@ export function MapEditor({
   // the box" — placing one seeds a real behavior_config with the new
   // triggerOnStepOn flag already on (plus a toggle_state action, so
   // trigger_map_object's own "no configured action" guard never rejects
-  // it), the same lookup-by-name-once pattern chestAssetId/bridgeAssetId
-  // already use, rather than requiring the DM to open BehaviorEditor and
+  // it), the same lookup-by-name-once pattern bridgeAssetId above already
+  // uses, rather than requiring the DM to open BehaviorEditor and
   // configure it manually before it does anything. The DM can still edit or
   // clear this afterward like any other object's behavior.
   const pressurePlateAssetId = useMemo(
@@ -994,6 +993,64 @@ export function MapEditor({
           }
         : undefined,
     [pressurePlateAssetId]
+  );
+
+  // Shared by handleCellClick's plain-click path AND the Ctrl+click
+  // quick-place popover's onPick (Map Editor Batch A1) — the actual
+  // "put this asset at this cell" logic used to live inline in
+  // handleCellClick alone, but the popover's pick happens on a LATER
+  // render (after the DM chooses from the popover, not synchronously with
+  // the click that opened it), so this reads live state via the same refs
+  // handleCellClick itself already relies on rather than closing over
+  // whatever `preview`/etc. looked like at click time.
+  const placeAssetAtCell = useCallback(
+    (assetId: string, x: number, y: number) => {
+      const preview = previewRef.current;
+      const clickInPreview = Boolean(preview) && inRegion(x, y);
+
+      // Placing inside an active preview adds to the draft (no network) —
+      // it becomes a real row only if the DM accepts.
+      if (clickInPreview) {
+        const created: PreviewObject = {
+          id: `preview-${crypto.randomUUID()}`,
+          assetId,
+          x,
+          y,
+          rotation: 0,
+        };
+        setPreviewState({ ...preview!, objects: [...preview!.objects, created] });
+        setSelectedObjectIds(new Set([created.id]));
+        return;
+      }
+
+      const elevation = (overlayRef.current.get(cellKey(x, y)) ?? DEFAULT_CELL).elevation;
+      void runObjectMutation(async (supabase) => {
+        const created = await createMapObject(supabase, {
+          mapId: map.id,
+          assetId,
+          x,
+          y,
+          elevation,
+          rotation: 0,
+          crossingType: crossingTypeForAsset(assetId),
+          behaviorConfig: initialBehaviorConfigForAsset(assetId),
+        });
+        addObjectLocal(created);
+        setSelectedObjectIds(new Set([created.id]));
+        pushHistory(makePlacementEntry(created));
+      });
+    },
+    [
+      map.id,
+      inRegion,
+      crossingTypeForAsset,
+      initialBehaviorConfigForAsset,
+      runObjectMutation,
+      addObjectLocal,
+      pushHistory,
+      makePlacementEntry,
+      setPreviewState,
+    ]
   );
 
   const handleCellClick = useCallback(
@@ -1070,14 +1127,25 @@ export function MapEditor({
       }
 
       // Ctrl (or Cmd, matching this file's existing undo/redo modifier
-      // handling) + click quick-places the built-in Chest without touching
-      // the palette selection — bypasses setSelectedAssetId entirely so the
-      // DM's actual pick is exactly what it was before this click, for
-      // every click after it. A plain click keeps using whatever's selected
-      // in the palette, same as always.
-      const wantsQuickChest = Boolean(event?.ctrlKey || event?.metaKey);
-      const assetId =
-        wantsQuickChest && chestAssetId ? chestAssetId : selectedAssetIdRef.current;
+      // handling) + click opens the quick-place popover at the clicked
+      // cell's screen position (Map Editor Batch A1) instead of hardcoding
+      // a single preset — bypasses setSelectedAssetId entirely, same as the
+      // old hardcoded shortcut did, so the palette's own selection is
+      // untouched for every click after this one. A plain click keeps
+      // using whatever's selected in the palette, same as always.
+      if (event && (event.ctrlKey || event.metaKey)) {
+        // No floor, no placement — same guard the plain-click path applies
+        // below; checked up front since there's nothing useful to offer a
+        // popover over a cell nothing can ever be placed on.
+        if (displayedTerrainAt(x, y) === "void") {
+          setObjectError(VOID_OBJECT_MESSAGE);
+          return;
+        }
+        setQuickPlacePopover({ x: event.clientX, y: event.clientY, cellX: x, cellY: y });
+        return;
+      }
+
+      const assetId = selectedAssetIdRef.current;
       if (!assetId) return;
 
       // No floor, no placement — checked after occupant selection so a click
@@ -1087,53 +1155,18 @@ export function MapEditor({
         return;
       }
 
-      // Placing inside an active preview adds to the draft (no network) —
-      // it becomes a real row only if the DM accepts.
-      if (clickInPreview) {
-        const created: PreviewObject = {
-          id: `preview-${crypto.randomUUID()}`,
-          assetId,
-          x,
-          y,
-          rotation: 0,
-        };
-        setPreviewState({ ...preview!, objects: [...preview!.objects, created] });
-        setSelectedObjectIds(new Set([created.id]));
-        return;
-      }
-
-      const elevation = (overlayRef.current.get(cellKey(x, y)) ?? DEFAULT_CELL).elevation;
-      void runObjectMutation(async (supabase) => {
-        const created = await createMapObject(supabase, {
-          mapId: map.id,
-          assetId,
-          x,
-          y,
-          elevation,
-          rotation: 0,
-          crossingType: crossingTypeForAsset(assetId),
-          behaviorConfig: initialBehaviorConfigForAsset(assetId),
-        });
-        addObjectLocal(created);
-        setSelectedObjectIds(new Set([created.id]));
-        pushHistory(makePlacementEntry(created));
-      });
+      placeAssetAtCell(assetId, x, y);
     },
     [
-      map.id,
-      chestAssetId,
-      crossingTypeForAsset,
-      initialBehaviorConfigForAsset,
       inRegion,
       displayedTerrainAt,
       runObjectMutation,
       replaceObject,
       handleSelectObject,
       setPreviewState,
-      addObjectLocal,
       pushHistory,
-      makePlacementEntry,
       makeObjectPatchEntry,
+      placeAssetAtCell,
     ]
   );
 
@@ -1604,6 +1637,12 @@ export function MapEditor({
     setTool(next);
     setSelectedObjectIds(new Set());
     setMoveArmed(false);
+    // The quick-place popover (Map Editor Batch A1) only makes sense while
+    // still in the object tool it was opened from — a tool switch (e.g. a
+    // number-key hotkey pressed while it happens to be open) closes it
+    // rather than leaving a stale popover floating with no live cell
+    // context behind it.
+    setQuickPlacePopover(null);
     // A pending one-shot pick doesn't survive a tool switch — Eyedropper is
     // deliberately never sticky (§5.2), and it only makes sense armed over
     // Ground/Light in the first place.
@@ -2657,19 +2696,14 @@ export function MapEditor({
               </div>
               {tool === "object" ? (
           <>
-            <div className={styles.assetGrid} data-testid="asset-palette">
-              {assets.map((asset) => (
-                <ChoiceCard
-                  key={asset.id}
-                  className={styles.assetCard}
-                  selected={asset.id === selectedAssetId}
-                  onClick={() => setSelectedAssetId(asset.id)}
-                  title={asset.name}
-                  meta={asset.source_type === "preset" ? "Built-in" : "Upload"}
-                  data-testid={`asset-${asset.id}`}
-                />
-              ))}
-            </div>
+            <AssetPickerGrid
+              assets={assets}
+              selectedAssetId={selectedAssetId}
+              onPick={setSelectedAssetId}
+              gridTestId="asset-palette"
+              cardTestIdPrefix="asset"
+              className={styles.assetGrid}
+            />
             {selectedObjectIds.size > 1 ? (
               <>
                 {/* Multi-selection: rotate/move/behavior-editing stay
@@ -3441,6 +3475,22 @@ export function MapEditor({
           Left click or drag applies the tool · right-drag orbits · scroll zooms · middle-drag pans
         </p>
       </div>
+
+      {/* Map Editor Batch A1: Ctrl+click's quick-place popover — a sibling
+          of the toolbar rather than nested inside it, since it's positioned
+          at the clicked cell's own screen coordinates, not anchored to any
+          toolbar panel. */}
+      {quickPlacePopover ? (
+        <QuickPlacePopover
+          position={{ x: quickPlacePopover.x, y: quickPlacePopover.y }}
+          assets={assets}
+          onPick={(assetId) => {
+            placeAssetAtCell(assetId, quickPlacePopover.cellX, quickPlacePopover.cellY);
+            setQuickPlacePopover(null);
+          }}
+          onClose={() => setQuickPlacePopover(null)}
+        />
+      ) : null}
     </div>
   );
 }

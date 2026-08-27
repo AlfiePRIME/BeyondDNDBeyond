@@ -251,3 +251,45 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* Ctrl+click quick-place popover (Map Editor Batch A1). `.quickPlaceOverlay`
+   is an invisible, full-viewport click-catcher — Modal.tsx's own dismissal
+   shape (a click lands on the overlay only when its target IS the overlay
+   itself, never a descendant) rather than a document-level "click outside"
+   listener; see QuickPlacePopover's own doc comment for why. Positioned
+   `absolute` inside a `fixed inset:0` overlay, so the popover's inline
+   left/top can be the click event's raw clientX/clientY with no further
+   coordinate translation. */
+.quickPlaceOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.quickPlacePopover {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 220px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--surface2) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--purple) 45%, transparent);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* A standalone floating box, not nested inside `.contextPanel` — so unlike
+   that panel's own asset grid this one carries no risk of the flex-crush
+   bug documented on `.assetGrid` above (no sibling here competes for
+   height). Still capped + independently scrollable on the same defensive
+   principle rather than trusting an unbounded roster to always fit. */
+.quickPlacePopoverGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  flex-shrink: 0;
+  padding-right: 2px;
+}
