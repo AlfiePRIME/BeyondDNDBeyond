@@ -308,8 +308,8 @@ export function DmBook({
             ) : null}
             <span className={roomStyles.panelLabel}>Weather</span>
             <p className={styles.dayNightHint}>
-              Sets the current weather for the whole party. Clear, Fog, Rain, Firestorm, and Acid
-              Storm have a visible effect — Thunderstorm is coming soon.
+              Sets the current weather for the whole party. Clear, Fog, Rain, Thunderstorm (rain
+              plus synchronized lightning), Firestorm, and Acid Storm all have a visible effect.
             </p>
             <div className={roomStyles.modeToggle} role="group" aria-label="Weather">
               {WEATHER_OPTIONS.map((option) => (

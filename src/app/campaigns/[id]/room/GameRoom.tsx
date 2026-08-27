@@ -142,7 +142,15 @@ import {
   type VisibilityCellInput,
   type VisibilityTier,
 } from "@/rules-engine";
-import { Badge, Button, computeChatBubbleDurationMs, Droplets, Modal } from "@/ui-components";
+import {
+  Badge,
+  Button,
+  computeChatBubbleDurationMs,
+  Droplets,
+  LightningFlash,
+  type LightningFlashState,
+  Modal,
+} from "@/ui-components";
 import {
   applySeatOffset,
   ChatBubble,
@@ -1830,8 +1838,10 @@ export function GameRoom({
   // the same campaigns postgres_changes feed as dayNightMode/economyStrict.
   // 'clear'/'fog' change the scene's own fog (GameTableScene's
   // resolveSceneFog); 'rain' additionally activates the Droplets overlay
-  // below (Weather & Enemies C2). 'thunderstorm'/'firestorm'/'acid_storm'
-  // remain reserved for C3/C4.
+  // below (Weather & Enemies C2); 'thunderstorm' activates BOTH Droplets
+  // (the exact same rain-on-glass overlay, reused as-is) AND the
+  // LightningFlash overlay below (Weather & Enemies C3). 'firestorm'/
+  // 'acid_storm' remain reserved for C4.
   const [weatherKind, setWeatherKindState] = useState<WeatherKind>(initialWeatherKind);
   const [weatherMechanical, setWeatherMechanicalState] = useState(initialWeatherMechanical);
   const [weatherBusy, setWeatherBusy] = useState(false);
@@ -1847,35 +1857,39 @@ export function GameRoom({
     setGameCanvasEl(state.gl.domElement);
   }, []);
   // Droplets is mounted lazily — the FIRST time this session's weather
-  // actually becomes 'rain' — rather than unconditionally from page load,
-  // and then stays mounted for the rest of the page's lifetime (never
-  // torn down again even if weather later leaves 'rain'). This is a
-  // deliberate, narrower reading of "always-present overlay" than literal
-  // "present from t=0 regardless of whether it's ever used": mounting
-  // Droplets' own <canvas> unconditionally adds a SECOND <canvas> element
-  // to every Game Room page, which broke every existing verify-*.mjs
-  // script's generic `page.locator("canvas")` (a real regression, caught
-  // by actually running one) — dozens of them, none related to weather,
-  // all assuming exactly one canvas. Lazy-mounting preserves this
-  // prompt's actual perf intent (no WebGL-context recreation across
-  // repeated rain toggles within one session, since it stays mounted once
-  // triggered) while adding zero DOM footprint to the overwhelming
-  // majority of sessions that never touch rain at all — see this prompt's
-  // own final report for the full reasoning.
+  // actually becomes 'rain' OR 'thunderstorm' (Weather & Enemies C3 reuses
+  // this exact same rain overlay for its own rain layer) — rather than
+  // unconditionally from page load, and then stays mounted for the rest of
+  // the page's lifetime (never torn down again even if weather later
+  // leaves both). This is a deliberate, narrower reading of "always-present
+  // overlay" than literal "present from t=0 regardless of whether it's ever
+  // used": mounting Droplets' own <canvas> unconditionally adds a SECOND
+  // <canvas> element to every Game Room page, which broke every existing
+  // verify-*.mjs script's generic `page.locator("canvas")` (a real
+  // regression, caught by actually running one) — dozens of them, none
+  // related to weather, all assuming exactly one canvas. Lazy-mounting
+  // preserves this prompt's actual perf intent (no WebGL-context recreation
+  // across repeated rain/thunderstorm toggles within one session, since it
+  // stays mounted once triggered) while adding zero DOM footprint to the
+  // overwhelming majority of sessions that never touch either at all — see
+  // C2's own final report for the full reasoning.
   // "Adjusting state when a prop changes" during render (React's own
   // sanctioned pattern for this, tracking the previously-seen value in a
   // second state slot) rather than a useEffect — a plain
-  // `useEffect(() => { if (weatherKind === "rain") setDropletsMounted(true); }, [weatherKind])`
+  // `useEffect(() => { if (isRainOrThunderstorm) setDropletsMounted(true); }, [weatherKind])`
   // trips this project's own lint (react-hooks/set-state-in-effect: calling
   // setState unconditionally inside an effect body risks cascading
   // renders), and mutating a ref during render trips a separate rule
   // (react-hooks/refs) — this is the lint-clean, React-recommended way to
   // latch a boolean the first time a prop hits a given value.
-  const [dropletsMounted, setDropletsMounted] = useState(initialWeatherKind === "rain");
+  const dropletsShouldBeActive = weatherKind === "rain" || weatherKind === "thunderstorm";
+  const [dropletsMounted, setDropletsMounted] = useState(
+    initialWeatherKind === "rain" || initialWeatherKind === "thunderstorm"
+  );
   const [prevWeatherKindForDroplets, setPrevWeatherKindForDroplets] = useState(weatherKind);
   if (weatherKind !== prevWeatherKindForDroplets) {
     setPrevWeatherKindForDroplets(weatherKind);
-    if (weatherKind === "rain" && !dropletsMounted) setDropletsMounted(true);
+    if (dropletsShouldBeActive && !dropletsMounted) setDropletsMounted(true);
   }
   // Whether Droplets' own WebGL2 instance actually initialized — mirrored
   // below (droplets-state) for verify-rain.mjs, so a real Playwright check
@@ -1891,6 +1905,26 @@ export function GameRoom({
   // why this exists. Purely informational; nothing here reads it back to
   // decide anything.
   const [weatherParticlesDebug, setWeatherParticlesDebug] = useState<WeatherParticlesDebugState | null>(null);
+  // Weather & Enemies C3: thunderstorm's own synchronized lightning overlay
+  // — mirrored below (lightning-state) so a real two-client Playwright
+  // check can prove every connected client computes the IDENTICAL flash
+  // schedule (same `bucket`/`active`/`opacity`), not independently
+  // randomized per client. See LightningFlash.tsx's own doc comment for the
+  // full "why a deterministic clock, not a realtime broadcast" writeup, and
+  // lightning.ts for the actual pure scheduling function. Throttled
+  // internally by LightningFlash to ~25Hz (DEBUG_TICK_MS) before it ever
+  // reaches this setState — the visible flash opacity itself is applied
+  // directly to the overlay's DOM node via a ref, bypassing React state
+  // entirely, so this callback is the ONLY thing that re-renders GameRoom
+  // while a flash is in progress, and only at that throttled rate.
+  const [lightningDebugState, setLightningDebugState] = useState<LightningFlashState>({
+    active: false,
+    opacity: 0,
+    bucket: -1,
+  });
+  const handleLightningDebugChange = useCallback((state: LightningFlashState) => {
+    setLightningDebugState(state);
+  }, []);
   // Chat & Summary B6: pause/resume, live-synced below via the same
   // campaigns postgres_changes feed as economyStrict/dayNightMode.
   // sessionPaused (derived, not its own state) is the "stopped for a break,
@@ -5767,27 +5801,44 @@ export function GameRoom({
           );
         })}
       </Canvas>
-      {/* Weather & Enemies C2: a rain-on-glass overlay, lazily mounted the
-          first time this session's weather becomes 'rain' and never torn
-          down again after that (see dropletsMounted's own doc comment for
-          why this reads "always-present" narrowly rather than literally
-          "mounted from page load regardless of use") — only visually
-          active while weatherKind is 'rain'. See Droplets.tsx's own doc
-          comment for the full capture-technique writeup. Placed
-          immediately after </Canvas> and before every 2D DOM panel below
-          so it paints above the 3D scene but beneath the book/chat/toolbar
-          chrome (plain DOM paint order, no z-index needed). Its own output
-          canvas is pointer-events:none, so it never intercepts cell
-          clicks, chair drags, or panel interactions — Droplets' own
-          optional interactive pointer-wipe is left off, per this prompt's
-          acceptance criteria. */}
+      {/* Weather & Enemies C2/C3: a rain-on-glass overlay, lazily mounted
+          the first time this session's weather becomes 'rain' or
+          'thunderstorm' and never torn down again after that (see
+          dropletsMounted's own doc comment for why this reads
+          "always-present" narrowly rather than literally "mounted from
+          page load regardless of use") — only visually active while
+          weatherKind is 'rain' or 'thunderstorm' (C3 reuses this exact same
+          component for its own rain layer, rather than reimplementing it).
+          See Droplets.tsx's own doc comment for the full capture-technique
+          writeup. Placed immediately after </Canvas> and before every 2D
+          DOM panel below so it paints above the 3D scene but beneath the
+          book/chat/toolbar chrome (plain DOM paint order, no z-index
+          needed). Its own output canvas is pointer-events:none, so it
+          never intercepts cell clicks, chair drags, or panel interactions —
+          Droplets' own optional interactive pointer-wipe is left off, per
+          C2's own acceptance criteria. */}
       {dropletsMounted ? (
         <Droplets
           sourceCanvas={gameCanvasEl}
-          active={weatherKind === "rain"}
+          active={dropletsShouldBeActive}
           onStatusChange={handleDropletsStatusChange}
         />
       ) : null}
+      {/* Weather & Enemies C3: the synchronized lightning flash overlay,
+          rendered AFTER Droplets so a flash washes out the rained-glass
+          look too (a real bright flash would overexpose everything in
+          front of the viewer, rain included) — see LightningFlash.tsx's own
+          doc comment for why this is a plain DOM overlay rather than a
+          spike on GameTableScene's own lights, and lightning.ts for the
+          deterministic, clock-derived schedule every connected client
+          computes independently and identically. Only active while
+          weatherKind is 'thunderstorm' — leaving thunderstorm immediately
+          stops the flashes the same way it stops Droplets' own rain. */}
+      <LightningFlash
+        active={weatherKind === "thunderstorm"}
+        campaignId={campaignId}
+        onDebugChange={handleLightningDebugChange}
+      />
       {/* Chat & Summary B3: the minimal, not-yet-docked chat input — see
           ChatDock.tsx's own doc comment for why this isn't a DraggablePanel
           entry (B4 supersedes it outright). */}
@@ -5844,9 +5895,23 @@ export function GameRoom({
           doc comment); `ready` reflects its WebGL2 instance actually
           initializing once mounted (not silently degrading) and is false
           while unmounted; `active` mirrors what this client told Droplets
-          to show, which should track weatherKind === 'rain' exactly. */}
+          to show, which should track dropletsShouldBeActive exactly (true
+          for BOTH 'rain' and 'thunderstorm' as of Weather & Enemies C3). */}
       <div data-testid="droplets-state" hidden>
-        {JSON.stringify({ mounted: dropletsMounted, ready: dropletsReady, active: weatherKind === "rain" })}
+        {JSON.stringify({ mounted: dropletsMounted, ready: dropletsReady, active: dropletsShouldBeActive })}
+      </div>
+      {/* Hidden render-state mirror for verify-thunderstorm.mjs (Weather &
+          Enemies C3) — WebGL/a plain overlay div have no DOM state a test
+          can otherwise read deterministically, same reasoning as
+          droplets-state above. `active`/`opacity`/`bucket` are exactly
+          LightningFlash's own last throttled computeLightningFlash result
+          (see lightning.ts) — `bucket` in particular lets a real two-client
+          Playwright check prove both clients are evaluating the IDENTICAL
+          deterministic schedule (not just coincidentally agreeing once),
+          since it's the raw bucket index every client's own Date.now()
+          maps to, not just a derived visual value. */}
+      <div data-testid="lightning-state" hidden>
+        {JSON.stringify(lightningDebugState)}
       </div>
       {/* Hidden render-state mirror for a real Playwright verification of
           Weather & Enemies C4's particle overlay — WeatherParticles'
