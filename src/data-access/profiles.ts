@@ -38,6 +38,10 @@ export interface Profile {
   avatar_ref: string | null;
   created_at: string;
   ui_preferences: UiPreferences;
+  /** AI Backend & Admin D1 — deployment-wide app-admin flag, gating
+   * app_settings (0072). Auto-granted, never auto-revoked; see
+   * maybeGrantAdmin below. */
+  is_admin: boolean;
 }
 
 export async function getProfile(supabase: SupabaseClient, userId: string): Promise<Profile | null> {
@@ -48,7 +52,102 @@ export async function getProfile(supabase: SupabaseClient, userId: string): Prom
     .maybeSingle();
 
   if (error) throw error;
+  if (data) await maybeGrantAdmin(supabase, userId, data);
   return data;
+}
+
+// Per-request cache of the calling session's own user, keyed by SupabaseClient
+// instance (never by user id — see the module-header comment on
+// createServerSupabaseClient/createBrowserSupabaseClient: a client is always
+// fresh-per-request, never a shared singleton, so a WeakMap keyed on the
+// instance itself cannot leak one user's identity into another request; it's
+// simply garbage-collected once that request's client goes out of scope).
+// This exists purely so getProfile's admin check (below) costs one auth
+// round trip per request, not one per profile fetched — the Game Room roster
+// (room/page.tsx) calls getProfile once per campaign member in a loop, all
+// against the same client instance.
+const sessionUserCache = new WeakMap<
+  SupabaseClient,
+  Promise<{ id: string; email: string | null } | null>
+>();
+
+function getSessionUserCached(supabase: SupabaseClient) {
+  let cached = sessionUserCache.get(supabase);
+  if (!cached) {
+    // getUser() specifically, NOT getSession(): this file's own realtime
+    // subscriptions below use getSession() for propagating the access token
+    // to the realtime socket, which is fine there (no authorization decision
+    // is being made — the token is just being handed to the socket that will
+    // itself enforce RLS). This call instead GATES a privilege grant, in
+    // server-side code — Supabase's own guidance is explicit that
+    // getSession() must never be trusted for an authorization decision on
+    // the server, since it only decodes the locally-stored JWT without
+    // asking the Auth server to confirm it's genuine; getUser() does that
+    // round trip. The extra network call is deliberately accepted here for
+    // that reason, mitigated by the cache above.
+    cached = supabase.auth.getUser().then(({ data }) =>
+      data.user ? { id: data.user.id, email: data.user.email ?? null } : null
+    );
+    sessionUserCache.set(supabase, cached);
+  }
+  return cached;
+}
+
+/**
+ * AI Backend & Admin D1's admin auto-grant. Runs inline on every getProfile
+ * call — the natural, already-broadly-called place per that prompt's own
+ * design note, since there's no centralized post-authentication hook
+ * anywhere in this app (proxy.ts's middleware only refreshes sessions).
+ *
+ * Cheap and grant-only by construction:
+ * - An already-admin row returns immediately — the ONLY work done for it is
+ *   the `profile.is_admin` check itself, a true no-op.
+ * - No ADMIN_EMAIL configured short-circuits identically, before ever
+ *   touching the session.
+ * - getProfile is also called for OTHER members' profiles (the Game Room
+ *   roster) — the grant only ever applies when the CALLER's own session
+ *   belongs to the exact row being fetched (`user.id === userId`), so
+ *   fetching another member's profile can never mutate THEIR is_admin based
+ *   on the caller's own session/email.
+ * - Never revokes: this only ever flips is_admin from false to true, and the
+ *   UPDATE itself is additionally scoped to `is_admin = false`, so it's a
+ *   correct no-op even under a rare concurrent double call, and changing or
+ *   unsetting ADMIN_EMAIL later can never strip a grant already made (this
+ *   code path simply never runs for an already-admin row).
+ * - A failure here is logged, not thrown: granting admin is a side effect
+ *   layered onto a read, not getProfile's primary contract, so a transient
+ *   auth/write failure shouldn't take down every page that calls getProfile.
+ *
+ * Known limitation, deliberately out of this prompt's scope: this relies on
+ * profiles' existing self-row UPDATE policy (0001), which has no column-level
+ * restriction, so it enforces "grant-only" and "correct email" in
+ * application code rather than in Postgres — RLS has no visibility into this
+ * Node process's ADMIN_EMAIL to enforce it independently. Closing that gap
+ * would need either a service-role write path (deliberately deferred to D3
+ * as this track's first use of service-role credentials in real application
+ * code) or propagating ADMIN_EMAIL into Postgres config, both out of scope
+ * for "schema, the auto-grant mechanism, and RLS only."
+ */
+async function maybeGrantAdmin(supabase: SupabaseClient, userId: string, profile: Profile): Promise<void> {
+  if (profile.is_admin) return;
+  const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  if (!adminEmail) return;
+
+  try {
+    const user = await getSessionUserCached(supabase);
+    if (!user || user.id !== userId) return;
+    if (user.email?.trim().toLowerCase() !== adminEmail) return;
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ is_admin: true })
+      .eq("id", userId)
+      .eq("is_admin", false);
+    if (error) throw error;
+    profile.is_admin = true;
+  } catch (err) {
+    console.error("[profiles] admin auto-grant check failed:", err);
+  }
 }
 
 /** A profile counts as "complete" once it has a non-empty display name. */

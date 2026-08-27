@@ -63,6 +63,11 @@ services:
       # NPC/lore drafting via the Anthropic API). Leave unset in .env and
       # those actions hide themselves in the UI instead of erroring.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Optional — auto-grants profiles.is_admin (migration 0072) to the
+      # signed-in account matching this email, checked on every getProfile()
+      # call. Grant-only: unsetting this later does not strip is_admin from
+      # a user who already has it.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
     healthcheck:
       # Consistent with supabase-studio's own healthcheck pattern in
       # supabase/docker-compose.yml (Node's built-in fetch, no curl/wget

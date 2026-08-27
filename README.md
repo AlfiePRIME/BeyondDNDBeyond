@@ -260,6 +260,7 @@ node scripts/db/verify-npc-stat-blocks.mjs # verify DM monster stat blocks: DM-o
 node scripts/db/verify-character-edit.mjs # verify sheet-side race/class/level/speed editing: owner and DM edits persist through a real browser, a race change re-derives speed/darkvision in one call, imported characters are editable identically, class edits leave resources/spells untouched, non-owner RLS still holds
 node scripts/db/verify-void-terrain.mjs # verify void terrain: the editor's Void brush persisting through Save, paint authorization, the widened CHECK (0039), no-floor rendering in both the editor preview and the live table, clear placement/drag-to-move rejections, a normal move unaffected (post-roadmap: non-rectangular room shapes)
 node scripts/db/verify-ground-types.mjs # verify ground types: the CHECK constraint (0046), paint authorization, independence from terrain_type, the editor's Ground brush persisting through Save, live rendering on both the editor preview and the live table, an untouched map's rendering unchanged (post-roadmap: flat-color ground types)
+node scripts/db/verify-admin-role.mjs # verify profiles.is_admin + app_settings RLS (AI Backend & Admin D1): a fresh signup matching ADMIN_EMAIL is auto-granted admin over a real getProfile() HTTP call, a non-matching signup is not, a pre-existing account is granted the next time it logs in after ADMIN_EMAIL is set to match it, removing ADMIN_EMAIL afterward never strips an existing grant, re-running profile completion for an admin is a safe no-op, and app_settings SELECT/UPDATE RLS holds for both roles via direct authenticated API calls
 ```
 
 The first two connect through Supavisor (the pooler Docker Compose exposes on `localhost:5432`)
@@ -295,6 +296,12 @@ both a DM's and a player's room — the latter seven scripts also start
 signed-in supabase-js clients for the RLS checks, a Playwright browser for the sheet's
 race/class/level/speed editing controls — and likewise starts `yarn dev` itself if `:3000`
 isn't already serving.
+`verify-admin-role.mjs` is the one exception to the ":3000, start it if not already up" shape
+above: since the auto-grant mechanism it verifies (`getProfile`, reading `ADMIN_EMAIL` from
+`process.env`) only changes behavior across a full process restart, it needs to restart the
+app server several times with different `ADMIN_EMAIL` values — so it always starts its own
+`next dev` on a dedicated port (`:3211`) rather than reusing whatever's already serving `:3000`,
+and tears it down again at the end.
 
 **A real RLS gotcha worth knowing if you add more policies:** `INSERT ... RETURNING` (what
 `.insert().select()` does in supabase-js, or the `Prefer: return=representation` header)
@@ -442,6 +449,7 @@ dev secrets this repo's own local setup uses.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser bundle **and** this app's server-side code | **Build time only** — `docker build --build-arg` | Yes — from `supabase/.env`'s `ANON_KEY` (or `SUPABASE_PUBLISHABLE_KEY` if you've migrated to the newer opaque keys) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Reserved for server-side use; not currently called by any app code path, but documented since the app's own `.env.example` asks for it | Run time — container restart is enough | From `supabase/.env`'s `SERVICE_ROLE_KEY` |
 | `ANTHROPIC_API_KEY` | `src/ai` (server-only, never sent to the browser) | Run time — container restart is enough | **No** — the app's one deliberate non-self-hosted dependency. Leave unset and the "Generate a draft" AI-assisted actions hide themselves with an explanation instead of erroring |
+| `ADMIN_EMAIL` | `src/data-access/profiles.ts`'s `getProfile` (server-only, never sent to the browser) | Run time — container restart is enough | **No** — auto-grants `profiles.is_admin` (migration 0072) to the signed-in account matching this email; grant-only, unsetting it later never strips `is_admin` from a user who already has it |
 | `APP_IMAGE` / `APP_IMAGE_TAG` | `docker-compose.production.yml` only | Compose `up` time | No — defaults to `beyonddndbeyond-app:latest` |
 | `APP_HOST_PORT_BINDING` | `docker-compose.production.yml` only | Compose `up` time | No — defaults to `127.0.0.1:3000`, see above |
 
