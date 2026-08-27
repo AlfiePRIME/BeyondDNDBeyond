@@ -23,6 +23,7 @@ import {
   createInteractionEvent,
   createMapObject,
   createMonsterStatBlock,
+  createMonsterStatBlockFromTemplate,
   deleteMonsterStatBlock,
   createOpportunityAttacks,
   declareDisengage,
@@ -114,6 +115,7 @@ import {
   type MapTransition,
   type MonsterAttack,
   type MonsterStatBlock,
+  type MonsterTemplate,
   type Npc,
   type RollLogEntry,
   type SeenCellSnapshot,
@@ -855,6 +857,7 @@ export function GameRoom({
   assets,
   characters,
   initialStatBlocks,
+  initialMonsterTemplates,
   rosterNpcs,
   initialHandouts,
   initialCombat,
@@ -911,6 +914,15 @@ export function GameRoom({
   /** Member-readable (0038): the campaign's monster stat blocks at load
    * time — kept fresh alongside combat refreshes below. */
   initialStatBlocks: MonsterStatBlock[];
+  /** Weather & Enemies C5: the GLOBAL monster template library (0073) at
+   * load time — loaded only for the DM (empty for players, who never see
+   * the book's Enemies page), the rosterNpcs/initialDmNotes convention
+   * immediately below. Static for the lifetime of this page: no realtime
+   * subscription, since admin-authored template content changing mid-
+   * session is not a live-sync need this prompt's acceptance criteria
+   * asks for (a reload picks up any change, same as any other admin
+   * content table in this codebase). */
+  initialMonsterTemplates: MonsterTemplate[];
   /** The Prompt 33 narrative roster, for the MonsterPanel's name
    * pre-fill; loaded only for the DM (empty for players, who never see
    * the panel). */
@@ -3503,7 +3515,8 @@ export function GameRoom({
                 ? // Quick add (Prompt 61): an ordinary NPC placement whose
                   // token links the stat block; npc_name carries the
                   // block's name so every existing display path is
-                  // untouched.
+                  // untouched. allegiance (Weather & Enemies C5) carries
+                  // the stat block's own default_allegiance from arm time.
                   await placeNpcToken(supabase, {
                     mapId,
                     npcName: armedToken.npcName,
@@ -3511,6 +3524,7 @@ export function GameRoom({
                     y,
                     elevation,
                     monsterStatBlockId: armedToken.statBlockId,
+                    allegiance: armedToken.allegiance,
                   })
                 : await moveMapToken(supabase, armedToken.tokenId, { x, y, elevation });
         applyTokenChange(token.id, token);
@@ -4224,18 +4238,52 @@ export function GameRoom({
     [runMonsterAction]
   );
 
+  // Weather & Enemies C5: MonsterPanel's "add from library" action — copies
+  // a chosen GLOBAL monster_templates row's stats into a brand new
+  // campaign-scoped stat block (createMonsterStatBlockFromTemplate), the
+  // exact same runMonsterAction busy/error/refresh path as manual create —
+  // the new row lands in the ordinary list above with its own ordinary
+  // Quick add button, no separate UI surface needed.
+  const handleAddTemplateToStatBlock = useCallback(
+    (template: MonsterTemplate) => {
+      void runMonsterAction(async (supabase) => {
+        await createMonsterStatBlockFromTemplate(supabase, {
+          campaignId,
+          name: template.name,
+          maxHp: template.max_hp,
+          armorClass: template.armor_class,
+          passivePerception: template.passive_perception,
+          attacks: template.attacks,
+          defaultAllegiance: template.default_allegiance,
+        });
+      }, "Could not add that template to your campaign.");
+    },
+    [campaignId, runMonsterAction]
+  );
+
   // Quick add, step one: arm the ordinary grid-click placement (the
   // place-npc interaction) with the stat block linked and its name as the
   // token's npc_name; handleCellClick finishes the flow. Also clears any
   // live click-select-to-move selection — the same mutual-exclusivity
-  // handleTokenSelect enforces the other way around.
+  // handleTokenSelect enforces the other way around. Weather & Enemies C5:
+  // also carries the block's own default_allegiance through to arm time,
+  // so handleCellClick's placeNpcToken call below gives the resulting
+  // token a sensible starting allegiance ('hostile' for every
+  // pre-existing, hand-authored block — unchanged — or whatever a copied
+  // template's own default_allegiance was, e.g. 'neutral' for a
+  // Trader/Guard/High Guard) instead of always defaulting hostile-red.
   const handleQuickAddMonster = useCallback(
     (statBlock: MonsterStatBlock) => {
       if (selectedTokenId) {
         setSelectedTokenId(null);
         void publishTokenSelection(null);
       }
-      setArmedToken({ kind: "place-monster", statBlockId: statBlock.id, npcName: statBlock.name });
+      setArmedToken({
+        kind: "place-monster",
+        statBlockId: statBlock.id,
+        npcName: statBlock.name,
+        allegiance: statBlock.default_allegiance,
+      });
     },
     [selectedTokenId, publishTokenSelection]
   );
@@ -5741,6 +5789,7 @@ export function GameRoom({
             <DmBook
               onClose={() => setBookOpen(false)}
               statBlocks={statBlocks}
+              monsterTemplates={initialMonsterTemplates}
               rosterNpcs={rosterNpcs}
               combatActive={combat !== null}
               hasLiveMap={liveMap !== null}
@@ -5750,6 +5799,7 @@ export function GameRoom({
               onUpdateStatBlock={handleUpdateStatBlock}
               onDeleteStatBlock={handleDeleteStatBlock}
               onQuickAddMonster={handleQuickAddMonster}
+              onAddTemplateToStatBlock={handleAddTemplateToStatBlock}
               campaignId={campaignId}
               characters={characterRows}
               members={roster}

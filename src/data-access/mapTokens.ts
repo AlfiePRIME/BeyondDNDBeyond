@@ -158,7 +158,13 @@ export async function placeCharacterToken(
  * branch of the RLS predicate can pass. As of Prompt 61 an optional
  * monsterStatBlockId links the token to a stat block (the quick-add flow
  * passes the block's own name as npcName, keeping every npc_name display
- * path unchanged); omitted, this is the bare placeholder it always was. */
+ * path unchanged); omitted, this is the bare placeholder it always was.
+ * Weather & Enemies C5 adds an optional `allegiance` override, defaulting
+ * to the long-standing hardcoded 'hostile' when omitted — every existing
+ * caller (bare NPC placement, and quick-add from a hand-authored stat
+ * block) is completely unaffected; only a quick-add sourced from a
+ * monster_templates copy (GameRoom's handleQuickAddMonster, reading the
+ * stat block's own default_allegiance) ever passes something else. */
 export async function placeNpcToken(
   supabase: SupabaseClient,
   params: {
@@ -168,6 +174,7 @@ export async function placeNpcToken(
     y: number;
     elevation: number;
     monsterStatBlockId?: string | null;
+    allegiance?: TokenAllegiance;
   }
 ): Promise<MapToken> {
   const { data, error } = await supabase
@@ -179,7 +186,7 @@ export async function placeNpcToken(
       x: params.x,
       y: params.y,
       elevation: params.elevation,
-      allegiance: "hostile",
+      allegiance: params.allegiance ?? "hostile",
     })
     .select()
     .single();

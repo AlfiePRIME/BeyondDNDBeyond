@@ -11,6 +11,7 @@ import type {
   LorePageLink,
   MonsterAttack,
   MonsterStatBlock,
+  MonsterTemplate,
   Npc,
   RollLogEntry,
   WeatherKind,
@@ -91,12 +92,19 @@ const WEATHER_OPTIONS: { id: WeatherKind; label: string }[] = [
  * GameTableScene's resolveSceneFog); every other option is offered from
  * day one since the schema already allows them, with C2-C4 adding their
  * own real effects on top later.
+ *
+ * Weather & Enemies C5 adds a "browse the global template library" section
+ * to the existing Enemies tab (MonsterPanel) rather than a new tab of its
+ * own — it's the same quick-add workflow with one more way to seed a stat
+ * block (copy a shared monster_templates row instead of typing one by
+ * hand), not a distinct feature surface.
  */
 export function DmBook({
   // Closing back to the 3D book's closed state.
   onClose,
   // Enemies (MonsterPanel)
   statBlocks,
+  monsterTemplates,
   rosterNpcs,
   combatActive,
   hasLiveMap,
@@ -106,6 +114,7 @@ export function DmBook({
   onUpdateStatBlock,
   onDeleteStatBlock,
   onQuickAddMonster,
+  onAddTemplateToStatBlock,
   // DM Controls (DmOverridesPanel)
   campaignId,
   characters,
@@ -136,6 +145,9 @@ export function DmBook({
 }: {
   onClose: () => void;
   statBlocks: MonsterStatBlock[];
+  /** Weather & Enemies C5: the global template library (0073), for the
+   * Enemies page's "add from library" browser. */
+  monsterTemplates: MonsterTemplate[];
   rosterNpcs: Npc[];
   combatActive: boolean;
   hasLiveMap: boolean;
@@ -160,6 +172,9 @@ export function DmBook({
   ) => void;
   onDeleteStatBlock: (statBlock: MonsterStatBlock) => void;
   onQuickAddMonster: (statBlock: MonsterStatBlock) => void;
+  /** Weather & Enemies C5: copies a template's stats into a brand new
+   * campaign-scoped stat block (never mutates the template). */
+  onAddTemplateToStatBlock: (template: MonsterTemplate) => void;
   campaignId: string;
   characters: Character[];
   members: RoomMember[];
@@ -230,6 +245,7 @@ export function DmBook({
         {page === "enemies" ? (
           <MonsterPanel
             statBlocks={statBlocks}
+            templates={monsterTemplates}
             rosterNpcs={rosterNpcs}
             combatActive={combatActive}
             hasLiveMap={hasLiveMap}
@@ -239,6 +255,7 @@ export function DmBook({
             onUpdate={onUpdateStatBlock}
             onDelete={onDeleteStatBlock}
             onQuickAdd={onQuickAddMonster}
+            onAddFromTemplate={onAddTemplateToStatBlock}
           />
         ) : null}
         {page === "dmControls" ? (
