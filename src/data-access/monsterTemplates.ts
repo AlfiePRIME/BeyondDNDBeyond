@@ -30,6 +30,18 @@ export interface MonsterTemplate {
   passive_perception: number;
   attacks: MonsterAttack[];
   description: string;
+  /** Weather & Enemies C6 (migration 0074): a LIVE pointer into
+   * asset_library — the model MapSurface.tsx renders for any token backed
+   * by a monster_stat_block that links back to this template
+   * (monster_stat_blocks.template_id). Deliberately NOT copied at
+   * quick-add time the way stats are (createMonsterStatBlockFromTemplate):
+   * if an admin changes this later, every campaign already using this
+   * template picks up the new appearance automatically. Nullable — a
+   * template with no model set (shouldn't happen for any of C5's 8 seeded
+   * rows, but possible for a future admin-authored one) simply renders no
+   * distinct model, falling back to the flat allegiance disc like any
+   * other unlinked NPC. */
+  default_asset_id: string | null;
   created_at: string;
 }
 

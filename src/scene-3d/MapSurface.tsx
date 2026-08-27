@@ -745,6 +745,17 @@ export interface MapSurfaceToken {
    * is omitted by the caller entirely — remembered cells deliberately
    * carry no token memory (the Prompt 55 schema captures terrain only). */
   dimmed?: boolean;
+  /** Weather & Enemies C6: the resolved model url for an NPC token whose
+   * linked monster_stat_block itself links back to a monster_template with
+   * its own default_asset_id (GameRoom resolves this — the caller-derived-
+   * value, not lookups-inside-the-component convention every other field
+   * here already follows) — the SAME preset-or-signed url shape
+   * MapSurfaceObject.url already uses, rendered through the SAME
+   * PlacedObject component. null/undefined (every token before this
+   * feature, and every freeform NPC/PC token after it) renders the
+   * unchanged flat allegiance-colored disc — this is a pure addition, never
+   * a replacement, for any token this isn't set on. */
+  modelUrl?: string | null;
 }
 
 const HP_BAR_WIDTH = 0.7;
@@ -955,6 +966,10 @@ const TokenConcentrationBadge = memo(function TokenConcentrationBadge() {
 // it looks detached from its cell.
 const RAISE_HEIGHT = 0.22;
 
+// Weather & Enemies C6: the "miniature base" plinth a template-linked
+// token's model sits on — see TokenMarker's own modelUrl-branch comment.
+const PLINTH_HEIGHT = 0.04;
+
 // A pawn silhouette (disc + stem + head) rather than a flat disc: the seat
 // cameras view the table at a shallow angle, where a flat disc on a small
 // cell all but disappears.
@@ -982,8 +997,10 @@ const TokenMarker = memo(function TokenMarker({
   deathSaveLabel,
   concentrating,
   dimmed,
+  modelUrl,
   onPointerDown,
   onSlideDebug,
+  onMeasureDebug,
 }: {
   id: string;
   gridX: number;
@@ -1003,8 +1020,14 @@ const TokenMarker = memo(function TokenMarker({
   deathSaveLabel: string;
   concentrating: boolean;
   dimmed: boolean;
+  /** Weather & Enemies C6: see MapSurfaceToken.modelUrl's own doc comment. */
+  modelUrl: string | null;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
   onSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
+  /** Verification-only: see MapSurfaceProps.onTokenMeasureDebug's doc
+   * comment. Only ever fires for a token actually rendering a model
+   * (modelUrl set) — a disc-fallback token has nothing to measure. */
+  onMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const color = dimmed ? DIMMED_ALLEGIANCE_COLOR[allegiance] : ALLEGIANCE_COLOR[allegiance];
@@ -1037,18 +1060,58 @@ const TokenMarker = memo(function TokenMarker({
   return (
     <group ref={slideRef} scale={scale}>
       <group position={[0, raised ? RAISE_HEIGHT : 0, 0]}>
-        <mesh position={[0, 0.05, 0]}>
-          <cylinderGeometry args={[0.3, 0.36, 0.1, 20]} />
-          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
-        </mesh>
-        <mesh position={[0, 0.26, 0]}>
-          <cylinderGeometry args={[0.12, 0.16, 0.32, 12]} />
-          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
-        </mesh>
-        <mesh position={[0, 0.5, 0]}>
-          <sphereGeometry args={[0.17, 16, 16]} />
-          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5 * emissiveScale} roughness={0.35} />
-        </mesh>
+        {modelUrl ? (
+          // Weather & Enemies C6: a template-linked NPC token — a distinct
+          // generated model (see generate-monster-presets.mjs) through the
+          // SAME PlacedObject/PropModel component MapSurfaceObject already
+          // renders decorative props with (same maxDim-based single-cell
+          // normalization, no bespoke scaling logic here). A thin allegiance-
+          // colored "miniature base" plinth sits under it — the real
+          // tabletop-mini convention — so a DM can still read
+          // party/hostile/neutral at a glance even though the model itself
+          // isn't allegiance-tinted (deliberate: these creature types
+          // already have a strong, fixed identity color of their own; see
+          // this prompt's own final report for the reasoning).
+          <>
+            <mesh position={[0, PLINTH_HEIGHT / 2, 0]}>
+              <cylinderGeometry args={[0.28, 0.32, PLINTH_HEIGHT, 20]} />
+              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+            </mesh>
+            <group position={[0, PLINTH_HEIGHT, 0]}>
+              <PlacedObject
+                url={modelUrl}
+                onMeasureDebug={onMeasureDebug ? (measurement) => onMeasureDebug(id, measurement) : undefined}
+              />
+            </group>
+            {dimmed ? (
+              // Same translucent shroud ObjectMarker overlays on a dimmed
+              // placed object (DIM_SHROUD_COLOR) — a model can't be
+              // recolored the disc's dimmed-hex way (PlacedObject has no
+              // per-material-swap hook for that), so this is the model
+              // path's own equivalent "you only dimly perceive this"
+              // treatment.
+              <mesh position={[0, PLINTH_HEIGHT + HIT_BOX_HEIGHT / 2, 0]}>
+                <boxGeometry args={[PLACED_OBJECT_SIZE, HIT_BOX_HEIGHT, PLACED_OBJECT_SIZE]} />
+                <meshBasicMaterial color={DIM_SHROUD_COLOR} transparent opacity={0.6} depthWrite={false} />
+              </mesh>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <mesh position={[0, 0.05, 0]}>
+              <cylinderGeometry args={[0.3, 0.36, 0.1, 20]} />
+              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+            </mesh>
+            <mesh position={[0, 0.26, 0]}>
+              <cylinderGeometry args={[0.12, 0.16, 0.32, 12]} />
+              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+            </mesh>
+            <mesh position={[0, 0.5, 0]}>
+              <sphereGeometry args={[0.17, 16, 16]} />
+              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5 * emissiveScale} roughness={0.35} />
+            </mesh>
+          </>
+        )}
         {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
         {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
         {deathSaveLabel !== "" ? <TokenDeathSaveBadge label={deathSaveLabel} /> : null}
@@ -1189,6 +1252,14 @@ export interface MapSurfaceProps {
    * fix's own real-measurement verification path). Omit it (as every real
    * caller does today) and nothing changes about how objects render. */
   onObjectMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
+  /** Verification-only: fires with a template-linked token's own generated
+   * model's measured bounding-box maxDim and derived scale — the same
+   * onObjectMeasureDebug precedent, applied to TokenMarker's own PlacedObject
+   * (Weather & Enemies C6). Only ever fires for a token actually rendering a
+   * model (MapSurfaceToken.modelUrl set); a disc-fallback token never calls
+   * this. Omit it (as every real caller does today) and nothing changes
+   * about how tokens render. */
+  onTokenMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
 }
 
 /**
@@ -1234,6 +1305,7 @@ export function MapSurface({
   onTokenSlideDebug,
   onObjectPoseDebug,
   onObjectMeasureDebug,
+  onTokenMeasureDebug,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
   const { offsetX, offsetZ } = mapCellOffsets(gridWidth, gridHeight, cellSize);
@@ -1369,8 +1441,10 @@ export function MapSurface({
           deathSaveLabel={token.deathSaveLabel ?? ""}
           concentrating={token.concentrating ?? false}
           dimmed={token.dimmed ?? false}
+          modelUrl={token.modelUrl ?? null}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
           onSlideDebug={onTokenSlideDebug}
+          onMeasureDebug={onTokenMeasureDebug}
         />
       ))}
 

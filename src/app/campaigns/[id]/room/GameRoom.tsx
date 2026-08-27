@@ -1201,6 +1201,27 @@ export function GameRoom({
     },
     []
   );
+  // Weather & Enemies C6: the exact same measured-bounding-box mirror as
+  // handleObjectMeasureDebug just above, applied to a template-linked
+  // token's own generated model — proves to a real Playwright check that
+  // an ACTUAL model loaded (a positive maxDim), not just that a truthy url
+  // string got passed through. Same dedup reasoning too (a fresh object
+  // literal every call would re-render GameRoom for no reason).
+  const [tokenModelMeasureDebug, setTokenModelMeasureDebug] = useState<
+    Record<string, { maxDim: number; scale: number }>
+  >({});
+  const handleTokenMeasureDebug = useCallback(
+    (id: string, measurement: { maxDim: number; scale: number }) => {
+      setTokenModelMeasureDebug((current) => {
+        const existing = current[id];
+        if (existing && existing.maxDim === measurement.maxDim && existing.scale === measurement.scale) {
+          return current;
+        }
+        return { ...current, [id]: measurement };
+      });
+    },
+    []
+  );
   // Investigation-only (teleport/mis-scale bug hunt): mirrors each seated
   // member's own loaded avatar model's measured bounding-box height and
   // derived scale factor — same reasoning as avatarPoseDebug above.
@@ -4249,6 +4270,7 @@ export function GameRoom({
       void runMonsterAction(async (supabase) => {
         await createMonsterStatBlockFromTemplate(supabase, {
           campaignId,
+          templateId: template.id,
           name: template.name,
           maxHp: template.max_hp,
           armorClass: template.armor_class,
@@ -4750,6 +4772,24 @@ export function GameRoom({
   // own appearance, the same distinction AssetPalette.tsx's own upload
   // section already draws.
   const customAssets = useMemo(() => assetList.filter((asset) => asset.source_type === "custom"), [assetList]);
+
+  // Weather & Enemies C6: id-keyed lookups for the token-model resolution
+  // below (statBlock.template_id -> template.default_asset_id ->
+  // assetUrlById) — the same CombatPanel/DiceLogPanel/QuickActionsPanel/
+  // OpportunityAttackPanel statBlockById precedent, built here too since
+  // the tableMap memo (not any of those panels) is what needs it.
+  // initialMonsterTemplates isn't kept in its own live-updating state
+  // (there's no in-app admin UI yet that could change it mid-session — see
+  // monsterTemplates.ts's own doc comment), so this reads that prop
+  // directly, same as MonsterPanel's own monsterTemplates prop below does.
+  const statBlockById = useMemo(
+    () => new Map(statBlocks.map((statBlock) => [statBlock.id, statBlock])),
+    [statBlocks]
+  );
+  const monsterTemplateById = useMemo(
+    () => new Map(initialMonsterTemplates.map((template) => [template.id, template])),
+    [initialMonsterTemplates]
+  );
 
   const characterById = useMemo(
     () => new Map(characterRows.map((character) => [character.id, character])),
@@ -5332,6 +5372,23 @@ export function GameRoom({
         // NPC token, or another player's PC, simply omits `hp` and renders
         // no bar.
         const character = token.character_id ? characterById.get(token.character_id) : undefined;
+        // Weather & Enemies C6: an NPC token whose linked monster_stat_block
+        // itself links back to a monster_template (statBlock.template_id,
+        // set ONLY by createMonsterStatBlockFromTemplate) resolves that
+        // template's CURRENT default_asset_id, fresh, every render — a live
+        // pointer, deliberately re-read here rather than cached at copy
+        // time, so a later admin change to the template's model picks up
+        // automatically (see monsterTemplates.ts's default_asset_id doc
+        // comment). A freeform stat block (template_id null) or a token with
+        // no monster_stat_block_id at all (a bare NPC placeholder, or any PC
+        // token) simply never resolves a modelUrl here, so it falls all the
+        // way through to MapSurface's own unchanged flat-disc fallback —
+        // zero regression for every token that existed before this feature.
+        const statBlock = token.monster_stat_block_id
+          ? statBlockById.get(token.monster_stat_block_id)
+          : undefined;
+        const template = statBlock?.template_id ? monsterTemplateById.get(statBlock.template_id) : undefined;
+        const modelUrl = template?.default_asset_id ? (assetUrlById.get(template.default_asset_id) ?? null) : null;
         return [{
           id: token.id,
           x: token.x,
@@ -5340,6 +5397,7 @@ export function GameRoom({
           // token elevation is a placement-time snapshot, not the render input.
           elevation: (overlay.get(cellKey(token.x, token.y)) ?? DEFAULT_CELL).elevation,
           allegiance: token.allegiance,
+          modelUrl,
           // The pre-existing, visible-to-everyone ring for TokenPanel's
           // separate armed "move" mechanism (DM free repositioning — see
           // TokenArm's own doc comment) — unrelated to, and unaffected by,
@@ -5372,7 +5430,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright
@@ -5714,6 +5772,7 @@ export function GameRoom({
           onAvatarMeasureDebug={handleAvatarMeasureDebug}
           onObjectPoseDebug={handleObjectPoseDebug}
           onObjectMeasureDebug={handleObjectMeasureDebug}
+          onTokenMeasureDebug={handleTokenMeasureDebug}
           seatOffsets={seatOffsets}
           onChairDragEnd={handleChairDragEnd}
           onOwnChairProjectedPosition={setOwnChairScreenPosition}
@@ -6145,6 +6204,27 @@ export function GameRoom({
           finished loading yet. */}
       <div data-testid="object-measure-state" hidden>
         {JSON.stringify(objectMeasureDebug)}
+      </div>
+      {/* Weather & Enemies C6: mirrors the ACTUAL rendering decision the
+          scene executes for every currently-rendered token — modelUrlByTokenId
+          is sourced straight from tableMap (this client's own real render
+          model, the visionDebug precedent), so it reflects exactly what
+          MapSurface was told to draw: null/absent means "flat allegiance
+          disc" (a freeform stat block, a bare NPC, or any PC token), a
+          non-null url means "a template-linked model". `measured` is the
+          SAME real Box3.setFromObject(loadedGltf) measurement
+          handleObjectMeasureDebug's own doc comment describes, keyed by
+          token id, proving an actual model loaded (positive maxDim) rather
+          than just that a url string got passed through — a real Playwright
+          check can confirm "shows a distinct model" against genuine
+          rendered output, not an assumption. */}
+      <div data-testid="token-model-state" hidden>
+        {JSON.stringify({
+          modelUrlByTokenId: Object.fromEntries(
+            (tableMap?.tokens ?? []).map((token) => [token.id, token.modelUrl ?? null])
+          ),
+          measured: tokenModelMeasureDebug,
+        })}
       </div>
       {/* Hidden render-state mirror for verify-token-click-select.mjs —
           see the selectionDebug memo. */}

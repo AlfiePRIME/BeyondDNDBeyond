@@ -41,6 +41,22 @@ export interface MonsterStatBlock {
    * Guard), so THOSE quick-added tokens stop defaulting to the wrong,
    * misleading hostile-red disc. */
   default_allegiance: TokenAllegiance;
+  /** Weather & Enemies C6 (migration 0074): set ONLY by
+   * createMonsterStatBlockFromTemplate, to the source monster_templates
+   * row's id — a LIVE pointer used PURELY for visual rendering (MapSurface
+   * looks up this template's own default_asset_id, fresh, every time a
+   * token backed by this stat block is drawn). Completely separate from,
+   * and independent of, the plain-value stat copy (max_hp/armor_class/
+   * attacks/etc.) that same function performs once at creation time: if an
+   * admin later changes the template's default_asset_id, this block's
+   * rendered appearance updates automatically, while every stat this block
+   * already copied stays exactly as it was copied — editing this block
+   * (updateMonsterStatBlock) never touches template_id, and there is no
+   * write path anywhere that re-syncs stats from the template after
+   * creation. null for every pre-existing, hand-authored (createMonsterStatBlock)
+   * block — the freeform case — so it continues rendering exactly as
+   * today, the flat allegiance-colored disc. */
+  template_id: string | null;
   created_at: string;
 }
 
@@ -90,18 +106,28 @@ export async function createMonsterStatBlock(
 /** Weather & Enemies C5: MonsterPanel's "add from library" action — copies
  * a global monster_templates row's stats into a BRAND NEW, fully
  * independent campaign-scoped monster_stat_blocks row. A one-time value
- * copy, never a live link: the template itself is never mutated by this
- * (0073's RLS wouldn't allow a non-admin to anyway), and there is no
- * template_id column here at all — editing the resulting row afterward
- * (updateMonsterStatBlock, the ordinary MonsterPanel edit form) can never
- * reach back into the template or any other campaign's own copy. Takes
- * plain fields rather than a MonsterTemplate object so this module doesn't
- * need to import monsterTemplates.ts (the caller already has the template
- * in hand from listMonsterTemplates). */
+ * copy, never a live link for the STATS: the template itself is never
+ * mutated by this (0073's RLS wouldn't allow a non-admin to anyway), and
+ * editing the resulting row afterward (updateMonsterStatBlock, the ordinary
+ * MonsterPanel edit form) can never reach back into the template or any
+ * other campaign's own copy. Takes plain fields rather than a
+ * MonsterTemplate object so this module doesn't need to import
+ * monsterTemplates.ts (the caller already has the template in hand from
+ * listMonsterTemplates).
+ *
+ * Weather & Enemies C6 (migration 0074) adds template_id, stamped here with
+ * the source template's own id — UNLIKE every field above, this one IS a
+ * live pointer, but purely for visual rendering (see MonsterStatBlock.
+ * template_id's own doc comment): MapSurface.tsx looks up this template's
+ * current default_asset_id fresh every render, so a later admin change to
+ * the template's model picture updates this block's on-table appearance
+ * automatically, while every stat copied above stays frozen exactly as
+ * copied. */
 export async function createMonsterStatBlockFromTemplate(
   supabase: SupabaseClient,
   params: {
     campaignId: string;
+    templateId: string;
     name: string;
     maxHp: number;
     armorClass: number;
@@ -114,6 +140,7 @@ export async function createMonsterStatBlockFromTemplate(
     .from("monster_stat_blocks")
     .insert({
       campaign_id: params.campaignId,
+      template_id: params.templateId,
       name: params.name.trim(),
       max_hp: params.maxHp,
       armor_class: params.armorClass,
