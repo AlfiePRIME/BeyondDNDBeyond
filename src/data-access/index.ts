@@ -188,6 +188,11 @@ export {
   type ConcealedPit,
 } from "./concealedPits";
 export {
+  createInteractionEvent,
+  listInteractionEvents,
+  type InteractionEvent,
+} from "./interactionEvents";
+export {
   listWhiteboardTiles,
   saveWhiteboardTiles,
   clearWhiteboard,

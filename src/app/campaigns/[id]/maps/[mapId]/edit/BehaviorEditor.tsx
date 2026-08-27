@@ -33,6 +33,11 @@ export function BehaviorEditor({
   const [action, setAction] = useState<MapObjectAction | "">(saved?.action ?? "");
   const [content, setContent] = useState(saved?.content ?? "");
   const [playerTriggerable, setPlayerTriggerable] = useState(saved?.playerTriggerable ?? false);
+  // Map Editor Batch A6: opts this object into firing automatically when a
+  // token (player OR NPC) lands on its cell, via the exact same
+  // trigger_map_object RPC a click uses — independent of playerTriggerable,
+  // which only governs manual click-triggering by a non-DM member.
+  const [triggerOnStepOn, setTriggerOnStepOn] = useState(saved?.triggerOnStepOn ?? false);
 
   const needsContent = action === "reveal_text" || action === "reveal_image";
 
@@ -45,6 +50,7 @@ export function BehaviorEditor({
       action,
       content: needsContent ? content : null,
       playerTriggerable,
+      triggerOnStepOn,
       // Changing the action invalidates whatever "triggered" meant for the
       // old one; re-saving the same action (message tweak, triggerability
       // flip) keeps the live state as-is.
@@ -87,6 +93,14 @@ export function BehaviorEditor({
           >
             Players can trigger: {playerTriggerable ? "yes" : "no"}
           </Button>
+          <Button
+            size="sm"
+            variant={triggerOnStepOn ? "accent" : "ghost"}
+            onClick={() => setTriggerOnStepOn((value) => !value)}
+            data-testid="behavior-trigger-on-step-on"
+          >
+            Trigger on step-on: {triggerOnStepOn ? "yes" : "no"}
+          </Button>
         </div>
       ) : null}
       <div className={styles.toolRow}>
@@ -103,6 +117,7 @@ export function BehaviorEditor({
           <span className={styles.selectedMeta} data-testid="behavior-summary">
             Saved: {ACTION_LABELS[saved.action]}
             {saved.playerTriggerable ? " · players can trigger" : " · DM only"}
+            {saved.triggerOnStepOn ? " · fires on step-on" : ""}
           </span>
         ) : null}
       </div>

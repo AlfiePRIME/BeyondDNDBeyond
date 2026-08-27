@@ -80,6 +80,7 @@ import {
 import type { PaletteAsset } from "./lib/assetUrl";
 import { captureMapThumbnail } from "../../lib/thumbnail";
 import { BehaviorEditor } from "./BehaviorEditor";
+import { ObjectTagEditor } from "./ObjectTagEditor";
 import styles from "./editor.module.css";
 
 // Structural message read, not instanceof — see GameRoom's note on the
@@ -963,6 +964,33 @@ export function MapEditor({
     [bridgeAssetId, stairsAssetId]
   );
 
+  // Map Editor Batch A6: the built-in Pressure Plate preset "works out of
+  // the box" — placing one seeds a real behavior_config with the new
+  // triggerOnStepOn flag already on (plus a toggle_state action, so
+  // trigger_map_object's own "no configured action" guard never rejects
+  // it), the same lookup-by-name-once pattern chestAssetId/bridgeAssetId
+  // already use, rather than requiring the DM to open BehaviorEditor and
+  // configure it manually before it does anything. The DM can still edit or
+  // clear this afterward like any other object's behavior.
+  const pressurePlateAssetId = useMemo(
+    () =>
+      assets.find((asset) => asset.source_type === "preset" && asset.name === "Pressure Plate")
+        ?.id ?? null,
+    [assets]
+  );
+  const initialBehaviorConfigForAsset = useCallback(
+    (assetId: string): Record<string, unknown> | undefined =>
+      assetId === pressurePlateAssetId
+        ? {
+            action: "toggle_state",
+            playerTriggerable: false,
+            triggerOnStepOn: true,
+            triggered: false,
+          }
+        : undefined,
+    [pressurePlateAssetId]
+  );
+
   const handleCellClick = useCallback(
     (x: number, y: number, event?: ThreeEvent<PointerEvent>) => {
       if (toolRef.current !== "object") return;
@@ -1079,6 +1107,7 @@ export function MapEditor({
           elevation,
           rotation: 0,
           crossingType: crossingTypeForAsset(assetId),
+          behaviorConfig: initialBehaviorConfigForAsset(assetId),
         });
         addObjectLocal(created);
         setSelectedObjectIds(new Set([created.id]));
@@ -1089,6 +1118,7 @@ export function MapEditor({
       map.id,
       chestAssetId,
       crossingTypeForAsset,
+      initialBehaviorConfigForAsset,
       inRegion,
       displayedTerrainAt,
       runObjectMutation,
@@ -1143,6 +1173,14 @@ export function MapEditor({
     const objectId = selectedLiveObject.id;
     void runObjectMutation(async (supabase) => {
       replaceObject(await setMapObjectBehavior(supabase, objectId, behavior));
+    });
+  }
+
+  function handleSaveTag(tag: string | null) {
+    if (!selectedLiveObject) return;
+    const objectId = selectedLiveObject.id;
+    void runObjectMutation(async (supabase) => {
+      replaceObject(await updateMapObject(supabase, objectId, { tag }));
     });
   }
 
@@ -1693,7 +1731,9 @@ export function MapEditor({
             // preset (its own catalog draws from decorative dressing), but
             // resolving this the same way as a manual placement means it's
             // correct-if-it-ever-happens rather than a silent inconsistency.
+            // Same reasoning for the Pressure Plate's default behavior_config.
             crossingType: crossingTypeForAsset(object.assetId),
+            behaviorConfig: initialBehaviorConfigForAsset(object.assetId),
           })
         );
       }
@@ -2710,6 +2750,11 @@ export function MapEditor({
                         {selectedLiveObject.blocks_line_of_sight ? "yes" : "no"}
                       </Button>
                     </div>
+                    <ObjectTagEditor
+                      key={`tag-${selectedLiveObject.id}`}
+                      object={selectedLiveObject}
+                      onSave={handleSaveTag}
+                    />
                     <BehaviorEditor
                       key={selectedLiveObject.id}
                       object={selectedLiveObject}

@@ -14,6 +14,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * pit. A successful save never touches this row: the trap stays concealed.
  */
 export interface ConcealedPit {
+  /** Map Editor Batch A6: a surrogate id (unique, not the primary key —
+   * (map_id,x,y) still is) added so a pit can be addressed by a single
+   * column, the same way map_objects.id already addresses a MapObject.
+   * Lets interaction_events (and a later prompt's item-container table)
+   * reference a specific pit with a real foreign key. */
+  id: string;
   map_id: string;
   x: number;
   y: number;

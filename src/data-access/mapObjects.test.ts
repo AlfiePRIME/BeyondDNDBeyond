@@ -17,6 +17,7 @@ describe("parseMapObjectBehavior", () => {
         action,
         content: null,
         playerTriggerable: false,
+        triggerOnStepOn: false,
         triggered: false,
       });
     }
@@ -28,12 +29,14 @@ describe("parseMapObjectBehavior", () => {
         action: "reveal_text",
         content: "You find 30 gold pieces",
         playerTriggerable: true,
+        triggerOnStepOn: true,
         triggered: true,
       })
     ).toEqual({
       action: "reveal_text",
       content: "You find 30 gold pieces",
       playerTriggerable: true,
+      triggerOnStepOn: true,
       triggered: true,
     });
   });
@@ -43,13 +46,21 @@ describe("parseMapObjectBehavior", () => {
       action: "toggle_state",
       content: 42,
       playerTriggerable: "yes",
+      triggerOnStepOn: "yes",
       triggered: "true",
     });
     expect(behavior).toEqual({
       action: "toggle_state",
       content: null,
       playerTriggerable: false,
+      triggerOnStepOn: false,
       triggered: false,
     });
+  });
+
+  it("defaults triggerOnStepOn to false when omitted (every object placed before Map Editor Batch A6)", () => {
+    expect(
+      parseMapObjectBehavior({ action: "toggle_state", triggered: true })?.triggerOnStepOn
+    ).toBe(false);
   });
 });
