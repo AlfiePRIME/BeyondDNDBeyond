@@ -65,6 +65,14 @@ export interface MapObject {
   /** See CrossingType's own doc comment. null for every object that isn't a
    * bridge or stairs — every object placed before this addition included. */
   crossing_type: CrossingType | null;
+  /** Map Editor Batch A6: a freeform, optional, DM-authored label — set when
+   * placing/editing an object, copied into every interaction_events row
+   * this object's triggers produce so an event can be attributed to a
+   * human-readable name regardless of what kind of object caused it.
+   * Deliberately independent of A4's own separate map_object_items.tag
+   * column (a different table, a different freeform label). null for every
+   * object placed before this addition. */
+  tag: string | null;
   created_at: string;
   asset: PlacedObjectAsset;
 }
@@ -89,6 +97,15 @@ export type MapObjectAction = (typeof MAP_OBJECT_ACTIONS)[number];
  *   playerTriggerable — whether a non-DM member may trigger it (the
  *                       trigger_map_object RPC in 0018 checks this key BY
  *                       NAME — renaming it is a migration, not a refactor)
+ *   triggerOnStepOn   — Map Editor Batch A6: whether a token LANDING on
+ *                       this object's cell fires it automatically, through
+ *                       the exact same trigger_map_object RPC a click does
+ *                       (GameRoom.tsx's handleTokenLanded) — independent of
+ *                       playerTriggerable, since step-on resolution runs on
+ *                       the DM's own authoritative client (the same one
+ *                       that resolves pit falls), never gated on who owns
+ *                       the stepping token. Fires for NPC tokens exactly
+ *                       like player-character tokens.
  *   triggered         — the CURRENT live state, kept separate from the
  *                       authoring fields above because it must survive
  *                       reconnects/new joins: reveal_*: content is shown;
@@ -99,6 +116,7 @@ export interface MapObjectBehavior {
   action: MapObjectAction;
   content: string | null;
   playerTriggerable: boolean;
+  triggerOnStepOn: boolean;
   triggered: boolean;
 }
 
@@ -112,6 +130,7 @@ export function parseMapObjectBehavior(config: Record<string, unknown>): MapObje
     action: action as MapObjectAction,
     content: typeof config.content === "string" ? config.content : null,
     playerTriggerable: config.playerTriggerable === true,
+    triggerOnStepOn: config.triggerOnStepOn === true,
     triggered: config.triggered === true,
   };
 }
@@ -145,6 +164,11 @@ export async function createMapObject(
     elevation: number;
     rotation: number;
     crossingType?: CrossingType | null;
+    /** Rarely set at creation — the built-in Pressure Plate preset is the
+     * one caller today (MapEditor.tsx's pressurePlateAssetId, the same
+     * lookup-by-name-once pattern as chestAssetId/bridgeAssetId) so it
+     * "works out of the box" without a manual BehaviorEditor step. */
+    behaviorConfig?: Record<string, unknown>;
   }
 ): Promise<MapObject> {
   const { data, error } = await supabase
@@ -157,6 +181,7 @@ export async function createMapObject(
       elevation: params.elevation,
       rotation: params.rotation,
       crossing_type: params.crossingType ?? null,
+      ...(params.behaviorConfig ? { behavior_config: params.behaviorConfig } : {}),
     })
     .select(OBJECT_COLUMNS)
     .single();
@@ -189,6 +214,7 @@ export async function restoreMapObject(
       behavior_config: object.behavior_config,
       blocks_line_of_sight: object.blocks_line_of_sight,
       crossing_type: object.crossing_type,
+      tag: object.tag,
       created_at: object.created_at,
     })
     .select(OBJECT_COLUMNS)
@@ -209,6 +235,9 @@ export async function updateMapObject(
     elevation?: number;
     rotation?: number;
     blocks_line_of_sight?: boolean;
+    /** Map Editor Batch A6: the freeform label editable from the map
+     * editor's object panel — null clears it back to unlabeled. */
+    tag?: string | null;
   }
 ): Promise<MapObject> {
   const { data, error } = await supabase
@@ -237,6 +266,7 @@ export async function setMapObjectBehavior(
         action: behavior.action,
         ...(behavior.content !== null ? { content: behavior.content } : {}),
         playerTriggerable: behavior.playerTriggerable,
+        triggerOnStepOn: behavior.triggerOnStepOn,
         triggered: behavior.triggered,
       }
     : {};

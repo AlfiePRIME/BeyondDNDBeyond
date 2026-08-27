@@ -14,6 +14,7 @@ import {
   applyNpcHpDelta,
   clearHiddenAsHider,
   createHandout,
+  createInteractionEvent,
   createMonsterStatBlock,
   deleteMonsterStatBlock,
   createOpportunityAttacks,
@@ -1869,10 +1870,54 @@ export function GameRoom({
    * before either ever runs — no concealed-pit save is even rolled, no
    * visible-pit fall is resolved. See `bridgeHere`'s own comment for why
    * this applies uniformly to visible and concealed pits alike.
+   *
+   * Map Editor Batch A6 (general step-on trigger system): a separate,
+   * generic branch just below the currentUserIsDM gate — but NOT scoped to
+   * token.character_id like the pit/fall branch — fires ANY MapObject
+   * opted into behavior_config.triggerOnStepOn, through the exact same
+   * trigger_map_object RPC (and TRIGGER_EVENT broadcast) a click trigger
+   * uses. Unscoped from character_id specifically so NPC-controlled tokens
+   * trigger it too, unlike pit/fall resolution which genuinely needs a
+   * character (HP, saves) and stays character-only. Concealed-pit
+   * fall-through remains its own untouched, dedicated path below — pits
+   * have save-DC/damage semantics this generic system doesn't absorb.
    */
   const handleTokenLanded = useCallback(
     async (token: MapToken, fromElevationSteps: number, fromPosition: GridPoint) => {
       let finalToken = token;
+      if (currentUserIsDM) {
+        const current = liveMapRef.current;
+        const steppedOnObject = current?.objects.find(
+          (object) => object.x === token.x && object.y === token.y
+        );
+        const stepBehavior = steppedOnObject
+          ? parseMapObjectBehavior(steppedOnObject.behavior_config)
+          : null;
+        if (steppedOnObject && stepBehavior?.triggerOnStepOn) {
+          try {
+            const supabase = createBrowserSupabaseClient();
+            const next = !stepBehavior.triggered;
+            // Same persist-then-broadcast order handleTrigger's click path
+            // already uses (DB is the source of truth for rejoining
+            // clients, then already-connected clients update immediately).
+            await triggerMapObject(supabase, steppedOnObject.id, next);
+            applyTriggered(steppedOnObject.id, next);
+            await campaignChannelRef.current?.publish<TriggerPayload>(TRIGGER_EVENT, {
+              objectId: steppedOnObject.id,
+              triggered: next,
+            });
+            await createInteractionEvent(supabase, {
+              campaignId,
+              mapObjectId: steppedOnObject.id,
+              actionType: "step_on_trigger",
+              tag: steppedOnObject.tag,
+              actorUserId: currentUserId,
+            });
+          } catch (err) {
+            setTriggerError(errorMessage(err) ?? "Could not resolve that trigger.");
+          }
+        }
+      }
       if (currentUserIsDM && token.character_id) {
         try {
           const supabase = createBrowserSupabaseClient();
@@ -1994,12 +2039,14 @@ export function GameRoom({
     },
     [
       currentUserIsDM,
+      currentUserId,
       campaignId,
       combat,
       refreshCombat,
       applyTokenChange,
       publishTokenChange,
       applyCellChange,
+      applyTriggered,
       maybeOfferTransition,
     ]
   );
@@ -2426,14 +2473,25 @@ export function GameRoom({
       triggeringRef.current = true;
       setTriggerError(null);
       try {
+        const supabase = createBrowserSupabaseClient();
         const next = !behavior.triggered;
         // Persist first (DB is the source of truth for rejoining clients),
         // then broadcast so already-connected clients update immediately.
-        await triggerMapObject(createBrowserSupabaseClient(), object.id, next);
+        await triggerMapObject(supabase, object.id, next);
         applyTriggered(object.id, next);
         await campaignChannelRef.current?.publish<TriggerPayload>(TRIGGER_EVENT, {
           objectId: object.id,
           triggered: next,
+        });
+        // Map Editor Batch A6: the shared interaction-event table — the
+        // click-trigger path's own write, alongside handleTokenLanded's
+        // step-on write above.
+        await createInteractionEvent(supabase, {
+          campaignId,
+          mapObjectId: object.id,
+          actionType: "click_trigger",
+          tag: object.tag,
+          actorUserId: currentUserId,
         });
       } catch (err) {
         setTriggerError(errorMessage(err) ?? "Could not trigger that object.");
@@ -2441,7 +2499,7 @@ export function GameRoom({
         triggeringRef.current = false;
       }
     },
-    [currentUserIsDM, applyTriggered]
+    [currentUserIsDM, currentUserId, campaignId, applyTriggered]
   );
 
   const handleSelectMapObject = useCallback(
@@ -4141,7 +4199,25 @@ export function GameRoom({
             rotation: object.rotation,
             url: assetUrlById.get(object.asset_id) ?? null,
             forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
-            selectable: behavior !== null && (currentUserIsDM || behavior.playerTriggerable),
+            // An object's own invisible, cell-sized hit box (MapSurface's
+            // own "makes thin/holey props clickable" doc comment) sits ON
+            // TOP of the cell beneath it, so a click there would otherwise
+            // ALWAYS trigger the object instead of ever reaching the cell's
+            // own move/placement handler — a token could never be moved
+            // onto an interactive object's cell at all (discovered via this
+            // batch's own Pressure Plate: a token must be able to land ON
+            // it, unlike a chest a DM merely walks up to). Suppressed while
+            // a move/placement is actually in progress (armedToken) or a
+            // token is selected for the click-a-reachable-cell move gesture
+            // (selectedTokenId) — in either state a cell click always means
+            // "move/place here", never "trigger this", so the click must
+            // reach the cell, not the object sitting on it. Ordinary
+            // click-to-trigger (no move in progress) is unaffected.
+            selectable:
+              behavior !== null &&
+              (currentUserIsDM || behavior.playerTriggerable) &&
+              !armedToken &&
+              !selectedTokenId,
             ghost: hiddenNow,
             active: behavior?.action === "toggle_state" && behavior.triggered,
             dimmed: tier === "dim",
@@ -4206,7 +4282,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright
