@@ -1,15 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BoxGeometry, EdgesGeometry, MOUSE, SRGBColorSpace, TextureLoader, type Texture } from "three";
+import { BoxGeometry, DoubleSide, EdgesGeometry, MOUSE, SRGBColorSpace, TextureLoader, type Texture } from "three";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
 import {
   EDITOR_MAP_METRICS,
+  mapCellOffsets,
   MapSurface,
   type MapSurfaceCell,
   type MapSurfaceObject,
 } from "./MapSurface";
+import { resolveWallMountOffset, WALL_MOUNT_FACES, type WallMountHost } from "./wallMount";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
 // — same hex-mirroring reasoning as GameTableScene.
@@ -135,6 +137,56 @@ function RegionMarker({
   );
 }
 
+// Map Editor Batch A7 (wall-mounted torches): purely decorative — the two
+// faces are NOT their own click targets (see MapEditor.tsx's own doc
+// comment on why the actual pick happens through a DOM overlay instead of
+// 3D raycasting: ObjectMarker's own invisible, nearly-full-cell hit box
+// would otherwise contest every ray against a marker positioned at the
+// SAME cell). Sits well above ObjectMarker's own HIT_BOX_HEIGHT (0.9) so it
+// never visually clips into that hit box, though clipping wouldn't matter
+// for raycasting since this has no pointer handlers of its own at all.
+const WALL_MOUNT_MARKER_HEIGHT = 1.05;
+const WALL_MOUNT_MARKER_COLOR = "#1ec8c8"; // TEAL — this file's own hover-glow hue
+
+function WallMountFaceHighlights({
+  host,
+  gridWidth,
+  gridHeight,
+}: {
+  host: WallMountHost;
+  gridWidth: number;
+  gridHeight: number;
+}) {
+  const { offsetX, offsetZ } = mapCellOffsets(gridWidth, gridHeight, CELL_SIZE);
+  const baseX = host.x * CELL_SIZE - offsetX;
+  const baseZ = host.y * CELL_SIZE - offsetZ;
+  const topY =
+    EDITOR_MAP_METRICS.baseHeight + host.elevation * EDITOR_MAP_METRICS.elevationStepHeight + WALL_MOUNT_MARKER_HEIGHT;
+  return (
+    <>
+      {WALL_MOUNT_FACES.map((faceDeg) => {
+        const { rotationDeg, offsetX: faceX, offsetZ: faceZ } = resolveWallMountOffset(host, faceDeg);
+        return (
+          <mesh
+            key={faceDeg}
+            position={[baseX + faceX * CELL_SIZE, topY, baseZ + faceZ * CELL_SIZE]}
+            rotation={[0, (rotationDeg * Math.PI) / 180, 0]}
+          >
+            <planeGeometry args={[CELL_SIZE * 0.55, 0.3]} />
+            <meshBasicMaterial
+              color={WALL_MOUNT_MARKER_COLOR}
+              transparent
+              opacity={0.55}
+              side={DoubleSide}
+              depthWrite={false}
+            />
+          </mesh>
+        );
+      })}
+    </>
+  );
+}
+
 export interface MapEditorSceneProps {
   gridWidth: number;
   gridHeight: number;
@@ -181,10 +233,20 @@ export interface MapEditorSceneProps {
    * adds to/toggles the selection or replaces it — plain click vs shift-click
    * multi-select. */
   onSelectObject?: (id: string, event: { shiftKey: boolean }) => void;
+  /** Map Editor Batch A7: fires whenever the pointer enters/leaves a placed
+   * object's own hit box — see MapSurfaceProps.onObjectHover's doc comment. */
+  onObjectHover?: (id: string, hovering: boolean, event: ThreeEvent<PointerEvent>) => void;
   /** The DM's guide art rendered under the grid; null/absent renders none.
    * Deliberately an editor-scene prop, NOT a MapSurface one — see
    * ReferenceImagePlane. */
   referenceImage?: EditorReferenceImage | null;
+  /** Map Editor Batch A7: the wall-family object currently hovered while the
+   * Torch preset is selected in Place mode — renders two decorative
+   * highlighted faces flush to its two sides. The DM actually PICKS a face
+   * via a DOM overlay MapEditor.tsx renders itself (see that file's own doc
+   * comment on WallMountFacePicker for why), not by clicking these meshes —
+   * null/absent renders neither highlight. */
+  wallMountHover?: WallMountHost | null;
 }
 
 export function MapEditorScene({
@@ -198,18 +260,22 @@ export function MapEditorScene({
   objects,
   selectedObjectIds,
   onSelectObject,
+  onObjectHover,
   referenceImage,
+  wallMountHover,
 }: MapEditorSceneProps) {
   const onPaintCellRef = useRef(onPaintCell);
   const onStrokeEndRef = useRef(onStrokeEnd);
   const onCellClickRef = useRef(onCellClick);
   const onSelectObjectRef = useRef(onSelectObject);
+  const onObjectHoverRef = useRef(onObjectHover);
   useEffect(() => {
     onPaintCellRef.current = onPaintCell;
     onStrokeEndRef.current = onStrokeEnd;
     onCellClickRef.current = onCellClick;
     onSelectObjectRef.current = onSelectObject;
-  }, [onPaintCell, onStrokeEnd, onCellClick, onSelectObject]);
+    onObjectHoverRef.current = onObjectHover;
+  }, [onPaintCell, onStrokeEnd, onCellClick, onSelectObject, onObjectHover]);
 
   const paintingRef = useRef(false);
   // One application per cell per stroke: without this, a drag lingering on
@@ -257,6 +323,10 @@ export function MapEditorScene({
 
   const handleSelectObject = useCallback((id: string, event: ThreeEvent<PointerEvent>) => {
     onSelectObjectRef.current?.(id, { shiftKey: event.shiftKey });
+  }, []);
+
+  const handleObjectHover = useCallback((id: string, hovering: boolean, event: ThreeEvent<PointerEvent>) => {
+    onObjectHoverRef.current?.(id, hovering, event);
   }, []);
 
   const handleOver = useCallback(
@@ -329,11 +399,15 @@ export function MapEditorScene({
         objects={objects}
         selectedObjectIds={selectedObjectIds}
         onSelectObject={onSelectObject ? handleSelectObject : undefined}
+        onObjectHover={onObjectHover ? handleObjectHover : undefined}
         onCellPointerDown={handleDown}
         onCellPointerOver={handleOver}
       />
 
       {region ? <RegionMarker region={region} gridWidth={gridWidth} gridHeight={gridHeight} /> : null}
+      {wallMountHover ? (
+        <WallMountFaceHighlights host={wallMountHover} gridWidth={gridWidth} gridHeight={gridHeight} />
+      ) : null}
     </>
   );
 }

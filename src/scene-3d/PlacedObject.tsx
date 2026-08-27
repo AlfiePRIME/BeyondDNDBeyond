@@ -61,6 +61,20 @@ const WALL_FIT_TARGET_BY_URL: Record<string, number> = {
   "/assets/presets/wall-door.glb": 1,
 };
 
+/**
+ * Map Editor Batch A7 (wall-mounted torches): the SAME "which urls are the
+ * placeable wall-object family" answer WALL_FIT_TARGET_BY_URL's keys
+ * already encode, exported so callers outside this module (MapEditor.tsx's
+ * hover/mount logic) don't grow a second, separately-maintained copy of
+ * this url list that could silently drift from the fit-target table above.
+ * Only ever true for the placeable wall-object family — the separate
+ * procedural elevation-edge wall rendering has no url/asset identity at all
+ * and can never match this.
+ */
+export function isWallFamilyUrl(url: string | null): boolean {
+  return url !== null && Object.hasOwn(WALL_FIT_TARGET_BY_URL, url);
+}
+
 const PLACEHOLDER_COLOR = "#8f86ad";
 
 /** Shown while a model loads and when a load fails — a translucent crate,

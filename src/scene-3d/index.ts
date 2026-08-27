@@ -15,6 +15,16 @@ export {
   type EditorRegion,
   type EditorReferenceImage,
 } from "./MapEditorScene";
+// Map Editor Batch A7 (wall-mounted torches) — MapEditor.tsx's own
+// hover/mount-resolution logic, and GameRoom.tsx's equivalent live-scene
+// derivation, both need the same pure geometry.
+export {
+  resolveWallMountOffset,
+  WALL_MOUNT_FACES,
+  WALL_MOUNT_OFFSET,
+  type WallMountHost,
+  type WallMountFaceDeg,
+} from "./wallMount";
 export {
   MapSurface,
   type MapSurfaceProps,
@@ -30,7 +40,7 @@ export {
 } from "./MapSurface";
 export { computeTableMapMetrics } from "./mapFit";
 export { buildGridOverlayPositions } from "./gridOverlay";
-export { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
+export { PlacedObject, PLACED_OBJECT_SIZE, isWallFamilyUrl } from "./PlacedObject";
 // Avatar's own normalization target — exported for the account/campaign
 // upload flows' rotate-and-confirm preview (OrientationPreview), which must
 // normalize a candidate avatar upload at the exact scale it will actually

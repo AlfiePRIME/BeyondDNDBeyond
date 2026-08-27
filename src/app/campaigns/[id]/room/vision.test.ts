@@ -63,6 +63,8 @@ function mapObject(overrides: Partial<MapObject>): MapObject {
     tag: null,
     tint: null,
     revealed_to_players: true,
+    mount_object_id: null,
+    mount_face_deg: null,
     created_at: "2026-08-24T10:00:00.000Z",
     asset: { name: "Torch", source_type: "preset", model_ref: "torch.glb" },
     ...overrides,

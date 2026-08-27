@@ -150,6 +150,7 @@ import {
   PLAYER_CHAIR_FRONTAGE,
   resolveChairDrop,
   resolveMemberTrayLayout,
+  resolveWallMountOffset,
   TABLE_SURFACE_Y,
   type CameraMode,
   type ChairObstacle,
@@ -4736,6 +4737,12 @@ export function GameRoom({
     // masking already decided this viewer perceives.
     const withHighlight = (cell: MapSurfaceCell): MapSurfaceCell =>
       highlightedCellKeysForViewer?.has(cellKey(cell.x, cell.y)) ? { ...cell, highlighted: true } : cell;
+    // Map Editor Batch A7 (wall-mounted torches): the SAME live-host-lookup
+    // derivation MapEditor.tsx's own sceneObjects memo uses — see
+    // wallMount.ts's own doc comment for why rotation/offset are resolved
+    // fresh from the CURRENT host wall here rather than trusting anything
+    // cached on the mounted object's own row.
+    const objectsById = new Map(liveMap.objects.map((candidate) => [candidate.id, candidate]));
     return {
       id: liveMap.map.id,
       gridWidth: liveMap.map.grid_width,
@@ -4783,13 +4790,28 @@ export function GameRoom({
         if (hiddenNow && !currentUserIsDM) return [];
         const tier = tierAt(object.x, object.y);
         if (tier === "none") return [];
+        // A wall-mounted torch's own x/y already tracks its host wall (a DB
+        // trigger keeps them equal whenever the host moves — see
+        // mapObjects.ts's own doc comment on mount_object_id), so `object.x`/
+        // `object.y` above (tier lookup) and `elevation` below need no
+        // special-casing. Only the RENDERED rotation and sub-cell offset
+        // need the host's CURRENT rotation, which isn't cascaded (see
+        // wallMount.ts): looked up fresh here so a live re-rotate of the
+        // host wall keeps a mounted torch visually correct with no extra
+        // realtime plumbing of its own.
+        const mountHost = object.mount_object_id ? objectsById.get(object.mount_object_id) : undefined;
+        const mount = mountHost
+          ? resolveWallMountOffset({ rotation: mountHost.rotation }, object.mount_face_deg ?? 0)
+          : null;
         return [
           {
             id: object.id,
             x: object.x,
             y: object.y,
             elevation: (overlay.get(cellKey(object.x, object.y)) ?? DEFAULT_CELL).elevation,
-            rotation: object.rotation,
+            rotation: mount ? mount.rotationDeg : object.rotation,
+            renderOffsetX: mount?.offsetX,
+            renderOffsetZ: mount?.offsetZ,
             url: assetUrlById.get(object.asset_id) ?? null,
             forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
             tint: object.tint,

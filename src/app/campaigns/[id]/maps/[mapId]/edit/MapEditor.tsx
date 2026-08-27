@@ -47,10 +47,14 @@ import {
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
+  isWallFamilyUrl,
   MapEditorScene,
+  resolveWallMountOffset,
   type EditorReferenceImage,
   type EditorRegion,
   type MapSurfaceObject,
+  type WallMountFaceDeg,
+  type WallMountHost,
 } from "@/scene-3d";
 import { FEET_PER_ELEVATION_STEP, type TerrainType } from "@/rules-engine";
 import {
@@ -85,6 +89,7 @@ import { ObjectTintEditor } from "./ObjectTintEditor";
 import { ContainerItemsEditor } from "./ContainerItemsEditor";
 import { AssetPickerGrid } from "./AssetPickerGrid";
 import { QuickPlacePopover } from "./QuickPlacePopover";
+import { WallMountFacePicker } from "./WallMountFacePicker";
 import styles from "./editor.module.css";
 
 // Structural message read, not instanceof — see GameRoom's note on the
@@ -313,6 +318,16 @@ export function MapEditor({
     y: number;
     cellX: number;
     cellY: number;
+  } | null>(null);
+  // Map Editor Batch A7 (wall-mounted torches): the DOM face-picker's own
+  // open state — the hovered wall's id plus the screen coordinates the
+  // pointer entered it at (WallMountFacePicker's own doc comment explains
+  // why closing happens ONLY via its explicit onClose/onPick, never a raw
+  // hover-out). Null renders neither the picker nor the 3D face highlight.
+  const [wallMountPicker, setWallMountPicker] = useState<{
+    hostId: string;
+    x: number;
+    y: number;
   } | null>(null);
 
   const otherMaps = useMemo(
@@ -996,6 +1011,15 @@ export function MapEditor({
     [pressurePlateAssetId]
   );
 
+  // Map Editor Batch A7 (wall-mounted torches): the same lookup-by-name-once
+  // pattern as bridgeAssetId/pressurePlateAssetId above — resolved once so
+  // the hover/mount logic below can compare against it by id rather than by
+  // the palette's own mutable display name.
+  const torchAssetId = useMemo(
+    () => assets.find((asset) => asset.source_type === "preset" && asset.name === "Torch")?.id ?? null,
+    [assets]
+  );
+
   // Shared by handleCellClick's plain-click path AND the Ctrl+click
   // quick-place popover's onPick (Map Editor Batch A1) — the actual
   // "put this asset at this cell" logic used to live inline in
@@ -1054,6 +1078,59 @@ export function MapEditor({
     ]
   );
 
+  // Map Editor Batch A7 (wall-mounted torches): WallMountFacePicker's own
+  // onPick — places the torch flush to `host`'s chosen face (position and
+  // rotation derived from the host wall's own transform, see wallMount.ts)
+  // instead of the cell's default floor position, then auto-anchors a light
+  // to it. Deliberately NOT routed through placeAssetAtCell above: a
+  // wall-mounted torch is never placed inside an active AI-preview region
+  // (the picker only ever appears over an already-placed, already-real wall
+  // object, which can't exist inside an unaccepted draft) and always
+  // carries the two extra mount fields ordinary placement never does.
+  const placeWallMountedTorch = useCallback(
+    (hostId: string, faceDeg: WallMountFaceDeg) => {
+      if (!torchAssetId) return;
+      const host = objectsRef.current.find((object) => object.id === hostId);
+      if (!host) return;
+      const elevation = (overlayRef.current.get(cellKey(host.x, host.y)) ?? DEFAULT_CELL).elevation;
+      const rotation = (host.rotation + faceDeg + 360) % 360;
+      void runObjectMutation(async (supabase) => {
+        const created = await createMapObject(supabase, {
+          mapId: map.id,
+          assetId: torchAssetId,
+          x: host.x,
+          y: host.y,
+          elevation,
+          rotation,
+          mountObjectId: host.id,
+          mountFaceDeg: faceDeg,
+        });
+        addObjectLocal(created);
+        setSelectedObjectIds(new Set([created.id]));
+        pushHistory(makePlacementEntry(created));
+        // A separate try/catch: a light-creation failure shouldn't read as
+        // "the torch itself failed to place" (runObjectMutation's own catch
+        // would otherwise show that generic message even though the torch
+        // row above already committed). Radius/brightness match this
+        // editor's own light-source form defaults (resetLightForm) — stays
+        // OUTSIDE undo history, the same "light authoring isn't
+        // undo-tracked" precedent every other light source here follows.
+        try {
+          const light = await createLightSource(supabase, {
+            mapId: map.id,
+            radiusFeet: 20,
+            brightness: "bright",
+            anchor: { kind: "object", objectId: created.id },
+          });
+          setLightSources((prev) => [...prev, light]);
+        } catch (err) {
+          setObjectError(errorMessage(err) ?? "The torch was placed, but its light could not be created.");
+        }
+      });
+    },
+    [torchAssetId, map.id, runObjectMutation, addObjectLocal, pushHistory, makePlacementEntry]
+  );
+
   const handleCellClick = useCallback(
     (x: number, y: number, event?: ThreeEvent<PointerEvent>) => {
       if (toolRef.current !== "object") return;
@@ -1103,7 +1180,20 @@ export function MapEditor({
         const elevation = (overlayRef.current.get(cellKey(x, y)) ?? DEFAULT_CELL).elevation;
         const previous = objectsRef.current.find((object) => object.id === selectedId);
         void runObjectMutation(async (supabase) => {
-          replaceObject(await updateMapObject(supabase, selectedId, { x, y, elevation }));
+          replaceObject(
+            await updateMapObject(supabase, selectedId, {
+              x,
+              y,
+              elevation,
+              // Map Editor Batch A7: manually moving a wall-mounted object
+              // away via this Move tool is a deliberate "detach it" gesture
+              // — leaving mount_object_id set would otherwise fight the
+              // NEXT time the host wall itself moves (0065's cascade
+              // trigger would silently drag this object back to the host's
+              // cell, overwriting this manual move).
+              ...(previous?.mount_object_id ? { mount_object_id: null } : {}),
+            })
+          );
           if (previous) {
             pushHistory(
               makeObjectPatchEntry(
@@ -1935,23 +2025,97 @@ export function MapEditor({
     [assets]
   );
 
+  // Map Editor Batch A7: MapSurface's own onObjectHover (piggybacking on the
+  // object hit-box's existing pointer handlers, see that prop's own doc
+  // comment) — opens the wall-mount face picker when the DM hovers a
+  // wall-family object while the Torch preset is selected in Place mode.
+  // Deliberately fires ONLY on hover-IN: see WallMountFacePicker's own doc
+  // comment for why a raw hover-out must never close it — the picker's own
+  // explicit onClose/onPick, or simply the tool/asset preconditions no
+  // longer holding (see wallMountPickerActive below, which gates whether
+  // this latched state actually renders anything), are what make it go
+  // away.
+  const handleObjectHover = useCallback(
+    (id: string, hovering: boolean, event: ThreeEvent<PointerEvent>) => {
+      if (!hovering) return;
+      if (toolRef.current !== "object" || selectedAssetIdRef.current !== torchAssetId) return;
+      const host = objectsRef.current.find((object) => object.id === id);
+      if (!host) return;
+      if (!isWallFamilyUrl(assetUrlById.get(host.asset_id) ?? null)) return;
+      setWallMountPicker({ hostId: id, x: event.clientX, y: event.clientY });
+    },
+    [torchAssetId, assetUrlById]
+  );
+
+  // Derived, not a separate effect-cleared piece of state: `wallMountPicker`
+  // itself is just "the last wall hovered while conditions held" — whether
+  // that's still ACTIONABLE right now (and so worth rendering the picker/3D
+  // highlight for) depends on the tool/selected-asset preconditions still
+  // holding too. Switching tools or picking a different palette asset makes
+  // this null on the very next render, with no setState-in-an-effect needed
+  // to explicitly tear the latch down.
+  const wallMountPickerActive =
+    tool === "object" && selectedAssetId === torchAssetId ? wallMountPicker : null;
+
+  // The 3D face-highlight overlay reads the CURRENT host row (not a
+  // snapshot taken when the picker opened) so it stays correct if something
+  // else moves/rotates the same wall while the picker happens to be open.
+  const wallMountHoverHost = useMemo<WallMountHost | null>(() => {
+    if (!wallMountPickerActive) return null;
+    const host = objects.find((object) => object.id === wallMountPickerActive.hostId);
+    if (!host) return null;
+    return {
+      x: host.x,
+      y: host.y,
+      elevation: (overlay.get(cellKey(host.x, host.y)) ?? DEFAULT_CELL).elevation,
+      rotation: host.rotation,
+    };
+  }, [wallMountPickerActive, objects, overlay]);
+
   const sceneObjects = useMemo<MapSurfaceObject[]>(() => {
     // Rendered on the cell's live displayed surface (preview ground inside
     // an active draft, sculpted overlay elsewhere); the stored elevation is
     // the record of the surface height at place/move time.
     const surfaceElevation = (x: number, y: number) =>
       (preview?.cells.get(cellKey(x, y)) ?? overlay.get(cellKey(x, y)) ?? DEFAULT_CELL).elevation;
+    // Map Editor Batch A7: a wall-mounted object's rendered cell/rotation/
+    // sub-cell offset are resolved from its CURRENT host wall (looked up
+    // fresh on every recompute, not a value frozen at placement time) — see
+    // wallMount.ts's own doc comment for why this needs no separate cascade
+    // of its own for rotation. Falls back to the object's own plain
+    // x/y/rotation (ordinary rendering, no offset) when there's no live
+    // host — an unmounted object, or a mounted one whose host was since
+    // deleted (mapObjects.ts's own FK already nulled mount_object_id then).
+    const objectsById = new Map(objects.map((object) => [object.id, object]));
+    const resolveMount = (
+      object: MapObject
+    ): { x: number; y: number; rotation: number; renderOffsetX: number; renderOffsetZ: number } => {
+      const host = object.mount_object_id ? objectsById.get(object.mount_object_id) : undefined;
+      if (!host) {
+        return { x: object.x, y: object.y, rotation: object.rotation, renderOffsetX: 0, renderOffsetZ: 0 };
+      }
+      const { rotationDeg, offsetX, offsetZ } = resolveWallMountOffset(
+        { rotation: host.rotation },
+        object.mount_face_deg ?? 0
+      );
+      return { x: host.x, y: host.y, rotation: rotationDeg, renderOffsetX: offsetX, renderOffsetZ: offsetZ };
+    };
     return [
-      ...objects.map((object) => ({
-        id: object.id,
-        x: object.x,
-        y: object.y,
-        elevation: surfaceElevation(object.x, object.y),
-        rotation: object.rotation,
-        url: assetUrlById.get(object.asset_id) ?? null,
-        forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
-        tint: object.tint,
-      })),
+      ...objects.map((object) => {
+        const mount = resolveMount(object);
+        return {
+          id: object.id,
+          x: mount.x,
+          y: mount.y,
+          elevation: surfaceElevation(mount.x, mount.y),
+          rotation: mount.rotation,
+          renderOffsetX: mount.renderOffsetX,
+          renderOffsetZ: mount.renderOffsetZ,
+          url: assetUrlById.get(object.asset_id) ?? null,
+          forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
+          tint: object.tint,
+        };
+      }),
       ...(preview?.objects.map((object) => ({
         id: object.id,
         x: object.x,
@@ -2238,7 +2402,9 @@ export function MapEditor({
           objects={sceneObjects}
           selectedObjectIds={selectedObjectIds}
           onSelectObject={tool === "object" ? handleSelectObject : undefined}
+          onObjectHover={tool === "object" ? handleObjectHover : undefined}
           referenceImage={referenceImage}
+          wallMountHover={wallMountHoverHost}
         />
       </Canvas>
 
@@ -3504,6 +3670,21 @@ export function MapEditor({
             setQuickPlacePopover(null);
           }}
           onClose={() => setQuickPlacePopover(null)}
+        />
+      ) : null}
+
+      {/* Map Editor Batch A7: the wall-mount face picker — opens on hover
+          (handleObjectHover), not click, so it's a sibling here rather than
+          nested in the toolbar for the same "positioned at a scene point,
+          not a panel" reason quick-place is. */}
+      {wallMountPickerActive ? (
+        <WallMountFacePicker
+          position={{ x: wallMountPickerActive.x, y: wallMountPickerActive.y }}
+          onPick={(faceDeg) => {
+            placeWallMountedTorch(wallMountPickerActive.hostId, faceDeg);
+            setWallMountPicker(null);
+          }}
+          onClose={() => setWallMountPicker(null)}
         />
       ) : null}
     </div>

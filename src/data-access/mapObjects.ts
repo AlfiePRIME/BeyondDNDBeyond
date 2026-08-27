@@ -95,6 +95,24 @@ export interface MapObject {
    * (like `tag`), never at creation — the editor's color picker only shows
    * once an object is already selected. */
   tint: string | null;
+  /** Map Editor Batch A7: the host wall-family object (see PlacedObject.tsx's
+   * WALL_FIT_TARGET_BY_URL — a real placed MapObject, never the separate
+   * procedural elevation-edge wall rendering) this object is mounted to, or
+   * null for an ordinary object sitting at its cell's default floor
+   * position. A self-reference, `on delete set null` — deleting the host
+   * un-mounts anything mounted to it rather than deleting it too. This
+   * row's OWN x/y/elevation are kept equal to the host's by a DB trigger
+   * (0065's map_objects_cascade_wall_mount) whenever the host moves, so
+   * every existing position reader (light-source anchor resolution,
+   * click-to-select-by-cell) stays correct with zero mount-awareness of its
+   * own; only the RENDERED rotation and sub-cell offset need mount-specific
+   * resolution (src/scene-3d/wallMount.ts), computed fresh from the host's
+   * CURRENT rotation plus `mount_face_deg` at render time. */
+  mount_object_id: string | null;
+  /** See `mount_object_id`'s doc comment and wallMount.ts's WALL_MOUNT_FACES
+   * — degrees ADDED TO the host wall's own `rotation`, not an absolute
+   * world angle. null unless `mount_object_id` is set. */
+  mount_face_deg: number | null;
   created_at: string;
   asset: PlacedObjectAsset;
 }
@@ -197,6 +215,12 @@ export async function createMapObject(
      * DM-placed object starts hidden from players until explicitly
      * revealed. See MapObject.revealed_to_players' own doc comment. */
     revealedToPlayers?: boolean;
+    /** Map Editor Batch A7: set together, only by MapEditor.tsx's
+     * placeWallMountedTorch — every other caller omits both (the DB default,
+     * null/null, an ordinary object). See MapObject.mount_object_id's own
+     * doc comment. */
+    mountObjectId?: string | null;
+    mountFaceDeg?: number | null;
   }
 ): Promise<MapObject> {
   const { data, error } = await supabase
@@ -213,6 +237,8 @@ export async function createMapObject(
       ...(params.revealedToPlayers !== undefined
         ? { revealed_to_players: params.revealedToPlayers }
         : {}),
+      ...(params.mountObjectId !== undefined ? { mount_object_id: params.mountObjectId } : {}),
+      ...(params.mountFaceDeg !== undefined ? { mount_face_deg: params.mountFaceDeg } : {}),
     })
     .select(OBJECT_COLUMNS)
     .single();
@@ -248,6 +274,8 @@ export async function restoreMapObject(
       tag: object.tag,
       tint: object.tint,
       revealed_to_players: object.revealed_to_players,
+      mount_object_id: object.mount_object_id,
+      mount_face_deg: object.mount_face_deg,
       created_at: object.created_at,
     })
     .select(OBJECT_COLUMNS)
@@ -279,6 +307,16 @@ export async function updateMapObject(
      * comment. Nothing in this app ever flips it back to false today (no
      * "hide again" affordance was asked for). */
     revealed_to_players?: boolean;
+    /** Map Editor Batch A7: MapEditor.tsx's own move-object flow passes
+     * `null` here whenever the object being moved was wall-mounted — moving
+     * a mounted object away via the ordinary Move tool is a deliberate
+     * "detach it" gesture (leaving mount_object_id set would otherwise
+     * fight the next time the host wall itself moves, since 0065's cascade
+     * trigger would silently drag this object back to the host's cell,
+     * overwriting the DM's manual move). No caller ever sets it to a real
+     * id here — mounting only ever happens once, at creation
+     * (createMapObject's own mountObjectId param). */
+    mount_object_id?: string | null;
   }
 ): Promise<MapObject> {
   const { data, error } = await supabase
