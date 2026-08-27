@@ -1,7 +1,13 @@
 "use client";
 
-import { Badge, Button } from "@/ui-components";
+import { Badge, Button, TextInput } from "@/ui-components";
 import type { CampaignMap, MapObject, MapObjectBehavior } from "@/data-access";
+import {
+  MAX_WHITEBOARD_HEIGHT,
+  MIN_WHITEBOARD_HEIGHT,
+  WHITEBOARD_HEIGHT_STEP,
+  type WhiteboardTool,
+} from "@/scene-3d";
 import styles from "./room.module.css";
 
 function stateBadge(behavior: MapObjectBehavior): { text: string; on: boolean } {
@@ -63,6 +69,19 @@ export function MapPanel({
   entries,
   onTrigger,
   triggerError,
+  whiteboardDrawMode,
+  onToggleWhiteboardDrawMode,
+  whiteboardTool,
+  onSetWhiteboardTool,
+  whiteboardColor,
+  onSetWhiteboardColor,
+  whiteboardHeight,
+  onSetWhiteboardHeight,
+  whiteboardCanUndo,
+  whiteboardCanRedo,
+  onWhiteboardUndo,
+  onWhiteboardRedo,
+  onWhiteboardClear,
 }: {
   isDM: boolean;
   maps: CampaignMap[];
@@ -86,6 +105,23 @@ export function MapPanel({
   entries: InteractiveEntry[];
   onTrigger: (object: MapObject) => void;
   triggerError: string | null;
+  /** Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md,
+   * Prompt 2) — DM-only, matching every other DM-only control already in
+   * this panel. Purely local UI state one level up (GameRoom.tsx); this
+   * component only renders it. */
+  whiteboardDrawMode: boolean;
+  onToggleWhiteboardDrawMode: () => void;
+  whiteboardTool: WhiteboardTool;
+  onSetWhiteboardTool: (tool: WhiteboardTool) => void;
+  whiteboardColor: string;
+  onSetWhiteboardColor: (color: string) => void;
+  whiteboardHeight: number;
+  onSetWhiteboardHeight: (height: number) => void;
+  whiteboardCanUndo: boolean;
+  whiteboardCanRedo: boolean;
+  onWhiteboardUndo: () => void;
+  onWhiteboardRedo: () => void;
+  onWhiteboardClear: () => void;
 }) {
   return (
     <aside className={styles.sidePanel} data-testid="map-panel">
@@ -93,6 +129,102 @@ export function MapPanel({
       <span className={styles.mapName} data-testid="live-map-name">
         {liveMapName ?? "No live map"}
       </span>
+
+      {/* Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md,
+          Prompt 2) — the map-viewer/switcher UI glyph the owner's decision
+          names, placed near this "You're viewing" header per §7.2. DM-only
+          (matching every other DM control here) and gated on there being a
+          live map at all — drawing on nothing has no meaning, and
+          GameTableScene never mounts the plane without one either. The
+          `🖊 Draw`/`🖊 Drawing` glyph-plus-label shape mirrors DmBook.tsx's
+          own ☀️ Day / 🌙 Night toggle and DraggablePanel.tsx's ▸/▾ collapse
+          button — both established "small glyph button flips a mode"
+          precedents already in this exact part of the app. */}
+      {isDM && liveMapId ? (
+        <div className={styles.mapPicker} data-testid="whiteboard-toolbar">
+          <div className={styles.objectHeader}>
+            <span className={styles.panelLabel}>Whiteboard</span>
+            <Button
+              size="sm"
+              variant={whiteboardDrawMode ? "teal" : "ghost"}
+              aria-pressed={whiteboardDrawMode}
+              aria-label={whiteboardDrawMode ? "Stop drawing on the whiteboard" : "Draw on the whiteboard"}
+              onClick={onToggleWhiteboardDrawMode}
+              data-testid="whiteboard-draw-toggle"
+            >
+              🖊 {whiteboardDrawMode ? "Drawing" : "Draw"}
+            </Button>
+          </div>
+          {whiteboardDrawMode ? (
+            <>
+              <div className={styles.modeToggle} role="group" aria-label="Whiteboard tool">
+                <button
+                  type="button"
+                  className={[styles.modeButton, whiteboardTool === "pen" ? styles.modeButtonActive : ""]
+                    .filter(Boolean)
+                    .join(" ")}
+                  aria-pressed={whiteboardTool === "pen"}
+                  onClick={() => onSetWhiteboardTool("pen")}
+                  data-testid="whiteboard-tool-pen"
+                >
+                  ✏️ Pen
+                </button>
+                <button
+                  type="button"
+                  className={[styles.modeButton, whiteboardTool === "eraser" ? styles.modeButtonActive : ""]
+                    .filter(Boolean)
+                    .join(" ")}
+                  aria-pressed={whiteboardTool === "eraser"}
+                  onClick={() => onSetWhiteboardTool("eraser")}
+                  data-testid="whiteboard-tool-eraser"
+                >
+                  🧹 Eraser
+                </button>
+              </div>
+              <TextInput
+                type="color"
+                label="Ink color"
+                value={whiteboardColor}
+                onChange={(event) => onSetWhiteboardColor(event.target.value)}
+                data-testid="whiteboard-color-picker"
+              />
+              <TextInput
+                type="range"
+                label={`Height: ${whiteboardHeight.toFixed(1)}`}
+                min={MIN_WHITEBOARD_HEIGHT}
+                max={MAX_WHITEBOARD_HEIGHT}
+                step={WHITEBOARD_HEIGHT_STEP}
+                value={whiteboardHeight}
+                onChange={(event) => onSetWhiteboardHeight(Number(event.target.value))}
+                data-testid="whiteboard-height-slider"
+              />
+              <div className={styles.objectHeader}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!whiteboardCanUndo}
+                  onClick={onWhiteboardUndo}
+                  data-testid="whiteboard-undo"
+                >
+                  Undo
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!whiteboardCanRedo}
+                  onClick={onWhiteboardRedo}
+                  data-testid="whiteboard-redo"
+                >
+                  Redo
+                </Button>
+                <Button size="sm" variant="danger" onClick={onWhiteboardClear} data-testid="whiteboard-clear">
+                  Clear
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
 
       {isDM ? (
         <div className={styles.mapPicker} data-testid="live-map-picker">

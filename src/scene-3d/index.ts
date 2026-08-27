@@ -107,3 +107,25 @@ export {
 // GameRoom.tsx mirrors the same call for its own DM-seat-relative prop
 // positions.
 export { TABLE_SURFACE_Y, COMBINED_TABLE_TOP } from "./table";
+// Whiteboard drawing layer (Prompt 2 of
+// docs/design/whiteboard-drawing-layer.md) — rendering/toolset/draw-mode
+// interaction, entirely local-state; persistence and cross-client sync are a
+// later prompt. WhiteboardPlane is wired into GameTableScene.tsx as a
+// sibling of MapSurface; the height/color defaults and tool type are public
+// so GameRoom.tsx (the toolbar's actual owner) and MapPanel.tsx (the toggle/
+// toolbar UI) can share them without redeclaring.
+export {
+  WhiteboardPlane,
+  type WhiteboardPlaneProps,
+  type WhiteboardHandle,
+  type WhiteboardTool,
+  type WhiteboardHistoryState,
+  type WhiteboardDebugState,
+} from "./WhiteboardPlane";
+export {
+  DEFAULT_WHITEBOARD_HEIGHT,
+  MIN_WHITEBOARD_HEIGHT,
+  MAX_WHITEBOARD_HEIGHT,
+  WHITEBOARD_HEIGHT_STEP,
+  DEFAULT_WHITEBOARD_COLOR,
+} from "./whiteboardMath";

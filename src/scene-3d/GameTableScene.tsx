@@ -30,6 +30,14 @@ import {
 } from "./MapSurface";
 import { computeTableMapMetrics } from "./mapFit";
 import type { TokenSlidePhase } from "./useTokenSlide";
+import {
+  WhiteboardPlane,
+  type WhiteboardDebugState,
+  type WhiteboardHandle,
+  type WhiteboardHistoryState,
+  type WhiteboardTool,
+} from "./WhiteboardPlane";
+import { DEFAULT_WHITEBOARD_COLOR, DEFAULT_WHITEBOARD_HEIGHT } from "./whiteboardMath";
 
 // Room ambiance pulls from the app's design tokens (see
 // src/ui-components/tokens.css) — scene-3d can't import CSS custom
@@ -600,6 +608,11 @@ const TableSeat = memo(function TableSeat({
 /** The currently-live map, already resolved to renderable form by the app
  * layer (dense cells, viewer-appropriate object flags, loadable URLs). */
 export interface TableLiveMap {
+  /** The map's own row id — used only to key the whiteboard drawing layer's
+   * per-map in-memory cache (WhiteboardPlane.tsx), so switching which map is
+   * live never shows one map's ink over another's. Nothing else here reads
+   * it; every other field is unchanged from before the whiteboard feature. */
+  id: string;
   gridWidth: number;
   gridHeight: number;
   cells: readonly MapSurfaceCell[];
@@ -752,6 +765,38 @@ export interface GameTableSceneProps {
    * by GameTableScene itself; changes nothing about how anything renders or
    * rotates. */
   onLookAroundDebug?: (state: { yaw: number; pitch: number }) => void;
+  /** Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md,
+   * Prompt 2): true only for the DM's own client while draw mode is toggled
+   * on in MapPanel.tsx — gates ONLY WhiteboardPlane's own invisible hit-plane
+   * (the always-mounted VISIBLE plane renders for every viewer regardless,
+   * so players see the DM's ink with no separate toggle of their own). */
+  whiteboardInteractive?: boolean;
+  /** DM-adjustable Y offset (world units) above the tabletop the whiteboard
+   * plane floats at — a plain numeric slider in MapPanel.tsx, not a 3D drag
+   * handle (docs/design/whiteboard-drawing-layer.md §6: no TransformControls
+   * precedent exists anywhere in this codebase). */
+  whiteboardHeight?: number;
+  whiteboardTool?: WhiteboardTool;
+  whiteboardColor?: string;
+  /** Real (not verification-only) callback: mirrors the active map's own
+   * whiteboard undo/redo stack sizes up to MapPanel.tsx's toolbar so it can
+   * enable/disable its Undo/Redo buttons. */
+  onWhiteboardHistoryChange?: (state: WhiteboardHistoryState) => void;
+  /** Verification-only pass-through to WhiteboardPlane's own onDebug — see
+   * its doc comment (the onTokenSlideDebug "WebGL has no DOM of its own"
+   * precedent). Omitting it changes nothing about how anything renders or
+   * draws. */
+  onWhiteboardDebug?: (state: WhiteboardDebugState) => void;
+  /** Verification-only pass-through to WhiteboardPlane's own
+   * onCenterProjectedPosition — see its doc comment. */
+  onWhiteboardCenterProjectedPosition?: (point: [number, number] | null) => void;
+  /** Registers (or clears, on unmount) this client's whiteboard imperative
+   * handle — undo()/redo()/clear() — the registerDiceTumbleRef precedent,
+   * simplified to a single instance since only one whiteboard is ever
+   * mounted at a time (one per live map, not one per member). Passed
+   * straight through as WhiteboardPlane's own `ref` — a plain callback prop
+   * is already exactly the shape a React ref callback needs. */
+  onWhiteboardHandleReady?: (handle: WhiteboardHandle | null) => void;
 }
 
 // Stable empty-Map default for GameTableSceneProps.seatOffsets — a fresh
@@ -811,6 +856,14 @@ export function GameTableScene({
   turnCameraActive = false,
   onLiveChairOffset,
   onLookAroundDebug,
+  whiteboardInteractive = false,
+  whiteboardHeight = DEFAULT_WHITEBOARD_HEIGHT,
+  whiteboardTool = "pen",
+  whiteboardColor = DEFAULT_WHITEBOARD_COLOR,
+  onWhiteboardHistoryChange,
+  onWhiteboardDebug,
+  onWhiteboardCenterProjectedPosition,
+  onWhiteboardHandleReady,
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
   const { camera, gl, size } = useThree();
@@ -1271,6 +1324,19 @@ export function GameTableScene({
   // its own boolean so its drag-over reaches its own callback.
   const [measuring, setMeasuring] = useState(false);
 
+  // Whiteboard drawing layer: mirrors WhiteboardPlane's own in-progress-
+  // stroke state (its `isDrawing`), purely so OrbitControls can be disabled
+  // for the same reason `measuring`/`isDraggingChair` already disable it
+  // below — OrbitControls binds its own native pointer listeners on the
+  // canvas DOM element, independent of r3f's synthetic per-mesh event
+  // dispatch, so a `stopPropagation()` on the whiteboard hit-plane's own
+  // pointerdown does NOT by itself stop OrbitControls from ALSO treating the
+  // same drag as a camera orbit while free-camera mode is active. Purely
+  // internal wiring — WhiteboardPlane already exposes this via its own
+  // onDrawingChange prop (the onChairDraggingChange precedent), so no new
+  // prop needs to reach GameRoom.tsx for it.
+  const [isWhiteboardDrawing, setIsWhiteboardDrawing] = useState(false);
+
   const handleRulerPointerDown = useCallback(
     (x: number, y: number, event: ThreeEvent<PointerEvent>) => {
       if (event.button !== 0) return;
@@ -1317,7 +1383,7 @@ export function GameTableScene({
         // no such guard: it's a single press, not a held-down drag, so
         // there's never a moment where the camera would fight it.
         <OrbitControls
-          enabled={!measuring && !isDraggingChair}
+          enabled={!measuring && !isDraggingChair && !isWhiteboardDrawing}
           target={[...LOOK_TARGET]}
           minDistance={1.5}
           // Re-tuned up from 22 (unchanged ratio over the old table's
@@ -1375,44 +1441,72 @@ export function GameTableScene({
       ))}
 
       {liveMap && mapMetrics ? (
-        // Nudged just above the tabletop so the map's base slab never
-        // z-fights the wood. x/z stay at the world origin — the seam
-        // between the two tables (CombinedTable's own doc comment) — on
-        // the project owner's explicit call to keep the live map's existing
-        // single-table-sized fit (mapFit.ts's computeTableMapMetrics,
-        // completely unchanged) centered on that seam, straddling both
-        // tables equally, rather than pushed flush against either one.
-        <group position={[0, TABLE_SURFACE_Y + 0.002, 0]}>
-          <MapSurface
-            gridWidth={liveMap.gridWidth}
-            gridHeight={liveMap.gridHeight}
-            cells={liveMap.cells}
-            metrics={mapMetrics}
-            objects={liveMap.objects}
-            tokens={liveMap.tokens}
-            gridOverlay
-            // Ruler mode owns the pointer outright: a cell press measures
-            // instead of placing/moving/selecting, POI objects go inert
-            // (their hit boxes would otherwise swallow the press), and
-            // tokens lose their click hit boxes — so a press anywhere on
-            // the map falls through to the cell beneath it.
-            onSelectObject={rulerActive ? undefined : onSelectMapObject}
-            onCellPointerDown={
-              rulerActive
-                ? handleRulerPointerDown
-                : onCellClick
-                  ? handleCellPointerDown
-                  : undefined
-            }
-            onCellPointerOver={measuring ? handleRulerDragOver : undefined}
-            onTokenPointerDown={
-              !rulerActive && onTokenClick ? handleTokenPointerDown : undefined
-            }
-            onTokenSlideDebug={onTokenSlideDebug}
-            onObjectPoseDebug={onObjectPoseDebug}
-            onObjectMeasureDebug={onObjectMeasureDebug}
-          />
-        </group>
+        <>
+          {/* Nudged just above the tabletop so the map's base slab never
+              z-fights the wood. x/z stay at the world origin — the seam
+              between the two tables (CombinedTable's own doc comment) — on
+              the project owner's explicit call to keep the live map's existing
+              single-table-sized fit (mapFit.ts's computeTableMapMetrics,
+              completely unchanged) centered on that seam, straddling both
+              tables equally, rather than pushed flush against either one. */}
+          <group position={[0, TABLE_SURFACE_Y + 0.002, 0]}>
+            <MapSurface
+              gridWidth={liveMap.gridWidth}
+              gridHeight={liveMap.gridHeight}
+              cells={liveMap.cells}
+              metrics={mapMetrics}
+              objects={liveMap.objects}
+              tokens={liveMap.tokens}
+              gridOverlay
+              // Ruler mode owns the pointer outright: a cell press measures
+              // instead of placing/moving/selecting, POI objects go inert
+              // (their hit boxes would otherwise swallow the press), and
+              // tokens lose their click hit boxes — so a press anywhere on
+              // the map falls through to the cell beneath it.
+              onSelectObject={rulerActive ? undefined : onSelectMapObject}
+              onCellPointerDown={
+                rulerActive
+                  ? handleRulerPointerDown
+                  : onCellClick
+                    ? handleCellPointerDown
+                    : undefined
+              }
+              onCellPointerOver={measuring ? handleRulerDragOver : undefined}
+              onTokenPointerDown={
+                !rulerActive && onTokenClick ? handleTokenPointerDown : undefined
+              }
+              onTokenSlideDebug={onTokenSlideDebug}
+              onObjectPoseDebug={onObjectPoseDebug}
+              onObjectMeasureDebug={onObjectMeasureDebug}
+            />
+          </group>
+          {/* Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md,
+              Prompt 2) — a SEPARATE group at its own DM-adjustable height,
+              same x/z centering as the map's own group above (both sit at
+              local x=0/z=0, so WhiteboardPlane's world→pixel math lines up
+              with MapSurface's cells without any extra offset math). Always
+              rendered whenever a live map is showing — the always-mounted
+              visible plane costs nothing when blank and is what lets
+              players see the DM's ink with no toggle of their own; only the
+              invisible hit-plane is gated on whiteboardInteractive. */}
+          <group position={[0, TABLE_SURFACE_Y + whiteboardHeight, 0]}>
+            <WhiteboardPlane
+              ref={onWhiteboardHandleReady}
+              mapId={liveMap.id}
+              gridWidth={liveMap.gridWidth}
+              gridHeight={liveMap.gridHeight}
+              cellSize={mapMetrics.cellSize}
+              worldY={TABLE_SURFACE_Y + whiteboardHeight}
+              interactive={whiteboardInteractive}
+              tool={whiteboardTool}
+              color={whiteboardColor}
+              onDrawingChange={setIsWhiteboardDrawing}
+              onHistoryChange={onWhiteboardHistoryChange}
+              onDebug={onWhiteboardDebug}
+              onCenterProjectedPosition={onWhiteboardCenterProjectedPosition}
+            />
+          </group>
+        </>
       ) : null}
 
       {seats.map((seat) => (
