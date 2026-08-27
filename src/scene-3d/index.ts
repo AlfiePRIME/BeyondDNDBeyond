@@ -10,6 +10,10 @@ export {
   type WeatherKind,
   resolveSceneFog,
 } from "./GameTableScene";
+// Weather & Enemies C4: verification-only debug payload for GameTableScene's
+// onWeatherParticlesDebug pass-through — see WeatherParticles.tsx's own doc
+// comment.
+export { type WeatherParticlesDebugState } from "./WeatherParticles";
 export { type TokenSlidePhase } from "./useTokenSlide";
 export {
   MapEditorScene,

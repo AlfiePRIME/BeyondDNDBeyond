@@ -14,6 +14,7 @@ import {
   applyHpDelta,
   applyNpcHpDelta,
   applyResourceDelta,
+  applyWeatherTick,
   claimContainerItem,
   clearHiddenAsHider,
   createHandout,
@@ -175,6 +176,7 @@ import {
   type SeatOffset,
   type TableLiveMap,
   type TokenSlidePhase,
+  type WeatherParticlesDebugState,
   type WhiteboardBrushSize,
   type WhiteboardGridPoint,
   type WhiteboardHandle,
@@ -333,6 +335,18 @@ const WHITEBOARD_STROKE_FLUSH_MS = 40;
 // (a perceived cell must land in map_seen_cells before the player relies
 // on remembering it, not instantly).
 const SEEN_CELLS_FLUSH_MS = 1500;
+
+// Weather & Enemies C4: how often the DM's own connected client attempts a
+// firestorm/acid-storm damage tick (see the weatherTickActive effect below,
+// and apply_weather_tick's own migration comment — 0071 — for how the
+// ACTUAL dedup/timing authority lives server-side, not in this interval).
+// No existing precedent in this codebase dictates the cadence itself (the
+// prompt's own framing); 30 seconds is a judgment call: frequent enough
+// that a raging fantasy storm feels like an escalating, real danger within
+// a single scene rather than background noise, while still leaving a DM
+// room to narrate between ticks and players a real chance to react (e.g.
+// retreat off the map) before the next one lands.
+const WEATHER_TICK_INTERVAL_MS = 30_000;
 
 // Prompt: doubling the table along its long edge (table.ts's
 // COMBINED_TABLE_TOP/TABLE_UNITS_LONG_EDGE) made seating.ts's ellipse fit
@@ -1872,6 +1886,11 @@ export function GameRoom({
   const handleDropletsStatusChange = useCallback((status: { ready: boolean }) => {
     setDropletsReady(status.ready);
   }, []);
+  // Verification-only mirror of GameTableScene's own onWeatherParticlesDebug
+  // (Weather & Enemies C4) — see WeatherParticles.tsx's own doc comment on
+  // why this exists. Purely informational; nothing here reads it back to
+  // decide anything.
+  const [weatherParticlesDebug, setWeatherParticlesDebug] = useState<WeatherParticlesDebugState | null>(null);
   // Chat & Summary B6: pause/resume, live-synced below via the same
   // campaigns postgres_changes feed as economyStrict/dayNightMode.
   // sessionPaused (derived, not its own state) is the "stopped for a break,
@@ -4351,6 +4370,60 @@ export function GameRoom({
     [campaignId, weatherBusy]
   );
 
+  // Weather & Enemies C4: the periodic firestorm/acid-storm damage timer.
+  // Gated on currentUserIsDM exactly like handleTokenLanded's pit-fall/
+  // step-on-trigger resolution above — the SAME "whichever DM client is
+  // currently connected is the authority" model already established there,
+  // not a new invention. Only the DM's own client ever runs this interval;
+  // a player's client never calls applyWeatherTick at all, and never needs
+  // to — every client (DM included) already renders the SAME weatherKind/
+  // weatherMechanical this effect keys off, live via subscribeToCampaignChanges
+  // above, so the "why is my HP changing" badge below works identically for
+  // everyone regardless of who happens to be running the timer.
+  //
+  // Correctness against double-firing/leaking past the weather ending lives
+  // almost entirely in apply_weather_tick itself (see migration 0071's own
+  // comment for the full design) — this effect just calls it every
+  // WEATHER_TICK_INTERVAL_MS while weatherTickActive is true, and NEVER
+  // consults the RPC's own return value to decide whether to keep going
+  // (only whether to poke the room). That keeps a reload, a second DM tab,
+  // or the weather changing out from under an already-queued call all safe
+  // without this effect needing to know any of that itself: a tick that
+  // resolves to zero characters (nothing currently on the live map, or the
+  // RPC decided it genuinely wasn't due yet) is a normal, silent no-op —
+  // only a NON-empty result represents real damage worth refreshing/poking
+  // the room for.
+  const weatherTickActive =
+    currentUserIsDM && weatherMechanical && (weatherKind === "firestorm" || weatherKind === "acid_storm");
+  useEffect(() => {
+    if (!weatherTickActive) return;
+    let cancelled = false;
+    const supabase = createBrowserSupabaseClient();
+    const tick = async () => {
+      try {
+        const damaged = await applyWeatherTick(supabase, campaignId);
+        if (cancelled || damaged.length === 0) return;
+        // The exact refresh + COMBAT_EVENT poke handleTokenLanded's own
+        // fall-damage branch already uses — apply_hp_delta's writes reach
+        // no postgres_changes feed of their own, so every OTHER connected
+        // client only learns its characters' new HP this way.
+        await refreshCombat(supabase);
+        await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+      } catch {
+        // A transient network/RLS error shouldn't permanently kill the
+        // timer — the next tick just tries again. weatherError is reserved
+        // for direct DM-initiated weather CHANGES (handleSetWeather above),
+        // not this background timer, so nothing here needs its own
+        // user-visible error surface.
+      }
+    };
+    const id = setInterval(() => void tick(), WEATHER_TICK_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [weatherTickActive, campaignId, refreshCombat]);
+
   // The d20 is rolled by the roll Route Handler (server-side randomness,
   // same as initiative), which applies the outcome via apply_death_save_roll
   // and logs it; this client then does the usual refresh + combat-changed
@@ -5553,6 +5626,7 @@ export function GameRoom({
           onRulerDragEnd={handleRulerDragEnd}
           dayNightMode={dayNightMode}
           weatherKind={weatherKind}
+          onWeatherParticlesDebug={setWeatherParticlesDebug}
           onTokenSlideDebug={handleTokenSlideDebug}
           onAvatarPoseDebug={handleAvatarPoseDebug}
           onAvatarMeasureDebug={handleAvatarMeasureDebug}
@@ -5657,6 +5731,7 @@ export function GameRoom({
               dayNightError={dayNightError}
               onToggleDayNight={() => void handleToggleDayNight()}
               weatherKind={weatherKind}
+              weatherMechanical={weatherMechanical}
               weatherBusy={weatherBusy}
               weatherError={weatherError}
               onSetWeather={(kind, mechanical) => void handleSetWeather(kind, mechanical)}
@@ -5772,6 +5847,18 @@ export function GameRoom({
           to show, which should track weatherKind === 'rain' exactly. */}
       <div data-testid="droplets-state" hidden>
         {JSON.stringify({ mounted: dropletsMounted, ready: dropletsReady, active: weatherKind === "rain" })}
+      </div>
+      {/* Hidden render-state mirror for a real Playwright verification of
+          Weather & Enemies C4's particle overlay — WeatherParticles'
+          own onDebug (threaded through GameTableScene's
+          onWeatherParticlesDebug), mirrored here for the same "WebGL has no
+          DOM of its own" reasoning as every other mirror on this page. null
+          while weatherKind is neither 'firestorm' nor 'acid_storm'; a real,
+          non-zero particleCount plus the matching `kind` otherwise —
+          confirms a real, kind-DISTINCT particle system is mounted without
+          pixel-diffing a screenshot. */}
+      <div data-testid="weather-particles-state" hidden>
+        {JSON.stringify(weatherParticlesDebug)}
       </div>
       {/* Hidden render-state mirror for verify-per-viewer-map.mjs (0046):
           no DOM otherwise exposes campaignDefaultMapId/dmSelectedMapId/
@@ -6084,6 +6171,22 @@ export function GameRoom({
           {sessionPaused ? (
             <Badge tone="orange" pulse data-testid="session-paused-badge">
               Session paused
+            </Badge>
+          ) : null}
+          {/* Weather & Enemies C4: the "why is my HP changing" indicator —
+              visible to every member (not DM-gated), the same
+              session-paused-badge posture above, since weatherKind/
+              weatherMechanical are already live-synced to everyone via
+              subscribeToCampaignChanges regardless of who's actually
+              running the timer (only the DM's own client does, see
+              weatherTickActive above). */}
+          {weatherMechanical && (weatherKind === "firestorm" || weatherKind === "acid_storm") ? (
+            <Badge
+              tone={weatherKind === "firestorm" ? "orange" : "teal"}
+              pulse
+              data-testid="weather-mechanical-badge"
+            >
+              {weatherKind === "firestorm" ? "🔥 Firestorm dealing damage" : "☠️ Acid storm dealing damage"}
             </Badge>
           ) : null}
           {currentUserIsDM ? (
