@@ -266,12 +266,17 @@ export {
 export {
   listMonsterStatBlocks,
   createMonsterStatBlock,
+  createMonsterStatBlockFromTemplate,
   updateMonsterStatBlock,
   deleteMonsterStatBlock,
   type MonsterAttack,
   type MonsterStatBlock,
   type UpdateMonsterStatBlockPatch,
 } from "./monsterStatBlocks";
+export {
+  listMonsterTemplates,
+  type MonsterTemplate,
+} from "./monsterTemplates";
 export {
   createOpportunityAttacks,
   listOpportunityAttacks,

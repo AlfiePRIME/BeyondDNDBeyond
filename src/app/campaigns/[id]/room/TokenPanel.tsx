@@ -9,11 +9,17 @@ import styles from "./room.module.css";
  * passes it to the scene as the signal to turn on cell raycasting.
  * "place-monster" is the Prompt 61 quick-add: an NPC placement whose token
  * links the stat block (npcName carries the block's name, keeping every
- * npc_name display path unchanged), armed from the MonsterPanel. */
+ * npc_name display path unchanged), armed from the MonsterPanel.
+ * `allegiance` (Weather & Enemies C5) carries the stat block's own
+ * `default_allegiance` at arm time — 'hostile' for every hand-authored
+ * block (unchanged from before this field existed), or whatever a copied
+ * monster_templates row's default_allegiance was (e.g. 'neutral' for a
+ * Trader/Guard/High Guard) — so handleCellClick can hand it to
+ * placeNpcToken instead of that call's own hardcoded 'hostile'. */
 export type TokenArm =
   | { kind: "place-character"; characterId: string; label: string }
   | { kind: "place-npc"; npcName: string }
-  | { kind: "place-monster"; statBlockId: string; npcName: string }
+  | { kind: "place-monster"; statBlockId: string; npcName: string; allegiance: TokenAllegiance }
   | { kind: "move"; tokenId: string; label: string };
 
 const ALLEGIANCE_TONE: Record<TokenAllegiance, BadgeTone> = {

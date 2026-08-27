@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Badge, Button } from "@/ui-components";
-import type { MonsterAttack, MonsterStatBlock, Npc } from "@/data-access";
+import { Badge, Button, type BadgeTone } from "@/ui-components";
+import type { MonsterAttack, MonsterStatBlock, MonsterTemplate, Npc, TokenAllegiance } from "@/data-access";
 import styles from "./room.module.css";
 
 /** One attack row's form drafts — parsed/validated only on save. */
@@ -13,6 +13,21 @@ interface AttackDraft {
 }
 
 const EMPTY_ATTACK: AttackDraft = { name: "", bonus: "", damageNotation: "" };
+
+/** TokenPanel's own ALLEGIANCE_TONE mapping, duplicated here rather than
+ * shared — both are small, page-local presentational lookups, not a
+ * data-access concern worth a shared module for three entries. */
+const ALLEGIANCE_TONE: Record<TokenAllegiance, BadgeTone> = {
+  party: "teal",
+  hostile: "red",
+  neutral: "orange",
+};
+
+function formatAttackSummary(attacks: MonsterAttack[]): string {
+  return attacks
+    .map((attack) => `${attack.name} ${attack.bonus >= 0 ? "+" : ""}${attack.bonus} (${attack.damageNotation})`)
+    .join(" · ");
+}
 
 /**
  * The DM's monster tooling (Prompt 61), a DM-ONLY side panel (GameRoom
@@ -39,6 +54,7 @@ const EMPTY_ATTACK: AttackDraft = { name: "", bonus: "", damageNotation: "" };
  */
 export function MonsterPanel({
   statBlocks,
+  templates,
   rosterNpcs,
   combatActive,
   hasLiveMap,
@@ -48,8 +64,13 @@ export function MonsterPanel({
   onUpdate,
   onDelete,
   onQuickAdd,
+  onAddFromTemplate,
 }: {
   statBlocks: MonsterStatBlock[];
+  /** Weather & Enemies C5: the GLOBAL monster template library (0073) —
+   * "Add to campaign" copies one into a brand new row in statBlocks above
+   * (a one-time value copy, never a live link back to this list). */
+  templates: MonsterTemplate[];
   /** The Prompt 33 narrative roster, for the name pre-fill convenience. */
   rosterNpcs: Npc[];
   combatActive: boolean;
@@ -78,6 +99,9 @@ export function MonsterPanel({
   onDelete: (statBlock: MonsterStatBlock) => void;
   /** Arms grid-click placement for this block's token (GameRoom). */
   onQuickAdd: (statBlock: MonsterStatBlock) => void;
+  /** Copies a template's stats into a brand new stat block above — never
+   * mutates the template itself. */
+  onAddFromTemplate: (template: MonsterTemplate) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -191,20 +215,16 @@ export function MonsterPanel({
             >
               <div className={styles.objectHeader}>
                 <span className={styles.objectName}>{statBlock.name}</span>
+                <Badge tone={ALLEGIANCE_TONE[statBlock.default_allegiance]}>
+                  {statBlock.default_allegiance}
+                </Badge>
                 <span className={styles.quickActionMeta}>
                   HP {statBlock.max_hp} · AC {statBlock.armor_class} · PP{" "}
                   {statBlock.passive_perception}
                 </span>
               </div>
               {statBlock.attacks.length > 0 ? (
-                <span className={styles.quickActionMeta}>
-                  {statBlock.attacks
-                    .map(
-                      (attack) =>
-                        `${attack.name} ${attack.bonus >= 0 ? "+" : ""}${attack.bonus} (${attack.damageNotation})`
-                    )
-                    .join(" · ")}
-                </span>
+                <span className={styles.quickActionMeta}>{formatAttackSummary(statBlock.attacks)}</span>
               ) : null}
               <div className={styles.objectHeader}>
                 <Button
@@ -247,6 +267,55 @@ export function MonsterPanel({
             }.`
           : "Stat blocks can be prepped here between maps — Quick add needs a live map to place tokens."}
       </p>
+
+      {/* Weather & Enemies C5: browse the shared, GLOBAL template library
+          (monster_templates, 0073) and copy one into THIS campaign's own
+          stat blocks above — a one-time, independent value copy, never a
+          live link. The template itself is never mutated by this action
+          (0073's RLS wouldn't allow it from here anyway: writes are
+          app-admin-only). The freshly copied row then behaves exactly
+          like any hand-authored stat block — its own ordinary Quick add
+          button, freely editable, deletable without touching the source
+          template. */}
+      <div className={styles.tokenSection} data-testid="monster-template-library">
+        <span className={styles.diceSectionLabel}>Add from library</span>
+        {templates.length === 0 ? (
+          <p className={styles.hint}>No templates available.</p>
+        ) : (
+          templates.map((template) => (
+            <div
+              key={template.id}
+              className={styles.objectRow}
+              data-testid={`monster-template-${template.id}`}
+            >
+              <div className={styles.objectHeader}>
+                <span className={styles.objectName}>{template.name}</span>
+                <Badge tone={ALLEGIANCE_TONE[template.default_allegiance]}>
+                  {template.default_allegiance}
+                </Badge>
+                <span className={styles.quickActionMeta}>
+                  HP {template.max_hp} · AC {template.armor_class} · PP {template.passive_perception}
+                </span>
+              </div>
+              {template.description ? <p className={styles.hint}>{template.description}</p> : null}
+              {template.attacks.length > 0 ? (
+                <span className={styles.quickActionMeta}>{formatAttackSummary(template.attacks)}</span>
+              ) : null}
+              <div className={styles.objectHeader}>
+                <Button
+                  size="sm"
+                  variant="accent"
+                  disabled={busy}
+                  onClick={() => onAddFromTemplate(template)}
+                  data-testid={`add-template-${template.id}`}
+                >
+                  Add to campaign
+                </Button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
 
       <div className={styles.tokenSection} data-testid="stat-block-form">
         <span className={styles.diceSectionLabel}>

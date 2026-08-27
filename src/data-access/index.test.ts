@@ -89,6 +89,12 @@ import {
   getSeatOffset,
   getSeatOffsetsForCampaign,
   setSeatOffset,
+  listMonsterStatBlocks,
+  createMonsterStatBlock,
+  createMonsterStatBlockFromTemplate,
+  updateMonsterStatBlock,
+  deleteMonsterStatBlock,
+  listMonsterTemplates,
 } from "@/data-access";
 
 describe("data-access module", () => {
@@ -153,6 +159,18 @@ describe("data-access module", () => {
     expect(advanceTurn).toBeTypeOf("function");
     expect(endCombat).toBeTypeOf("function");
     expect(setCombatantInitiative).toBeTypeOf("function");
+  });
+
+  it("exports the monster stat block functions from the main barrel", () => {
+    expect(listMonsterStatBlocks).toBeTypeOf("function");
+    expect(createMonsterStatBlock).toBeTypeOf("function");
+    expect(updateMonsterStatBlock).toBeTypeOf("function");
+    expect(deleteMonsterStatBlock).toBeTypeOf("function");
+  });
+
+  it("exports the Weather & Enemies C5 monster template library functions from the main barrel", () => {
+    expect(listMonsterTemplates).toBeTypeOf("function");
+    expect(createMonsterStatBlockFromTemplate).toBeTypeOf("function");
   });
 
   it("exports the combatant condition functions from the main barrel", () => {

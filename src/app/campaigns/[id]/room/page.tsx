@@ -26,6 +26,7 @@ import {
   listMapTokens,
   listMapTokensForCampaign,
   listMonsterStatBlocks,
+  listMonsterTemplates,
   listNpcs,
   listRollLog,
   listWhiteboardTiles,
@@ -94,6 +95,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     initialRolls,
     initialChatMessages,
     initialStatBlocks,
+    initialMonsterTemplates,
     rosterNpcs,
     dmNoteRows,
     initialLorePages,
@@ -129,6 +131,13 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // Monster stat blocks (Prompt 61), member-readable — AC auto-fill
     // for stat-blocked NPC targets needs them on every client.
     listMonsterStatBlocks(supabase, campaignId),
+    // Weather & Enemies C5: the GLOBAL monster template library (0073),
+    // only for the DM's book's Enemies (MonsterPanel) "add from library"
+    // browser — same DM-gated fetch convention as rosterNpcs immediately
+    // below (0073's SELECT policy is actually open to any authenticated
+    // user, but no non-DM surface reads it today, so there's no point
+    // fetching it for a player).
+    currentUserIsDM ? listMonsterTemplates(supabase) : Promise.resolve([]),
     // The narrative roster, only for the DM's book's Enemies (MonsterPanel)
     // name pre-fill; players never see the book, so no point fetching.
     currentUserIsDM ? listNpcs(supabase, campaignId) : Promise.resolve([]),
@@ -262,6 +271,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       assets={paletteAssets}
       characters={characters}
       initialStatBlocks={initialStatBlocks}
+      initialMonsterTemplates={initialMonsterTemplates}
       rosterNpcs={rosterNpcs}
       initialHandouts={initialHandouts}
       initialCombat={initialCombat}

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { TokenAllegiance } from "./mapTokens";
 
 // DM NPC/monster stat blocks (Prompt 61): the lightweight, campaign-scoped
 // TEMPLATE a placed token links to (map_tokens.monster_stat_block_id) and
@@ -29,6 +30,17 @@ export interface MonsterStatBlock {
   armor_class: number;
   passive_perception: number;
   attacks: MonsterAttack[];
+  /** Weather & Enemies C5 (migration 0073): the allegiance a token quick-
+   * added from this block should default to. 'hostile' for every
+   * pre-existing, hand-authored block (the column's own DB default,
+   * matching placeNpcToken's long-standing hardcoded literal exactly) —
+   * createMonsterStatBlock below never sets this column, by design, so
+   * freeform blocks are completely unaffected. A block created via
+   * createMonsterStatBlockFromTemplate carries its template's
+   * default_allegiance instead (e.g. 'neutral' for a Trader/Guard/High
+   * Guard), so THOSE quick-added tokens stop defaulting to the wrong,
+   * misleading hostile-red disc. */
+  default_allegiance: TokenAllegiance;
   created_at: string;
 }
 
@@ -67,6 +79,47 @@ export async function createMonsterStatBlock(
       armor_class: params.armorClass,
       passive_perception: params.passivePerception,
       attacks: params.attacks,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as MonsterStatBlock;
+}
+
+/** Weather & Enemies C5: MonsterPanel's "add from library" action — copies
+ * a global monster_templates row's stats into a BRAND NEW, fully
+ * independent campaign-scoped monster_stat_blocks row. A one-time value
+ * copy, never a live link: the template itself is never mutated by this
+ * (0073's RLS wouldn't allow a non-admin to anyway), and there is no
+ * template_id column here at all — editing the resulting row afterward
+ * (updateMonsterStatBlock, the ordinary MonsterPanel edit form) can never
+ * reach back into the template or any other campaign's own copy. Takes
+ * plain fields rather than a MonsterTemplate object so this module doesn't
+ * need to import monsterTemplates.ts (the caller already has the template
+ * in hand from listMonsterTemplates). */
+export async function createMonsterStatBlockFromTemplate(
+  supabase: SupabaseClient,
+  params: {
+    campaignId: string;
+    name: string;
+    maxHp: number;
+    armorClass: number;
+    passivePerception: number;
+    attacks: MonsterAttack[];
+    defaultAllegiance: TokenAllegiance;
+  }
+): Promise<MonsterStatBlock> {
+  const { data, error } = await supabase
+    .from("monster_stat_blocks")
+    .insert({
+      campaign_id: params.campaignId,
+      name: params.name.trim(),
+      max_hp: params.maxHp,
+      armor_class: params.armorClass,
+      passive_perception: params.passivePerception,
+      attacks: params.attacks,
+      default_allegiance: params.defaultAllegiance,
     })
     .select()
     .single();
