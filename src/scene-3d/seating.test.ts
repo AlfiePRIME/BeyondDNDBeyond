@@ -372,6 +372,64 @@ describe("computeCampaignSeatLayout", () => {
     expect(appendedTables).toHaveLength(0);
     expect(seats).toHaveLength(0);
   });
+
+  // Regression guard for a party shaped exactly like
+  // verify-per-member-dice-trays.mjs's own overflow scenario: a DM, 3
+  // already-connected players, HEAD_SQUARE_SEAT_CAPACITY - 1 (23) filler
+  // players padding out the rest of the head square, and 2 more players who
+  // are guaranteed to overflow onto an appended table. A prior investigation
+  // into a reported "23-filler-member crash" traced the actual failure to
+  // that verify script's own Playwright wait logic (a waitForSelector call
+  // missing `state: "attached"` against a permanently `hidden` debug mirror
+  // div, plus a second, too-weak wait condition on the overflow-tray read
+  // further down) — computeCampaignSeatLayout itself never threw, produced
+  // no NaN/undefined, and correctly bucketed every member, at this exact
+  // party size or its neighbors. These three sizes (one below, at, and one
+  // above the real reported scenario) pin that finding down permanently.
+  describe("a party shaped like verify-per-member-dice-trays.mjs's own 23-filler overflow scenario", () => {
+    function makeOverflowScenarioMembers(fillerCount: number): SeatMember[] {
+      const named = (id: string): SeatMember => ({ user_id: id, role: "player", display_name: id });
+      return [
+        { user_id: "dm", role: "dm", display_name: "dm" },
+        named("alice"),
+        named("bob"),
+        named("carol"),
+        ...Array.from({ length: fillerCount }, (_, i) => named(`filler-${i}`)),
+        named("dave"),
+        named("erin"),
+      ];
+    }
+
+    it.each([22, 23, 24])("computes a fully sane layout with %i filler members (no NaN/undefined, no overlap, dave/erin on the same appended table)", (fillerCount) => {
+      const members = makeOverflowScenarioMembers(fillerCount);
+      const { appendedTables, seats } = computeCampaignSeatLayout(members);
+
+      expect(seats).toHaveLength(members.length);
+      for (const seat of seats) {
+        expect(Number.isFinite(seat.position[0])).toBe(true);
+        expect(Number.isFinite(seat.position[1])).toBe(true);
+        expect(Number.isFinite(seat.position[2])).toBe(true);
+        expect(Number.isFinite(seat.rotationY)).toBe(true);
+        expect(Number.isFinite(seat.cameraPosition[0])).toBe(true);
+        expect(Number.isFinite(seat.cameraPosition[1])).toBe(true);
+        expect(Number.isFinite(seat.cameraPosition[2])).toBe(true);
+      }
+      expect(seats.filter((s) => s.member.role === "dm")).toHaveLength(1);
+
+      for (let tableIndex = -1; tableIndex < appendedTables.length; tableIndex++) {
+        expectNoAdjacentCollisions(seats.filter((s) => s.tableIndex === tableIndex));
+      }
+
+      // dave/erin (the last 2 joiners) are exactly the two players who
+      // overflow past the head square, given HEAD_SQUARE_SEAT_CAPACITY (24)
+      // minus the DM's own seat (23) already fully consumed by
+      // alice/bob/carol plus this many fillers.
+      const dave = seats.find((s) => s.member.user_id === "dave")!;
+      const erin = seats.find((s) => s.member.user_id === "erin")!;
+      expect(dave.tableIndex).toBe(0);
+      expect(erin.tableIndex).toBe(0);
+    });
+  });
 });
 
 describe("HEAD_SQUARE_SEAT_CAPACITY / SINGLE_TABLE_SEAT_CAPACITY", () => {

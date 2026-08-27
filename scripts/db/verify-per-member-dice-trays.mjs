@@ -550,10 +550,56 @@ try {
     (await alicePage.$('[data-testid="dice-tray-upload-button"]')) === null
   );
   if (uploadedAsset) {
+    // alicePage's own customAssets list is GameRoom.tsx's handleAssetUploaded
+    // — a one-shot, page-load-only server fetch (page.tsx's
+    // listAssetsForCampaign), deliberately never broadcast to already-open
+    // clients (see that handler's own doc comment: "neither surface
+    // broadcasts a freshly-uploaded asset to other already-open clients
+    // today... this doesn't regress anything", matching AssetPalette.tsx's
+    // own pre-existing behavior). Alice's page opened before the DM's
+    // "Carved Oak Tray" upload above, so — exactly like a real returning
+    // player — she only sees it after her own next reload.
+    await alicePage.reload();
+    await alicePage.waitForSelector('[data-testid="dice-tray-layout-state"]', { state: "attached", timeout: 30000 });
     check(
       "a non-DM player CAN still pick an existing custom tray model",
       (await alicePage.$(`[data-testid="dice-tray-choice-${uploadedAsset.id}"]`)) !== null
     );
+
+    // Not just offered — actually selecting it takes effect, the same
+    // rigor the DM's own upload/select/revert flow above already gets:
+    // alice's own tray flips to modelSource: 'custom', the persisted
+    // preference is really hers (not the DM's), and a second, idle,
+    // already-connected client sees HER tray flip live too.
+    await alicePage.click(`[data-testid="dice-tray-choice-${uploadedAsset.id}"]`);
+    const aliceCustom = await waitForTrayField(alicePage, alice.id, (t) => t.modelSource === "custom", 6000);
+    check(
+      "selecting it actually takes effect: alice's own client shows HER tray as modelSource: 'custom'",
+      aliceCustom?.modelSource === "custom",
+      JSON.stringify(aliceCustom)
+    );
+    const { data: alicePrefRow } = await admin
+      .from("campaign_members")
+      .select("dice_tray_source, dice_tray_asset_id")
+      .eq("campaign_id", campaignId)
+      .eq("user_id", alice.id)
+      .maybeSingle();
+    check(
+      "alice's own preference (not the DM's) is what actually got persisted",
+      alicePrefRow?.dice_tray_source === "custom" && alicePrefRow?.dice_tray_asset_id === uploadedAsset.id,
+      JSON.stringify(alicePrefRow)
+    );
+    const bobSeesAliceCustom = await waitForTrayField(bobPage, alice.id, (t) => t.modelSource === "custom", 6000);
+    check(
+      "a second, idle, already-connected client (bob) sees ALICE's own tray-model change live too",
+      bobSeesAliceCustom?.modelSource === "custom",
+      JSON.stringify(bobSeesAliceCustom)
+    );
+
+    // Revert, tidy for the rest of the run — matches the DM's own revert
+    // step above.
+    await alicePage.click('[data-testid="dice-tray-choice-default"]');
+    await waitForTrayField(alicePage, alice.id, (t) => t.modelSource === "default", 6000);
   }
 
   check("no uncaught page error occurred during this run", pageErrors.length === 0, pageErrors.join(" | "));
@@ -628,7 +674,18 @@ try {
   await erinPage.waitForSelector('[data-testid="dice-tray-layout-state"]', { state: "attached", timeout: 30000 });
 
   await davePage.reload();
-  await davePage.waitForSelector('[data-testid="seat-layout-state"]', { timeout: 30000 });
+  // Every "hidden render-state mirror" div in GameRoom.tsx (this one
+  // included — see its own "Hidden render-state mirror of the full seat
+  // layout" doc comment) carries the plain HTML `hidden` attribute
+  // unconditionally, so it can never satisfy waitForSelector's DEFAULT
+  // "visible" state — that default was the actual bug here (confirmed by
+  // direct reproduction: the element was attached with real, fully-formed
+  // JSON content the whole time; Playwright's own timeout log showed
+  // `resolved to hidden <div hidden="" data-testid="seat-layout-state">…`
+  // on every poll), not any crash in seating.ts's layout math. `{ state:
+  // "attached" }` is what every OTHER waitForSelector call on one of these
+  // hidden mirrors in this same file already uses.
+  await davePage.waitForSelector('[data-testid="seat-layout-state"]', { state: "attached", timeout: 30000 });
   const overflowSeats = (await seatLayoutState(davePage)).seats;
   const daveSeat = overflowSeats.find((s) => s.userId === dave.id);
   const erinSeat = overflowSeats.find((s) => s.userId === erin.id);
@@ -644,7 +701,19 @@ try {
   // pages were closed/navigated away by now except alice/bob, still open
   // from earlier — count trays for at least these 3 present, not an exact
   // total, since alice/bob may still be connected too).
+  // Each of the three waited for individually (not just "does davePage
+  // report ANY tray at all"): GameRoom.tsx's own presence-change handler
+  // doc comment notes a client's OWN id lands in its local presentUserIds
+  // set immediately, even before the real presence sync completes ("so
+  // this client's own tray never flickers away for the brief moment before
+  // its own presence has fully synced") — so waiting on dave's own tray
+  // alone resolves trivially on davePage's very first render, well before
+  // erin's/the DM's own presence has actually finished syncing in over the
+  // realtime channel post-reload, and reading the layout that early can
+  // catch it mid-sync with either (or both) still missing.
   await waitForTrayField(davePage, dave.id, () => true, 20000);
+  await waitForTrayField(davePage, erin.id, () => true, 20000);
+  await waitForTrayField(davePage, dm.id, () => true, 20000);
   const overflowTrayState = await trayLayoutState(davePage);
   const daveTray = overflowTrayState.trays.find((t) => t.userId === dave.id);
   const erinTray = overflowTrayState.trays.find((t) => t.userId === erin.id);
