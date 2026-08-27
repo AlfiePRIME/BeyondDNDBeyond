@@ -110,6 +110,8 @@ export {
   duplicateMap,
   listMapsForCampaign,
   getMap,
+  listMapsLinkingInto,
+  deleteMap,
   listMapCells,
   upsertMapCells,
   setLiveMap,
@@ -141,6 +143,7 @@ export {
   type MapGrowthEdge,
   type GroundType,
   type WaterFlowDirection,
+  type LinkedFromMap,
 } from "./maps";
 export {
   listMapObjects,
