@@ -193,6 +193,16 @@ export {
   type InteractionEvent,
 } from "./interactionEvents";
 export {
+  listContainerItems,
+  listItemsForMapObjects,
+  addContainerItem,
+  updateContainerItem,
+  removeContainerItem,
+  claimContainerItem,
+  type MapObjectItem,
+  type ContainerRef,
+} from "./mapObjectItems";
+export {
   listWhiteboardTiles,
   saveWhiteboardTiles,
   clearWhiteboard,

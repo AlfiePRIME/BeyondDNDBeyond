@@ -81,6 +81,7 @@ import type { PaletteAsset } from "./lib/assetUrl";
 import { captureMapThumbnail } from "../../lib/thumbnail";
 import { BehaviorEditor } from "./BehaviorEditor";
 import { ObjectTagEditor } from "./ObjectTagEditor";
+import { ContainerItemsEditor } from "./ContainerItemsEditor";
 import styles from "./editor.module.css";
 
 // Structural message read, not instanceof — see GameRoom's note on the
@@ -330,6 +331,10 @@ export function MapEditor({
   const [concealedPitDepthFeet, setConcealedPitDepthFeet] = useState("15");
   const [concealedPitBusy, setConcealedPitBusy] = useState(false);
   const [concealedPitError, setConcealedPitError] = useState<string | null>(null);
+  // Map Editor Batch A4: which concealed pit's item contents are currently
+  // expanded in the list below — at most one at a time, matching the
+  // selected-object panel's own single-container-at-a-time authoring UI.
+  const [expandedPitId, setExpandedPitId] = useState<string | null>(null);
 
   // Light-source authoring (Prompt 55) — the transition tool's form-based
   // shape: pick an anchor, fill in radius/brightness, create; each existing
@@ -2760,6 +2765,15 @@ export function MapEditor({
                       object={selectedLiveObject}
                       onSave={handleSaveBehavior}
                     />
+                    {/* Map Editor Batch A4: a chest's (or any placed
+                        object's) item contents — a general-purpose
+                        container concept, not tied to any specific asset
+                        name. */}
+                    <ContainerItemsEditor
+                      key={`items-${selectedLiveObject.id}`}
+                      campaignId={campaignId}
+                      container={{ mapObjectId: selectedLiveObject.id }}
+                    />
                   </>
                 ) : (
                   <p className={styles.hint}>
@@ -3146,24 +3160,41 @@ export function MapEditor({
             {concealedPits.length > 0 ? (
               <div data-testid="concealed-pit-list">
                 {concealedPits.map((pit) => (
-                  <div
-                    key={`${pit.x},${pit.y}`}
-                    className={styles.toolRow}
-                    data-testid={`concealed-pit-${pit.x}-${pit.y}`}
-                  >
-                    <span className={styles.selectedMeta}>
-                      ({pit.x},{pit.y}) — real floor at elevation {pit.bottom_elevation_steps} (DC{" "}
-                      {pit.save_dc})
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      disabled={concealedPitBusy}
-                      onClick={() => void handleRemoveConcealedPit(pit)}
-                      data-testid={`remove-concealed-pit-${pit.x}-${pit.y}`}
-                    >
-                      Remove
-                    </Button>
+                  <div key={`${pit.x},${pit.y}`} data-testid={`concealed-pit-${pit.x}-${pit.y}`}>
+                    <div className={styles.toolRow}>
+                      <span className={styles.selectedMeta}>
+                        ({pit.x},{pit.y}) — real floor at elevation {pit.bottom_elevation_steps} (DC{" "}
+                        {pit.save_dc})
+                      </span>
+                      <Button
+                        size="sm"
+                        variant={expandedPitId === pit.id ? "accent" : "ghost"}
+                        disabled={concealedPitBusy}
+                        onClick={() => setExpandedPitId((current) => (current === pit.id ? null : pit.id))}
+                        data-testid={`toggle-concealed-pit-items-${pit.x}-${pit.y}`}
+                      >
+                        {expandedPitId === pit.id ? "Hide items" : "Items"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        disabled={concealedPitBusy}
+                        onClick={() => void handleRemoveConcealedPit(pit)}
+                        data-testid={`remove-concealed-pit-${pit.x}-${pit.y}`}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                    {expandedPitId === pit.id ? (
+                      // Map Editor Batch A4: a still-concealed pit can hold
+                      // items too — the DM's only way to author them, since
+                      // a pit has no Place-mode selection of its own.
+                      <ContainerItemsEditor
+                        key={`items-${pit.id}`}
+                        campaignId={campaignId}
+                        container={{ concealedPitId: pit.id }}
+                      />
+                    ) : null}
                   </div>
                 ))}
               </div>

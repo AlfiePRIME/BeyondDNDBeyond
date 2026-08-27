@@ -12,6 +12,7 @@ import {
   applyExhaustionDelta,
   applyHpDelta,
   applyNpcHpDelta,
+  claimContainerItem,
   clearHiddenAsHider,
   createHandout,
   createInteractionEvent,
@@ -33,6 +34,8 @@ import {
   listCombatCombatants,
   listCombatantHiddenFrom,
   listConcealedPits,
+  listContainerItems,
+  listItemsForMapObjects,
   listHandouts,
   listLightSources,
   listMapCells,
@@ -89,6 +92,7 @@ import {
   type LorePageLink,
   type MapCell,
   type MapObject,
+  type MapObjectItem,
   type MapToken,
   type MapTransition,
   type MonsterAttack,
@@ -176,6 +180,7 @@ import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
 import { buildDiceTumbleSpec } from "../roll/tumble";
 import { CombatPanel, type CombatState } from "./CombatPanel";
+import { ContainerPanel } from "./ContainerPanel";
 import { DraggablePanel, PanelLayoutProvider } from "./DraggablePanel";
 import { DiceLogPanel } from "./DiceLogPanel";
 import { DiceTrayPicker } from "./DiceTrayPicker";
@@ -203,6 +208,24 @@ const COMBAT_EVENT = "combat-changed";
 // shape (DB written first, then broadcast so already-connected clients update
 // immediately without their own extra read).
 const CELL_REVEALED_EVENT = "cell-revealed";
+// Map Editor Batch A4: item containers. ITEM_TAKEN_EVENT is the
+// TRIGGER_EVENT shape (persist via claim_map_object_item first, then
+// broadcast so every other client with that same container's panel open
+// drops the item live, matching "taking an item removes it for every
+// connected client" exactly). PIT_ITEMS_FOUND_EVENT is the
+// CELL_REVEALED_EVENT shape: fired once, from the DM's own authoritative
+// client, at the exact moment a concealed pit's trap springs (see
+// handleTokenLanded) — every client receives it, but only the finding
+// character's own owner (or the DM) ever opens the panel from it (see
+// applyPitItemsFound below). Neither carries a dedicated onReconnect pair:
+// a dropped ITEM_TAKEN_EVENT only ever costs a stale-looking already-open
+// panel (claimContainerItem's own row-lock-then-delete makes a stale
+// "Take" safely fail rather than double-award the item — see
+// mapObjectItems.ts), and a dropped PIT_ITEMS_FOUND_EVENT just means the
+// finding player never sees the popup for a loot they didn't know to
+// expect anyway — not a wrong persisted state either way.
+const ITEM_TAKEN_EVENT = "container-item-taken";
+const PIT_ITEMS_FOUND_EVENT = "pit-items-found";
 // Click-select-to-move (replaces the old drag gesture): an ephemeral
 // "who's got a token picked up right now" poke, same non-persisted-state
 // shape as DICE_ROLLED_EVENT — nothing is ever read back from the DB, so
@@ -359,6 +382,34 @@ interface CellRevealedPayload {
   cell: MapCell;
 }
 
+/** Map Editor Batch A4: an item was just claimed (claim_map_object_item
+ * already persisted the removal) — every receiver drops it from whichever
+ * open container panel currently shows it, via applyItemTaken. */
+interface ItemTakenPayload {
+  itemId: string;
+  /** Null for a pit-sourced item — MapPanel's Containers list is
+   * MapObject-only (see LiveMapData.containerObjectIds' own comment). */
+  mapObjectId: string | null;
+  /** How many items the container held right after this one was removed —
+   * 0 means every receiver should drop mapObjectId from
+   * liveMap.containerObjectIds too, not just from an open panel. */
+  remaining: number;
+}
+
+/** A concealed pit's trap just sprang and it held items — the DM's own
+ * client (the only one that ever resolves a fall, see handleTokenLanded)
+ * sends the already-fetched item list directly rather than making
+ * receivers re-query map_object_items themselves: a concealed pit's items
+ * stay DM-only readable even after this broadcast (0060's own RLS), so a
+ * raw follow-up read wouldn't work for the finding player's own client
+ * anyway. `characterId` is whichever character's token fell in — only that
+ * character's own owner (or the DM) renders the popup this produces. */
+interface PitItemsFoundPayload {
+  characterId: string;
+  pitId: string;
+  items: MapObjectItem[];
+}
+
 /** Same shape as TokenPayload: the full new row on reveal, so receivers
  * never need a follow-up fetch; null for "no longer visible to you" (hidden
  * again or deleted — receivers drop the row without learning which, so a
@@ -489,6 +540,18 @@ export interface LiveMapData {
    * bundle so a map switch/reconnect hydrates the drawing exactly like
    * every other piece of this map's state, with no separate fetch path. */
   whiteboardTiles: WhiteboardTile[];
+  /** Map Editor Batch A4: every object.id on this map currently holding at
+   * least one item — MapPanel's own "Containers" list reads this to offer
+   * a reliable, click-agnostic Open action (a raw 3D click on the object
+   * itself also opens it, see handleSelectMapObject, but a small placed
+   * prop can be a fiddly target to aim at). Refreshed with the rest of
+   * this bundle (initial load, live-map switches, reconnects); kept live
+   * in between by applyItemTaken when a take empties a container — a
+   * newly-DM-added item on an object that had none before won't appear
+   * here until the next refresh, the same "no live sync for this, reload
+   * to see it" posture this file's own asset-upload precedent already
+   * accepts for an analogous gap. */
+  containerObjectIds: ReadonlySet<string>;
 }
 
 /** TOKEN_SELECTED_EVENT's payload: `tokenId: null` clears — a broadcast
@@ -1311,6 +1374,23 @@ export function GameRoom({
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [triggerError, setTriggerError] = useState<string | null>(null);
+  // Map Editor Batch A4: whichever container's contents are currently open
+  // in the modal below — a chest (opened by clicking it, see
+  // handleOpenObjectContainer) or a still-concealed pit (surfaced
+  // automatically to the falling character, see handleTokenLanded's reveal
+  // branch). At most one open at a time, like every other modal in this
+  // file. `characterId` on the pit variant is fixed at the moment the trap
+  // sprang — the SPECIFIC character who found it — while the object
+  // variant resolves the taking character fresh at Take time (any of the
+  // viewer's own characters), since anyone who can see the chest may open
+  // it.
+  const [openContainer, setOpenContainer] = useState<
+    | { source: "object"; objectId: string; label: string; items: MapObjectItem[] }
+    | { source: "pit"; pitId: string; characterId: string; label: string; items: MapObjectItem[] }
+    | null
+  >(null);
+  const [containerBusy, setContainerBusy] = useState(false);
+  const [containerError, setContainerError] = useState<string | null>(null);
   // Same ahead-of-React ref pattern as MapEditor: broadcast handlers and the
   // trigger path both write, and two updates landing in one frame must
   // stack, not clobber.
@@ -1366,6 +1446,40 @@ export function GameRoom({
   // anyone else" capability.
   const [dmSelectedMapId, setDmSelectedMapId] = useState<string | null>(initialCampaignLiveMapId);
 
+  // Character rows go stateful as of Prompt 46: mid-combat damage/healing
+  // changes current_hp, and the combat panel's HP readout and the token HP
+  // bars both render from these rows. Same render-time prop reset as
+  // roster/members above. Declared this early (rather than alongside its
+  // other siblings further down) so ownCharacterIds/ownCharacterIdsRef
+  // below can be declared before applyPitItemsFound, which reads the ref.
+  const [characterRows, setCharacterRows] = useState<Character[]>(characters);
+  const [prevCharacters, setPrevCharacters] = useState(characters);
+  if (prevCharacters !== characters) {
+    setPrevCharacters(characters);
+    setCharacterRows(characters);
+  }
+  // Every character THIS viewer owns in this campaign.
+  const ownCharacterIds = useMemo(
+    () =>
+      new Set(
+        characterRows
+          .filter((character) => character.owner_id === currentUserId)
+          .map((character) => character.id)
+      ),
+    [characterRows, currentUserId]
+  );
+  // Map Editor Batch A4: a ref mirror so applyPitItemsFound below (called
+  // from inside the campaign-channel effect's stable subscribe callback,
+  // far below) can read the latest value without forcing that whole
+  // effect to depend on characterRows — which changes on every mid-combat
+  // HP/condition refresh and would otherwise tear down and rejoin the
+  // realtime channel far too often. Same ref-mirrors-state reasoning as
+  // liveMapRef/concealedPitsRef elsewhere in this file.
+  const ownCharacterIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    ownCharacterIdsRef.current = new Set(ownCharacterIds);
+  }, [ownCharacterIds]);
+
   const applyTriggered = useCallback((objectId: string, triggered: boolean) => {
     const current = liveMapRef.current;
     if (!current) return;
@@ -1379,6 +1493,59 @@ export function GameRoom({
     };
     setLiveMapState(liveMapRef.current);
   }, []);
+
+  // Map Editor Batch A4: removes a just-taken item from whichever
+  // container panel is currently open, on EVERY connected client — the
+  // taker's own client calls this immediately (before its own broadcast
+  // round-trips back), and ITEM_TAKEN_EVENT's subscribe handler below calls
+  // it for every other already-open panel on this same container. A no-op
+  // if the open panel isn't showing that item (or nothing's open at all).
+  const applyItemTaken = useCallback((payload: ItemTakenPayload) => {
+    setOpenContainer((current) =>
+      current && current.items.some((item) => item.id === payload.itemId)
+        ? { ...current, items: current.items.filter((item) => item.id !== payload.itemId) }
+        : current
+    );
+    // The MapPanel Containers list (LiveMapData.containerObjectIds) needs
+    // updating too, independent of whether anyone has this container's
+    // panel open right now.
+    if (payload.mapObjectId && payload.remaining === 0) {
+      const current = liveMapRef.current;
+      if (current && current.containerObjectIds.has(payload.mapObjectId)) {
+        liveMapRef.current = {
+          ...current,
+          containerObjectIds: new Set(
+            [...current.containerObjectIds].filter((id) => id !== payload.mapObjectId)
+          ),
+        };
+        setLiveMapState(liveMapRef.current);
+      }
+    }
+  }, []);
+
+  // Map Editor Batch A4: a concealed pit's trap just sprang and held
+  // items — opens the container panel, but ONLY on the finding character's
+  // own owner's client (or the DM's, for prep/observation) — every OTHER
+  // connected client also receives this broadcast (this app's usual
+  // "the wire carries everything, per-viewer restriction is a rendering
+  // decision" posture) but must not pop up someone else's loot. Reads
+  // ownCharacterIdsRef, not the plain ownCharacterIds value, so this can
+  // sit in the campaign-channel effect below without that effect needing
+  // to depend on (and rejoin the channel over) every character refresh.
+  const applyPitItemsFound = useCallback(
+    (payload: PitItemsFoundPayload) => {
+      if (!(currentUserIsDM || ownCharacterIdsRef.current.has(payload.characterId))) return;
+      setContainerError(null);
+      setOpenContainer({
+        source: "pit",
+        pitId: payload.pitId,
+        characterId: payload.characterId,
+        label: "You find something in the pit.",
+        items: payload.items,
+      });
+    },
+    [currentUserIsDM]
+  );
 
   const [handouts, setHandouts] = useState(initialHandouts);
   const [handoutBusy, setHandoutBusy] = useState(false);
@@ -1416,16 +1583,6 @@ export function GameRoom({
   const [dayNightMode, setDayNightModeState] = useState<DayNightMode>(initialDayNightMode);
   const [dayNightBusy, setDayNightBusy] = useState(false);
   const [dayNightError, setDayNightError] = useState<string | null>(null);
-  // Character rows go stateful as of Prompt 46: mid-combat damage/healing
-  // changes current_hp, and the combat panel's HP readout and the token HP
-  // bars both render from these rows. Same render-time prop reset as
-  // roster/members above.
-  const [characterRows, setCharacterRows] = useState<Character[]>(characters);
-  const [prevCharacters, setPrevCharacters] = useState(characters);
-  if (prevCharacters !== characters) {
-    setPrevCharacters(characters);
-    setCharacterRows(characters);
-  }
   // Monster stat blocks (Prompt 61): member-readable rows every panel's
   // AC/HP lookups ride. Kept fresh by the combat refresh below — a
   // quick-added monster's stat block reaches other clients on the same
@@ -2005,7 +2162,25 @@ export function GameRoom({
                 water_flow_direction: destCell?.water_flow_direction ?? null,
               };
               await upsertMapCells(supabase, [revealedCell]);
-              await deleteConcealedPit(supabase, token.map_id, token.x, token.y);
+              // Map Editor Batch A4: if the DM ever stashed items in this
+              // pit (map_object_items.concealed_pit_id, added on the exact
+              // same row this reveal is about to delete), fetch them BEFORE
+              // deleting — concealed_pit_id's ON DELETE CASCADE (0060)
+              // would otherwise destroy the loot in the same instant it
+              // becomes reachable. When there ARE items, the row is kept
+              // alive indefinitely as a container handle (claim_map_object_item
+              // deliberately never deletes it either, even once emptied —
+              // see that function's own comment on the interaction_events
+              // CASCADE conflict that would otherwise create) — nothing
+              // else reads concealed_pits after this point for gameplay
+              // (concealedPitsRef is already pruned below regardless), only
+              // the DM's own authoring list, which will keep showing this
+              // pit (with an empty Items panel) even after it's fully
+              // looted — a known, accepted cosmetic loose end.
+              const pitItems = await listContainerItems(supabase, { concealedPitId: concealed.id });
+              if (pitItems.length === 0) {
+                await deleteConcealedPit(supabase, token.map_id, token.x, token.y);
+              }
               // Locally prune the ref (no periodic re-fetch exists) so a
               // second mover landing on this now-public pit is resolved as
               // an ordinary visible pit, not re-rolled as still-concealed.
@@ -2017,6 +2192,26 @@ export function GameRoom({
                 cell: revealedCell,
               });
               await resolveVisiblePitFall(concealed.bottom_elevation_steps);
+              // The pit's own "opening" moment: unlike a chest (a
+              // deliberate click), a concealed pit is discovered by falling
+              // into it — there is no other way a player's client could
+              // ever learn this pit existed (concealed_pits stays DM-only
+              // readable even now, see 0060's own RLS comment), so the
+              // falling character's own owner (or the DM) is offered the
+              // contents right here, on the same authoritative client that
+              // just resolved the fall.
+              if (pitItems.length > 0 && token.character_id) {
+                const foundPayload: PitItemsFoundPayload = {
+                  characterId: token.character_id,
+                  pitId: concealed.id,
+                  items: pitItems,
+                };
+                applyPitItemsFound(foundPayload);
+                await campaignChannelRef.current?.publish<PitItemsFoundPayload>(
+                  PIT_ITEMS_FOUND_EVENT,
+                  foundPayload
+                );
+              }
             }
           } else if (!bridgeHere && destCell?.terrain_type === "pit") {
             await resolveVisiblePitFall(destCell.elevation);
@@ -2047,6 +2242,7 @@ export function GameRoom({
       publishTokenChange,
       applyCellChange,
       applyTriggered,
+      applyPitItemsFound,
       maybeOfferTransition,
     ]
   );
@@ -2071,7 +2267,14 @@ export function GameRoom({
         // whiteboard-drawing-layer.md §5.3 — "no new reconnect concept").
         listWhiteboardTiles(supabase, mapId),
       ]);
-      next = { map, cells, objects, tokens, lightSources, whiteboardTiles };
+      // Map Editor Batch A4: which of THIS map's objects currently hold
+      // items — a second query rather than folding into the Promise.all
+      // above since it depends on `objects`' own ids.
+      const containerItems = await listItemsForMapObjects(supabase, objects.map((object) => object.id));
+      const containerObjectIds = new Set(
+        containerItems.flatMap((item) => (item.map_object_id ? [item.map_object_id] : []))
+      );
+      next = { map, cells, objects, tokens, lightSources, whiteboardTiles, containerObjectIds };
     }
     if (seq !== refreshSeqRef.current) return;
     liveMapRef.current = next;
@@ -2240,6 +2443,16 @@ export function GameRoom({
     const unsubscribeCellRevealed = channel.subscribe<CellRevealedPayload>(
       CELL_REVEALED_EVENT,
       (payload) => applyCellChange(payload.cell)
+    );
+    // Map Editor Batch A4: item containers. No onReconnect pair for either
+    // — see ITEM_TAKEN_EVENT/PIT_ITEMS_FOUND_EVENT's own doc comments for
+    // why a dropped broadcast is harmless here.
+    const unsubscribeItemTaken = channel.subscribe<ItemTakenPayload>(ITEM_TAKEN_EVENT, (payload) => {
+      applyItemTaken(payload);
+    });
+    const unsubscribePitItemsFound = channel.subscribe<PitItemsFoundPayload>(
+      PIT_ITEMS_FOUND_EVENT,
+      (payload) => applyPitItemsFound(payload)
     );
     const unsubscribeHandout = channel.subscribe<HandoutPayload>(HANDOUT_EVENT, (payload) => {
       const row = payload.handout;
@@ -2428,6 +2641,8 @@ export function GameRoom({
       unsubscribeTrigger();
       unsubscribeToken();
       unsubscribeCellRevealed();
+      unsubscribeItemTaken();
+      unsubscribePitItemsFound();
       unsubscribeHandout();
       unsubscribeReconnect();
       unsubscribeHandoutReconnect();
@@ -2458,6 +2673,8 @@ export function GameRoom({
     applyTriggered,
     applyTokenChange,
     applyCellChange,
+    applyItemTaken,
+    applyPitItemsFound,
     applyHandoutChange,
     handleTokenLanded,
     refreshCombat,
@@ -2502,12 +2719,89 @@ export function GameRoom({
     [currentUserIsDM, currentUserId, campaignId, applyTriggered]
   );
 
+  // Map Editor Batch A4: opens a chest's contents panel when a player
+  // clicks it in the Game Room — a pure additive read (RLS already lets
+  // any member see a chest's items on the live map, see 0060's own SELECT
+  // policy), so this runs unconditionally alongside handleTrigger below.
+  // An object with no items at all (the overwhelming majority — decorative
+  // props, levers, torches, an already-emptied chest) just does nothing
+  // extra: no panel opens, exactly like clicking any other inert prop
+  // today.
+  const handleOpenObjectContainer = useCallback(async (object: MapObject) => {
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const items = await listContainerItems(supabase, { mapObjectId: object.id });
+      if (items.length === 0) return;
+      setContainerError(null);
+      setOpenContainer({ source: "object", objectId: object.id, label: object.asset.name, items });
+    } catch (err) {
+      setContainerError(errorMessage(err) ?? "Could not open that.");
+    }
+  }, []);
+
   const handleSelectMapObject = useCallback(
     (id: string) => {
       const object = liveMapRef.current?.objects.find((candidate) => candidate.id === id);
-      if (object) void handleTrigger(object);
+      if (!object) return;
+      void handleTrigger(object);
+      void handleOpenObjectContainer(object);
     },
-    [handleTrigger]
+    [handleTrigger, handleOpenObjectContainer]
+  );
+
+  // Map Editor Batch A4: takes one item from whichever container is
+  // currently open. claim_map_object_item is the atomic, race-proof
+  // "picked up once, globally" boundary — it ALSO logs the item_taken
+  // interaction_events row itself, server-side, in the same transaction
+  // (see that function's own migration comment for why a separate
+  // client-side createInteractionEvent call here would hit its DM-only
+  // SELECT limitation for a non-DM taker). Everything after the claim
+  // here — inventory credit, the local panel update, the cross-client
+  // broadcast — is this client's own follow-up writes. Reads
+  // ownCharacterIdsRef/liveMapRef (not the plain ownCharacterIds/liveMap
+  // values) so this callback never needs to be recreated on every
+  // mid-combat character refresh.
+  const handleTakeContainerItem = useCallback(
+    async (item: MapObjectItem) => {
+      if (containerBusy || !openContainer) return;
+      const characterId =
+        openContainer.source === "pit"
+          ? openContainer.characterId
+          : (mostRecentOwnToken(liveMapRef.current?.tokens ?? [], ownCharacterIdsRef.current)
+              ?.character_id ?? [...ownCharacterIdsRef.current][0] ?? null);
+      if (!characterId) {
+        setContainerError("You have no character in this campaign to receive an item.");
+        return;
+      }
+      setContainerBusy(true);
+      setContainerError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const claimed = await claimContainerItem(supabase, item.id);
+        const takenPayload: ItemTakenPayload = {
+          itemId: item.id,
+          mapObjectId: openContainer.source === "object" ? openContainer.objectId : null,
+          // openContainer.items still includes the just-claimed item at
+          // this point (applyItemTaken hasn't run yet) — one fewer once
+          // it's removed.
+          remaining: openContainer.items.length - 1,
+        };
+        applyItemTaken(takenPayload);
+        await campaignChannelRef.current?.publish<ItemTakenPayload>(ITEM_TAKEN_EVENT, takenPayload);
+        const character = characterRows.find((row) => row.id === characterId);
+        if (character) {
+          const updated = await updateCharacter(supabase, characterId, {
+            inventory: [...character.inventory, { name: claimed.name, quantity: 1 }],
+          });
+          setCharacterRows((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
+        }
+      } catch (err) {
+        setContainerError(errorMessage(err) ?? "Could not take that item.");
+      } finally {
+        setContainerBusy(false);
+      }
+    },
+    [containerBusy, openContainer, characterRows, applyItemTaken]
   );
 
   // The DM's "push this map to the whole party" action (0046) — writes the
@@ -3693,16 +3987,6 @@ export function GameRoom({
   // section already draws.
   const customAssets = useMemo(() => assetList.filter((asset) => asset.source_type === "custom"), [assetList]);
 
-  const ownCharacterIds = useMemo(
-    () =>
-      new Set(
-        characterRows
-          .filter((character) => character.owner_id === currentUserId)
-          .map((character) => character.id)
-      ),
-    [characterRows, currentUserId]
-  );
-
   const characterById = useMemo(
     () => new Map(characterRows.map((character) => [character.id, character])),
     [characterRows]
@@ -4498,6 +4782,14 @@ export function GameRoom({
     [liveMap, currentUserIsDM]
   );
 
+  // Map Editor Batch A4: every object on the current live map worth
+  // showing an Open action for — see LiveMapData.containerObjectIds' own
+  // comment for what populates the id set this filters against.
+  const openableContainers = useMemo(
+    () => (liveMap?.objects ?? []).filter((object) => liveMap?.containerObjectIds.has(object.id) ?? false),
+    [liveMap]
+  );
+
   return (
     <PanelLayoutProvider userId={currentUserId} initialPreferences={initialUiPreferences}>
     <div className={styles.room}>
@@ -5044,6 +5336,8 @@ export function GameRoom({
           entries={interactiveEntries}
           onTrigger={handleTrigger}
           triggerError={triggerError}
+          containers={openableContainers}
+          onOpenContainer={(object) => void handleOpenObjectContainer(object)}
           whiteboardDrawMode={drawMode}
           onToggleWhiteboardDrawMode={handleToggleDrawMode}
           whiteboardTool={whiteboardTool}
@@ -5201,6 +5495,27 @@ export function GameRoom({
           onDelete={handleDeleteHandout}
         />
       </DraggablePanel>
+      {/* Map Editor Batch A4: a chest or pit's opened contents. */}
+      <Modal
+        open={openContainer !== null}
+        onClose={() => {
+          if (containerBusy) return;
+          setOpenContainer(null);
+          setContainerError(null);
+        }}
+        title={openContainer?.source === "pit" ? "You found something…" : "Container"}
+      >
+        {openContainer ? (
+          <ContainerPanel
+            label={openContainer.label}
+            items={openContainer.items}
+            canTake={openContainer.source === "pit" ? true : ownCharacterIds.size > 0}
+            busy={containerBusy}
+            error={containerError}
+            onTake={(item) => void handleTakeContainerItem(item)}
+          />
+        ) : null}
+      </Modal>
       <Modal
         open={handoutPopup !== null}
         onClose={() => setHandoutPopup(null)}
