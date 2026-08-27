@@ -33,6 +33,19 @@
 //     west/north grow, so a hidden trap stays pinned to the same visible
 //     cell instead of drifting onto the wrong one relative to the
 //     now-larger grid.
+//   - 0058 addition (docs/design/whiteboard-drawing-layer.md §8.1): a
+//     map_whiteboard_tiles row (a fourth (map_id, x, y)-keyed table, added
+//     to shift_map_coordinate_table's own allowlist alongside map_cells/
+//     concealed_pits) shifts by the same dx/dy on a west/north grow, its
+//     tile_png bytes byte-for-byte unchanged — proving the whiteboard
+//     drawing layer's own per-cell persistence rides the ALREADY-FIXED
+//     generic shift mechanism (0057) rather than needing a new one. Every
+//     PRE-EXISTING assertion in this script (seed data, atomicity/
+//     authorization, east/south no-op, the four real grows' own cell/
+//     object/token/pit/combat checks) is left completely unchanged — the
+//     whiteboard checks are additive, new checks alongside them, exactly
+//     per this feature's own Notes on how conservatively to extend this
+//     already-shipped, already-relied-upon RPC.
 //
 // Hybrid shape per verify-void-terrain.mjs: service-role client for setup
 // and admin-side assertions, real signed-in clients for the RLS/RPC checks,
@@ -150,19 +163,26 @@ async function makeTestUser(label) {
  * script's exact-match comparisons. */
 async function snapshotMap(mapId) {
   const { data: map } = await admin.from("campaign_maps").select().eq("id", mapId).single();
-  const [{ data: cells }, { data: objects }, { data: tokens }, { data: encounters }, { data: pits }] = await Promise.all([
-    admin.from("map_cells").select().eq("map_id", mapId).order("x").order("y"),
-    admin.from("map_objects").select().eq("map_id", mapId).order("x").order("y"),
-    admin.from("map_tokens").select().eq("map_id", mapId).order("x").order("y"),
-    admin.from("combat_encounters").select().eq("campaign_id", map.campaign_id),
-    // concealed_pits (0050) — DM-only, but the service-role admin client
-    // bypasses RLS the same way it already does for every other table here.
-    // Included in the snapshot (not a separate ad-hoc query) so it rides
-    // along for free in the existing "every rejected call left everything
-    // untouched" whole-snapshot equality check below, exactly like cells/
-    // objects/tokens already do.
-    admin.from("concealed_pits").select().eq("map_id", mapId).order("x").order("y"),
-  ]);
+  const [{ data: cells }, { data: objects }, { data: tokens }, { data: encounters }, { data: pits }, { data: whiteboardTiles }] =
+    await Promise.all([
+      admin.from("map_cells").select().eq("map_id", mapId).order("x").order("y"),
+      admin.from("map_objects").select().eq("map_id", mapId).order("x").order("y"),
+      admin.from("map_tokens").select().eq("map_id", mapId).order("x").order("y"),
+      admin.from("combat_encounters").select().eq("campaign_id", map.campaign_id),
+      // concealed_pits (0050) — DM-only, but the service-role admin client
+      // bypasses RLS the same way it already does for every other table here.
+      // Included in the snapshot (not a separate ad-hoc query) so it rides
+      // along for free in the existing "every rejected call left everything
+      // untouched" whole-snapshot equality check below, exactly like cells/
+      // objects/tokens already do.
+      admin.from("concealed_pits").select().eq("map_id", mapId).order("x").order("y"),
+      // map_whiteboard_tiles (0058) — the whiteboard drawing layer's own
+      // per-cell persistence, a fourth (map_id, x, y)-keyed table added to
+      // shift_map_coordinate_table's allowlist. Same reasoning as pits
+      // above: included here so it rides along for free in the existing
+      // "every rejected call left everything untouched" equality check.
+      admin.from("map_whiteboard_tiles").select().eq("map_id", mapId).order("x").order("y"),
+    ]);
   const encounterIds = (encounters ?? []).map((e) => e.id);
   const { data: combatants } =
     encounterIds.length > 0
@@ -176,6 +196,7 @@ async function snapshotMap(mapId) {
     encounters: encounters ?? [],
     combatants: combatants ?? [],
     pits: pits ?? [],
+    whiteboardTiles: whiteboardTiles ?? [],
   };
 }
 
@@ -297,6 +318,22 @@ try {
   // bottom_elevation_steps) is actually exercised end to end.
   await admin.from("concealed_pits").insert({ map_id: mapId, x: 4, y: 0, bottom_elevation_steps: 3, save_dc: 12 });
 
+  // A whiteboard drawing-layer tile (0058) at (0,4) — the grid's OWN LAST
+  // remaining unused corner ((0,0)/(4,4) are goblin tokens, (4,0) is the
+  // concealed pit, (1,1)/(3,3) are painted cells, (2,2) is the placed
+  // object), so it can never collide with anything else seeded above. A
+  // tiny, valid PNG-header byte sequence, hex-encoded in the exact `\x`-
+  // prefixed wire format bytea/PostgREST actually use (confirmed directly
+  // against this project's own local stack — see src/data-access/
+  // whiteboardTiles.ts's own doc comment) — this script only needs to prove
+  // the raw BYTES survive a coordinate shift unchanged, not exercise the
+  // drawing UI itself (that's scripts/db/verify-whiteboard-drawing.mjs's
+  // job).
+  const WHITEBOARD_TILE_PNG_HEX = "\\x89504e470d0a1a0a0000000d49484452";
+  await admin
+    .from("map_whiteboard_tiles")
+    .insert({ map_id: mapId, x: 0, y: 4, tile_png: WHITEBOARD_TILE_PNG_HEX });
+
   // A live game in progress, mid-combat: a real encounter with non-default
   // round/turn state and two combatants, keyed by token_id (never by
   // coordinate) — this is what should come through every resize completely
@@ -335,6 +372,41 @@ try {
       seedSnapshot.pits[0].bottom_elevation_steps === 3 &&
       seedSnapshot.pits[0].save_dc === 12,
     JSON.stringify({ cells: seedSnapshot.cells, pits: seedSnapshot.pits })
+  );
+  check(
+    "seed data also landed the one whiteboard tile (0058 fixture)",
+    seedSnapshot.whiteboardTiles.length === 1 &&
+      seedSnapshot.whiteboardTiles[0].x === 0 &&
+      seedSnapshot.whiteboardTiles[0].y === 4 &&
+      seedSnapshot.whiteboardTiles[0].tile_png === WHITEBOARD_TILE_PNG_HEX,
+    JSON.stringify(seedSnapshot.whiteboardTiles)
+  );
+
+  // A non-DM member cannot write a whiteboard tile directly (0058 RLS) —
+  // this project's established "gate real actions at the RLS layer, not
+  // just the UI" discipline, checked the exact same way the very next
+  // section checks it for grow_map_grid itself: a real signed-in player
+  // client attempting the write directly against the table, not through
+  // any app code that might client-side-gate it first.
+  const { error: playerWhiteboardWriteError } = await player.client
+    .from("map_whiteboard_tiles")
+    .insert({ map_id: mapId, x: 9, y: 9, tile_png: WHITEBOARD_TILE_PNG_HEX });
+  check(
+    "a non-DM member cannot write a whiteboard tile directly — server-side RLS, not just client-gated (0058)",
+    playerWhiteboardWriteError !== null,
+    String(playerWhiteboardWriteError)
+  );
+  const { data: rejectedWhiteboardRow } = await admin
+    .from("map_whiteboard_tiles")
+    .select()
+    .eq("map_id", mapId)
+    .eq("x", 9)
+    .eq("y", 9)
+    .maybeSingle();
+  check(
+    "the rejected non-DM whiteboard write left no row behind",
+    rejectedWhiteboardRow === null,
+    JSON.stringify(rejectedWhiteboardRow)
   );
 
   // ── 1. Atomicity/authorization: every rejected call leaves EVERYTHING
@@ -446,6 +518,14 @@ try {
     afterEast.pits.length === 1 && afterEast.pits[0].x === 4 && afterEast.pits[0].y === 0 && afterEast.pits[0].bottom_elevation_steps === 3,
     JSON.stringify(afterEast.pits)
   );
+  check(
+    "growing east left the whiteboard tile at its exact original coordinates (0058)",
+    afterEast.whiteboardTiles.length === 1 &&
+      afterEast.whiteboardTiles[0].x === 0 &&
+      afterEast.whiteboardTiles[0].y === 4 &&
+      afterEast.whiteboardTiles[0].tile_png === WHITEBOARD_TILE_PNG_HEX,
+    JSON.stringify(afterEast.whiteboardTiles)
+  );
 
   // ── 4. Grow SOUTH by 3 — pure height bump, nothing moves. ──
   await page.selectOption('[data-testid="grow-edge"]', "south");
@@ -468,6 +548,11 @@ try {
     "growing south left the concealed pit exactly where east already left it (0057 no-regression)",
     JSON.stringify(afterSouth.pits) === JSON.stringify(afterEast.pits),
     JSON.stringify({ afterEast: afterEast.pits, afterSouth: afterSouth.pits })
+  );
+  check(
+    "growing south left the whiteboard tile exactly where east already left it (0058)",
+    JSON.stringify(afterSouth.whiteboardTiles) === JSON.stringify(afterEast.whiteboardTiles),
+    JSON.stringify({ afterEast: afterEast.whiteboardTiles, afterSouth: afterSouth.whiteboardTiles })
   );
 
   // ── 5. Grow WEST by 4 — THE risky case: every x shifts by +4. ──
@@ -540,6 +625,22 @@ try {
     JSON.stringify(westPit)
   );
   check("growing west left exactly one concealed pit row (no duplicate left behind by the delete-then-reinsert)", afterWest.pits.length === 1, JSON.stringify(afterWest.pits));
+  // 0058: the whiteboard drawing layer's own per-cell persistence, riding
+  // the ALREADY-FIXED shift_map_coordinate_table mechanism (0057) via its
+  // extended allowlist — the single highest-risk part of this whole
+  // feature, per this feature's own Notes. Seeded at (0,4); a west grow by
+  // 4 shifts x by +4 only, exactly like every other per-cell table above.
+  const westWhiteboardTile = afterWest.whiteboardTiles.find((t) => t.map_id === mapId);
+  check(
+    "growing west shifted the whiteboard tile's x by exactly +4 (0→4), y untouched, tile_png bytes preserved byte-for-byte (0058)",
+    westWhiteboardTile?.x === 4 && westWhiteboardTile?.y === 4 && westWhiteboardTile?.tile_png === WHITEBOARD_TILE_PNG_HEX,
+    JSON.stringify(westWhiteboardTile)
+  );
+  check(
+    "growing west left exactly one whiteboard tile row (no duplicate left behind by the delete-then-reinsert)",
+    afterWest.whiteboardTiles.length === 1,
+    JSON.stringify(afterWest.whiteboardTiles)
+  );
 
   // ── 6. Grow NORTH by 2 — every y shifts by +2, on top of the west shift. ──
   await page.selectOption('[data-testid="grow-edge"]', "north");
@@ -604,6 +705,25 @@ try {
     JSON.stringify(northPit)
   );
   check("growing north left exactly one concealed pit row", afterNorth.pits.length === 1, JSON.stringify(afterNorth.pits));
+  // 0058, compounded across BOTH risky shifts — the same "still correct
+  // after two consecutive west/north grows, not just one" bar 0057's own
+  // checks above hold cells/pits to, now covering the whiteboard drawing
+  // layer's own per-cell tiles too: draw something, grow west, grow north,
+  // confirm the drawing is still aligned with the same terrain it was
+  // drawn on (this script proves the coordinate math; the pixel-alignment
+  // half of that same acceptance criterion is confirmed by a real drawn
+  // stroke in scripts/db/verify-whiteboard-drawing.mjs).
+  const northWhiteboardTile = afterNorth.whiteboardTiles.find((t) => t.map_id === mapId);
+  check(
+    "growing north shifted the whiteboard tile's y by exactly +2 (4→6) on top of west's x shift (0→4), tile_png bytes still preserved byte-for-byte (0058)",
+    northWhiteboardTile?.x === 4 && northWhiteboardTile?.y === 6 && northWhiteboardTile?.tile_png === WHITEBOARD_TILE_PNG_HEX,
+    JSON.stringify(northWhiteboardTile)
+  );
+  check(
+    "growing north left exactly one whiteboard tile row",
+    afterNorth.whiteboardTiles.length === 1,
+    JSON.stringify(afterNorth.whiteboardTiles)
+  );
 
   // ── 7. The live Game Room table still renders this map cleanly post-resize
   //       (no void cells introduced, no crash) — the "live game in progress"

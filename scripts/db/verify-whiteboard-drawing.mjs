@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// Whiteboard drawing layer verification (docs/design/whiteboard-drawing-layer.md,
-// Prompt 2 — rendering, toolset, draw-mode UI, and undo/redo; persistence
-// and cross-client sync are explicitly a LATER prompt, so this script never
-// reloads a page expecting a drawing to survive it, and never asserts
-// anything about map_whiteboard_tiles or any other database table for the
-// drawing itself).
+// Whiteboard drawing layer verification (docs/design/whiteboard-drawing-layer.md).
+// Prompt 2 shipped rendering/toolset/draw-mode UI/undo-redo, entirely local-
+// state; Prompt 3 added real persistence (map_whiteboard_tiles, 0058) and
+// cross-client sync (the live-tier stream + the persisted-tier broadcast,
+// §5) on top — this script now covers both, extended rather than replaced
+// (every Prompt 2 check below is unmodified; Prompt 3's own checks are new
+// sections layered on top of the same DM+Alice session).
 //
 // Real signed-in Playwright browsers throughout (a DM and a player, Alice),
 // against a live room — the WebGL canvas has no DOM to inspect, so every
@@ -15,24 +16,36 @@
 // gestures are real mouse drags on the canvas at the REAL projected screen
 // point the mirror hands back (onCenterProjectedPosition), not a blind scan.
 //
-// Covers: draw mode toggles via the new MapPanel glyph and only THEN shows
-// the pen/eraser/color/height/undo/redo toolbar; a real freehand drag draws
-// with the selected color (real screenshots); switching to the eraser and
-// dragging over the same ink genuinely deletes it from the sparse per-cell
-// tile store (not a paint-over — tileCount drops to 0 and the touched cell's
-// key disappears entirely); Clear wipes everything and is itself undoable;
-// Undo/Redo restore and re-remove the cleared ink, with the mirrored
-// canUndo/canRedo flags tracking each step exactly; the height slider both
-// updates its own reported value AND genuinely moves the plane in 3D space
-// (the projected center's own screen Y shifts); and — the single highest-risk
-// regression this prompt's own Notes call out — with draw mode toggled back
-// OFF, the SAME DM client's ordinary token-move gesture (TokenPanel's arm/
-// move flow, a plain map-cell click) still works exactly as before, and a
-// totally different player's chair-drag gesture (a different continuous-drag
-// pointer system, exercised on a client that never had whiteboard
-// interactivity at all) is completely unaffected by the whiteboard's
-// always-mounted, non-interactive visual plane having been present in the
-// scene the whole time.
+// Covers (Prompt 2): draw mode toggles via the new MapPanel glyph and only
+// THEN shows the pen/eraser/color/height/undo/redo toolbar; a real freehand
+// drag draws with the selected color (real screenshots); switching to the
+// eraser and dragging over the same ink genuinely deletes it from the
+// sparse per-cell tile store (not a paint-over — tileCount drops to 0 and
+// the touched cell's key disappears entirely); Clear wipes everything and
+// is itself undoable; Undo/Redo restore and re-remove the cleared ink, with
+// the mirrored canUndo/canRedo flags tracking each step exactly; the height
+// slider both updates its own reported value AND genuinely moves the plane
+// in 3D space (the projected center's own screen Y shifts); and — the
+// single highest-risk regression this prompt's own Notes call out — with
+// draw mode toggled back OFF, the SAME DM client's ordinary token-move
+// gesture (TokenPanel's arm/move flow, a plain map-cell click) still works
+// exactly as before, and a totally different player's chair-drag gesture (a
+// different continuous-drag pointer system, exercised on a client that
+// never had whiteboard interactivity at all) is completely unaffected by
+// the whiteboard's always-mounted, non-interactive visual plane having been
+// present in the scene the whole time.
+//
+// Covers (Prompt 3, added by this extension): RLS rejects a non-DM's direct
+// write against map_whiteboard_tiles, server-side, not just client-gated;
+// a connected player sees the DM's ink appear WHILE a stroke is still in
+// progress (the live tier), then converges to exactly the DM's own tiles
+// once it completes (the persisted tier correcting/confirming it); a
+// reload rebuilds the exact same drawing from map_whiteboard_tiles, not
+// from any in-session cache; and a second map's own board is completely
+// unaffected by the first map's drawing, verified with a real player
+// independently viewing that second map (per the per-viewer map system)
+// while the DM keeps drawing on the first, confirmed both in the client
+// render and directly against the database.
 //
 // Needs the local Supabase stack. Starts (or reuses) its own dev server on a
 // dedicated port (this host runs several worktrees/agents side by side and
@@ -308,6 +321,28 @@ try {
     !(await alicePage.locator('[data-testid="whiteboard-draw-toggle"]').isVisible().catch(() => false))
   );
 
+  // ── 1b. RLS (0058, Prompt 3): a non-DM's DIRECT write attempt against
+  //    map_whiteboard_tiles is rejected server-side — this project's
+  //    established "gate real actions at the RLS layer, not just the UI"
+  //    discipline, exercised with Alice's own real signed-in client, not
+  //    through any app code that might merely hide the button. ──
+  const { error: aliceWhiteboardWriteError } = await alice.client
+    .from("map_whiteboard_tiles")
+    .insert({ map_id: mapId, x: 5, y: 5, tile_png: "\\x89504e470d0a1a0a" });
+  check(
+    "a player cannot write a whiteboard tile directly — server-side RLS rejects it, not just client-gated (0058)",
+    aliceWhiteboardWriteError !== null,
+    String(aliceWhiteboardWriteError)
+  );
+  const { data: aliceRejectedRow } = await admin
+    .from("map_whiteboard_tiles")
+    .select()
+    .eq("map_id", mapId)
+    .eq("x", 5)
+    .eq("y", 5)
+    .maybeSingle();
+  check("the rejected player write left no row behind", aliceRejectedRow === null, JSON.stringify(aliceRejectedRow));
+
   // ── 2. Toggle draw mode on — the toolbar appears, and the plane's own
   //    projected center becomes available as a real click target. ──
   await dmPage.click('[data-testid="whiteboard-draw-toggle"]');
@@ -348,7 +383,37 @@ try {
   check("the color picker updates the reported ink color", afterColor.color === INK_COLOR, JSON.stringify(afterColor));
 
   const strokePoints = strokeAround(center);
-  await dragStroke(dmPage, strokePoints);
+
+  // Live sync (Prompt 3, docs/design/whiteboard-drawing-layer.md §5): Alice
+  // — a connected player, on the SAME map, with no reveal step of any kind
+  // — must see the DM's strokes appear AS they're drawn, not only once the
+  // gesture completes and persists. This drives the SAME stroke the rest of
+  // this section already needs (not a separate, extra one this script
+  // would then have to clean back up) but pauses mid-gesture — pointer
+  // still down, no mouseup yet — specifically to check Alice's own board
+  // WHILE the stroke is in progress, which is the only thing that actually
+  // exercises the live tier's own stream rather than the persisted tier's
+  // eventual stroke-end broadcast (§5.1's two genuinely different wire
+  // paths).
+  const aliceBeforeStroke = await whiteboardState(alicePage);
+  check("before any drawing, Alice's own board has no ink yet", aliceBeforeStroke.tileCount === 0, JSON.stringify(aliceBeforeStroke));
+  await dmPage.mouse.move(strokePoints[0].x, strokePoints[0].y);
+  await dmPage.mouse.down();
+  for (const point of strokePoints.slice(1, -1)) {
+    await dmPage.mouse.move(point.x, point.y, { steps: 8 });
+  }
+  // Still mid-gesture — no mouseup yet. The live-tier's own send interval
+  // (WHITEBOARD_STROKE_FLUSH_MS) needs a moment to have actually fired at
+  // least once; waitFor's own polling absorbs that.
+  const aliceMidStroke = await waitFor(() => whiteboardState(alicePage), (s) => s.tileCount > 0, 6000);
+  check(
+    "a connected player sees the DM's ink appear WHILE the stroke is still in progress (the live tier), not only after it completes",
+    aliceMidStroke.tileCount > 0,
+    JSON.stringify(aliceMidStroke)
+  );
+  await dmPage.mouse.move(strokePoints[strokePoints.length - 1].x, strokePoints[strokePoints.length - 1].y, { steps: 8 });
+  await dmPage.mouse.up();
+
   const afterDraw = await waitFor(() => whiteboardState(dmPage), (s) => s.tileCount > 0);
   check(
     "a real freehand drag leaves ink behind — the per-cell tile store is non-empty",
@@ -361,6 +426,21 @@ try {
     JSON.stringify(afterDraw)
   );
   await dmPage.screenshot({ path: join(SCREENSHOT_DIR, "01-drawn-stroke.png") });
+
+  // Once the stroke completes and the persisted tier's own tiles-changed
+  // broadcast lands, Alice's board converges to EXACTLY the DM's own —
+  // proving the persisted tier corrects/confirms the live tier's own
+  // result rather than the two ever silently disagreeing.
+  const aliceAfterStroke = await waitFor(
+    () => whiteboardState(alicePage),
+    (s) => s.tileCount === afterDraw.tileCount
+  );
+  check(
+    "once the stroke completes, the player's board converges to EXACTLY the same tiles as the DM's own",
+    aliceAfterStroke.tileCount === afterDraw.tileCount &&
+      [...aliceAfterStroke.tileKeys].sort().join(",") === [...afterDraw.tileKeys].sort().join(","),
+    JSON.stringify({ dm: afterDraw, alice: aliceAfterStroke })
+  );
 
   // ── 4. The eraser is a REAL destination-out compositing operation: the
   //    touched cell's own tile disappears from the sparse store entirely,
@@ -508,7 +588,155 @@ try {
     JSON.stringify({ before: aliceSeatBefore, after: aliceSeatAfter })
   );
 
-  // ── 9. A final wide screenshot, free camera, for the report. ──
+  // ── 9. Persistence (Prompt 3, docs/design/whiteboard-drawing-layer.md
+  //    §5.3): reloading the page rebuilds the composite canvas from exactly
+  //    what's in map_whiteboard_tiles — the SAME drawing survives, not just
+  //    this session's own in-memory cache (a fresh page load creates a
+  //    wholly new WhiteboardPlane instance with an EMPTY per-map cache, so
+  //    this genuinely exercises the persisted-tier fetch-and-composite path,
+  //    not a cache that merely survived). ──
+  const beforeReload = await whiteboardState(dmPage);
+  check("there is real ink to persist before reloading", beforeReload.tileCount > 0, JSON.stringify(beforeReload));
+  await dmPage.reload();
+  await dmPage.waitForSelector('[data-testid="whiteboard-state"]', { state: "attached", timeout: 60000 });
+  const afterReload = await waitFor(() => whiteboardState(dmPage), (s) => s.tileCount === beforeReload.tileCount, 15000);
+  check(
+    "reloading the page shows the exact same drawing — persisted per-cell, not just cached in this session's memory",
+    afterReload.tileCount === beforeReload.tileCount &&
+      [...afterReload.tileKeys].sort().join(",") === [...beforeReload.tileKeys].sort().join(","),
+    JSON.stringify({ before: beforeReload, after: afterReload })
+  );
+  await dmPage.screenshot({ path: join(SCREENSHOT_DIR, "05-persisted-after-reload.png") });
+
+  // ── 10. Per-map independence (Prompt 3): a SEPARATE map's own board is
+  //    completely unaffected by the DM's drawing on this one — verified
+  //    with a real second map and a player independently viewing it (per
+  //    the per-viewer map system, MapPlan P9) while the DM keeps drawing on
+  //    the FIRST map. ──
+  const mapBId = crypto.randomUUID();
+  await admin.from("campaign_maps").insert({
+    id: mapBId,
+    campaign_id: campaignId,
+    name: "A different map entirely",
+    grid_width: 6,
+    grid_height: 6,
+  });
+
+  // Gives Alice her own character with a token placed on Map B — her own
+  // "effective current map" (ownTokenMapId in GameRoom.tsx, the per-viewer
+  // map system, verify-per-viewer-map.mjs's own technique) now
+  // independently resolves to Map B, regardless of the campaign's shared
+  // live map (still Map A throughout this whole script — campaigns.live_map
+  // is never touched here).
+  const aliceCharacterId = crypto.randomUUID();
+  await admin.from("characters").insert({
+    id: aliceCharacterId,
+    campaign_id: campaignId,
+    owner_id: alice.id,
+    name: "Alice Wayfarer",
+    race: "Human",
+    class: "Rogue",
+    level: 1,
+    strength: 10,
+    dexterity: 14,
+    constitution: 10,
+    intelligence: 10,
+    wisdom: 10,
+    charisma: 10,
+    current_hp: 10,
+    max_hp: 10,
+    armor_class: 12,
+    speed: 30,
+    proficiencies: [],
+    inventory: [],
+    spells: [],
+  });
+  await admin.from("map_tokens").insert({
+    id: crypto.randomUUID(),
+    map_id: mapBId,
+    character_id: aliceCharacterId,
+    x: 0,
+    y: 0,
+    elevation: 0,
+    allegiance: "party",
+  });
+
+  // A fresh navigation (not a reload) — re-runs the effective-map
+  // derivation (ownTokenMapId ?? campaignDefaultMapId), both server- and
+  // client-side, from scratch against this now-placed token, the same way
+  // any real client picks up a change like this.
+  await alicePage.goto(`${APP_URL}/campaigns/${campaignId}/room`);
+  await alicePage.waitForSelector('[data-testid="whiteboard-state"]', { state: "attached", timeout: 60000 });
+  const aliceOnMapB = await waitFor(() => whiteboardState(alicePage), (s) => s.mapId === mapBId, 15000);
+  check(
+    "Alice's own view has independently switched to Map B (per-viewer map system)",
+    aliceOnMapB.mapId === mapBId,
+    JSON.stringify(aliceOnMapB)
+  );
+  check(
+    "Map B's own board starts completely empty — a brand new map with no drawing of its own",
+    aliceOnMapB.tileCount === 0,
+    JSON.stringify(aliceOnMapB)
+  );
+
+  // The DM (still on Map A the whole script) draws again. Draw mode is
+  // local-only UI state (never persisted, per the owner's own §7.2 design
+  // decision) — the page reload in section 9 above reset it to off, and
+  // reset the height slider to its own default too, so both need
+  // re-establishing (and `center` re-deriving from the freshly reported
+  // centerScreenPoint) exactly like every other post-reload/post-height-
+  // change stroke earlier in this script already does.
+  await dmPage.bringToFront();
+  const dmStillOnMapA = await whiteboardState(dmPage);
+  check("the DM's own view never left Map A", dmStillOnMapA.mapId === mapId, JSON.stringify(dmStillOnMapA));
+  await dmPage.click('[data-testid="whiteboard-draw-toggle"]');
+  const dmDrawModeBackOn = await waitFor(() => whiteboardState(dmPage), (s) => s.drawMode === true);
+  check("draw mode is back on for this second round of drawing", dmDrawModeBackOn.drawMode === true, JSON.stringify(dmDrawModeBackOn));
+  const dmCenterAfterReload = await waitFor(() => whiteboardState(dmPage), (s) => s.centerScreenPoint !== null, 5000);
+  center = centerAbs(dmCenterAfterReload);
+  // Clear first — the reloaded height reverted to its own default (1.2),
+  // which happens to reproject to the SAME screen point section 3's very
+  // first stroke already used, so redrawing there without clearing first
+  // would just re-ink cells already inked and never move tileCount at all,
+  // even though a real stroke genuinely happened (a false-negative risk in
+  // THIS check, not a real product bug). Clearing first makes "did this
+  // stroke land" unambiguous regardless of exactly where on the board it
+  // falls, the same simple tileCount > 0 shape sections 3/6 already use.
+  await dmPage.click('[data-testid="whiteboard-clear"]');
+  await waitFor(() => whiteboardState(dmPage), (s) => s.tileCount === 0);
+  const beforeIndependenceDraw = 0;
+  await dragStroke(dmPage, strokeAround(center));
+  const afterIndependenceDraw = await waitFor(() => whiteboardState(dmPage), (s) => s.tileCount > beforeIndependenceDraw);
+  check(
+    "the DM's new stroke really did land on Map A",
+    afterIndependenceDraw.tileCount > beforeIndependenceDraw,
+    JSON.stringify(afterIndependenceDraw)
+  );
+
+  // Give any stray broadcast a moment to arrive, then confirm it did NOT —
+  // Alice, independently viewing Map B, never evaluates a Map-A-scoped
+  // event at all (§5.2's own "simply ignores the event" wording is what
+  // this is confirming, not just an absence of effort to send it to her).
+  await sleep(1200);
+  const aliceStillOnMapB = await whiteboardState(alicePage);
+  check(
+    "a drawing on Map A does not appear on Map B for a player independently viewing it",
+    aliceStillOnMapB.mapId === mapBId && aliceStillOnMapB.tileCount === 0,
+    JSON.stringify(aliceStillOnMapB)
+  );
+
+  // Confirmed directly against the database too, not just the client-side
+  // render mirror: Map B's own map_whiteboard_tiles rows stay at zero
+  // throughout, while Map A's are genuinely non-empty.
+  const { data: mapBTiles } = await admin.from("map_whiteboard_tiles").select().eq("map_id", mapBId);
+  const { data: mapATiles } = await admin.from("map_whiteboard_tiles").select().eq("map_id", mapId);
+  check(
+    "Map B has zero persisted whiteboard tiles; Map A has real ones — independence confirmed at the database, not just the render",
+    (mapBTiles ?? []).length === 0 && (mapATiles ?? []).length > 0,
+    JSON.stringify({ mapBTiles, mapATilesCount: (mapATiles ?? []).length })
+  );
+
+  // ── 11. A final wide screenshot, free camera, for the report. ──
   await dmPage.bringToFront();
   await dmPage.click('[data-testid="camera-mode-toggle"]');
   await sleep(400);

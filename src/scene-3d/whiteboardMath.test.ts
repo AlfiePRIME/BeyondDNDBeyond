@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   cellKey,
+  gridPointToPixel,
   pixelToCell,
+  pixelToGridPoint,
   planeSizeWorldUnits,
   sampleSegmentCells,
   TILE_PX,
@@ -105,6 +107,31 @@ describe("sampleSegmentCells", () => {
     const point = { x: TILE_PX - 5, y: TILE_PX / 2 };
     const cells = sampleSegmentCells(null, point, 0);
     expect(cells).toEqual([{ x: 0, y: 0 }]);
+  });
+});
+
+describe("pixelToGridPoint / gridPointToPixel round trip", () => {
+  it("is the exact inverse of each other for an arbitrary pixel coordinate", () => {
+    const cases = [
+      { pixelX: 0, pixelY: 0 },
+      { pixelX: TILE_PX, pixelY: TILE_PX * 2 },
+      { pixelX: 37.5, pixelY: 210.25 },
+    ];
+    for (const { pixelX, pixelY } of cases) {
+      const { u, v } = pixelToGridPoint(pixelX, pixelY);
+      const backToPixel = gridPointToPixel(u, v);
+      expect(backToPixel.pixelX).toBeCloseTo(pixelX);
+      expect(backToPixel.pixelY).toBeCloseTo(pixelY);
+    }
+  });
+
+  it("is resolution-independent — a fixed cell-relative fraction stays the same regardless of TILE_PX", () => {
+    // Cell 2's own center, expressed in grid-space units, is exactly 2.5 —
+    // independent of whatever TILE_PX happens to be, which is the whole
+    // point of transmitting live-tier points in this unit rather than raw
+    // pixels (docs/design/whiteboard-drawing-layer.md §5.2).
+    const point = pixelToGridPoint(2 * TILE_PX + TILE_PX / 2, 0);
+    expect(point.u).toBeCloseTo(2.5);
   });
 });
 

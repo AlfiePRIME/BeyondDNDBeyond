@@ -33,8 +33,11 @@ import type { TokenSlidePhase } from "./useTokenSlide";
 import {
   WhiteboardPlane,
   type WhiteboardDebugState,
+  type WhiteboardGridPoint,
   type WhiteboardHandle,
   type WhiteboardHistoryState,
+  type WhiteboardTileData,
+  type WhiteboardTileUpdate,
   type WhiteboardTool,
 } from "./WhiteboardPlane";
 import { DEFAULT_WHITEBOARD_COLOR, DEFAULT_WHITEBOARD_HEIGHT } from "./whiteboardMath";
@@ -618,6 +621,15 @@ export interface TableLiveMap {
   cells: readonly MapSurfaceCell[];
   objects: readonly MapSurfaceObject[];
   tokens: readonly MapSurfaceToken[];
+  /** This map's own already-persisted whiteboard tiles (docs/design/
+   * whiteboard-drawing-layer.md §5.3) — fetched by GameRoom as part of the
+   * same per-viewer map bundle every load/switch already re-fetches, and
+   * passed straight through to WhiteboardPlane's own `initialTiles` prop to
+   * hydrate its composite canvas. Defaults to an empty array for any
+   * existing caller that hasn't been updated (none currently) — never
+   * required for TableLiveMap's own core meaning, which predates the
+   * whiteboard feature. */
+  whiteboardTiles?: readonly WhiteboardTileData[];
 }
 
 export interface GameTableSceneProps {
@@ -797,6 +809,20 @@ export interface GameTableSceneProps {
    * straight through as WhiteboardPlane's own `ref` — a plain callback prop
    * is already exactly the shape a React ref callback needs. */
   onWhiteboardHandleReady?: (handle: WhiteboardHandle | null) => void;
+  /** Persistence and live sync (docs/design/whiteboard-drawing-layer.md §5,
+   * Prompt 3) — straight pass-throughs to WhiteboardPlane's own identically-
+   * named props/imperative-handle methods; see WhiteboardPlane.tsx's own
+   * doc comments for what each one means. GameTableScene stays a pure
+   * pass-through here (no data-access, no realtime channel) — GameRoom.tsx
+   * is the actual orchestrator for all of it. */
+  onWhiteboardLocalStrokeStart?: (
+    mapId: string,
+    info: { strokeId: string; tool: WhiteboardTool; color: string; point: WhiteboardGridPoint }
+  ) => void;
+  onWhiteboardLocalStrokePoint?: (mapId: string, strokeId: string, point: WhiteboardGridPoint) => void;
+  onWhiteboardLocalStrokeEnd?: (mapId: string, strokeId: string) => void;
+  onWhiteboardTilesPersist?: (mapId: string, changes: readonly WhiteboardTileUpdate[]) => void;
+  onWhiteboardClearPersist?: (mapId: string) => void;
 }
 
 // Stable empty-Map default for GameTableSceneProps.seatOffsets — a fresh
@@ -864,6 +890,11 @@ export function GameTableScene({
   onWhiteboardDebug,
   onWhiteboardCenterProjectedPosition,
   onWhiteboardHandleReady,
+  onWhiteboardLocalStrokeStart,
+  onWhiteboardLocalStrokePoint,
+  onWhiteboardLocalStrokeEnd,
+  onWhiteboardTilesPersist,
+  onWhiteboardClearPersist,
 }: GameTableSceneProps) {
   const lighting = DAY_NIGHT_PRESETS[dayNightMode];
   const { camera, gl, size } = useThree();
@@ -1504,6 +1535,12 @@ export function GameTableScene({
               onHistoryChange={onWhiteboardHistoryChange}
               onDebug={onWhiteboardDebug}
               onCenterProjectedPosition={onWhiteboardCenterProjectedPosition}
+              initialTiles={liveMap.whiteboardTiles}
+              onLocalStrokeStart={onWhiteboardLocalStrokeStart}
+              onLocalStrokePoint={onWhiteboardLocalStrokePoint}
+              onLocalStrokeEnd={onWhiteboardLocalStrokeEnd}
+              onTilesPersist={onWhiteboardTilesPersist}
+              onClearPersist={onWhiteboardClearPersist}
             />
           </group>
         </>
