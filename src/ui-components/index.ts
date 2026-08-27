@@ -20,6 +20,18 @@ export {
   type ChatFormatFlag,
 } from "./chatFormatting";
 export { computeChatBubbleDurationMs } from "./chatBubbleTiming";
+// Weather & Enemies C3: the deterministic, clock-derived thunderstorm
+// lightning schedule (see lightning.ts's own doc comment for why this is
+// the cross-client synchronization mechanism, not a realtime broadcast) and
+// the plain DOM overlay component that renders it — NOT a CanvasUI/WebGL
+// effect like Droplets below, just a screen-space white flash div.
+export {
+  computeLightningFlash,
+  seedFromString,
+  LIGHTNING_BUCKET_MS,
+  type LightningFlashState,
+} from "./lightning";
+export { LightningFlash, type LightningFlashProps } from "./LightningFlash";
 
 // CanvasUI WebGL effects (installed via `shadcn add @canvas-ui/...`).
 // Glitch: broadcast glitch bursts — matches the ported glitch-a/glitch-b

@@ -5,13 +5,16 @@ import {
   CHAT_COLOR_CODES,
   ChatText,
   ChoiceCard,
+  computeLightningFlash,
   Glitch,
+  LightningFlash,
   Modal,
   MODULE_NAME,
   Panel,
   parseChatFormatting,
   SectionHeader,
   Select,
+  seedFromString,
   TextInput,
   VHS,
 } from "@/ui-components";
@@ -35,5 +38,11 @@ describe("ui-components module", () => {
   it("exports the chat formatting parser and its color table", () => {
     expect(parseChatFormatting).toBeTypeOf("function");
     expect(CHAT_COLOR_CODES["4"]).toBeTypeOf("string");
+  });
+
+  it("exports the thunderstorm lightning overlay and its deterministic schedule (Weather & Enemies C3)", () => {
+    expect(LightningFlash).toBeTypeOf("function");
+    expect(computeLightningFlash).toBeTypeOf("function");
+    expect(seedFromString("x")).toBeTypeOf("number");
   });
 });
