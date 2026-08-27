@@ -863,14 +863,23 @@ export function GameRoom({
   // user_id, then by that specific roll's own dieIndex, so a percentile
   // pair's two dice (tens + ones) both land in the same rollId entry
   // instead of clobbering each other.
+  // usedPhysics (docs/design/dice-numbers-and-physics.md §9): whether THIS
+  // roll's tumble actually ran through physicsDiceAnimator rather than
+  // falling back to scriptedDiceAnimator — scripts/db/verify-dice-physics.mjs
+  // and scripts/perf/dice-physics-benchmark.mjs both read this to confirm
+  // real physics genuinely ran, not just that the (always-correct-either-way)
+  // result was right.
   const [diceFaceLabelsDebugByUser, setDiceFaceLabelsDebugByUser] = useState<
-    Record<string, { rollId: string; dice: Record<number, { sides: number; result: number; label: string }> }>
+    Record<
+      string,
+      { rollId: string; dice: Record<number, { sides: number; result: number; label: string; usedPhysics: boolean }> }
+    >
   >({});
   const handleDieSettledDebug = useCallback((userId: string, info: DiceFaceSettledInfo) => {
     setDiceFaceLabelsDebugByUser((current) => {
       const existing = current[userId];
       const dice = existing && existing.rollId === info.rollId ? { ...existing.dice } : {};
-      dice[info.dieIndex] = { sides: info.sides, result: info.result, label: info.label };
+      dice[info.dieIndex] = { sides: info.sides, result: info.result, label: info.label, usedPhysics: info.usedPhysics };
       return { ...current, [userId]: { rollId: info.rollId, dice } };
     });
   }, []);

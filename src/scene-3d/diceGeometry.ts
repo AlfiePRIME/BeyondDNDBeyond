@@ -29,6 +29,14 @@ export const DIE_KINDS: readonly DieKind[] = ["d4", "d6", "d8", "d10", "d12", "d
 
 const SIDES_BY_KIND: Record<DieKind, number> = { d4: 4, d6: 6, d8: 8, d10: 10, d12: 12, d20: 20 };
 
+/** Every die's rendered size (the "radius"-ish argument fed to
+ * buildDieGeometry) — the one shared constant DiceTumble.tsx's visual mesh
+ * AND diceAnimator.ts's physics collider both build from
+ * (docs/design/dice-numbers-and-physics.md §8: the collider is built
+ * directly from buildDieGeometry's own vertices, at this same size, so the
+ * two can never silently drift into physically different-sized shapes). */
+export const DIE_SIZE = 0.13;
+
 /** Maps a rolled term's side count to a DieKind with real geometry. Returns
  * null for anything the free-form notation box can produce that isn't one
  * of the six standard shapes (d100, d3, d2, ...) — DieMesh falls back to a
