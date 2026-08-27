@@ -82,6 +82,26 @@
   padding: 20px;
 }
 
+/* ── Activity page (DmBookActivityPage.tsx, Chat & Summary B5) ──
+   Just a padded wrapper around two stacked sections — every actual list-item
+   style (roomStyles.rollList/rollEntry/rollMeta/rollHeadline/rollDetail,
+   roomStyles.diceSectionLabel/hint) is reused verbatim from room.module.css,
+   the exact visual language DiceLogPanel's own roll feed already uses, so a
+   DM reading triggers/pickups/damage here sees the same list styling as
+   everywhere else rolls show up. */
+.activityPage {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px;
+}
+
+.activitySection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .dayNightHint {
   margin: 0;
   font-family: var(--font-m);

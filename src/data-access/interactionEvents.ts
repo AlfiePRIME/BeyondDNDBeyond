@@ -8,9 +8,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * CHECK constraint enforces this at the DB level), since a concealed pit is
  * not a MapObject at all.
  *
- * No UI reads this yet — it exists purely as plumbing for the live DM
- * activity feed / end-of-session summary a later Chat & Summary track
- * prompt builds on top of it.
+ * Chat & Summary B5: read by DmBookActivityPage (the DM's book's live
+ * Activity page) via listInteractionEvents/subscribeToInteractionEvents
+ * below — the "who triggered/took what, and when" half of that feed, the
+ * roll_log damage feed being the other half. A later Chat & Summary track
+ * prompt (B6, the end-of-session summary) builds on the same read path.
  */
 export interface InteractionEvent {
   id: string;
@@ -77,9 +79,7 @@ export async function createInteractionEvent(
 
 /** Every interaction event for a campaign, most recent first — DM-only
  * readable (0059), so a player's client gets an empty list back rather than
- * an error. Unused by any UI yet (see this module's own doc comment); kept
- * here so the Chat & Summary track's activity feed/summary prompts have a
- * real read path to build on instead of reinventing one. */
+ * an error. Read by Chat & Summary B5's live DM activity feed (DmBookActivityPage). */
 export async function listInteractionEvents(
   supabase: SupabaseClient,
   campaignId: string
@@ -92,4 +92,51 @@ export async function listInteractionEvents(
 
   if (error) throw error;
   return data ?? [];
+}
+
+/**
+ * Fires `handler` with every newly logged interaction event in the
+ * campaign — the subscribeToChatMessages/subscribeToRollLog postgres_changes
+ * shape, INSERT-only since 0059 has no UPDATE or DELETE policy at all (every
+ * row is write-once). Per-subscriber visibility rides the table's own
+ * DM-only SELECT policy: a non-DM subscriber's socket simply never receives
+ * anything, the same silent-empty-list posture listInteractionEvents above
+ * already has.
+ */
+export function subscribeToInteractionEvents(
+  supabase: SupabaseClient,
+  campaignId: string,
+  handler: (event: InteractionEvent) => void
+): () => void {
+  let removed = false;
+  let channel: ReturnType<SupabaseClient["channel"]> | null = null;
+
+  void (async () => {
+    // Same deterministic-claims dance as subscribeToChatMessages/
+    // subscribeToRollLog: without the explicit setAuth, the socket can join
+    // as anon and RLS silently drops every event.
+    const { data } = await supabase.auth.getSession();
+    if (removed) return;
+    if (data.session) await supabase.realtime.setAuth(data.session.access_token);
+    if (removed) return;
+
+    channel = supabase
+      .channel(`interaction-events:${campaignId}:${crypto.randomUUID()}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "interaction_events",
+          filter: `campaign_id=eq.${campaignId}`,
+        },
+        (payload) => handler(payload.new as InteractionEvent)
+      )
+      .subscribe();
+  })();
+
+  return () => {
+    removed = true;
+    if (channel) void supabase.removeChannel(channel);
+  };
 }
