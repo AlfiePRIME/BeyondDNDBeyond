@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
+import type { RootState } from "@react-three/fiber";
 import {
   addCombatant,
   addFreeformCombatant,
@@ -140,7 +141,7 @@ import {
   type VisibilityCellInput,
   type VisibilityTier,
 } from "@/rules-engine";
-import { Badge, Button, computeChatBubbleDurationMs, Modal } from "@/ui-components";
+import { Badge, Button, computeChatBubbleDurationMs, Droplets, Modal } from "@/ui-components";
 import {
   applySeatOffset,
   ChatBubble,
@@ -1813,12 +1814,64 @@ export function GameRoom({
   const [dayNightError, setDayNightError] = useState<string | null>(null);
   // The DM's weather control (Weather & Enemies C1), live-synced below via
   // the same campaigns postgres_changes feed as dayNightMode/economyStrict.
-  // Only 'clear'/'fog' actually change anything rendered as of this prompt
-  // — see GameTableScene's resolveSceneFog.
+  // 'clear'/'fog' change the scene's own fog (GameTableScene's
+  // resolveSceneFog); 'rain' additionally activates the Droplets overlay
+  // below (Weather & Enemies C2). 'thunderstorm'/'firestorm'/'acid_storm'
+  // remain reserved for C3/C4.
   const [weatherKind, setWeatherKindState] = useState<WeatherKind>(initialWeatherKind);
   const [weatherMechanical, setWeatherMechanicalState] = useState(initialWeatherMechanical);
   const [weatherBusy, setWeatherBusy] = useState(false);
   const [weatherError, setWeatherError] = useState<string | null>(null);
+  // Weather & Enemies C2: the Game Room's own live R3F canvas element,
+  // captured via <Canvas onCreated> below so Droplets can read it directly
+  // as a WebGL texture source every frame — see Droplets.tsx's own doc
+  // comment for why this replaces the Glitch/VHS DOM-capture pattern for a
+  // continuously-updating WebGL surface. Starts null until R3F finishes
+  // creating its renderer on first mount.
+  const [gameCanvasEl, setGameCanvasEl] = useState<HTMLCanvasElement | null>(null);
+  const handleCanvasCreated = useCallback((state: RootState) => {
+    setGameCanvasEl(state.gl.domElement);
+  }, []);
+  // Droplets is mounted lazily — the FIRST time this session's weather
+  // actually becomes 'rain' — rather than unconditionally from page load,
+  // and then stays mounted for the rest of the page's lifetime (never
+  // torn down again even if weather later leaves 'rain'). This is a
+  // deliberate, narrower reading of "always-present overlay" than literal
+  // "present from t=0 regardless of whether it's ever used": mounting
+  // Droplets' own <canvas> unconditionally adds a SECOND <canvas> element
+  // to every Game Room page, which broke every existing verify-*.mjs
+  // script's generic `page.locator("canvas")` (a real regression, caught
+  // by actually running one) — dozens of them, none related to weather,
+  // all assuming exactly one canvas. Lazy-mounting preserves this
+  // prompt's actual perf intent (no WebGL-context recreation across
+  // repeated rain toggles within one session, since it stays mounted once
+  // triggered) while adding zero DOM footprint to the overwhelming
+  // majority of sessions that never touch rain at all — see this prompt's
+  // own final report for the full reasoning.
+  // "Adjusting state when a prop changes" during render (React's own
+  // sanctioned pattern for this, tracking the previously-seen value in a
+  // second state slot) rather than a useEffect — a plain
+  // `useEffect(() => { if (weatherKind === "rain") setDropletsMounted(true); }, [weatherKind])`
+  // trips this project's own lint (react-hooks/set-state-in-effect: calling
+  // setState unconditionally inside an effect body risks cascading
+  // renders), and mutating a ref during render trips a separate rule
+  // (react-hooks/refs) — this is the lint-clean, React-recommended way to
+  // latch a boolean the first time a prop hits a given value.
+  const [dropletsMounted, setDropletsMounted] = useState(initialWeatherKind === "rain");
+  const [prevWeatherKindForDroplets, setPrevWeatherKindForDroplets] = useState(weatherKind);
+  if (weatherKind !== prevWeatherKindForDroplets) {
+    setPrevWeatherKindForDroplets(weatherKind);
+    if (weatherKind === "rain" && !dropletsMounted) setDropletsMounted(true);
+  }
+  // Whether Droplets' own WebGL2 instance actually initialized — mirrored
+  // below (droplets-state) for verify-rain.mjs, so a real Playwright check
+  // can confirm the effect genuinely came up rather than silently
+  // degrading, without needing to pixel-diff a screenshot just to know
+  // whether a shader is even running.
+  const [dropletsReady, setDropletsReady] = useState(false);
+  const handleDropletsStatusChange = useCallback((status: { ready: boolean }) => {
+    setDropletsReady(status.ready);
+  }, []);
   // Chat & Summary B6: pause/resume, live-synced below via the same
   // campaigns postgres_changes feed as economyStrict/dayNightMode.
   // sessionPaused (derived, not its own state) is the "stopped for a break,
@@ -5460,7 +5513,17 @@ export function GameRoom({
   return (
     <PanelLayoutProvider userId={currentUserId} initialPreferences={initialUiPreferences}>
     <div className={styles.room}>
-      <Canvas shadows dpr={[1, 2]}>
+      <Canvas
+        shadows
+        dpr={[1, 2]}
+        // Weather & Enemies C2: preserveDrawingBuffer so Droplets' own,
+        // structurally separate rAF capture loop can never race this
+        // renderer's own frame presentation — see Droplets.tsx's own doc
+        // comment (the spike's `preserveDrawingBuffer` section) for why
+        // this is a defensive-correctness choice, not a perf-free one.
+        gl={{ preserveDrawingBuffer: true }}
+        onCreated={handleCanvasCreated}
+      >
         <GameTableScene
           members={roster}
           currentUserId={currentUserId}
@@ -5629,6 +5692,27 @@ export function GameRoom({
           );
         })}
       </Canvas>
+      {/* Weather & Enemies C2: a rain-on-glass overlay, lazily mounted the
+          first time this session's weather becomes 'rain' and never torn
+          down again after that (see dropletsMounted's own doc comment for
+          why this reads "always-present" narrowly rather than literally
+          "mounted from page load regardless of use") — only visually
+          active while weatherKind is 'rain'. See Droplets.tsx's own doc
+          comment for the full capture-technique writeup. Placed
+          immediately after </Canvas> and before every 2D DOM panel below
+          so it paints above the 3D scene but beneath the book/chat/toolbar
+          chrome (plain DOM paint order, no z-index needed). Its own output
+          canvas is pointer-events:none, so it never intercepts cell
+          clicks, chair drags, or panel interactions — Droplets' own
+          optional interactive pointer-wipe is left off, per this prompt's
+          acceptance criteria. */}
+      {dropletsMounted ? (
+        <Droplets
+          sourceCanvas={gameCanvasEl}
+          active={weatherKind === "rain"}
+          onStatusChange={handleDropletsStatusChange}
+        />
+      ) : null}
       {/* Chat & Summary B3: the minimal, not-yet-docked chat input — see
           ChatDock.tsx's own doc comment for why this isn't a DraggablePanel
           entry (B4 supersedes it outright). */}
@@ -5677,6 +5761,17 @@ export function GameRoom({
           mechanical: weatherMechanical,
           fog: resolveSceneFog(dayNightMode, weatherKind),
         })}
+      </div>
+      {/* Hidden render-state mirror for verify-rain.mjs (Weather & Enemies
+          C2) — WebGL has no DOM of its own, same reasoning as weather-state
+          above. `mounted` reflects whether Droplets' <canvas> has ever been
+          added to the DOM this session (lazy — see dropletsMounted's own
+          doc comment); `ready` reflects its WebGL2 instance actually
+          initializing once mounted (not silently degrading) and is false
+          while unmounted; `active` mirrors what this client told Droplets
+          to show, which should track weatherKind === 'rain' exactly. */}
+      <div data-testid="droplets-state" hidden>
+        {JSON.stringify({ mounted: dropletsMounted, ready: dropletsReady, active: weatherKind === "rain" })}
       </div>
       {/* Hidden render-state mirror for verify-per-viewer-map.mjs (0046):
           no DOM otherwise exposes campaignDefaultMapId/dmSelectedMapId/

@@ -25,10 +25,17 @@ export { computeChatBubbleDurationMs } from "./chatBubbleTiming";
 // Glitch: broadcast glitch bursts — matches the ported glitch-a/glitch-b
 // vocabulary. VHS: worn-tape scanline/chroma-bleed CRT texture. ForceField:
 // energy-shield lattice with click shockwaves. Peel: peels the page back
-// from an edge in 3D, book-page style. All are dependency-free, degrade
-// gracefully without html-in-canvas support, and respect
-// prefers-reduced-motion. Reserve for hero moments and accents.
+// from an edge in 3D, book-page style. All four capture STATIC HTML content
+// via the experimental html-in-canvas API and degrade gracefully without
+// it (confirmed NOT present in this project's real target Chromium — see
+// Droplets' own doc comment for the direct evidence). Reserve for hero
+// moments and accents.
 export { Glitch, type GlitchProps, type GlitchOptions } from "./canvasui/Glitch";
 export { VHS, type VHSProps, type VHSOptions } from "./canvasui/VHS";
 export { ForceField, type ForceFieldProps, type ForceFieldOptions } from "./canvasui/ForceField";
 export { Peel, type PeelProps, type PeelOptions } from "./canvasui/Peel";
+// Droplets (Weather & Enemies C2): rain-on-glass refraction over the Game
+// Room's own live R3F canvas — captured directly via WebGL texImage2D, NOT
+// through the html-in-canvas path the other four use (see its own doc
+// comment for the full spike writeup). Reused as-is by C3's thunderstorm.
+export { Droplets, type DropletsProps, type DropletsOptions } from "./canvasui/Droplets";
