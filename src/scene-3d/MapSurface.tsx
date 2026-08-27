@@ -477,6 +477,16 @@ export interface MapSurfaceObject {
    * genuinely recolor the glTF's own materials — per-instance-cloned first
    * so it never leaks onto any other placed instance of the same asset. */
   tint?: string | null;
+  /** Map Editor Batch A7 (wall-mounted torches): a sub-cell visual nudge, in
+   * CELL-FRACTION units (0.5 = half a cell), added on top of the cell-center
+   * position `x`/`y` already place this object at — absent/0 (every object
+   * predating this feature, and every ordinary floor-standing placement
+   * today) renders at exactly the same cell-center position as before. The
+   * caller derives this from wallMount.ts's resolveWallMountOffset for a
+   * wall-mounted object; MapSurface itself has no notion of "mounting" at
+   * all, just this plain numeric offset. */
+  renderOffsetX?: number;
+  renderOffsetZ?: number;
 }
 
 interface ObjectMarkerProps {
@@ -500,6 +510,19 @@ interface ObjectMarkerProps {
   onPoseDebug?: (id: string, compatible: boolean) => void;
   /** Verification-only: see MapSurfaceProps.onObjectMeasureDebug's doc comment. */
   onMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
+  /** Map Editor Batch A7: mirrors this marker's own hover state (the exact
+   * pointer-over/out this component already tracks locally for its own TEAL
+   * ring below) out to a caller that wants to know "is the pointer
+   * currently over object X" — the map editor's Torch-preset wall-mount
+   * hover UI. Piggybacks on the SAME `selectable` hit-box handlers rather
+   * than adding a second mesh, so it only ever fires while this marker is
+   * already a click target (Place mode's object tool). Omit it (as every
+   * caller except the editor's own wall-mount UI does) and nothing about
+   * hover rendering changes. The raw ThreeEvent is forwarded (the onSelect
+   * precedent above) so a caller can read clientX/clientY — the map
+   * editor's wall-mount picker positions its DOM popover at the hover-in
+   * point, the exact QuickPlacePopover precedent for a click. */
+  onHoverChange?: (id: string, hovering: boolean, event: ThreeEvent<PointerEvent>) => void;
 }
 
 // The invisible hit box exists because raycasting against the glTF's own
@@ -535,6 +558,7 @@ const ObjectMarker = memo(function ObjectMarker({
   onSelect,
   onPoseDebug,
   onMeasureDebug,
+  onHoverChange,
 }: ObjectMarkerProps) {
   const [hovered, setHovered] = useState(false);
   return (
@@ -579,8 +603,12 @@ const ObjectMarker = memo(function ObjectMarker({
           onPointerOver={(event) => {
             event.stopPropagation();
             setHovered(true);
+            onHoverChange?.(id, true, event);
           }}
-          onPointerOut={() => setHovered(false)}
+          onPointerOut={(event) => {
+            setHovered(false);
+            onHoverChange?.(id, false, event);
+          }}
           position={[0, HIT_BOX_HEIGHT / 2, 0]}
         >
           <boxGeometry args={[PLACED_OBJECT_SIZE, HIT_BOX_HEIGHT, PLACED_OBJECT_SIZE]} />
@@ -1083,6 +1111,11 @@ export interface MapSurfaceProps {
    * cell beneath; when absent they're inert and clicks fall through to the
    * cell, so sculpt tools still paint occupied cells. */
   onSelectObject?: (id: string, event: ThreeEvent<PointerEvent>) => void;
+  /** Map Editor Batch A7: fires whenever the pointer enters/leaves a placed
+   * object's own hit box — see ObjectMarkerProps.onHoverChange's doc
+   * comment. Omit it (as every caller except the editor's own wall-mount
+   * hover UI does) and nothing about hover rendering changes. */
+  onObjectHover?: (id: string, hovering: boolean, event: ThreeEvent<PointerEvent>) => void;
   /** Raw per-cell pointer hooks — stroke semantics (paint dedup, click vs
    * drag) stay in the editor scene, not here. Omit both for an inert map. */
   onCellPointerDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
@@ -1152,6 +1185,7 @@ export function MapSurface({
   tokens,
   gridOverlay = false,
   onSelectObject,
+  onObjectHover,
   onCellPointerDown,
   onCellPointerOver,
   onTokenPointerDown,
@@ -1251,8 +1285,8 @@ export function MapSurface({
         <ObjectMarker
           key={object.id}
           id={object.id}
-          worldX={object.x * cellSize - offsetX}
-          worldZ={object.y * cellSize - offsetZ}
+          worldX={(object.x + (object.renderOffsetX ?? 0)) * cellSize - offsetX}
+          worldZ={(object.y + (object.renderOffsetZ ?? 0)) * cellSize - offsetZ}
           topY={baseHeight + object.elevation * elevationStepHeight}
           scale={cellSize}
           rotation={object.rotation}
@@ -1267,6 +1301,7 @@ export function MapSurface({
           onSelect={onSelectObject ?? NOOP_SELECT}
           onPoseDebug={onObjectPoseDebug}
           onMeasureDebug={onObjectMeasureDebug}
+          onHoverChange={onObjectHover}
         />
       ))}
 
