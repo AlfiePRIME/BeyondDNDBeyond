@@ -214,7 +214,19 @@ async function mapObjectRow(objectId) {
 }
 
 async function aliceTintDebug(page) {
-  const text = await textOrNull(page, "table-surface-state");
+  // NOT textOrNull: table-surface-state is GameRoom.tsx's own hidden
+  // render-state mirror (see its own doc comment: "Hidden render-state
+  // mirror for verify-void-terrain.mjs") — it carries the literal HTML
+  // `hidden` attribute UNCONDITIONALLY, on every render, precisely so a
+  // verify script can read it at any time. That `hidden` attribute makes
+  // Playwright's isVisible() return false forever, regardless of content —
+  // textOrNull's own isVisible gate is correct for a REAL UI element that's
+  // only conditionally rendered (like object-tint-current below), but wrong
+  // here, where "hidden" is the mirror's permanent, intentional state.
+  // Every other verify script reading this same div (e.g.
+  // verify-map-grid-growth.mjs's tableMirrorText) calls page.textContent
+  // directly for exactly this reason.
+  const text = await page.textContent('[data-testid="table-surface-state"]').catch(() => null);
   if (!text) return null;
   try {
     return JSON.parse(text).tintByObjectId ?? null;
