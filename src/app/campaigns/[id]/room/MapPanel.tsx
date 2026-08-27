@@ -70,6 +70,8 @@ export function MapPanel({
   entries,
   onTrigger,
   triggerError,
+  containers,
+  onOpenContainer,
   whiteboardDrawMode,
   onToggleWhiteboardDrawMode,
   whiteboardTool,
@@ -108,6 +110,15 @@ export function MapPanel({
   entries: InteractiveEntry[];
   onTrigger: (object: MapObject) => void;
   triggerError: string | null;
+  /** Map Editor Batch A4: every placed object on the current live map that
+   * currently holds at least one item — a chest doesn't need a configured
+   * click-trigger action at all to be openable, so it would never appear
+   * in `entries` above; this is a separate, reliable, click-agnostic way
+   * to find and open one (a raw 3D click on the object itself also opens
+   * it, see GameTableScene's onSelectObject, but a small placed prop can
+   * be a fiddly target — this list doesn't require aiming at it). */
+  containers: MapObject[];
+  onOpenContainer: (object: MapObject) => void;
   /** Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md,
    * Prompt 2) — DM-only, matching every other DM-only control already in
    * this panel. Purely local UI state one level up (GameRoom.tsx); this
@@ -373,6 +384,34 @@ export function MapPanel({
               {triggerError}
             </p>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* Map Editor Batch A4: item containers — see `containers`' own doc
+          comment for why this exists alongside (not merged into) the
+          Interactive-objects list above. */}
+      {liveMapId ? (
+        <div className={styles.interactiveList} data-testid="container-list-panel">
+          <span className={styles.panelLabel}>Containers</span>
+          {containers.length === 0 ? (
+            <p className={styles.hint}>Nothing to open here — yet.</p>
+          ) : (
+            containers.map((object) => (
+              <div key={object.id} className={styles.objectRow} data-testid={`container-entry-${object.id}`}>
+                <div className={styles.objectHeader}>
+                  <span className={styles.objectName}>{object.asset.name}</span>
+                  <Button
+                    size="sm"
+                    variant="teal"
+                    onClick={() => onOpenContainer(object)}
+                    data-testid={`open-container-${object.id}`}
+                  >
+                    Open
+                  </Button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       ) : null}
     </aside>

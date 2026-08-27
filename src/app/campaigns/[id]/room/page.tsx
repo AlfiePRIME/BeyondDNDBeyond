@@ -14,6 +14,7 @@ import {
   listCombatantHiddenFrom,
   listDmNotes,
   listHandouts,
+  listItemsForMapObjects,
   listLightSources,
   listLorePages,
   listLorePageLinksForCampaign,
@@ -211,7 +212,14 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
         // shows the DM's drawing with no client-side flash-of-blank-board.
         listWhiteboardTiles(supabase, map.id),
       ]);
-      initialLiveMap = { map, cells, objects, tokens, lightSources, whiteboardTiles };
+      // Map Editor Batch A4: which of this map's objects already hold
+      // items — same second-query-after-objects reasoning as GameRoom's
+      // own refreshLiveMap (this bundle's live-reload counterpart).
+      const containerItems = await listItemsForMapObjects(supabase, objects.map((object) => object.id));
+      const containerObjectIds = new Set(
+        containerItems.flatMap((item) => (item.map_object_id ? [item.map_object_id] : []))
+      );
+      initialLiveMap = { map, cells, objects, tokens, lightSources, whiteboardTiles, containerObjectIds };
     }
   }
 

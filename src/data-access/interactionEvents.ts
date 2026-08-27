@@ -38,6 +38,19 @@ export interface InteractionEvent {
  * Exactly one of mapObjectId/concealedPitId must be provided, matching the
  * table's own CHECK constraint — callers pass whichever source they have,
  * omitting or nulling the other.
+ *
+ * Map Editor Batch A4 fix: deliberately does NOT chain `.select()` after
+ * the insert, and returns nothing. Postgres applies a table's SELECT
+ * policy to an INSERT's RETURNING projection too (the exact
+ * INSERT...RETURNING gotcha verify-rls.mjs's own campaign-creation flow
+ * already documents) — and interaction_events' SELECT policy (0059) is
+ * DM-only, full stop, even for the very member who just wrote the row. A
+ * `.select().single()` here would make this function work only when the
+ * caller happens to BE the DM (true for every call site A6 itself shipped:
+ * step-on/click triggers both run on the DM's own authoritative client)
+ * and throw a confusing "violates row-level security policy" for any
+ * ordinary member — exactly what A4's own player-driven item-pickup flow
+ * hit. No existing caller ever used the returned row anyway.
  */
 export async function createInteractionEvent(
   supabase: SupabaseClient,
@@ -49,22 +62,17 @@ export async function createInteractionEvent(
     tag?: string | null;
     actorUserId: string;
   }
-): Promise<InteractionEvent> {
-  const { data, error } = await supabase
-    .from("interaction_events")
-    .insert({
-      campaign_id: params.campaignId,
-      map_object_id: params.mapObjectId ?? null,
-      concealed_pit_id: params.concealedPitId ?? null,
-      action_type: params.actionType,
-      tag: params.tag ?? null,
-      actor_user_id: params.actorUserId,
-    })
-    .select()
-    .single();
+): Promise<void> {
+  const { error } = await supabase.from("interaction_events").insert({
+    campaign_id: params.campaignId,
+    map_object_id: params.mapObjectId ?? null,
+    concealed_pit_id: params.concealedPitId ?? null,
+    action_type: params.actionType,
+    tag: params.tag ?? null,
+    actor_user_id: params.actorUserId,
+  });
 
   if (error) throw error;
-  return data;
 }
 
 /** Every interaction event for a campaign, most recent first — DM-only
