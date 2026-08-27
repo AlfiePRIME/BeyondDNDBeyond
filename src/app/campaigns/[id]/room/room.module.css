@@ -538,6 +538,33 @@
   border-radius: 8px;
 }
 
+/* Map Editor Batch A10: LiveObjectsPanel — its own standalone DraggablePanel
+   (panelId "liveObjects"), the exact .diceTraySection precedent (full panel
+   chrome reused verbatim) since live-object placement/reveal/behavior is a
+   genuinely separate DM concern from MapPanel's already-substantial
+   live-map-picker/interactive-objects/containers content, not a section
+   bolted onto it. Deliberately no nested overflow-y:auto anywhere inside
+   this panel's own asset-picker grid (unlike the map editor's own
+   .assetGrid) — this outer overflow already caps total height, and a SECOND
+   scrollable flex item inside it would risk the exact flex-shrink-to-zero
+   bug documented on the editor's .assetGrid (a flex item with its own
+   `overflow-y: auto` gets an automatic minimum size of 0, so a tall enough
+   sibling can crush it to an invisible-but-present 0-height box). Reuses
+   the Ctrl+click quick-place popover's own .quickPlacePopoverGrid instead
+   (editor.module.css), which already carries the `flex-shrink: 0` guard. */
+.liveObjectPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  width: 300px;
+  max-height: 50vh;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
+  border-radius: 8px;
+}
+
 .diceTrayGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));

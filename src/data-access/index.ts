@@ -150,6 +150,7 @@ export {
   deleteMapObject,
   setMapObjectBehavior,
   triggerMapObject,
+  revealAllPendingMapObjects,
   parseMapObjectBehavior,
   MAP_OBJECT_ACTIONS,
   type MapObject,

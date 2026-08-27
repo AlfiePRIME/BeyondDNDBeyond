@@ -73,6 +73,18 @@ export interface MapObject {
    * column (a different table, a different freeform label). null for every
    * object placed before this addition. */
   tag: string | null;
+  /** Map Editor Batch A10: staged reveal for objects placed live, from the
+   * Game Room itself. Defaults to TRUE for every object placed before this
+   * addition and every object placed through the Map Editor route — only
+   * the Game Room's own live-placement path (GameRoom.tsx's
+   * handlePlaceLiveObject) ever inserts FALSE. While false, map_objects'
+   * own SELECT policy (0063) hides the row from every non-DM member
+   * entirely — the DM always sees it regardless. GameRoom.tsx additionally
+   * never broadcasts an unrevealed row to other clients at all (matching
+   * HandoutPayload's own "a fresh handout is hidden, so no other client may
+   * see anything yet" precedent) — this flag isn't just a render-time
+   * filter, it's backed by both layers. */
+  revealed_to_players: boolean;
   created_at: string;
   asset: PlacedObjectAsset;
 }
@@ -169,6 +181,12 @@ export async function createMapObject(
      * lookup-by-name-once pattern as chestAssetId/bridgeAssetId) so it
      * "works out of the box" without a manual BehaviorEditor step. */
     behaviorConfig?: Record<string, unknown>;
+    /** Map Editor Batch A10: omitted (the DB default, true) by every
+     * existing caller — the Map Editor's own placeAssetAtCell never passes
+     * this. Only GameRoom.tsx's live-placement path passes `false`, so a
+     * DM-placed object starts hidden from players until explicitly
+     * revealed. See MapObject.revealed_to_players' own doc comment. */
+    revealedToPlayers?: boolean;
   }
 ): Promise<MapObject> {
   const { data, error } = await supabase
@@ -182,6 +200,9 @@ export async function createMapObject(
       rotation: params.rotation,
       crossing_type: params.crossingType ?? null,
       ...(params.behaviorConfig ? { behavior_config: params.behaviorConfig } : {}),
+      ...(params.revealedToPlayers !== undefined
+        ? { revealed_to_players: params.revealedToPlayers }
+        : {}),
     })
     .select(OBJECT_COLUMNS)
     .single();
@@ -215,6 +236,7 @@ export async function restoreMapObject(
       blocks_line_of_sight: object.blocks_line_of_sight,
       crossing_type: object.crossing_type,
       tag: object.tag,
+      revealed_to_players: object.revealed_to_players,
       created_at: object.created_at,
     })
     .select(OBJECT_COLUMNS)
@@ -238,6 +260,11 @@ export async function updateMapObject(
     /** Map Editor Batch A6: the freeform label editable from the map
      * editor's object panel — null clears it back to unlabeled. */
     tag?: string | null;
+    /** Map Editor Batch A10: the Game Room's per-object "Reveal" action
+     * flips this true — see MapObject.revealed_to_players' own doc
+     * comment. Nothing in this app ever flips it back to false today (no
+     * "hide again" affordance was asked for). */
+    revealed_to_players?: boolean;
   }
 ): Promise<MapObject> {
   const { data, error } = await supabase
@@ -249,6 +276,26 @@ export async function updateMapObject(
 
   if (error) throw error;
   return data;
+}
+
+/**
+ * Map Editor Batch A10: the DM's bulk "Reveal all pending" action — every
+ * object on this map that's still hidden from players becomes visible in
+ * one round trip, rather than the caller looping updateMapObject per row.
+ */
+export async function revealAllPendingMapObjects(
+  supabase: SupabaseClient,
+  mapId: string
+): Promise<MapObject[]> {
+  const { data, error } = await supabase
+    .from("map_objects")
+    .update({ revealed_to_players: true })
+    .eq("map_id", mapId)
+    .eq("revealed_to_players", false)
+    .select(OBJECT_COLUMNS);
+
+  if (error) throw error;
+  return data ?? [];
 }
 
 /**

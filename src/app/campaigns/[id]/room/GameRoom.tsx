@@ -17,6 +17,7 @@ import {
   clearHiddenAsHider,
   createHandout,
   createInteractionEvent,
+  createMapObject,
   createMonsterStatBlock,
   deleteMonsterStatBlock,
   createOpportunityAttacks,
@@ -55,6 +56,7 @@ import {
   placeNpcToken,
   recordSeenCells,
   removeCondition,
+  revealAllPendingMapObjects,
   setActionEconomyStrict,
   setCombatantEconomyFlag,
   setCombatantInitiative,
@@ -62,6 +64,7 @@ import {
   setDiceTrayPreference,
   setHandoutRevealed,
   setLiveMap,
+  setMapObjectBehavior,
   setSeatOffset,
   setTokenAllegiance,
   startCombat,
@@ -75,6 +78,7 @@ import {
   transitionMapToken,
   triggerMapObject,
   updateCharacter,
+  updateMapObject,
   updateMonsterStatBlock,
   uploadHandoutFile,
   upsertMapCells,
@@ -94,6 +98,7 @@ import {
   type LorePageLink,
   type MapCell,
   type MapObject,
+  type MapObjectBehavior,
   type MapObjectItem,
   type MapToken,
   type MapTransition,
@@ -193,6 +198,7 @@ import { OpportunityAttackPanel } from "./OpportunityAttackPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 import { HandoutContent, HandoutPanel } from "./HandoutPanel";
 import { HpPanel } from "./HpPanel";
+import { LiveObjectsPanel } from "./LiveObjectsPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
 import { TokenPanel, type TokenArm } from "./TokenPanel";
 import styles from "./room.module.css";
@@ -230,6 +236,18 @@ const CELL_REVEALED_EVENT = "cell-revealed";
 // expect anyway — not a wrong persisted state either way.
 const ITEM_TAKEN_EVENT = "container-item-taken";
 const PIT_ITEMS_FOUND_EVENT = "pit-items-found";
+// Map Editor Batch A10: live object placement + staged reveal. Deliberately
+// NOT broadcast at placement time — HandoutPayload's own "a fresh handout is
+// hidden, so no other client may see anything yet" precedent, not the
+// ephemeral-poke precedent above (TOKEN_SELECTED_EVENT etc.): an unrevealed
+// object's row is real DM-authored secret content, so it only ever reaches
+// this wire once it's genuinely safe for every receiver to have it — on
+// reveal, and on any later behavior/tag edit of an ALREADY-revealed object
+// (handleSaveLiveObjectBehavior/handleSaveLiveObjectTag only publish when
+// `updated.revealed_to_players` is true). The DM's own client applies every
+// one of these locally without waiting for the round trip (publish doesn't
+// echo to its own sender).
+const MAP_OBJECT_UPSERTED_EVENT = "map-object-upserted";
 // Click-select-to-move (replaces the old drag gesture): an ephemeral
 // "who's got a token picked up right now" poke, same non-persisted-state
 // shape as DICE_ROLLED_EVENT — nothing is ever read back from the DB, so
@@ -384,6 +402,16 @@ interface TokenPayload {
  * covers it — reconnecting re-reads the whole map fresh via refreshLiveMap. */
 interface CellRevealedPayload {
   cell: MapCell;
+}
+
+/** Map Editor Batch A10: a live-placed object's full current row, sent only
+ * once every receiver is actually allowed to have it — see
+ * MAP_OBJECT_UPSERTED_EVENT's own doc comment for why this never carries an
+ * unrevealed object. applyObjectUpserted upserts by id, so this doubles as
+ * both "a brand-new object just became visible" and "an already-visible
+ * object's behavior/tag just changed". */
+interface MapObjectUpsertedPayload {
+  object: MapObject;
 }
 
 /** Map Editor Batch A4: an item was just claimed (claim_map_object_item
@@ -1395,6 +1423,21 @@ export function GameRoom({
   >(null);
   const [containerBusy, setContainerBusy] = useState(false);
   const [containerError, setContainerError] = useState<string | null>(null);
+  // Map Editor Batch A10: live object placement + staged reveal.
+  // `placingAssetId` set arms the NEXT cell click on the 3D map (see
+  // onCellClick's own wiring below) to place that asset there instead of
+  // moving/selecting a token — mirrors the Map Editor's own click-to-place
+  // model rather than the Ctrl+click quick-place popover's screen-anchored
+  // popup, since there's no natural screen position to anchor a popup at
+  // here (unlike MapEditor's handleCellClick, this fires from a plain
+  // button press in LiveObjectsPanel, not a click on the canvas itself).
+  const [placingAssetId, setPlacingAssetId] = useState<string | null>(null);
+  const [liveObjectBusy, setLiveObjectBusy] = useState(false);
+  const [liveObjectError, setLiveObjectError] = useState<string | null>(null);
+  // Which object's behavior/tag editor LiveObjectsPanel currently has
+  // expanded — purely local UI state, same shape as MapEditor's own
+  // soloSelectedId.
+  const [editingLiveObjectId, setEditingLiveObjectId] = useState<string | null>(null);
   // Same ahead-of-React ref pattern as MapEditor: broadcast handlers and the
   // trigger path both write, and two updates landing in one frame must
   // stack, not clobber.
@@ -1721,6 +1764,26 @@ export function GameRoom({
             candidate.x === cell.x && candidate.y === cell.y ? cell : candidate
           )
         : [...current.cells, cell],
+    };
+    setLiveMapState(liveMapRef.current);
+  }, []);
+
+  // Map Editor Batch A10: applyCellChange's own shape — upserts one object
+  // by id, a no-op if it belongs to a map this client isn't currently
+  // looking at (a receiver whose own liveMapRef is a different map, or
+  // whose object list simply doesn't contain this id yet, per `exists`
+  // below). The DM's own placement/reveal/behavior-save handlers call this
+  // directly (no round trip); MAP_OBJECT_UPSERTED_EVENT's subscribe handler
+  // below calls it for every other connected client.
+  const applyObjectUpserted = useCallback((object: MapObject) => {
+    const current = liveMapRef.current;
+    if (!current || object.map_id !== current.map.id) return;
+    const exists = current.objects.some((candidate) => candidate.id === object.id);
+    liveMapRef.current = {
+      ...current,
+      objects: exists
+        ? current.objects.map((candidate) => (candidate.id === object.id ? object : candidate))
+        : [...current.objects, object],
     };
     setLiveMapState(liveMapRef.current);
   }, []);
@@ -2418,6 +2481,12 @@ export function GameRoom({
     const unsubscribeTrigger = channel.subscribe<TriggerPayload>(TRIGGER_EVENT, (payload) => {
       applyTriggered(payload.objectId, payload.triggered);
     });
+    // Map Editor Batch A10: see MAP_OBJECT_UPSERTED_EVENT's own doc comment
+    // for why this only ever carries a row every receiver may already have.
+    const unsubscribeObjectUpserted = channel.subscribe<MapObjectUpsertedPayload>(
+      MAP_OBJECT_UPSERTED_EVENT,
+      (payload) => applyObjectUpserted(payload.object)
+    );
     const unsubscribeToken = channel.subscribe<TokenPayload>(TOKEN_EVENT, (payload) => {
       // Position compared against the pre-update row so only genuine moves
       // (a player's click-confirmed move, or the DM acting in another
@@ -2643,6 +2712,7 @@ export function GameRoom({
     return () => {
       unsubscribeLiveMap();
       unsubscribeTrigger();
+      unsubscribeObjectUpserted();
       unsubscribeToken();
       unsubscribeCellRevealed();
       unsubscribeItemTaken();
@@ -2675,6 +2745,7 @@ export function GameRoom({
     currentUserIsDM,
     refreshLiveMap,
     applyTriggered,
+    applyObjectUpserted,
     applyTokenChange,
     applyCellChange,
     applyItemTaken,
@@ -2751,6 +2822,154 @@ export function GameRoom({
       void handleOpenObjectContainer(object);
     },
     [handleTrigger, handleOpenObjectContainer]
+  );
+
+  // Map Editor Batch A10: live object placement + staged reveal, DM-only
+  // (LiveObjectsPanel itself renders nothing for a non-DM viewer, and every
+  // one of these is only ever wired to that panel's own buttons).
+  const handleArmLivePlacement = useCallback((assetId: string) => {
+    setLiveObjectError(null);
+    setPlacingAssetId(assetId);
+  }, []);
+
+  const handleCancelLivePlacement = useCallback(() => {
+    setPlacingAssetId(null);
+  }, []);
+
+  // The onCellClick target while placingAssetId is armed (wired below,
+  // ahead of armedToken/selectedTokenId) — mirrors MapEditor's own
+  // placeAssetAtCell guards (void-terrain rejection) plus an
+  // already-occupied-cell rejection this simplified flow needs of its own,
+  // since (unlike the editor) there's no "select the occupant instead"
+  // fallback here. Deliberately never sets `crossingType` — the live
+  // path doesn't replicate the Map Editor's bridge/stairs authoring, so an
+  // object placed here can never suppress a pit/water cost, matching the
+  // Notes' steer against rebuilding a second toolbar.
+  const handlePlaceLiveObject = useCallback(
+    async (x: number, y: number) => {
+      const assetId = placingAssetId;
+      const current = liveMapRef.current;
+      if (!assetId || !current || liveObjectBusy) return;
+      if (cellIsVoid(current.cells, x, y)) {
+        setLiveObjectError(VOID_CELL_MESSAGE);
+        return;
+      }
+      if (current.objects.some((object) => object.x === x && object.y === y)) {
+        setLiveObjectError("There's already an object on that cell.");
+        return;
+      }
+      setLiveObjectBusy(true);
+      setLiveObjectError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const created = await createMapObject(supabase, {
+          mapId: current.map.id,
+          assetId,
+          x,
+          y,
+          elevation: cellElevation(current.cells, x, y),
+          rotation: 0,
+          revealedToPlayers: false,
+        });
+        // Local-only, matching handleCreateHandout's own "a fresh [row] is
+        // hidden, so no other client may see anything yet" precedent — no
+        // broadcast until this object is actually revealed.
+        applyObjectUpserted(created);
+        setPlacingAssetId(null);
+        setEditingLiveObjectId(created.id);
+      } catch (err) {
+        setLiveObjectError(errorMessage(err) ?? "Could not place that object.");
+      } finally {
+        setLiveObjectBusy(false);
+      }
+    },
+    [placingAssetId, liveObjectBusy, applyObjectUpserted]
+  );
+
+  const handleRevealLiveObject = useCallback(
+    async (object: MapObject) => {
+      if (liveObjectBusy) return;
+      setLiveObjectBusy(true);
+      setLiveObjectError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        // Persist first, broadcast second — same ordering rationale as
+        // every other trigger/reveal path in this file.
+        const updated = await updateMapObject(supabase, object.id, { revealed_to_players: true });
+        applyObjectUpserted(updated);
+        await campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+          object: updated,
+        });
+      } catch (err) {
+        setLiveObjectError(errorMessage(err) ?? "Could not reveal that object.");
+      } finally {
+        setLiveObjectBusy(false);
+      }
+    },
+    [liveObjectBusy, applyObjectUpserted]
+  );
+
+  const handleRevealAllPendingLiveObjects = useCallback(async () => {
+    const current = liveMapRef.current;
+    if (!current || liveObjectBusy) return;
+    setLiveObjectBusy(true);
+    setLiveObjectError(null);
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const updated = await revealAllPendingMapObjects(supabase, current.map.id);
+      for (const object of updated) applyObjectUpserted(object);
+      await Promise.all(
+        updated.map((object) =>
+          campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+            object,
+          })
+        )
+      );
+    } catch (err) {
+      setLiveObjectError(errorMessage(err) ?? "Could not reveal those objects.");
+    } finally {
+      setLiveObjectBusy(false);
+    }
+  }, [liveObjectBusy, applyObjectUpserted]);
+
+  // Behavior/tag edits only ever broadcast when the object being edited is
+  // ALREADY revealed — an edit to a still-pending object stays local-only,
+  // the exact same "never send a row before it's safe to" discipline
+  // MAP_OBJECT_UPSERTED_EVENT's own doc comment describes for placement.
+  const handleSaveLiveObjectBehavior = useCallback(
+    async (objectId: string, behavior: MapObjectBehavior | null) => {
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const updated = await setMapObjectBehavior(supabase, objectId, behavior);
+        applyObjectUpserted(updated);
+        if (updated.revealed_to_players) {
+          await campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+            object: updated,
+          });
+        }
+      } catch (err) {
+        setLiveObjectError(errorMessage(err) ?? "Could not save that behavior.");
+      }
+    },
+    [applyObjectUpserted]
+  );
+
+  const handleSaveLiveObjectTag = useCallback(
+    async (objectId: string, tag: string | null) => {
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const updated = await updateMapObject(supabase, objectId, { tag });
+        applyObjectUpserted(updated);
+        if (updated.revealed_to_players) {
+          await campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+            object: updated,
+          });
+        }
+      } catch (err) {
+        setLiveObjectError(errorMessage(err) ?? "Could not save that tag.");
+      }
+    },
+    [applyObjectUpserted]
   );
 
   // Map Editor Batch A4: takes one item from whichever container is
@@ -4516,6 +4735,12 @@ export function GameRoom({
         }
       ),
       objects: liveMap.objects.flatMap((object) => {
+        // Map Editor Batch A10: belt-and-suspenders — a non-DM viewer's own
+        // liveMap never actually contains an unrevealed object in the first
+        // place (RLS on the initial/refresh read, and no broadcast at
+        // placement time either, see MAP_OBJECT_UPSERTED_EVENT's own doc
+        // comment), so this is defense in depth, not the real boundary.
+        if (!object.revealed_to_players && !currentUserIsDM) return [];
         const behavior = parseMapObjectBehavior(object.behavior_config);
         const hiddenNow = behavior?.action === "toggle_visibility" && !behavior.triggered;
         if (hiddenNow && !currentUserIsDM) return [];
@@ -4538,17 +4763,20 @@ export function GameRoom({
             // onto an interactive object's cell at all (discovered via this
             // batch's own Pressure Plate: a token must be able to land ON
             // it, unlike a chest a DM merely walks up to). Suppressed while
-            // a move/placement is actually in progress (armedToken) or a
+            // a move/placement is actually in progress (armedToken), a
             // token is selected for the click-a-reachable-cell move gesture
-            // (selectedTokenId) — in either state a cell click always means
-            // "move/place here", never "trigger this", so the click must
-            // reach the cell, not the object sitting on it. Ordinary
-            // click-to-trigger (no move in progress) is unaffected.
+            // (selectedTokenId), or the DM has a live-object placement armed
+            // (placingAssetId, Map Editor Batch A10) — in any of these
+            // states a cell click always means "move/place here", never
+            // "trigger this", so the click must reach the cell, not the
+            // object sitting on it. Ordinary click-to-trigger (nothing
+            // armed) is unaffected.
             selectable:
               behavior !== null &&
               (currentUserIsDM || behavior.playerTriggerable) &&
               !armedToken &&
-              !selectedTokenId,
+              !selectedTokenId &&
+              !placingAssetId,
             ghost: hiddenNow,
             active: behavior?.action === "toggle_state" && behavior.triggered,
             dimmed: tier === "dim",
@@ -4613,7 +4841,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright
@@ -4808,6 +5036,12 @@ export function GameRoom({
   const interactiveEntries = useMemo<InteractiveEntry[]>(
     () =>
       (liveMap?.objects ?? []).flatMap((object) => {
+        // Map Editor Batch A10: belt-and-suspenders, the exact same
+        // reasoning as tableMap.objects' own revealed_to_players check
+        // above — a non-DM viewer's liveMap never actually holds an
+        // unrevealed row in practice, but this list must never be the one
+        // place that forgets to check anyway.
+        if (!object.revealed_to_players && !currentUserIsDM) return [];
         const behavior = parseMapObjectBehavior(object.behavior_config);
         if (!behavior) return [];
         if (!currentUserIsDM) {
@@ -4833,7 +5067,22 @@ export function GameRoom({
   // showing an Open action for — see LiveMapData.containerObjectIds' own
   // comment for what populates the id set this filters against.
   const openableContainers = useMemo(
-    () => (liveMap?.objects ?? []).filter((object) => liveMap?.containerObjectIds.has(object.id) ?? false),
+    () =>
+      (liveMap?.objects ?? []).filter(
+        (object) =>
+          (liveMap?.containerObjectIds.has(object.id) ?? false) &&
+          (currentUserIsDM || object.revealed_to_players)
+      ),
+    [liveMap, currentUserIsDM]
+  );
+
+  // Map Editor Batch A10: objects placed live that the DM hasn't revealed to
+  // players yet — LiveObjectsPanel's own "Pending reveal" list. Meaningful
+  // only for the DM's own client: every object placed before this feature
+  // existed, or through the Map Editor, defaults to revealed_to_players
+  // true and never appears here.
+  const pendingLiveObjects = useMemo(
+    () => (liveMap?.objects ?? []).filter((object) => !object.revealed_to_players),
     [liveMap]
   );
 
@@ -4883,7 +5132,20 @@ export function GameRoom({
           liveMap={tableMap}
           onSelectMapObject={handleSelectMapObject}
           onCellClick={
-            armedToken ? handleCellClick : selectedTokenId ? handleSelectedTokenCellClick : undefined
+            // Map Editor Batch A10: an armed live-object placement takes
+            // priority over both token gestures below — a DM who's just
+            // picked an asset from LiveObjectsPanel almost certainly isn't
+            // also mid-token-move, and if both happened to be armed at
+            // once, "the thing I most recently asked for" is the sane
+            // resolution (armedToken already wins over selectedTokenId on
+            // the exact same principle).
+            placingAssetId
+              ? (x: number, y: number) => void handlePlaceLiveObject(x, y)
+              : armedToken
+                ? handleCellClick
+                : selectedTokenId
+                  ? handleSelectedTokenCellClick
+                  : undefined
           }
           onTokenClick={handleTokenSelect}
           rulerActive={rulerActive}
@@ -5435,6 +5697,26 @@ export function GameRoom({
           onWhiteboardUndo={handleWhiteboardUndo}
           onWhiteboardRedo={handleWhiteboardRedo}
           onWhiteboardClear={handleWhiteboardClear}
+        />
+      </DraggablePanel>
+      <DraggablePanel panelId="liveObjects">
+        <LiveObjectsPanel
+          isDM={currentUserIsDM}
+          hasLiveMap={Boolean(liveMap)}
+          assets={assetList}
+          objects={liveMap?.objects ?? []}
+          pendingObjects={pendingLiveObjects}
+          placingAssetId={placingAssetId}
+          onArmPlacement={handleArmLivePlacement}
+          onCancelPlacement={handleCancelLivePlacement}
+          onReveal={(object) => void handleRevealLiveObject(object)}
+          onRevealAll={() => void handleRevealAllPendingLiveObjects()}
+          editingObjectId={editingLiveObjectId}
+          onSelectEditing={setEditingLiveObjectId}
+          onSaveBehavior={(objectId, behavior) => void handleSaveLiveObjectBehavior(objectId, behavior)}
+          onSaveTag={(objectId, tag) => void handleSaveLiveObjectTag(objectId, tag)}
+          busy={liveObjectBusy}
+          error={liveObjectError}
         />
       </DraggablePanel>
       {liveMap ? (
