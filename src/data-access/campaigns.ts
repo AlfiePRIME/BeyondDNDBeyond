@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Character } from "./characters";
 
 export interface Campaign {
   id: string;
@@ -33,6 +34,16 @@ export interface Campaign {
    * (and inert) for every other weather_kind, including this prompt's own
    * 'clear'/'fog'. */
   weather_mechanical: boolean;
+  /** Last time Weather & Enemies C4's periodic-damage timer actually
+   * applied a tick (written only by the apply_weather_tick RPC, never
+   * directly by setWeather) -- null before the first tick of the current
+   * mechanical activation, or whenever setWeather has run since (it always
+   * resets this to null, so a stale timestamp from an earlier activation
+   * can never make a fresh one look "already due" -- see setWeather's own
+   * doc comment). Not read anywhere on the client; purely apply_weather_
+   * tick's own dedup bookkeeping (see migration 0071's comment for the
+   * full design), included here since campaigns.* is one shared row shape. */
+  weather_last_tick_at: string | null;
   created_at: string;
 }
 
@@ -358,6 +369,14 @@ export async function setDayNightMode(
  * a stale mechanical flag left on from a previous firestorm should never
  * silently survive a switch to a weather kind it doesn't apply to. Live sync
  * rides subscribeToCampaignChanges below, same as day_night_mode.
+ *
+ * Also always resets weather_last_tick_at to null (C4) — every call here is
+ * either a genuine weather CHANGE or an explicit mechanical on/off flip, and
+ * either way the periodic-damage timer's "last applied" clock should start
+ * clean: a stale timestamp surviving from an earlier activation (possibly
+ * hours old) must never make a freshly re-armed timer look "overdue" for
+ * apply_weather_tick, and a switch away from firestorm/acid_storm entirely
+ * must leave nothing behind that a later switch BACK could pick back up.
  */
 export async function setWeather(
   supabase: SupabaseClient,
@@ -367,11 +386,39 @@ export async function setWeather(
 ): Promise<void> {
   const { error, count } = await supabase
     .from("campaigns")
-    .update({ weather_kind: kind, weather_mechanical: mechanical }, { count: "exact" })
+    .update({ weather_kind: kind, weather_mechanical: mechanical, weather_last_tick_at: null }, { count: "exact" })
     .eq("id", campaignId);
 
   if (error) throw error;
   if (count === 0) throw new Error("Only the campaign's DM can change the weather.");
+}
+
+/**
+ * Resolves one tick of firestorm/acid_storm's optional periodic damage
+ * (Weather & Enemies C4) via the apply_weather_tick RPC (migration 0071) —
+ * the ONE authoritative path that ever advances weather_last_tick_at and
+ * applies HP loss, so two nearly-simultaneous callers (the same DM open in
+ * two tabs, a fresh page-reload's timer racing the tab it replaced) can
+ * never double-apply a single tick; see the RPC's own migration comment for
+ * the full design.
+ *
+ * DM-only (the RPC raises if the caller isn't the campaign's DM) — called
+ * ONLY from GameRoom.tsx's own periodic-tick effect, itself gated on
+ * currentUserIsDM, matching the existing DM-client-resolves-authoritatively
+ * model already used for step-on triggers and concealed-pit fall damage
+ * (handleTokenLanded). Returns the characters actually damaged — empty
+ * when a tick wasn't due yet, or the weather stopped being mechanical
+ * underneath the caller (the RPC re-checks the DB, not this client's own
+ * possibly-stale React state). GameRoom treats a non-empty result as "a
+ * real tick just landed": it refreshes its own character rows and pokes
+ * every other connected client via the same COMBAT_EVENT broadcast fall
+ * damage already uses, since apply_hp_delta's writes reach no
+ * postgres_changes feed of their own.
+ */
+export async function applyWeatherTick(supabase: SupabaseClient, campaignId: string): Promise<Character[]> {
+  const { data, error } = await supabase.rpc("apply_weather_tick", { p_campaign_id: campaignId });
+  if (error) throw error;
+  return (data ?? []) as Character[];
 }
 
 /**

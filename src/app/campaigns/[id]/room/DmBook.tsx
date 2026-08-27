@@ -124,8 +124,9 @@ export function DmBook({
   dayNightBusy,
   dayNightError,
   onToggleDayNight,
-  // Weather (Weather & Enemies C1)
+  // Weather (Weather & Enemies C1, mechanical toggle added by C4)
   weatherKind,
+  weatherMechanical,
   weatherBusy,
   weatherError,
   onSetWeather,
@@ -175,12 +176,14 @@ export function DmBook({
   onToggleDayNight: () => void;
   /** campaigns.weather_kind, live-synced (Weather & Enemies C1). */
   weatherKind: WeatherKind;
+  /** campaigns.weather_mechanical, live-synced (Weather & Enemies C4) —
+   * only meaningful (and only ever true) while weatherKind is 'firestorm'
+   * or 'acid_storm'; the toggle below is grayed out for every other kind. */
+  weatherMechanical: boolean;
   weatherBusy: boolean;
   weatherError: string | null;
   /** Always fires with BOTH kind and mechanical together — see setWeather's
-   * own doc comment on why mechanical always travels with kind. This
-   * prompt's own picker only ever calls it with `mechanical: false` (no UI
-   * for the mechanical toggle yet — that's C4's own addition). */
+   * own doc comment on why mechanical always travels with kind. */
   onSetWeather: (kind: WeatherKind, mechanical: boolean) => void;
   /** interaction_events at load time (DM-only per its RLS) — see
    * DmBookActivityPage's own doc comment for how this stays live. */
@@ -191,6 +194,10 @@ export function DmBook({
   initialRolls: RollLogEntry[];
 }) {
   const [page, setPage] = useState<BookPage>("enemies");
+  // Weather & Enemies C4: the mechanical-damage toggle only makes sense for
+  // the two fantasy weather kinds — grayed out (disabled, never hidden, per
+  // the prompt's own wording) for clear/fog/rain/thunderstorm.
+  const weatherMechanicalEligible = weatherKind === "firestorm" || weatherKind === "acid_storm";
 
   return (
     <div className={styles.book} data-testid="dm-book-panel">
@@ -301,8 +308,8 @@ export function DmBook({
             ) : null}
             <span className={roomStyles.panelLabel}>Weather</span>
             <p className={styles.dayNightHint}>
-              Sets the current weather for the whole party. Clear, Fog, and Rain have a visible
-              effect — Thunderstorm, Firestorm, and Acid Storm are coming soon.
+              Sets the current weather for the whole party. Clear, Fog, Rain, Firestorm, and Acid
+              Storm have a visible effect — Thunderstorm is coming soon.
             </p>
             <div className={roomStyles.modeToggle} role="group" aria-label="Weather">
               {WEATHER_OPTIONS.map((option) => (
@@ -322,6 +329,37 @@ export function DmBook({
                   {option.label}
                 </button>
               ))}
+            </div>
+            {/* Weather & Enemies C4: periodic damage, only meaningful for
+                Firestorm/Acid Storm — a plain toggle button (not a checkbox;
+                this book has no existing checkbox convention, and
+                roomStyles.modeButton's own :disabled styling already gives
+                the "grayed out for every other weather kind" look the
+                prompt calls for). Fires onSetWeather with the CURRENT
+                weatherKind unchanged and only `mechanical` flipped — the
+                same "always both together" call shape the kind buttons
+                above use, per setWeather's own doc comment. */}
+            <span className={roomStyles.panelLabel}>Periodic damage</span>
+            <p className={styles.dayNightHint}>
+              Firestorm and Acid Storm can optionally deal real damage while active: once armed,
+              the DM&apos;s own connected client deals a small amount of damage to every character
+              currently on the live map, once every 30 seconds, for as long as this stays on and
+              this weather stays active. Turning it off (or changing the weather) stops it
+              immediately. Grayed out for every other weather.
+            </p>
+            <div className={roomStyles.modeToggle} role="group" aria-label="Periodic damage">
+              <button
+                type="button"
+                className={[roomStyles.modeButton, weatherMechanical ? roomStyles.modeButtonActive : ""]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-pressed={weatherMechanical}
+                disabled={weatherBusy || !weatherMechanicalEligible}
+                onClick={() => onSetWeather(weatherKind, !weatherMechanical)}
+                data-testid="weather-mechanical-toggle"
+              >
+                {weatherMechanical ? "🔥 Dealing damage" : "Cosmetic only"}
+              </button>
             </div>
             {weatherError ? (
               <p role="alert" className={roomStyles.errorText} data-testid="weather-error">

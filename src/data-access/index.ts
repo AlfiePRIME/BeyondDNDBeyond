@@ -54,6 +54,7 @@ export {
   setActionEconomyStrict,
   setDayNightMode,
   setWeather,
+  applyWeatherTick,
   subscribeToCampaignChanges,
   type Campaign,
   type CampaignRole,

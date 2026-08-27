@@ -47,6 +47,7 @@ import {
   DEFAULT_WHITEBOARD_HEIGHT,
   type WhiteboardBrushSize,
 } from "./whiteboardMath";
+import { WeatherParticles, type WeatherParticlesDebugState } from "./WeatherParticles";
 
 // Room ambiance pulls from the app's design tokens (see
 // src/ui-components/tokens.css) — scene-3d can't import CSS custom
@@ -736,6 +737,13 @@ export interface GameTableSceneProps {
    * this prompt (see resolveSceneFog); every other value renders identically
    * to 'clear' until C2-C4 add their own separate overlay effects. */
   weatherKind?: WeatherKind;
+  /** Verification-only pass-through to WeatherParticles' own onDebug (C4) —
+   * see its own doc comment for why: WebGL has no DOM of its own for a
+   * script to confirm a real, kind-DISTINCT particle system (embers for
+   * firestorm, a falling green haze for acid storm) is actually mounted,
+   * without pixel-diffing a screenshot. Omitting it changes nothing about
+   * what renders. */
+  onWeatherParticlesDebug?: (state: WeatherParticlesDebugState | null) => void;
   /** Verification-only pass-through to MapSurface's onTokenSlideDebug — see
    * its own doc comment. Purely a mirror of each token's slide animation
    * state; omitting it changes nothing about how tokens move or render. */
@@ -945,6 +953,7 @@ export function GameTableScene({
   onRulerDragEnd,
   dayNightMode = "day",
   weatherKind = "clear",
+  onWeatherParticlesDebug,
   onTokenSlideDebug,
   onAvatarPoseDebug,
   onAvatarMeasureDebug,
@@ -1551,6 +1560,13 @@ export function GameTableScene({
       />
       <pointLight color={PURPLE} intensity={lighting.purpleIntensity} position={[-9, 4, -6]} distance={40} />
       <pointLight color={TEAL} intensity={lighting.tealIntensity} position={[9, 3.5, 6]} distance={40} />
+
+      {/* Weather & Enemies C4: firestorm/acid_storm's own particle overlay
+          — a no-op for every other weatherKind (WeatherParticles returns
+          null and reports onDebug(null)). Purely decorative; independent of
+          weather_mechanical (GameRoom.tsx's own periodic-tick effect owns
+          the damage side entirely). */}
+      <WeatherParticles weatherKind={weatherKind} onDebug={onWeatherParticlesDebug} />
 
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <circleGeometry args={[24, 48]} />
