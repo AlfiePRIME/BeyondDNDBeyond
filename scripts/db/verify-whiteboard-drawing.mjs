@@ -489,6 +489,70 @@ try {
     JSON.stringify(afterRedo)
   );
 
+  // ── 5b. Brush size: a small/medium/large selector (the owner's own
+  //    report: "I can't pick colours or brush sizes, can this be added")
+  //    that must actually change the next stroke's own footprint, and that
+  //    change must reach a connected player too — the exact same
+  //    color/tool/live-tier wiring §3/§4 above already established, now
+  //    carrying brushSize alongside. Board is empty here (Redo just
+  //    re-applied the clear above), tool is "pen" (also set just above). ──
+  check(
+    "brush size starts at the documented default",
+    (await whiteboardState(dmPage)).brushSize === "medium",
+    JSON.stringify(await whiteboardState(dmPage))
+  );
+
+  await dmPage.click('[data-testid="whiteboard-brush-small"]');
+  const afterSmallBrush = await waitFor(() => whiteboardState(dmPage), (s) => s.brushSize === "small");
+  check("the brush-size control updates the reported size", afterSmallBrush.brushSize === "small", JSON.stringify(afterSmallBrush));
+
+  await dragStroke(dmPage, strokePoints);
+  const afterSmallStroke = await waitFor(() => whiteboardState(dmPage), (s) => s.tileCount > 0);
+  check("a small-brush stroke leaves real ink", afterSmallStroke.tileCount > 0, JSON.stringify(afterSmallStroke));
+  await dmPage.screenshot({ path: join(SCREENSHOT_DIR, "06-small-brush-stroke.png") });
+
+  await dmPage.click('[data-testid="whiteboard-clear"]');
+  await waitFor(() => whiteboardState(dmPage), (s) => s.tileCount === 0);
+
+  await dmPage.click('[data-testid="whiteboard-brush-large"]');
+  const afterLargeBrush = await waitFor(() => whiteboardState(dmPage), (s) => s.brushSize === "large");
+  check("switching to the large brush is reflected in the mirror", afterLargeBrush.brushSize === "large", JSON.stringify(afterLargeBrush));
+
+  // The IDENTICAL gesture (same strokePoints) as the small-brush stroke
+  // above — any difference in how much ink lands is attributable ONLY to
+  // the brush-size change, nothing else.
+  await dragStroke(dmPage, strokePoints);
+  const afterLargeStroke = await waitFor(() => whiteboardState(dmPage), (s) => s.tileCount > 0);
+  check(
+    "changing the brush size visibly changes the next stroke drawn — the identical gesture leaves strictly more ink at 'large' than it did at 'small'",
+    afterLargeStroke.tileCount > afterSmallStroke.tileCount,
+    JSON.stringify({ small: afterSmallStroke.tileCount, large: afterLargeStroke.tileCount })
+  );
+  await dmPage.screenshot({ path: join(SCREENSHOT_DIR, "07-large-brush-stroke.png") });
+
+  // Cross-client sync (§5.1's live tier): Alice — still on this same map —
+  // must converge to the SAME (larger) footprint too, the exact
+  // color-convergence check above, now for brush size.
+  const aliceAfterLargeStroke = await waitFor(
+    () => whiteboardState(alicePage),
+    (s) => s.tileCount === afterLargeStroke.tileCount
+  );
+  check(
+    "a connected player's board converges to the EXACT SAME (larger) footprint — the chosen brush size travels through the same live/persisted sync path as color",
+    aliceAfterLargeStroke.tileCount === afterLargeStroke.tileCount &&
+      [...aliceAfterLargeStroke.tileKeys].sort().join(",") === [...afterLargeStroke.tileKeys].sort().join(","),
+    JSON.stringify({ dm: afterLargeStroke, alice: aliceAfterLargeStroke })
+  );
+
+  // Leaves the board empty and brush size back at its default — section 6
+  // below (height) draws its own fresh stroke and doesn't care about brush
+  // size, but shouldn't inherit an unrelated non-default choice this
+  // section made.
+  await dmPage.click('[data-testid="whiteboard-clear"]');
+  await waitFor(() => whiteboardState(dmPage), (s) => s.tileCount === 0);
+  await dmPage.click('[data-testid="whiteboard-brush-medium"]');
+  await waitFor(() => whiteboardState(dmPage), (s) => s.brushSize === "medium");
+
   // ── 6. Height slider: updates its own reported value AND genuinely moves
   //    the plane (its projected screen point shifts), not just a label. ──
   const beforeHeight = await whiteboardState(dmPage);

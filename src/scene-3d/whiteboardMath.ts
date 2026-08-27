@@ -20,13 +20,40 @@ import { mapCellOffsets } from "./MapSurface";
  * modest canvas size on an ordinary battle-map grid). */
 export const TILE_PX = 96;
 
-/** Pen/eraser stroke width, expressed as a fraction of one cell (the spike's
+/**
+ * Pen/eraser stroke width, expressed as a fraction of one cell (the spike's
  * own §5.2 "resolution-independent" units) — multiplied by TILE_PX to get an
  * actual canvas lineWidth. The eraser is deliberately wider than the pen —
  * the ordinary whiteboard-eraser convention (easy to fully clear a stray
- * mark without many passes), not a precision tool. */
-export const PEN_WIDTH_CELLS = 0.12;
-export const ERASER_WIDTH_CELLS = 0.4;
+ * mark without many passes), not a precision tool.
+ *
+ * Brush SIZE (the owner's report: "can't pick... brush sizes, can this be
+ * added") is a small/medium/large selector, not a raw numeric slider —
+ * matching WhiteboardTool's own discrete-choice shape ("pen" | "eraser",
+ * never a free-form string) rather than the height control's continuous
+ * range (a plane's height has no natural "sizes"; ink width does, the same
+ * way real markers/erasers come in a few actual widths, not a dial). Each
+ * tool keeps its OWN three-point table so the pen/eraser width relationship
+ * above (eraser deliberately wider) holds at every size, not just medium —
+ * "medium" is exactly the single hardcoded value each tool used before this
+ * control existed, so a brand new session's very first stroke is pixel-for-
+ * pixel identical to before this feature was added; small/large are that
+ * same value halved/doubled.
+ */
+export type WhiteboardBrushSize = "small" | "medium" | "large";
+
+export const DEFAULT_WHITEBOARD_BRUSH_SIZE: WhiteboardBrushSize = "medium";
+
+export const PEN_WIDTH_CELLS_BY_SIZE: Record<WhiteboardBrushSize, number> = {
+  small: 0.06,
+  medium: 0.12,
+  large: 0.24,
+};
+export const ERASER_WIDTH_CELLS_BY_SIZE: Record<WhiteboardBrushSize, number> = {
+  small: 0.2,
+  medium: 0.4,
+  large: 0.8,
+};
 
 /** DM-adjustable plane height (world units above the tabletop) — a plain
  * numeric range, not a 3D drag handle (see docs/design/whiteboard-drawing-layer.md
@@ -113,7 +140,7 @@ export function gridPointToPixel(u: number, v: number): { pixelX: number; pixelY
  * space — accumulated into a stroke's own touched-cell set incrementally,
  * per docs/design/whiteboard-drawing-layer.md §4.1 ("trivial... at no extra
  * cost"). `halfWidthPx` is the drawn line's own half-width in pixels
- * (PEN_WIDTH_CELLS/ERASER_WIDTH_CELLS × TILE_PX / 2): a stroke isn't
+ * (PEN_WIDTH_CELLS_BY_SIZE/ERASER_WIDTH_CELLS_BY_SIZE × TILE_PX / 2): a stroke isn't
  * infinitely thin, so a cell can receive real ink from a segment whose own
  * CENTERLINE never enters it — most visibly for the wider eraser brush
  * running close to a cell boundary — and a naive centerline-only sample

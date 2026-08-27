@@ -41,7 +41,12 @@ import {
   type WhiteboardTileUpdate,
   type WhiteboardTool,
 } from "./WhiteboardPlane";
-import { DEFAULT_WHITEBOARD_COLOR, DEFAULT_WHITEBOARD_HEIGHT } from "./whiteboardMath";
+import {
+  DEFAULT_WHITEBOARD_BRUSH_SIZE,
+  DEFAULT_WHITEBOARD_COLOR,
+  DEFAULT_WHITEBOARD_HEIGHT,
+  type WhiteboardBrushSize,
+} from "./whiteboardMath";
 
 // Room ambiance pulls from the app's design tokens (see
 // src/ui-components/tokens.css) — scene-3d can't import CSS custom
@@ -806,6 +811,7 @@ export interface GameTableSceneProps {
   whiteboardHeight?: number;
   whiteboardTool?: WhiteboardTool;
   whiteboardColor?: string;
+  whiteboardBrushSize?: WhiteboardBrushSize;
   /** Real (not verification-only) callback: mirrors the active map's own
    * whiteboard undo/redo stack sizes up to MapPanel.tsx's toolbar so it can
    * enable/disable its Undo/Redo buttons. */
@@ -833,7 +839,7 @@ export interface GameTableSceneProps {
    * is the actual orchestrator for all of it. */
   onWhiteboardLocalStrokeStart?: (
     mapId: string,
-    info: { strokeId: string; tool: WhiteboardTool; color: string; point: WhiteboardGridPoint }
+    info: { strokeId: string; tool: WhiteboardTool; color: string; brushSize: WhiteboardBrushSize; point: WhiteboardGridPoint }
   ) => void;
   onWhiteboardLocalStrokePoint?: (mapId: string, strokeId: string, point: WhiteboardGridPoint) => void;
   onWhiteboardLocalStrokeEnd?: (mapId: string, strokeId: string) => void;
@@ -902,6 +908,7 @@ export function GameTableScene({
   whiteboardHeight = DEFAULT_WHITEBOARD_HEIGHT,
   whiteboardTool = "pen",
   whiteboardColor = DEFAULT_WHITEBOARD_COLOR,
+  whiteboardBrushSize = DEFAULT_WHITEBOARD_BRUSH_SIZE,
   onWhiteboardHistoryChange,
   onWhiteboardDebug,
   onWhiteboardCenterProjectedPosition,
@@ -1567,6 +1574,7 @@ export function GameTableScene({
               interactive={whiteboardInteractive}
               tool={whiteboardTool}
               color={whiteboardColor}
+              brushSize={whiteboardBrushSize}
               onDrawingChange={setIsWhiteboardDrawing}
               onHistoryChange={onWhiteboardHistoryChange}
               onDebug={onWhiteboardDebug}
