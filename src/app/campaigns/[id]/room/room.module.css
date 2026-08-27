@@ -1049,3 +1049,43 @@
   align-items: center;
   gap: 8px;
 }
+
+/* Chat & Summary B3: the minimal, deliberately-not-docked chat input
+   (ChatDock.tsx) — a small fixed bar bottom-center, clear of the
+   left/right-docked panels (DraggablePanel's own default anchors) and the
+   bottom overlay controls. Superseded by B4's real, fully-docked chat
+   panel; see ChatDock.tsx's own doc comment for why this intentionally
+   isn't a DraggablePanel entry. */
+.chatDock {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--surface2) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dim) 35%, transparent);
+  border-radius: 8px;
+  pointer-events: auto;
+  z-index: 20;
+}
+
+.chatDockInput {
+  width: 320px;
+  max-width: 40vw;
+  padding: 6px 10px;
+  font-family: var(--font-b);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 6px;
+}
+
+.chatDockError {
+  color: var(--red);
+  font-size: 12px;
+  max-width: 220px;
+}

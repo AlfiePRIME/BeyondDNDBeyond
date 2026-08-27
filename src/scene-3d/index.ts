@@ -76,6 +76,10 @@ export {
   // Same collision-avoidance reasoning as DiceTumble's own TRAY_RADIUS above.
   DM_BOOK_FOOTPRINT_RADIUS,
 } from "./DmBookProp";
+// Chat & Summary B3: the floating chat bubble above a seated member's own
+// chair — GameRoom.tsx mounts one of these per currently-chatting member,
+// the same Canvas-sibling pattern as DmBookProp above.
+export { ChatBubble, type ChatBubbleProps } from "./ChatBubble";
 export {
   computeSeatLayout,
   computeCampaignSeatLayout,

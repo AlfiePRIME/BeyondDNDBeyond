@@ -16,6 +16,8 @@ import {
   claimContainerItem,
   clearHiddenAsHider,
   createHandout,
+  sendChatMessage,
+  subscribeToChatMessages,
   createInteractionEvent,
   createMapObject,
   createMonsterStatBlock,
@@ -85,8 +87,8 @@ import {
   upsertMapCells,
   DEFAULT_DICE_TRAY_PREFERENCE,
   type CampaignMap,
-  type Character,
   type ChatMessage,
+  type Character,
   type CombatCombatant,
   type CombatantEconomyFlag,
   type ConcealedPit,
@@ -133,9 +135,10 @@ import {
   type VisibilityCellInput,
   type VisibilityTier,
 } from "@/rules-engine";
-import { Button, Modal } from "@/ui-components";
+import { Button, computeChatBubbleDurationMs, Modal } from "@/ui-components";
 import {
   applySeatOffset,
+  ChatBubble,
   computeCampaignSeatLayout,
   computeMemberTrayPosition,
   DEFAULT_WHITEBOARD_BRUSH_SIZE,
@@ -146,6 +149,7 @@ import {
   DM_BOOK_FOOTPRINT_RADIUS,
   DM_CHAIR_FRONTAGE,
   GameTableScene,
+  getEffectiveSeat,
   PERSONAL_TRAY_RADIUS,
   PERSONAL_TRAY_SCALE,
   PLAYER_CHAIR_FRONTAGE,
@@ -191,6 +195,7 @@ import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
 import { buildDiceTumbleSpec } from "../roll/tumble";
+import { ChatDock } from "./ChatDock";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { ChatLogPanel } from "./ChatLogPanel";
 import { ContainerPanel } from "./ContainerPanel";
@@ -1397,6 +1402,131 @@ export function GameRoom({
       } catch (err) {
         setDiceTrayPreferenceError(errorMessage(err) ?? "Could not save your dice tray preference.");
       }
+    },
+    [campaignId, currentUserId]
+  );
+
+  // Chat & Summary B3: the floating chat bubble above a sender's own seat.
+  // One entry per sender currently showing (or queued to show) a message —
+  // `current` is what's on screen right now, `queue` is every later message
+  // from that SAME sender still waiting its turn (the "queue, never overlap
+  // or replace mid-display" acceptance criterion). A sender with no entry
+  // at all here has nothing to show.
+  const [chatBubbles, setChatBubbles] = useState<Map<string, { current: ChatMessage; queue: ChatMessage[] }>>(
+    new Map()
+  );
+  // subscribeToChatMessages (chat.ts) fires on both INSERT and UPDATE (an
+  // edit within B1's own window) with the same payload shape — the floating
+  // bubble only ever reacts to a genuinely NEW message (an id it hasn't
+  // seen before); an edit of an already-shown-or-shown-and-gone bubble is
+  // B4's log panel's own concern, never this one's, so this ref is purely
+  // insert-vs-update disambiguation, nothing else reads it.
+  const seenChatMessageIdsRef = useRef<Set<string>>(new Set());
+
+  // Pops the next queued message (if any) into `current` — a sender with an
+  // empty queue is removed entirely (nothing left to show). Deliberately
+  // pure (no setTimeout or other side effect in here): React's dev-only
+  // Strict Mode double-invokes a useState updater function to catch exactly
+  // this kind of impurity, and an earlier version of this callback DID
+  // schedule its own next-advance timer from inside the updater — under
+  // Strict Mode that ran the scheduling side effect twice, so the SECOND
+  // duplicate's own later advance call saw the queue already drained (the
+  // first duplicate having already popped it) and deleted the sender's
+  // entry out from under the just-promoted message almost immediately,
+  // rather than leaving it on screen for its own real duration. Scheduling
+  // now lives entirely in the effect below, which reacts to `current`
+  // actually changing rather than running as a side effect of computing it.
+  const advanceChatBubble = useCallback((senderId: string) => {
+    setChatBubbles((current) => {
+      const entry = current.get(senderId);
+      if (!entry) return current;
+      const next = new Map(current);
+      if (entry.queue.length === 0) {
+        next.delete(senderId);
+      } else {
+        const [nextMessage, ...rest] = entry.queue;
+        next.set(senderId, { current: nextMessage, queue: rest });
+      }
+      return next;
+    });
+  }, []);
+
+  // Called for every genuinely new message (the subscription handler below,
+  // after its own seenChatMessageIdsRef de-dupe): shows it immediately if
+  // that sender has nothing showing yet, otherwise appends to their queue.
+  // Also pure, for the same reason as advanceChatBubble above.
+  const enqueueChatBubble = useCallback((message: ChatMessage) => {
+    setChatBubbles((current) => {
+      const senderId = message.sender_user_id;
+      const entry = current.get(senderId);
+      const next = new Map(current);
+      if (!entry) {
+        next.set(senderId, { current: message, queue: [] });
+      } else {
+        next.set(senderId, { current: entry.current, queue: [...entry.queue, message] });
+      }
+      return next;
+    });
+  }, []);
+
+  // postgres_changes, not this room's own broadcast channel — chat.ts's
+  // subscribeToChatMessages own doc comment (a member must see a message
+  // wherever they're reading it, not only while this specific room's
+  // channel happens to be joined), the exact same subscribeToCampaignChanges/
+  // subscribeToProfileChanges shape above.
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    return subscribeToChatMessages(supabase, campaignId, (message) => {
+      if (seenChatMessageIdsRef.current.has(message.id)) return;
+      seenChatMessageIdsRef.current.add(message.id);
+      enqueueChatBubble(message);
+    });
+  }, [campaignId, enqueueChatBubble]);
+
+  // The one place that schedules a sender's own next-advance timer — keyed
+  // by that sender's CURRENT message id (not just senderId), so this only
+  // reschedules when `current` itself actually changes (a new message
+  // merely being appended to the queue, with `current` unchanged, is a
+  // no-op here). Runs as a real effect rather than as a side effect of the
+  // state updaters above, so it's naturally safe under Strict Mode's
+  // dev-only double-invocation of render/updater functions — an effect is
+  // expected to run once per real commit, not twice per computation.
+  const scheduledChatAdvanceRef = useRef<Map<string, { messageId: string; timer: ReturnType<typeof setTimeout> }>>(
+    new Map()
+  );
+  useEffect(() => {
+    const scheduled = scheduledChatAdvanceRef.current;
+    for (const [senderId, entry] of chatBubbles) {
+      const existing = scheduled.get(senderId);
+      if (existing && existing.messageId === entry.current.id) continue;
+      if (existing) clearTimeout(existing.timer);
+      const timer = setTimeout(() => advanceChatBubble(senderId), computeChatBubbleDurationMs(entry.current.body));
+      scheduled.set(senderId, { messageId: entry.current.id, timer });
+    }
+    for (const senderId of Array.from(scheduled.keys())) {
+      if (!chatBubbles.has(senderId)) scheduled.delete(senderId);
+    }
+  }, [chatBubbles, advanceChatBubble]);
+
+  // Every scheduled dequeue timer, cleared on unmount only — never on a
+  // dependency change (empty deps), since scheduledChatAdvanceRef's own Map
+  // is mutated in place by the effect above rather than replaced.
+  useEffect(() => {
+    const scheduled = scheduledChatAdvanceRef.current;
+    return () => {
+      for (const { timer } of scheduled.values()) clearTimeout(timer);
+    };
+  }, []);
+
+  // Send-only — chat.ts's own RLS re-verifies sender_user_id === auth.uid()
+  // regardless of what's passed here (chat.ts's own doc comment); the
+  // message that shows up as a bubble is always the one that round-trips
+  // back through THIS client's own subscription above, exactly like every
+  // other connected client, never an optimistic local echo.
+  const handleSendChat = useCallback(
+    async (body: string) => {
+      const supabase = createBrowserSupabaseClient();
+      await sendChatMessage(supabase, campaignId, currentUserId, body);
     },
     [campaignId, currentUserId]
   );
@@ -5342,7 +5472,57 @@ export function GameRoom({
             />
           </DmBookProp>
         ) : null}
+        {/* Chat & Summary B3: one floating bubble per member CURRENTLY
+            showing a message — a Canvas sibling of GameTableScene, the same
+            mounting pattern as DmBookProp above and the per-member dice
+            trays. Positioned via getEffectiveSeat (seating.ts) reading
+            through `layout`/`liveSeatOffsets` — the exact same
+            live-during-a-drag source dmSeat/dmBookPosition/memberTrayPositions
+            above already read through, so a message sent while the sender's
+            own chair is mid-drag anchors to wherever it actually is RIGHT
+            NOW, not its pre-drag default. Keyed by the message's own id (not
+            the sender's user_id) so a brand-new message for the same sender
+            always remounts ChatBubble fresh, restarting its own fade timer
+            rather than reusing a stale one. */}
+        {Array.from(chatBubbles.entries()).map(([userId, entry]) => {
+          const seat = getEffectiveSeat(layout, userId, liveSeatOffsets);
+          if (!seat) return null;
+          return (
+            <ChatBubble
+              key={entry.current.id}
+              userId={userId}
+              position={seat.position}
+              isDm={seat.member.role === "dm"}
+              text={entry.current.body}
+              durationMs={computeChatBubbleDurationMs(entry.current.body)}
+            />
+          );
+        })}
       </Canvas>
+      {/* Chat & Summary B3: the minimal, not-yet-docked chat input — see
+          ChatDock.tsx's own doc comment for why this isn't a DraggablePanel
+          entry (B4 supersedes it outright). */}
+      <ChatDock onSend={handleSendChat} />
+      {/* Hidden render-state mirror for a real Playwright verification of
+          the floating chat bubble feature — same "WebGL has no DOM of its
+          own" reasoning as every other mirror on this page. Exposes exactly
+          what a script can't otherwise observe deterministically: which
+          message is CURRENTLY showing for a given sender vs. still queued
+          behind it, without racing real display-duration timing. */}
+      <div data-testid="chat-bubble-state" hidden>
+        {JSON.stringify(
+          Object.fromEntries(
+            Array.from(chatBubbles.entries()).map(([userId, entry]) => [
+              userId,
+              {
+                currentId: entry.current.id,
+                currentBody: entry.current.body,
+                queuedIds: entry.queue.map((message) => message.id),
+              },
+            ])
+          )
+        )}
+      </div>
       {/* Hidden render-state mirror for verify-vision-rendering.mjs — see
           the visionDebug memo. */}
       <div data-testid="vision-state" hidden>

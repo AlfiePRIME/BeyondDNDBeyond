@@ -19,6 +19,7 @@ export {
   type ChatSpan,
   type ChatFormatFlag,
 } from "./chatFormatting";
+export { computeChatBubbleDurationMs } from "./chatBubbleTiming";
 
 // CanvasUI WebGL effects (installed via `shadcn add @canvas-ui/...`).
 // Glitch: broadcast glitch bursts — matches the ported glitch-a/glitch-b
