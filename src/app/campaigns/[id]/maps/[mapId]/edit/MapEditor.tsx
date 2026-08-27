@@ -81,6 +81,7 @@ import type { PaletteAsset } from "./lib/assetUrl";
 import { captureMapThumbnail } from "../../lib/thumbnail";
 import { BehaviorEditor } from "./BehaviorEditor";
 import { ObjectTagEditor } from "./ObjectTagEditor";
+import { ObjectTintEditor } from "./ObjectTintEditor";
 import { ContainerItemsEditor } from "./ContainerItemsEditor";
 import { AssetPickerGrid } from "./AssetPickerGrid";
 import { QuickPlacePopover } from "./QuickPlacePopover";
@@ -1222,6 +1223,14 @@ export function MapEditor({
     });
   }
 
+  function handleSaveTint(tint: string | null) {
+    if (!selectedLiveObject) return;
+    const objectId = selectedLiveObject.id;
+    void runObjectMutation(async (supabase) => {
+      replaceObject(await updateMapObject(supabase, objectId, { tint }));
+    });
+  }
+
   function handleRemove() {
     if (selectedPreviewObject && preview) {
       setPreviewState({
@@ -1941,6 +1950,7 @@ export function MapEditor({
         rotation: object.rotation,
         url: assetUrlById.get(object.asset_id) ?? null,
         forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
+        tint: object.tint,
       })),
       ...(preview?.objects.map((object) => ({
         id: object.id,
@@ -2793,6 +2803,11 @@ export function MapEditor({
                       key={`tag-${selectedLiveObject.id}`}
                       object={selectedLiveObject}
                       onSave={handleSaveTag}
+                    />
+                    <ObjectTintEditor
+                      key={`tint-${selectedLiveObject.id}`}
+                      object={selectedLiveObject}
+                      onSave={handleSaveTint}
                     />
                     <BehaviorEditor
                       key={selectedLiveObject.id}

@@ -74,6 +74,7 @@ import {
   saveWhiteboardTiles,
   subscribeToCampaignChanges,
   subscribeToCombatantHiddenFromChanges,
+  subscribeToMapObjectChanges,
   subscribeToProfileChanges,
   transitionMapToken,
   triggerMapObject,
@@ -1784,6 +1785,31 @@ export function GameRoom({
       objects: exists
         ? current.objects.map((candidate) => (candidate.id === object.id ? object : candidate))
         : [...current.objects, object],
+    };
+    setLiveMapState(liveMapRef.current);
+  }, []);
+
+  // Map Editor Batch A3: subscribeToMapObjectChanges' own receiver — merges
+  // just the changed scalar fields (tint, chiefly, but tag/rotation/behavior
+  // too) onto whatever candidate this client already has, keeping that
+  // candidate's own joined `.asset` (the raw postgres_changes row has no
+  // join). A no-op if the id isn't already known here — unlike
+  // applyObjectUpserted above (which always has a real join to insert with),
+  // fabricating a stub entry with no `.asset` would render broken; this
+  // client's next real refreshLiveMap (map switch/reconnect) picks up
+  // anything that narrow edge case misses, the same "defense in depth, not
+  // the real boundary" precedent applyObjectUpserted's own doc comment
+  // already leans on for revealed_to_players.
+  const applyMapObjectRowChanged = useCallback((row: Omit<MapObject, "asset">) => {
+    const current = liveMapRef.current;
+    if (!current || row.map_id !== current.map.id) return;
+    const exists = current.objects.some((candidate) => candidate.id === row.id);
+    if (!exists) return;
+    liveMapRef.current = {
+      ...current,
+      objects: current.objects.map((candidate) =>
+        candidate.id === row.id ? { ...candidate, ...row } : candidate
+      ),
     };
     setLiveMapState(liveMapRef.current);
   }, []);
@@ -4317,6 +4343,17 @@ export function GameRoom({
     void refreshLiveMap(createBrowserSupabaseClient(), desiredMapId);
   }, [desiredMapId, refreshLiveMap]);
 
+  // Map Editor Batch A3: live sync for object-metadata edits (tint, chiefly)
+  // made via the separate Map Editor route while this room already has the
+  // same map open — see subscribeToMapObjectChanges' own doc comment for
+  // why postgres_changes rather than this room's own broadcast channel.
+  // Re-subscribes whenever the displayed map itself changes.
+  useEffect(() => {
+    if (!desiredMapId) return;
+    const supabase = createBrowserSupabaseClient();
+    return subscribeToMapObjectChanges(supabase, desiredMapId, applyMapObjectRowChanged);
+  }, [desiredMapId, applyMapObjectRowChanged]);
+
   // ---------------------------------------------------------------------
   // Turn camera: an automatically-offered better vantage on the viewing
   // player's own combat turn. Everything that decides WHETHER the improved
@@ -4755,6 +4792,7 @@ export function GameRoom({
             rotation: object.rotation,
             url: assetUrlById.get(object.asset_id) ?? null,
             forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
+            tint: object.tint,
             // An object's own invisible, cell-sized hit box (MapSurface's
             // own "makes thin/holey props clickable" doc comment) sits ON
             // TOP of the cell beneath it, so a click there would otherwise
@@ -4924,6 +4962,18 @@ export function GameRoom({
     for (const object of liveMap.objects) {
       if (object.crossing_type) crossingByCell[cellKey(object.x, object.y)] = object.crossing_type;
     }
+    // Map Editor Batch A3: this viewer's own live client-side state for each
+    // object's tint (or null) — mirrors the exact value MapSurface actually
+    // renders with, sourced from liveMap.objects (the same array
+    // subscribeToMapObjectChanges' own applyMapObjectRowChanged patches in
+    // place). Lets a verify script confirm a tint change made via the
+    // separate Map Editor route reaches an ALREADY-OPEN Game Room client
+    // live, with no page reload — a WebGL canvas has no DOM of its own to
+    // inspect a mesh's actual material color.
+    const tintByObjectId: Record<string, string | null> = {};
+    for (const object of liveMap.objects) {
+      tintByObjectId[object.id] = object.tint;
+    }
     return JSON.stringify({
       mapId: liveMap.map.id,
       voidCells: liveMap.cells
@@ -4940,6 +4990,7 @@ export function GameRoom({
         .filter((cell) => cell.terrain_type === "pit")
         .map((cell) => ({ key: cellKey(cell.x, cell.y), elevation: cell.elevation })),
       crossingByCell,
+      tintByObjectId,
     });
   }, [liveMap, tableMap]);
 

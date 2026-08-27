@@ -85,6 +85,16 @@ export interface MapObject {
    * see anything yet" precedent) — this flag isn't just a render-time
    * filter, it's backed by both layers. */
   revealed_to_players: boolean;
+  /** Map Editor Batch A3: a '#rrggbb' hex string applied at render time as a
+   * MULTIPLY against the model's own base color (see PosedClone.tsx's
+   * buildTintedScene) — never a flat color replacement, so texture/grain
+   * detail (a chest's wood grain, etc.) survives. null (the default, and
+   * every object placed before this addition) renders through the exact
+   * same untinted code path as before this feature — not just "visually
+   * the same" but literally unchanged. Settable only via updateMapObject
+   * (like `tag`), never at creation — the editor's color picker only shows
+   * once an object is already selected. */
+  tint: string | null;
   created_at: string;
   asset: PlacedObjectAsset;
 }
@@ -236,6 +246,7 @@ export async function restoreMapObject(
       blocks_line_of_sight: object.blocks_line_of_sight,
       crossing_type: object.crossing_type,
       tag: object.tag,
+      tint: object.tint,
       revealed_to_players: object.revealed_to_players,
       created_at: object.created_at,
     })
@@ -260,6 +271,9 @@ export async function updateMapObject(
     /** Map Editor Batch A6: the freeform label editable from the map
      * editor's object panel — null clears it back to unlabeled. */
     tag?: string | null;
+    /** Map Editor Batch A3: the render-time tint — see MapObject.tint's own
+     * doc comment. null clears it back to untinted. */
+    tint?: string | null;
     /** Map Editor Batch A10: the Game Room's per-object "Reveal" action
      * flips this true — see MapObject.revealed_to_players' own doc
      * comment. Nothing in this app ever flips it back to false today (no
@@ -351,4 +365,56 @@ export async function deleteMapObject(supabase: SupabaseClient, objectId: string
   const { error } = await supabase.from("map_objects").delete().eq("id", objectId);
 
   if (error) throw error;
+}
+
+/**
+ * Map Editor Batch A3: live sync for object-metadata edits made from OUTSIDE
+ * the Game Room's own broadcast channel — chiefly the separate Map Editor
+ * route's tint picker (also tag/rotation/behavior edits made there, as a
+ * byproduct), none of which broadcast anywhere today: MapEditor.tsx has no
+ * realtime channel of its own at all, so a DM tinting an object on a map a
+ * session is already live on would otherwise only reach connected clients
+ * at their next full reconnect/map-switch refetch. postgres_changes rather
+ * than a new broadcast channel — same subscribeToProfileChanges/
+ * subscribeToUiPreferencesChanges precedent (data-access/profiles.ts),
+ * row-filtered server-side to one map so an edit on a different map in the
+ * same campaign never wakes this up. Same deterministic-claims setAuth
+ * dance as those two: without it a socket can join anon and RLS silently
+ * drops every event, which would look identical to "nothing changed"
+ * instead of surfacing as a bug.
+ *
+ * Hands the caller postgres_changes' own raw new row — every scalar column,
+ * but no joined `asset` (that join only happens in listMapObjects' own
+ * OBJECT_COLUMNS select) — so a caller merges just the changed fields onto
+ * whatever object it already has cached (keeping that object's own
+ * `.asset`) rather than this function re-deriving a full MapObject itself.
+ */
+export function subscribeToMapObjectChanges(
+  supabase: SupabaseClient,
+  mapId: string,
+  handler: (object: Omit<MapObject, "asset">) => void
+): () => void {
+  let removed = false;
+  let channel: ReturnType<SupabaseClient["channel"]> | null = null;
+
+  void (async () => {
+    const { data } = await supabase.auth.getSession();
+    if (removed) return;
+    if (data.session) await supabase.realtime.setAuth(data.session.access_token);
+    if (removed) return;
+
+    channel = supabase
+      .channel(`map-object-changes:${mapId}:${crypto.randomUUID()}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "map_objects", filter: `map_id=eq.${mapId}` },
+        (payload) => handler(payload.new as Omit<MapObject, "asset">)
+      )
+      .subscribe();
+  })();
+
+  return () => {
+    removed = true;
+    if (channel) void supabase.removeChannel(channel);
+  };
 }

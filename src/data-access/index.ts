@@ -152,6 +152,7 @@ export {
   triggerMapObject,
   revealAllPendingMapObjects,
   parseMapObjectBehavior,
+  subscribeToMapObjectChanges,
   MAP_OBJECT_ACTIONS,
   type MapObject,
   type MapObjectAction,
