@@ -63,6 +63,38 @@ export async function setCharacterResourceUses(
   return data as CharacterResource;
 }
 
+/**
+ * Raise or lower a named resource's current_uses by `delta`, clamped to
+ * [0, max_uses], via the apply_character_resource_delta RPC (Map Editor
+ * Batch A9) — the apply_hp_delta/applyExhaustionDelta pattern, not a
+ * client-side read-then-write, so the new count is computed from the
+ * CURRENT stored value under a row lock rather than a value read moments
+ * earlier. Matched by name, case-insensitively, against whichever
+ * character_resources row belongs to `characterId` — the cursed/blessed
+ * item case this exists for configures a resource by NAME (see
+ * CurseBlessingEffect in mapObjectItems.ts) since no specific
+ * character_resources row exists yet when the DM authors the item. Returns
+ * null (a silent no-op, not a thrown error) if the character has no
+ * resource by that name — SECURITY INVOKER, so authorization is 0008's
+ * plain character_resources UPDATE policy (owner or campaign DM), same as
+ * setCharacterResourceUses.
+ */
+export async function applyResourceDelta(
+  supabase: SupabaseClient,
+  characterId: string,
+  resourceName: string,
+  delta: number
+): Promise<CharacterResource | null> {
+  const { data, error } = await supabase.rpc("apply_character_resource_delta", {
+    p_character_id: characterId,
+    p_resource_name: resourceName,
+    p_delta: delta,
+  });
+
+  if (error) throw error;
+  return (data as CharacterResource | null) ?? null;
+}
+
 /** Resets only short_rest resources — see the short_rest() SQL function. */
 export async function shortRest(supabase: SupabaseClient, characterId: string): Promise<void> {
   const { error } = await supabase.rpc("short_rest", { p_character_id: characterId });
