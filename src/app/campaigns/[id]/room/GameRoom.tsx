@@ -120,6 +120,8 @@ import {
   applySeatOffset,
   computeCampaignSeatLayout,
   computeMemberTrayPosition,
+  DEFAULT_WHITEBOARD_COLOR,
+  DEFAULT_WHITEBOARD_HEIGHT,
   DiceTumble,
   DmBookProp,
   DM_BOOK_FOOTPRINT_RADIUS,
@@ -141,6 +143,8 @@ import {
   type SeatOffset,
   type TableLiveMap,
   type TokenSlidePhase,
+  type WhiteboardHandle,
+  type WhiteboardTool,
 } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
 import {
@@ -1471,6 +1475,37 @@ export function GameRoom({
   // arrives from raw pointer events, often several per frame.
   const [rulerDrag, setRulerDrag] = useState<RulerDrag | null>(null);
   const rulerDragRef = useRef<RulerDrag | null>(null);
+
+  // Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md,
+  // Prompt 2) — purely local UI state per the spike's own §7.2 call
+  // ("nothing about whether the DM currently has the pen 'armed' is
+  // anything a player's client needs to know"): no DB write, no broadcast,
+  // just like rulerActive above. The real drawing data (the composite
+  // canvas, per-cell tiles, undo/redo stacks) lives entirely inside
+  // WhiteboardPlane itself; this component only owns the toolbar's own
+  // controls and an imperative handle to trigger undo/redo/clear on it.
+  const [drawMode, setDrawMode] = useState(false);
+  const [whiteboardTool, setWhiteboardTool] = useState<WhiteboardTool>("pen");
+  const [whiteboardColor, setWhiteboardColor] = useState(DEFAULT_WHITEBOARD_COLOR);
+  const [whiteboardHeight, setWhiteboardHeight] = useState(DEFAULT_WHITEBOARD_HEIGHT);
+  const [whiteboardHistory, setWhiteboardHistory] = useState({ canUndo: false, canRedo: false });
+  // Verification-only mirror of WhiteboardPlane's own tile store — see
+  // onWhiteboardDebug's doc comment (GameTableScene.tsx); nothing here reads
+  // it back except the hidden whiteboard-state testid mirror below.
+  const [whiteboardDebug, setWhiteboardDebug] = useState<{ tileKeys: readonly string[] }>({ tileKeys: [] });
+  // Verification-only: the plane's own world-space center projected to a
+  // real screen point — see WhiteboardPlaneProps.onCenterProjectedPosition's
+  // doc comment (GameTableScene.tsx). Lets a Playwright script find a real
+  // click target on the whiteboard without a blind canvas scan.
+  const [whiteboardCenterScreen, setWhiteboardCenterScreen] = useState<[number, number] | null>(null);
+  const whiteboardHandleRef = useRef<WhiteboardHandle | null>(null);
+  const handleToggleDrawMode = useCallback(() => setDrawMode((mode) => !mode), []);
+  const handleWhiteboardHandleReady = useCallback((handle: WhiteboardHandle | null) => {
+    whiteboardHandleRef.current = handle;
+  }, []);
+  const handleWhiteboardUndo = useCallback(() => whiteboardHandleRef.current?.undo(), []);
+  const handleWhiteboardRedo = useCallback(() => whiteboardHandleRef.current?.redo(), []);
+  const handleWhiteboardClear = useCallback(() => whiteboardHandleRef.current?.clear(), []);
 
   // Updates BOTH the campaign-wide token cache (campaignTokensState/Ref)
   // AND, iff relevant, the currently-loaded map's own token list
@@ -3708,6 +3743,7 @@ export function GameRoom({
     const withHighlight = (cell: MapSurfaceCell): MapSurfaceCell =>
       highlightedCellKeysForViewer?.has(cellKey(cell.x, cell.y)) ? { ...cell, highlighted: true } : cell;
     return {
+      id: liveMap.map.id,
       gridWidth: liveMap.map.grid_width,
       gridHeight: liveMap.map.grid_height,
       cells: buildDenseCells(liveMap.map.grid_width, liveMap.map.grid_height, overlay).flatMap(
@@ -4064,6 +4100,14 @@ export function GameRoom({
           turnCameraActive={turnCameraActive}
           onLiveChairOffset={handleLiveChairOffset}
           onLookAroundDebug={setLookAroundDebug}
+          whiteboardInteractive={currentUserIsDM && drawMode}
+          whiteboardHeight={whiteboardHeight}
+          whiteboardTool={whiteboardTool}
+          whiteboardColor={whiteboardColor}
+          onWhiteboardHistoryChange={setWhiteboardHistory}
+          onWhiteboardDebug={setWhiteboardDebug}
+          onWhiteboardCenterProjectedPosition={setWhiteboardCenterScreen}
+          onWhiteboardHandleReady={handleWhiteboardHandleReady}
         />
         {/* Prompt 8b: one personal dice tray per CONNECTED member —
             replacing the old single shared corner tray plus the DM's
@@ -4172,6 +4216,31 @@ export function GameRoom({
           campaignDefaultMapId,
           ownTokenMapId,
           livePlayerMapIds: [...livePlayerMapIds],
+        })}
+      </div>
+      {/* Hidden render-state mirror for scripts/db/verify-whiteboard-drawing.mjs
+          (docs/design/whiteboard-drawing-layer.md, Prompt 2) — WebGL has no
+          DOM of its own for a test to inspect the composite canvas's actual
+          pixels, so `tileKeys`/`tileCount` (WhiteboardPlane's own onDebug)
+          stand in for "does a real drawn/erased/cleared mark exist right
+          now", and `centerScreenPoint` (onCenterProjectedPosition) gives a
+          real click target instead of a blind canvas scan. `drawMode`/
+          `tool`/`color`/`height`/`canUndo`/`canRedo` are this client's own
+          real toolbar state, present for every client (not DM-gated) purely
+          for mirror simplicity — a player's client always has drawMode
+          false and an always-disabled toolbar, since MapPanel never renders
+          the toggle for them at all. */}
+      <div data-testid="whiteboard-state" hidden>
+        {JSON.stringify({
+          drawMode,
+          tool: whiteboardTool,
+          color: whiteboardColor,
+          height: whiteboardHeight,
+          canUndo: whiteboardHistory.canUndo,
+          canRedo: whiteboardHistory.canRedo,
+          tileCount: whiteboardDebug.tileKeys.length,
+          tileKeys: whiteboardDebug.tileKeys,
+          centerScreenPoint: whiteboardCenterScreen,
         })}
       </div>
       {/* Hidden render-state mirror for verify-per-member-dice-trays.mjs
@@ -4521,6 +4590,19 @@ export function GameRoom({
           entries={interactiveEntries}
           onTrigger={handleTrigger}
           triggerError={triggerError}
+          whiteboardDrawMode={drawMode}
+          onToggleWhiteboardDrawMode={handleToggleDrawMode}
+          whiteboardTool={whiteboardTool}
+          onSetWhiteboardTool={setWhiteboardTool}
+          whiteboardColor={whiteboardColor}
+          onSetWhiteboardColor={setWhiteboardColor}
+          whiteboardHeight={whiteboardHeight}
+          onSetWhiteboardHeight={setWhiteboardHeight}
+          whiteboardCanUndo={whiteboardHistory.canUndo}
+          whiteboardCanRedo={whiteboardHistory.canRedo}
+          onWhiteboardUndo={handleWhiteboardUndo}
+          onWhiteboardRedo={handleWhiteboardRedo}
+          onWhiteboardClear={handleWhiteboardClear}
         />
       </DraggablePanel>
       {liveMap ? (

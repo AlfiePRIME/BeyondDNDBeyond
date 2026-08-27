@@ -1106,6 +1106,26 @@ export interface MapSurfaceProps {
 }
 
 /**
+ * The world-space offset from grid index (0,0) to this local coordinate
+ * space's own origin, along X and Z — the exact derivation MapSurface's own
+ * cells.map below uses inline for worldX/worldZ (`cell.x * cellSize -
+ * offsetX`), factored out and exported so anything else sharing this same
+ * local space (currently only the whiteboard drawing plane, WhiteboardPlane.tsx)
+ * computes cell/world positions with the identical formula rather than a
+ * hand-copied duplicate that could silently drift out of sync. (gridOverlay.ts
+ * has its own long-standing inline copy of this same formula, predating this
+ * export — left untouched here since refactoring it is unrelated to this
+ * change.)
+ */
+export function mapCellOffsets(
+  gridWidth: number,
+  gridHeight: number,
+  cellSize: number
+): { offsetX: number; offsetZ: number } {
+  return { offsetX: ((gridWidth - 1) / 2) * cellSize, offsetZ: ((gridHeight - 1) / 2) * cellSize };
+}
+
+/**
  * The one shared renderer for a map's cell blocks and placed objects — the
  * full-screen editor and the miniature on the game table both draw through
  * this, wrapping it with their own camera/lighting/interaction context, so
@@ -1129,8 +1149,7 @@ export function MapSurface({
   onObjectMeasureDebug,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
-  const offsetX = ((gridWidth - 1) / 2) * cellSize;
-  const offsetZ = ((gridHeight - 1) / 2) * cellSize;
+  const { offsetX, offsetZ } = mapCellOffsets(gridWidth, gridHeight, cellSize);
   const span = cellSize * (1 - CELL_GAP_RATIO);
 
   return (
