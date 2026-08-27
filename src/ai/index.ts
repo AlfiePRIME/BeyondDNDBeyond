@@ -26,3 +26,18 @@ export {
   type GeneratedAreaCell,
   type GeneratedAreaObject,
 } from "./generateMapArea";
+export {
+  generateSessionSummary,
+  buildSessionSummaryRequest,
+  extractSessionSummaryDraft,
+  validateGeneratedSessionSummary,
+  SessionSummaryGenerationError,
+  SESSION_SUMMARY_MODEL,
+  SESSION_SUMMARY_HIGHLIGHT_KINDS,
+  type SessionSummaryChatInput,
+  type SessionSummaryEventInput,
+  type SessionSummaryWindow,
+  type SessionSummaryHighlightKind,
+  type SessionSummaryHighlightDraft,
+  type GeneratedSessionSummary,
+} from "./generateSessionSummary";

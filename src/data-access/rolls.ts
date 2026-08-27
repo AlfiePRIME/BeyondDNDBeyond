@@ -202,6 +202,34 @@ export async function listRollLog(
 }
 
 /**
+ * Every roll within [startIso, endIso] (inclusive), oldest first — Chat &
+ * Summary B6's end-of-session summary window, unlike listRollLog above (a
+ * most-recent-first, tail-limited live feed). No `limit`, same reasoning as
+ * listChatMessagesInRange: one session's worth of rolls is bounded enough to
+ * fetch in full, and the summary generator caps its own prompt size from the
+ * result. Visibility rides roll_log's existing SELECT policy (campaign
+ * members, private rolls DM-only) — the end-session-summary Route Handler is
+ * DM-gated anyway, so this always sees every roll a DM legitimately can.
+ */
+export async function listRollLogInRange(
+  supabase: SupabaseClient,
+  campaignId: string,
+  startIso: string,
+  endIso: string
+): Promise<RollLogEntry[]> {
+  const { data, error } = await supabase
+    .from("roll_log")
+    .select()
+    .eq("campaign_id", campaignId)
+    .gte("created_at", startIso)
+    .lte("created_at", endIso)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []) as RollLogEntry[];
+}
+
+/**
  * Fires `handler` with each newly logged roll in the campaign. A
  * postgres_changes subscription, NOT the Game Room's campaign-channel
  * broadcast, on purpose: rolls can originate from the character sheet page,

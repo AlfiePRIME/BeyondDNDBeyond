@@ -112,17 +112,26 @@ export function StartSessionControl({
       const list = await listCampaignsForUser(supabase, currentUserId);
       if (cancelled) return;
       setMemberships(list);
+      // Chat & Summary B6: a campaign with an open session_started_at but
+      // session_active === false is a PAUSED session (pauseSession stops the
+      // live signal but deliberately leaves session_started_at set) — that
+      // still needs the same presence probe as a live one, not an instant
+      // "startable". Before pausing existed, session_active === false always
+      // meant "nothing in progress"; treating it that way here now would let
+      // a second member hijack the DM role from underneath a mid-break DM
+      // whose room is still genuinely occupied.
+      const inProgress = (campaign: Campaign) => campaign.session_active || campaign.session_started_at !== null;
       setAvailability(
         Object.fromEntries(
-          list.map((m) => [m.campaign.id, m.campaign.session_active ? "checking" : "startable"])
+          list.map((m) => [m.campaign.id, inProgress(m.campaign) ? "checking" : "startable"])
         )
       );
-      // A session_active campaign might be a stranded flag from a crashed
-      // room — probe its real presence so a genuinely empty one is offered
-      // as reclaimable instead of being disabled forever.
+      // A session_active (or paused) campaign might be a stranded flag from
+      // a crashed room — probe its real presence so a genuinely empty one is
+      // offered as reclaimable instead of being disabled forever.
       await Promise.all(
         list
-          .filter((m) => m.campaign.session_active)
+          .filter((m) => inProgress(m.campaign))
           .map(async (m) => {
             const others = await countOthersPresent(supabase, m.campaign.id, {
               userId: currentUserId,

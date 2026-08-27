@@ -1,0 +1,120 @@
+/* Chat & Summary B6: the end-of-session preview/edit screen's own body
+ * content, hosted inside ui-components' shared Modal chrome. The
+ * textarea/field styling mirrors session-log.module.css's own local
+ * textarea (the shared library has no Textarea primitive) at this app's
+ * usual small-panel scale. */
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 360px;
+  max-width: 520px;
+}
+
+.status {
+  margin: 0;
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.hint {
+  margin: 0;
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  color: var(--dim);
+}
+
+.error {
+  margin: 0;
+  color: var(--red);
+  line-height: 1.5;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fieldLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.textarea {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: var(--font-b);
+  font-size: 14px;
+  caret-color: var(--pink);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.textarea:hover:not(:disabled) {
+  border-color: var(--dim);
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ga);
+}
+
+.textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.highlightsSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.highlightsList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.highlightItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--r);
+  background: var(--surface2);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.highlightCategory {
+  flex-shrink: 0;
+  font-family: var(--font-m);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--teal);
+}

@@ -329,6 +329,74 @@ export async function deleteSessionLogEntry(supabase: SupabaseClient, entryId: s
   if (error) throw error;
 }
 
+/** Chat & Summary B6: the structured half of an end-of-session summary —
+ * "who damaged what, who triggered/touched what" as a flat, ordered list of
+ * short highlights, kept in its own table (0069) rather than a jsonb column
+ * on session_log, per the project owner's own extensibility call: these rows
+ * can be queried/indexed independently of the narrative recap text later. */
+export const SESSION_SUMMARY_HIGHLIGHT_CATEGORIES = ["damage", "interaction", "other"] as const;
+
+export type SessionSummaryHighlightCategory = (typeof SESSION_SUMMARY_HIGHLIGHT_CATEGORIES)[number];
+
+export interface SessionSummaryHighlight {
+  id: string;
+  session_log_id: string;
+  category: SessionSummaryHighlightCategory;
+  headline: string;
+  sort_order: number;
+  created_at: string;
+}
+
+/** Every highlight for one session_log entry, in generated/DM-confirmed
+ * order — same member-read visibility as the session_log entry it's keyed
+ * to (0069's RLS joins through session_log for that check). */
+export async function listSessionSummaryHighlights(
+  supabase: SupabaseClient,
+  sessionLogId: string
+): Promise<SessionSummaryHighlight[]> {
+  const { data, error } = await supabase
+    .from("session_summary_highlights")
+    .select()
+    .eq("session_log_id", sessionLogId)
+    .order("sort_order", { ascending: true });
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * Saves a full breakdown for one session_log entry in a single batch insert,
+ * at confirm time — the entry itself (createSessionLogEntry) must already
+ * exist, since 0069's INSERT policy for this table authorizes through it.
+ * `sort_order` is assigned here from array position, preserving whatever
+ * order the caller hands in (the AI's own ordering, or the DM's after
+ * editing) rather than leaving it to insertion-order luck. A no-op for an
+ * empty list — a session with nothing structured to report saves zero rows,
+ * not an empty-but-present placeholder.
+ */
+export async function createSessionSummaryHighlights(
+  supabase: SupabaseClient,
+  sessionLogId: string,
+  highlights: { category: SessionSummaryHighlightCategory; headline: string }[]
+): Promise<SessionSummaryHighlight[]> {
+  if (highlights.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("session_summary_highlights")
+    .insert(
+      highlights.map((highlight, index) => ({
+        session_log_id: sessionLogId,
+        category: highlight.category,
+        headline: highlight.headline,
+        sort_order: index,
+      }))
+    )
+    .select();
+
+  if (error) throw error;
+  return data ?? [];
+}
+
 export interface Handout {
   id: string;
   campaign_id: string;

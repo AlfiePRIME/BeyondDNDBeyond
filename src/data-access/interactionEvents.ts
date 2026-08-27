@@ -95,6 +95,32 @@ export async function listInteractionEvents(
 }
 
 /**
+ * Every interaction event within [startIso, endIso] (inclusive), oldest
+ * first — Chat & Summary B6's end-of-session summary window, unlike
+ * listInteractionEvents above (a most-recent-first live feed with no time
+ * bound). Same DM-only visibility (0059) as every other read of this table;
+ * the end-session-summary Route Handler is itself DM-gated, so this never
+ * needs to serve a player.
+ */
+export async function listInteractionEventsInRange(
+  supabase: SupabaseClient,
+  campaignId: string,
+  startIso: string,
+  endIso: string
+): Promise<InteractionEvent[]> {
+  const { data, error } = await supabase
+    .from("interaction_events")
+    .select()
+    .eq("campaign_id", campaignId)
+    .gte("created_at", startIso)
+    .lte("created_at", endIso)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
  * Fires `handler` with every newly logged interaction event in the
  * campaign — the subscribeToChatMessages/subscribeToRollLog postgres_changes
  * shape, INSERT-only since 0059 has no UPDATE or DELETE policy at all (every

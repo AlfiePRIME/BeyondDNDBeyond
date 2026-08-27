@@ -48,6 +48,8 @@ export {
   transferDM,
   startSession,
   endSession,
+  pauseSession,
+  resumeSession,
   setHouseRules,
   setActionEconomyStrict,
   setDayNightMode,
@@ -195,6 +197,7 @@ export {
 export {
   createInteractionEvent,
   listInteractionEvents,
+  listInteractionEventsInRange,
   subscribeToInteractionEvents,
   type InteractionEvent,
 } from "./interactionEvents";
@@ -304,6 +307,7 @@ export {
 } from "./characterResources";
 export {
   listRollLog,
+  listRollLogInRange,
   subscribeToRollLog,
   resolveAttackDamage,
   resolveNpcAttackDamage,
@@ -336,6 +340,7 @@ export {
 // entry didn't exist until now.
 export {
   listChatMessages,
+  listChatMessagesInRange,
   sendChatMessage,
   editChatMessage,
   subscribeToChatMessages,
@@ -366,6 +371,9 @@ export {
   createSessionLogEntry,
   updateSessionLogEntry,
   deleteSessionLogEntry,
+  SESSION_SUMMARY_HIGHLIGHT_CATEGORIES,
+  listSessionSummaryHighlights,
+  createSessionSummaryHighlights,
   listHandouts,
   createHandout,
   setHandoutRevealed,
@@ -383,6 +391,8 @@ export {
   type Quest,
   type QuestStatus,
   type SessionLogEntry,
+  type SessionSummaryHighlightCategory,
+  type SessionSummaryHighlight,
   type Handout,
   type DmNote,
 } from "./narrative";
