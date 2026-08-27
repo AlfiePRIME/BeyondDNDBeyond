@@ -325,6 +325,81 @@ export async function getMap(supabase: SupabaseClient, mapId: string): Promise<C
   return data;
 }
 
+export interface LinkedFromMap {
+  id: string;
+  name: string;
+}
+
+/**
+ * Other maps with an authored transition whose to_map_id targets this one —
+ * a door/link elsewhere that leads here (map_transitions' own doc comment:
+ * directional, one row per origin cell). Read this BEFORE deleteMap so the
+ * DM's confirmation dialog can name them: map_transitions.to_map_id cascades
+ * on delete (0025) right along with the map itself, so that other map's own
+ * door silently stops working unless the DM is warned first. Self-links (a
+ * map transitioning into itself) are excluded via the from/to filter — not
+ * "another map" needing a warning, and already covered by the plain
+ * permanent-deletion warning every delete gets.
+ */
+export async function listMapsLinkingInto(
+  supabase: SupabaseClient,
+  mapId: string
+): Promise<LinkedFromMap[]> {
+  const { data, error } = await supabase
+    .from("map_transitions")
+    .select("from_map:campaign_maps!from_map_id(id, name)")
+    .eq("to_map_id", mapId)
+    .neq("from_map_id", mapId);
+
+  if (error) throw error;
+  const byId = new Map<string, LinkedFromMap>();
+  for (const row of data ?? []) {
+    const fromMap = row.from_map as unknown as LinkedFromMap | null;
+    if (fromMap) byId.set(fromMap.id, fromMap);
+  }
+  return [...byId.values()];
+}
+
+/**
+ * Permanently deletes a map. Every other table referencing map_id (cells,
+ * objects, tokens, transitions in both directions, light sources, concealed
+ * pits, whiteboard tiles, container items, interaction events, ...) already
+ * cascades via its own FK, and campaigns.live_map's "on delete set null"
+ * (0014) means a campaign whose live map is this one just loses it rather
+ * than blocking the delete — see this file's own migration audit above.
+ * Only the thumbnail and reference-image Storage objects need explicit
+ * cleanup here: they live in Storage buckets, outside the FK graph a DB-level
+ * cascade can reach.
+ *
+ * The storage cleanup MUST run before the row delete below, not after:
+ * both buckets' own delete policies (0024/0026) gate on can_write_map(mapId),
+ * which itself looks the map row up by id — once campaign_maps' row is gone,
+ * can_write_map can never resolve true again, so a delete attempted
+ * afterward would be silently blocked by that bucket's own RLS, leaking the
+ * file forever.
+ *
+ * DM-only, enforced by campaign_maps' DELETE RLS policy (0015) — same
+ * zero-rows-affected detection as deleteCampaign/renameCampaign (campaigns.ts)
+ * and setLiveMap below: a non-DM caller's delete matches zero rows rather
+ * than erroring, so `count` is the only signal available to distinguish that
+ * from a real deletion.
+ */
+export async function deleteMap(supabase: SupabaseClient, mapId: string): Promise<void> {
+  const map = await getMap(supabase, mapId);
+  if (!map) throw new Error("Map not found.");
+
+  if (map.thumbnail_ref) await deleteMapThumbnailFile(supabase, map.thumbnail_ref);
+  if (map.reference_image_ref) await deleteMapReferenceImageFile(supabase, map.reference_image_ref);
+
+  const { error, count } = await supabase
+    .from("campaign_maps")
+    .delete({ count: "exact" })
+    .eq("id", mapId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can delete this map.");
+}
+
 /**
  * Points campaigns.live_map at this map (or clears it with null) — the
  * minimal plumbing that makes a map "the live one" so members' RLS reads

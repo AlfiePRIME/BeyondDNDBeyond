@@ -7,6 +7,8 @@ import {
   createMap,
   listMapsForCampaign,
   getMap,
+  listMapsLinkingInto,
+  deleteMap,
   listMapCells,
   upsertMapCells,
   listMapObjects,
@@ -101,6 +103,11 @@ describe("data-access module", () => {
     expect(getMap).toBeTypeOf("function");
     expect(listMapCells).toBeTypeOf("function");
     expect(upsertMapCells).toBeTypeOf("function");
+  });
+
+  it("exports the map deletion functions from the main barrel", () => {
+    expect(listMapsLinkingInto).toBeTypeOf("function");
+    expect(deleteMap).toBeTypeOf("function");
   });
 
   it("exports the map object functions from the main barrel", () => {

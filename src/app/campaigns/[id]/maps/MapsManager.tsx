@@ -3,16 +3,19 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Badge, Button, ChoiceCard, SectionHeader, Select, TextInput } from "@/ui-components";
+import { Badge, Button, ChoiceCard, Modal, SectionHeader, Select, TextInput } from "@/ui-components";
 import {
   createMapFolder,
   createPopulatedMap,
+  deleteMap,
   deleteMapFolder,
   duplicateMap,
   getMapThumbnailSignedUrl,
+  listMapsLinkingInto,
   renameMapFolder,
   setMapFolder,
   type CampaignMap,
+  type LinkedFromMap,
   type MapFolder,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
@@ -37,6 +40,7 @@ function MapCard({
   busy,
   onAssign,
   onDuplicate,
+  onDelete,
 }: {
   campaignId: string;
   map: CampaignMap;
@@ -45,6 +49,7 @@ function MapCard({
   busy: boolean;
   onAssign: (map: CampaignMap, folderId: string | null) => void;
   onDuplicate: (map: CampaignMap) => void;
+  onDelete: (map: CampaignMap) => void;
 }) {
   const editHref = `/campaigns/${campaignId}/maps/${map.id}/edit`;
   return (
@@ -86,15 +91,26 @@ function MapCard({
           </option>
         ))}
       </Select>
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={busy}
-        onClick={() => onDuplicate(map)}
-        data-testid={`duplicate-map-${map.id}`}
-      >
-        Duplicate
-      </Button>
+      <div className={styles.cardActions}>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          onClick={() => onDuplicate(map)}
+          data-testid={`duplicate-map-${map.id}`}
+        >
+          Duplicate
+        </Button>
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={busy}
+          onClick={() => onDelete(map)}
+          data-testid={`delete-map-${map.id}`}
+        >
+          Delete
+        </Button>
+      </div>
     </li>
   );
 }
@@ -119,6 +135,12 @@ export function MapsManager({
   const [organizeBusy, setOrganizeBusy] = useState(false);
   const [pendingMapId, setPendingMapId] = useState<string | null>(null);
   const [organizeError, setOrganizeError] = useState<string | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<CampaignMap | null>(null);
+  const [linkedFromMaps, setLinkedFromMaps] = useState<LinkedFromMap[]>([]);
+  const [linkedFromLoading, setLinkedFromLoading] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [width, setWidth] = useState("20");
@@ -246,6 +268,51 @@ export function MapsManager({
     })();
   }
 
+  // Opens the confirm dialog and, in the background, looks up any other
+  // map whose own transition leads into this one — the dialog names them
+  // once the lookup resolves (linkedFromLoading gates the confirm button so
+  // a DM can't approve before that warning has had a chance to appear).
+  function handleOpenDelete(map: CampaignMap) {
+    if (pendingMapId) return;
+    setDeleteTarget(map);
+    setDeleteError(null);
+    setLinkedFromMaps([]);
+    setLinkedFromLoading(true);
+    void (async () => {
+      try {
+        const linked = await listMapsLinkingInto(createBrowserSupabaseClient(), map.id);
+        setLinkedFromMaps(linked);
+      } catch {
+        // The permanent-deletion warning still stands on its own; a failed
+        // lookup here just means this DM sees one fewer heads-up, not a
+        // reason to block the dialog entirely.
+      } finally {
+        setLinkedFromLoading(false);
+      }
+    })();
+  }
+
+  function closeDeleteDialog() {
+    if (deleteBusy) return;
+    setDeleteTarget(null);
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      const target = deleteTarget;
+      await deleteMap(createBrowserSupabaseClient(), target.id);
+      setMaps((prev) => prev.filter((row) => row.id !== target.id));
+      setDeleteTarget(null);
+    } catch {
+      setDeleteError("Couldn't delete the map — try again.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   function parseDimension(value: string): number | null {
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed < MIN_GRID || parsed > MAX_GRID) return null;
@@ -309,6 +376,7 @@ export function MapsManager({
             busy={pendingMapId !== null}
             onAssign={handleAssign}
             onDuplicate={handleDuplicate}
+            onDelete={handleOpenDelete}
           />
         ))}
       </ul>
@@ -507,6 +575,57 @@ export function MapsManager({
           </p>
         ) : null}
       </div>
+
+      <Modal
+        open={deleteTarget !== null}
+        onClose={closeDeleteDialog}
+        title="Delete map"
+        footer={
+          deleteTarget ? (
+            <>
+              <Button size="sm" variant="ghost" disabled={deleteBusy} onClick={closeDeleteDialog}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={deleteBusy || linkedFromLoading}
+                onClick={() => void handleConfirmDelete()}
+                data-testid="confirm-delete-map"
+              >
+                {deleteBusy ? "Deleting…" : "Delete permanently"}
+              </Button>
+            </>
+          ) : null
+        }
+      >
+        {deleteTarget ? (
+          <div className={styles.deleteDialogBody} data-testid="delete-map-modal">
+            <p>
+              Deleting <strong>{deleteTarget.name}</strong> is permanent and cannot be undone — its
+              cells, objects, tokens, transitions, light sources, and drawings all go with it.
+            </p>
+            {linkedFromLoading ? (
+              <p className={styles.createHint}>Checking for links from other maps…</p>
+            ) : linkedFromMaps.length > 0 ? (
+              <p className={styles.linkWarning} role="alert" data-testid="delete-map-linked-warning">
+                {linkedFromMaps.length === 1
+                  ? `Another map — ${linkedFromMaps[0].name} — has`
+                  : `${linkedFromMaps.length} other maps — ${linkedFromMaps
+                      .map((linked) => linked.name)
+                      .join(", ")} — have`}{" "}
+                a door or transition leading into {deleteTarget.name}. Deleting it will remove that
+                link too.
+              </p>
+            ) : null}
+            {deleteError ? (
+              <p role="alert" className={styles.errorText} data-testid="delete-map-error">
+                {deleteError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

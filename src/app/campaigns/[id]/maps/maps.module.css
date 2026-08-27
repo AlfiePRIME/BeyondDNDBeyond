@@ -152,6 +152,27 @@
   color: var(--teal);
 }
 
+.cardActions {
+  display: flex;
+  gap: 6px;
+}
+
+.cardActions > button {
+  flex: 1;
+}
+
+.deleteDialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.linkWarning {
+  color: var(--orange);
+  line-height: 1.5;
+  margin: 0;
+}
+
 .createSection {
   display: flex;
   flex-direction: column;
