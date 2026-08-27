@@ -1,0 +1,48 @@
+/* Chat & Summary B3 — the floating chat bubble anchored above a seat
+   (ChatBubble.tsx). This is scene-3d's first own CSS module (every earlier
+   <Html> surface in this directory, e.g. DmBookProp.tsx, takes its real
+   content as `children` styled by an app-layer component instead) — that
+   split doesn't fit here, because a bubble is rendered directly inside
+   GameTableScene/GameRoom's own per-seat loop rather than composed by the
+   app layer per instance, so this component owns its own chrome. Nothing
+   here is app-layer-specific: only the shared design tokens (tokens.css,
+   loaded globally via src/app/globals.css) and B2's own ChatText styling. */
+
+.bubble {
+  max-width: 260px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-family: var(--font-b);
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface2) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: var(--ga);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: center;
+  /* Opacity-only transition (no keyframe entrance animation): the bubble
+     renders at full opacity from its very first frame, and only ever
+     transitions AWAY from that at the very end of its life (ChatBubble.tsx's
+     own `fading` state) — so a prefers-reduced-motion visitor (tokens.css's
+     global rule collapses this transition's duration to near-zero) simply
+     loses the brief fade tail, not the entire message's visible time, which
+     a full show-and-hide keyframe animation would have cost them instead. */
+  opacity: 1;
+  transition: opacity 400ms ease;
+}
+
+/* The DM's own bubble: this app's DM-purple accent (Chair.tsx's DmChair
+   trim, DmBookProp.tsx's own PURPLE constant) so it visibly reads as DM
+   speech rather than a player's, matching every other DM-distinct treatment
+   in this room. */
+.bubbleDm {
+  border-color: color-mix(in srgb, var(--purple) 70%, transparent);
+  background: color-mix(in srgb, var(--purple) 24%, var(--surface2));
+  box-shadow: var(--gp);
+}
+
+.bubbleFading {
+  opacity: 0;
+}

@@ -330,6 +330,16 @@ export {
   type ActionOverride,
   type ActionOverrideStatus,
 } from "./actionOverrides";
+// Chat & Summary B1's data model — B3 (the floating chat bubble) and B4
+// (the persistent chat log panel) are its first consumers, so this barrel
+// entry didn't exist until now.
+export {
+  listChatMessages,
+  sendChatMessage,
+  editChatMessage,
+  subscribeToChatMessages,
+  type ChatMessage,
+} from "./chat";
 export {
   listNpcs,
   createNpc,
@@ -375,12 +385,5 @@ export {
   type Handout,
   type DmNote,
 } from "./narrative";
-export {
-  listChatMessages,
-  sendChatMessage,
-  editChatMessage,
-  subscribeToChatMessages,
-  type ChatMessage,
-} from "./chat";
 
 export const MODULE_NAME = "data-access" as const;
