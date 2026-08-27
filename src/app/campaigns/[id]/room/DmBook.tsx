@@ -16,6 +16,7 @@ import type {
   RollLogEntry,
   WeatherKind,
 } from "@/data-access";
+import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import { DmNotes } from "../dm-notes/DmNotes";
 import type { RoomMember } from "./avatar-url";
 import { MonsterPanel } from "./MonsterPanel";
@@ -115,6 +116,12 @@ export function DmBook({
   onDeleteStatBlock,
   onQuickAddMonster,
   onAddTemplateToStatBlock,
+  // Weather & Enemies C7: MonsterPanel's per-template override upload
+  templateOverrides,
+  overrideBusy,
+  overrideError,
+  onUploadTemplateOverride,
+  onRemoveTemplateOverride,
   // DM Controls (DmOverridesPanel)
   campaignId,
   characters,
@@ -175,6 +182,16 @@ export function DmBook({
   /** Weather & Enemies C5: copies a template's stats into a brand new
    * campaign-scoped stat block (never mutates the template). */
   onAddTemplateToStatBlock: (template: MonsterTemplate) => void;
+  /** Weather & Enemies C7: this campaign's own template overrides
+   * (0075), id-keyed by monster_template_id, for MonsterPanel's
+   * per-template "current override" display. */
+  templateOverrides: Map<string, { assetId: string; assetName: string }>;
+  overrideBusy: boolean;
+  overrideError: string | null;
+  /** Fires once MonsterPanel's own upload flow has already created the
+   * custom asset_library row — links it as templateId's override. */
+  onUploadTemplateOverride: (templateId: string, asset: PaletteAsset) => void;
+  onRemoveTemplateOverride: (templateId: string) => void;
   campaignId: string;
   characters: Character[];
   members: RoomMember[];
@@ -256,6 +273,12 @@ export function DmBook({
             onDelete={onDeleteStatBlock}
             onQuickAdd={onQuickAddMonster}
             onAddFromTemplate={onAddTemplateToStatBlock}
+            campaignId={campaignId}
+            templateOverrides={templateOverrides}
+            overrideBusy={overrideBusy}
+            overrideError={overrideError}
+            onUploadOverride={onUploadTemplateOverride}
+            onRemoveOverride={onRemoveTemplateOverride}
           />
         ) : null}
         {page === "dmControls" ? (

@@ -1,8 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Badge, Button, type BadgeTone } from "@/ui-components";
-import type { MonsterAttack, MonsterStatBlock, MonsterTemplate, Npc, TokenAllegiance } from "@/data-access";
+import {
+  createCustomAsset,
+  getMapAssetSignedUrl,
+  setForwardOffsetDeg,
+  uploadMapAssetFile,
+  type MonsterAttack,
+  type MonsterStatBlock,
+  type MonsterTemplate,
+  type Npc,
+  type TokenAllegiance,
+} from "@/data-access";
+import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
+import { validateGlbFile } from "@/app/lib/validate-glb";
+import { ModelOrientationStep } from "@/app/ModelOrientationStep";
+import { PLACED_OBJECT_SIZE } from "@/scene-3d";
+import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import styles from "./room.module.css";
 
 /** One attack row's form drafts — parsed/validated only on save. */
@@ -51,6 +66,18 @@ function formatAttackSummary(attacks: MonsterAttack[]): string {
  * exists, so stat blocks can be prepped between maps; `hasLiveMap` gates
  * only the Quick add action (which needs a live grid to click), not the
  * panel's existence.
+ *
+ * Weather & Enemies C7 adds an "Override model" upload per template row in
+ * the library section below, reusing AssetPalette.tsx's/DiceTrayPicker.tsx's
+ * exact upload pipeline (validateGlbFile → ModelOrientationStep's
+ * rotate-and-confirm step → uploadMapAssetFile/createCustomAsset →
+ * setForwardOffsetDeg) — no parallel upload mechanism. The upload itself
+ * happens right here (this component owns it, the DiceTrayPicker
+ * precedent); once the new custom asset_library row exists, `onUploadOverride`
+ * hands it up to GameRoom, which links it as that template's override
+ * (campaign_monster_template_overrides, 0075) and appends it to the
+ * caller's own asset list. Scoped to THIS campaign only — a DM here can
+ * never affect how the same template renders anywhere else.
  */
 export function MonsterPanel({
   statBlocks,
@@ -65,6 +92,12 @@ export function MonsterPanel({
   onDelete,
   onQuickAdd,
   onAddFromTemplate,
+  campaignId,
+  templateOverrides,
+  overrideBusy,
+  overrideError,
+  onUploadOverride,
+  onRemoveOverride,
 }: {
   statBlocks: MonsterStatBlock[];
   /** Weather & Enemies C5: the GLOBAL monster template library (0073) —
@@ -102,6 +135,26 @@ export function MonsterPanel({
   /** Copies a template's stats into a brand new stat block above — never
    * mutates the template itself. */
   onAddFromTemplate: (template: MonsterTemplate) => void;
+  /** Weather & Enemies C7: needed by this panel's own override-upload flow
+   * (uploadMapAssetFile scopes every custom asset to a campaign_id). */
+  campaignId: string;
+  /** This campaign's own override, if any, for each template — id-keyed by
+   * monster_template_id (GameRoom's overrideDisplayByTemplateId). Absent
+   * for a template with no override set: it still renders C6's own
+   * default_asset_id model, unaffected. */
+  templateOverrides: Map<string, { assetId: string; assetName: string }>;
+  /** True while a set/remove-override write is in flight — the SEPARATE
+   * busy flag from `busy` above (stat-block CRUD), since an override
+   * upload/link/removal is its own concern. */
+  overrideBusy: boolean;
+  overrideError: string | null;
+  /** Fires once THIS component's own upload has already created the new
+   * custom asset_library row — GameRoom links it as `templateId`'s override
+   * and appends it to the campaign's asset list. */
+  onUploadOverride: (templateId: string, asset: PaletteAsset) => void;
+  /** Reverts `templateId`'s rendering in this campaign back to C6's own
+   * default_asset_id. */
+  onRemoveOverride: (templateId: string) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -110,6 +163,76 @@ export function MonsterPanel({
   const [passivePerception, setPassivePerception] = useState("10");
   const [attackDrafts, setAttackDrafts] = useState<AttackDraft[]>([{ ...EMPTY_ATTACK }]);
   const [rosterPick, setRosterPick] = useState("");
+
+  // Weather & Enemies C7: the per-template override upload flow — one
+  // shared hidden file input and pending-orientation-step slot (like
+  // AssetPalette's own single `pendingFile`), tracking WHICH template it's
+  // currently uploading for via `overrideUploadTargetId` rather than one
+  // input/ref per template row.
+  const [overrideUploadTargetId, setOverrideUploadTargetId] = useState<string | null>(null);
+  const [overrideUploadBusy, setOverrideUploadBusy] = useState(false);
+  const [overrideUploadError, setOverrideUploadError] = useState<string | null>(null);
+  const [pendingOverrideFile, setPendingOverrideFile] = useState<File | null>(null);
+  const overrideFileInputRef = useRef<HTMLInputElement>(null);
+
+  function startOverrideUpload(templateId: string) {
+    setOverrideUploadTargetId(templateId);
+    setOverrideUploadError(null);
+    overrideFileInputRef.current?.click();
+  }
+
+  async function handleOverrideFileChosen(fileList: FileList | null) {
+    const file = fileList?.[0];
+    const templateId = overrideUploadTargetId;
+    if (!file || !templateId) return;
+    setOverrideUploadError(null);
+    setOverrideUploadBusy(true);
+    const result = await validateGlbFile(file, "monster override models");
+    if (!result.ok) {
+      setOverrideUploadError(result.message);
+      setOverrideUploadBusy(false);
+      setOverrideUploadTargetId(null);
+      if (overrideFileInputRef.current) overrideFileInputRef.current.value = "";
+      return;
+    }
+    // Hands off to the rotate-and-confirm step, same as AssetPalette's own
+    // upload — completeOverrideUpload runs once the uploader skips or
+    // confirms a forward-direction offset.
+    setPendingOverrideFile(file);
+  }
+
+  async function completeOverrideUpload(forwardOffsetDeg: number) {
+    const file = pendingOverrideFile;
+    const templateId = overrideUploadTargetId;
+    const template = templateId ? templates.find((candidate) => candidate.id === templateId) : undefined;
+    setPendingOverrideFile(null);
+    if (!file || !templateId || !template) {
+      setOverrideUploadBusy(false);
+      setOverrideUploadTargetId(null);
+      return;
+    }
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const path = await uploadMapAssetFile(supabase, campaignId, file);
+      const asset = await createCustomAsset(supabase, {
+        campaignId,
+        name: `${template.name} (custom)`,
+        modelRef: path,
+      });
+      await setForwardOffsetDeg(supabase, path, forwardOffsetDeg);
+      const url = await getMapAssetSignedUrl(supabase, path, 6 * 60 * 60).catch(() => null);
+      // The upload/catalog half is done — GameRoom takes it from here
+      // (appends to the campaign's own asset list, links it as this
+      // template's override).
+      onUploadOverride(templateId, { ...asset, url, forwardOffsetDeg });
+    } catch {
+      setOverrideUploadError("Couldn't upload that override model — try again.");
+    } finally {
+      setOverrideUploadBusy(false);
+      setOverrideUploadTargetId(null);
+      if (overrideFileInputRef.current) overrideFileInputRef.current.value = "";
+    }
+  }
 
   function resetForm() {
     setEditingId(null);
@@ -282,39 +405,110 @@ export function MonsterPanel({
         {templates.length === 0 ? (
           <p className={styles.hint}>No templates available.</p>
         ) : (
-          templates.map((template) => (
-            <div
-              key={template.id}
-              className={styles.objectRow}
-              data-testid={`monster-template-${template.id}`}
-            >
-              <div className={styles.objectHeader}>
-                <span className={styles.objectName}>{template.name}</span>
-                <Badge tone={ALLEGIANCE_TONE[template.default_allegiance]}>
-                  {template.default_allegiance}
-                </Badge>
-                <span className={styles.quickActionMeta}>
-                  HP {template.max_hp} · AC {template.armor_class} · PP {template.passive_perception}
-                </span>
+          templates.map((template) => {
+            // Weather & Enemies C7: THIS campaign's own override, if any —
+            // absent means the template still renders C6's own
+            // default_asset_id model, unaffected by any other campaign's
+            // override.
+            const override = templateOverrides.get(template.id);
+            return (
+              <div
+                key={template.id}
+                className={styles.objectRow}
+                data-testid={`monster-template-${template.id}`}
+              >
+                <div className={styles.objectHeader}>
+                  <span className={styles.objectName}>{template.name}</span>
+                  <Badge tone={ALLEGIANCE_TONE[template.default_allegiance]}>
+                    {template.default_allegiance}
+                  </Badge>
+                  <span className={styles.quickActionMeta}>
+                    HP {template.max_hp} · AC {template.armor_class} · PP {template.passive_perception}
+                  </span>
+                </div>
+                {template.description ? <p className={styles.hint}>{template.description}</p> : null}
+                {template.attacks.length > 0 ? (
+                  <span className={styles.quickActionMeta}>{formatAttackSummary(template.attacks)}</span>
+                ) : null}
+                <div className={styles.objectHeader}>
+                  <Button
+                    size="sm"
+                    variant="accent"
+                    disabled={busy}
+                    onClick={() => onAddFromTemplate(template)}
+                    data-testid={`add-template-${template.id}`}
+                  >
+                    Add to campaign
+                  </Button>
+                </div>
+                {/* Weather & Enemies C7: per-campaign appearance override —
+                    scoped to THIS campaign only (0075's own RLS/write
+                    path); a different campaign using this same template
+                    keeps rendering C6's default model regardless. */}
+                <div className={styles.objectHeader}>
+                  {override ? (
+                    <>
+                      <span
+                        className={styles.quickActionMeta}
+                        data-testid={`template-override-current-${template.id}`}
+                      >
+                        Custom model: {override.assetName}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={overrideBusy}
+                        onClick={() => onRemoveOverride(template.id)}
+                        data-testid={`remove-override-${template.id}`}
+                      >
+                        Remove override
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={overrideBusy || overrideUploadBusy}
+                      onClick={() => startOverrideUpload(template.id)}
+                      data-testid={`upload-override-${template.id}`}
+                    >
+                      {overrideUploadBusy && overrideUploadTargetId === template.id
+                        ? "Uploading…"
+                        : "Upload override model"}
+                    </Button>
+                  )}
+                </div>
               </div>
-              {template.description ? <p className={styles.hint}>{template.description}</p> : null}
-              {template.attacks.length > 0 ? (
-                <span className={styles.quickActionMeta}>{formatAttackSummary(template.attacks)}</span>
-              ) : null}
-              <div className={styles.objectHeader}>
-                <Button
-                  size="sm"
-                  variant="accent"
-                  disabled={busy}
-                  onClick={() => onAddFromTemplate(template)}
-                  data-testid={`add-template-${template.id}`}
-                >
-                  Add to campaign
-                </Button>
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
+        <input
+          ref={overrideFileInputRef}
+          type="file"
+          accept=".glb,model/gltf-binary"
+          aria-label="Upload a custom monster override model"
+          className={styles.hiddenFileInput}
+          disabled={overrideUploadBusy}
+          onChange={(event) => void handleOverrideFileChosen(event.target.files)}
+        />
+        <p className={styles.hint}>Override models: binary glTF (.glb), max 10MB.</p>
+        {overrideUploadError ? (
+          <p role="alert" className={styles.errorText} data-testid="monster-template-override-upload-error">
+            {overrideUploadError}
+          </p>
+        ) : null}
+        {overrideError ? (
+          <p role="alert" className={styles.errorText} data-testid="monster-template-override-error">
+            {overrideError}
+          </p>
+        ) : null}
+        {pendingOverrideFile ? (
+          <ModelOrientationStep
+            file={pendingOverrideFile}
+            normalize={{ kind: "maxDimension", targetSize: PLACED_OBJECT_SIZE }}
+            onDone={(forwardOffsetDeg) => void completeOverrideUpload(forwardOffsetDeg)}
+          />
+        ) : null}
       </div>
 
       <div className={styles.tokenSection} data-testid="stat-block-form">

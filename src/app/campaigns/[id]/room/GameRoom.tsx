@@ -25,6 +25,7 @@ import {
   createMonsterStatBlock,
   createMonsterStatBlockFromTemplate,
   deleteMonsterStatBlock,
+  deleteMonsterTemplateOverride,
   createOpportunityAttacks,
   declareDisengage,
   deleteConcealedPit,
@@ -54,6 +55,7 @@ import {
   listMapTokensForCampaign,
   listMapTransitionsForCampaign,
   listMonsterStatBlocks,
+  listMonsterTemplateOverridesForCampaign,
   listSeenCells,
   moveCombatToken,
   moveMapToken,
@@ -72,6 +74,7 @@ import {
   setHandoutRevealed,
   setLiveMap,
   setMapObjectBehavior,
+  setMonsterTemplateOverride,
   setSeatOffset,
   setTokenAllegiance,
   setWeather,
@@ -116,6 +119,7 @@ import {
   type MonsterAttack,
   type MonsterStatBlock,
   type MonsterTemplate,
+  type MonsterTemplateOverride,
   type Npc,
   type RollLogEntry,
   type SeenCellSnapshot,
@@ -858,6 +862,7 @@ export function GameRoom({
   characters,
   initialStatBlocks,
   initialMonsterTemplates,
+  initialTemplateOverrides,
   rosterNpcs,
   initialHandouts,
   initialCombat,
@@ -921,8 +926,32 @@ export function GameRoom({
    * subscription, since admin-authored template content changing mid-
    * session is not a live-sync need this prompt's acceptance criteria
    * asks for (a reload picks up any change, same as any other admin
-   * content table in this codebase). */
+   * content table in this codebase).
+   *
+   * KNOWN, PRE-EXISTING GAP (not introduced by C7, inherited as-is): C6's
+   * own token-model resolution below (the tableMap memo) reads
+   * monsterTemplateById for EVERY viewer's own render model, but this prop
+   * — the thing that map is built from — is only ever fetched for the DM
+   * (page.tsx). A non-DM viewer's monsterTemplateById is therefore always
+   * empty, so `modelUrl` never resolves for them: today, only the DM
+   * actually SEES a templated monster's distinct model; every player still
+   * sees the flat allegiance disc for the exact same token. Fixing this
+   * (fetching templates — and C7's own overrides below — for every viewer,
+   * not just the DM) is a real, separate follow-up; out of scope here since
+   * it predates this prompt and neither C6's nor this prompt's own
+   * acceptance criteria call for a player-visible fix. */
   initialMonsterTemplates: MonsterTemplate[];
+  /** Weather & Enemies C7: this campaign's own template-model overrides
+   * (0075) at load time — same DM-only fetch convention as
+   * initialMonsterTemplates immediately above, for the same reason (only
+   * MonsterPanel's DM-only override UI and the token-model resolution it
+   * feeds read this today) — and therefore the SAME pre-existing
+   * player-visibility gap documented on initialMonsterTemplates just above:
+   * an override changes what the DM sees render, not (yet) what a player
+   * does. UNLIKE initialMonsterTemplates, this table IS mutable from inside
+   * this app (a DM can add/remove an override without ever reloading), so
+   * it seeds real state below rather than being read as a static prop. */
+  initialTemplateOverrides: MonsterTemplateOverride[];
   /** The Prompt 33 narrative roster, for the MonsterPanel's name
    * pre-fill; loaded only for the DM (empty for players, who never see
    * the panel). */
@@ -4283,6 +4312,77 @@ export function GameRoom({
     [campaignId, runMonsterAction]
   );
 
+  // Weather & Enemies C7: this campaign's own override list for C6's
+  // template-model resolution below — UNLIKE initialMonsterTemplates
+  // itself (a static prop, see its own doc comment), this table IS mutable
+  // from inside this app, so it needs real, refetched state, the
+  // statBlocks/runMonsterAction precedent applied to its own dedicated
+  // busy/error pair (a separate concern from monster stat-block CRUD, so it
+  // doesn't share runMonsterAction's single in-flight guard).
+  const [templateOverrides, setTemplateOverrides] = useState<MonsterTemplateOverride[]>(
+    initialTemplateOverrides
+  );
+  const [overrideBusy, setOverrideBusy] = useState(false);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+
+  /** MonsterPanel's own upload flow (AssetPalette.tsx/DiceTrayPicker.tsx's
+   * exact upload pipeline, reused — see MonsterPanel's own doc comment)
+   * hands the freshly-created custom asset_library row back here once the
+   * upload itself has already succeeded. Appended to assetList exactly like
+   * handleAssetUploaded already does for DiceTrayPicker's own uploads
+   * (immediately resolvable elsewhere with no reload), then linked as this
+   * template's override — an upsert on (campaign_id, monster_template_id),
+   * see setMonsterTemplateOverride's own doc comment — so the very next
+   * tableMap render (below) resolves it ahead of the template's own
+   * default_asset_id. */
+  const handleUploadTemplateOverride = useCallback(
+    (templateId: string, asset: PaletteAsset) => {
+      handleAssetUploaded(asset);
+      if (overrideBusy) return;
+      setOverrideBusy(true);
+      setOverrideError(null);
+      void (async () => {
+        try {
+          const supabase = createBrowserSupabaseClient();
+          await setMonsterTemplateOverride(supabase, {
+            campaignId,
+            templateId,
+            customAssetId: asset.id,
+          });
+          setTemplateOverrides(await listMonsterTemplateOverridesForCampaign(supabase, campaignId));
+        } catch (err) {
+          setOverrideError(errorMessage(err) ?? "Could not set that template's override model.");
+        } finally {
+          setOverrideBusy(false);
+        }
+      })();
+    },
+    [campaignId, overrideBusy, handleAssetUploaded]
+  );
+
+  /** Reverts this campaign's rendering of `templateId` back to C6's own
+   * default_asset_id — a plain delete of the override row, nothing else
+   * touched (the underlying custom asset itself stays in asset_library). */
+  const handleRemoveTemplateOverride = useCallback(
+    (templateId: string) => {
+      if (overrideBusy) return;
+      setOverrideBusy(true);
+      setOverrideError(null);
+      void (async () => {
+        try {
+          const supabase = createBrowserSupabaseClient();
+          await deleteMonsterTemplateOverride(supabase, { campaignId, templateId });
+          setTemplateOverrides(await listMonsterTemplateOverridesForCampaign(supabase, campaignId));
+        } catch (err) {
+          setOverrideError(errorMessage(err) ?? "Could not remove that template's override.");
+        } finally {
+          setOverrideBusy(false);
+        }
+      })();
+    },
+    [campaignId, overrideBusy]
+  );
+
   // Quick add, step one: arm the ordinary grid-click placement (the
   // place-npc interaction) with the stat block linked and its name as the
   // token's npc_name; handleCellClick finishes the flow. Also clears any
@@ -4790,6 +4890,32 @@ export function GameRoom({
     () => new Map(initialMonsterTemplates.map((template) => [template.id, template])),
     [initialMonsterTemplates]
   );
+  // Weather & Enemies C7: this campaign's own override for a template's
+  // default_asset_id (0075), id-keyed by monster_template_id — the SAME
+  // shape as monsterTemplateById immediately above, but sourced from the
+  // real, refetched `templateOverrides` state (not a static prop) since
+  // this table IS mutable from inside this app. Read FIRST in the
+  // resolution below, falling back to the template's own default_asset_id
+  // only when this campaign has no row here — see
+  // monsterTemplateOverrides.ts's own doc comment for why this is
+  // deliberately a second, campaign-scoped link rather than a replacement
+  // for C6's live pointer.
+  const overrideAssetIdByTemplateId = useMemo(
+    () => new Map(templateOverrides.map((override) => [override.monster_template_id, override.custom_asset_id])),
+    [templateOverrides]
+  );
+  // MonsterPanel's own display-only lookup: which template currently has an
+  // override, and what to CALL the model it points at (assetList already
+  // carries every custom asset's name — no separate fetch needed).
+  const overrideDisplayByTemplateId = useMemo(() => {
+    const assetNameById = new Map(assetList.map((asset) => [asset.id, asset.name]));
+    return new Map(
+      templateOverrides.map((override) => [
+        override.monster_template_id,
+        { assetId: override.custom_asset_id, assetName: assetNameById.get(override.custom_asset_id) ?? "Custom model" },
+      ])
+    );
+  }, [templateOverrides, assetList]);
 
   const characterById = useMemo(
     () => new Map(characterRows.map((character) => [character.id, character])),
@@ -5388,7 +5514,21 @@ export function GameRoom({
           ? statBlockById.get(token.monster_stat_block_id)
           : undefined;
         const template = statBlock?.template_id ? monsterTemplateById.get(statBlock.template_id) : undefined;
-        const modelUrl = template?.default_asset_id ? (assetUrlById.get(template.default_asset_id) ?? null) : null;
+        // Weather & Enemies C7: THIS campaign's own override for the
+        // template (if any) wins over the template's own default_asset_id —
+        // the exact "campaign-specific override first, template default as
+        // fallback" order the prompt's own Task describes — never a
+        // parallel rendering mechanism, just one more id feeding the SAME
+        // assetUrlById lookup C6 already resolves modelUrl through. A
+        // different campaign with no row in overrideAssetIdByTemplateId for
+        // this template simply falls straight through to `template?.
+        // default_asset_id`, completely unaffected by this campaign's own
+        // override.
+        const resolvedAssetId =
+          (statBlock?.template_id ? overrideAssetIdByTemplateId.get(statBlock.template_id) : undefined) ??
+          template?.default_asset_id ??
+          null;
+        const modelUrl = resolvedAssetId ? (assetUrlById.get(resolvedAssetId) ?? null) : null;
         return [{
           id: token.id,
           x: token.x,
@@ -5430,7 +5570,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright
@@ -5859,6 +5999,11 @@ export function GameRoom({
               onDeleteStatBlock={handleDeleteStatBlock}
               onQuickAddMonster={handleQuickAddMonster}
               onAddTemplateToStatBlock={handleAddTemplateToStatBlock}
+              templateOverrides={overrideDisplayByTemplateId}
+              overrideBusy={overrideBusy}
+              overrideError={overrideError}
+              onUploadTemplateOverride={handleUploadTemplateOverride}
+              onRemoveTemplateOverride={handleRemoveTemplateOverride}
               campaignId={campaignId}
               characters={characterRows}
               members={roster}
