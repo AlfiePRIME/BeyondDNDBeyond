@@ -1,15 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button, TextInput } from "@/ui-components";
+import { Button, Select, TextInput } from "@/ui-components";
 import {
   addContainerItem,
+  curseBlessingToDraft,
+  DEFAULT_CURSE_BLESSING_DRAFT,
+  draftToCurseBlessing,
+  isCurseBlessingDraftValid,
   listContainerItems,
   removeContainerItem,
   updateContainerItem,
   type ContainerRef,
+  type CurseBlessingDraft,
   type MapObjectItem,
 } from "@/data-access";
+import { CONDITION_BY_KEY, CONDITIONS, type ConditionKey } from "@/rules-engine";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import styles from "./editor.module.css";
 
@@ -30,6 +36,149 @@ function parseHiddenDc(raw: string): { value: number | null; valid: boolean } {
   if (trimmed === "") return { value: null, valid: true };
   const parsed = Number(trimmed);
   return Number.isInteger(parsed) && parsed > 0 ? { value: parsed, valid: true } : { value: null, valid: false };
+}
+
+/** A one-line summary of a saved curse/blessing draft, shown next to an
+ * item in the (non-editing) list row so the DM can see it's configured
+ * without opening Edit — the exact BehaviorEditor "Saved: …" precedent. */
+function curseBlessingSummary(draft: CurseBlessingDraft): string | null {
+  if (!draft.enabled) return null;
+  const label = draft.kind === "cursed" ? "Cursed" : "Blessed";
+  const resolution =
+    draft.resolution === "narrative"
+      ? "narrative"
+      : draft.effectKind === "condition"
+        ? `${CONDITION_BY_KEY.get(draft.conditionKey)?.name ?? draft.conditionKey}`
+        : draft.effectKind === "hp_delta"
+          ? `${draft.hpDelta} HP`
+          : `${draft.resourceDelta} ${draft.resourceName || "resource"}`;
+  return `${label} (${resolution})${draft.telegraphed ? " · telegraphed" : ""}`;
+}
+
+/**
+ * Map Editor Batch A9: the cursed/blessed configuration fields for one
+ * item's draft — shared between the "add new item" form and the "edit
+ * existing item" form below so the two never drift into two separately
+ * maintained copies of the same fieldset. Fully controlled: all state lives
+ * in the caller's own draft/onChange pair (the same pattern the rest of
+ * this file already uses for name/description/tag).
+ */
+function CurseBlessingFields({
+  draft,
+  onChange,
+  idPrefix,
+}: {
+  draft: CurseBlessingDraft;
+  onChange: (next: CurseBlessingDraft) => void;
+  idPrefix: string;
+}) {
+  return (
+    <div data-testid={`${idPrefix}-curse-blessing-fields`}>
+      <div className={styles.toolRow}>
+        <Button
+          size="sm"
+          variant={draft.enabled ? "accent" : "ghost"}
+          onClick={() => onChange({ ...draft, enabled: !draft.enabled })}
+          data-testid={`${idPrefix}-curse-blessing-toggle`}
+        >
+          Cursed / blessed: {draft.enabled ? "yes" : "no"}
+        </Button>
+      </div>
+      {draft.enabled ? (
+        <>
+          <div className={styles.toolRow}>
+            <Select
+              label="Kind"
+              value={draft.kind}
+              onChange={(event) => onChange({ ...draft, kind: event.target.value as CurseBlessingDraft["kind"] })}
+              data-testid={`${idPrefix}-curse-blessing-kind`}
+            >
+              <option value="cursed">Cursed</option>
+              <option value="blessed">Blessed</option>
+            </Select>
+            <Select
+              label="Resolution"
+              value={draft.resolution}
+              onChange={(event) =>
+                onChange({ ...draft, resolution: event.target.value as CurseBlessingDraft["resolution"] })
+              }
+              data-testid={`${idPrefix}-curse-blessing-resolution`}
+            >
+              <option value="narrative">Narrative (DM adjudicates)</option>
+              <option value="mechanical">Mechanical (applies automatically)</option>
+            </Select>
+          </div>
+          {draft.resolution === "mechanical" ? (
+            <div className={styles.toolRow}>
+              <Select
+                label="Effect"
+                value={draft.effectKind}
+                onChange={(event) =>
+                  onChange({ ...draft, effectKind: event.target.value as CurseBlessingDraft["effectKind"] })
+                }
+                data-testid={`${idPrefix}-curse-blessing-effect-kind`}
+              >
+                <option value="condition">Apply a condition</option>
+                <option value="hp_delta">HP change</option>
+                <option value="resource_delta">Resource change</option>
+              </Select>
+              {draft.effectKind === "condition" ? (
+                <Select
+                  label="Condition"
+                  value={draft.conditionKey}
+                  onChange={(event) => onChange({ ...draft, conditionKey: event.target.value as ConditionKey })}
+                  data-testid={`${idPrefix}-curse-blessing-condition`}
+                >
+                  {CONDITIONS.map((condition) => (
+                    <option key={condition.key} value={condition.key}>
+                      {condition.name}
+                    </option>
+                  ))}
+                </Select>
+              ) : null}
+              {draft.effectKind === "hp_delta" ? (
+                <TextInput
+                  label="HP delta (negative harms, positive heals)"
+                  type="number"
+                  value={draft.hpDelta}
+                  onChange={(event) => onChange({ ...draft, hpDelta: event.target.value })}
+                  data-testid={`${idPrefix}-curse-blessing-hp-delta`}
+                />
+              ) : null}
+              {draft.effectKind === "resource_delta" ? (
+                <>
+                  <TextInput
+                    label="Resource name (must match a resource on the taking character)"
+                    value={draft.resourceName}
+                    onChange={(event) => onChange({ ...draft, resourceName: event.target.value })}
+                    placeholder="e.g. Ki Points"
+                    data-testid={`${idPrefix}-curse-blessing-resource-name`}
+                  />
+                  <TextInput
+                    label="Resource delta"
+                    type="number"
+                    value={draft.resourceDelta}
+                    onChange={(event) => onChange({ ...draft, resourceDelta: event.target.value })}
+                    data-testid={`${idPrefix}-curse-blessing-resource-delta`}
+                  />
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          <div className={styles.toolRow}>
+            <Button
+              size="sm"
+              variant={draft.telegraphed ? "accent" : "ghost"}
+              onClick={() => onChange({ ...draft, telegraphed: !draft.telegraphed })}
+              data-testid={`${idPrefix}-curse-blessing-telegraphed`}
+            >
+              Telegraph to players before pickup: {draft.telegraphed ? "yes" : "no"}
+            </Button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -61,12 +210,16 @@ export function ContainerItemsEditor({
   const [tag, setTag] = useState("");
   // Map Editor Batch A5: blank means "not hidden" — see parseHiddenDc.
   const [hiddenDc, setHiddenDc] = useState("");
+  // Map Editor Batch A9.
+  const [curseDraft, setCurseDraft] = useState<CurseBlessingDraft>(DEFAULT_CURSE_BLESSING_DRAFT);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editTag, setEditTag] = useState("");
   const [editHiddenDc, setEditHiddenDc] = useState("");
+  // Map Editor Batch A9.
+  const [editCurseDraft, setEditCurseDraft] = useState<CurseBlessingDraft>(DEFAULT_CURSE_BLESSING_DRAFT);
 
   useEffect(() => {
     // No setLoading(true) here: this component is mounted keyed by the
@@ -95,7 +248,7 @@ export function ContainerItemsEditor({
   async function handleAdd() {
     const trimmed = name.trim();
     const parsedHiddenDc = parseHiddenDc(hiddenDc);
-    if (!trimmed || !parsedHiddenDc.valid || busy) return;
+    if (!trimmed || !parsedHiddenDc.valid || busy || !isCurseBlessingDraftValid(curseDraft)) return;
     setBusy(true);
     setError(null);
     try {
@@ -106,12 +259,14 @@ export function ContainerItemsEditor({
         description: description.trim() === "" ? null : description.trim(),
         tag: tag.trim() === "" ? null : tag.trim(),
         hiddenDc: parsedHiddenDc.value,
+        curseBlessing: draftToCurseBlessing(curseDraft),
       });
       setItems((current) => [...current, created]);
       setName("");
       setDescription("");
       setTag("");
       setHiddenDc("");
+      setCurseDraft(DEFAULT_CURSE_BLESSING_DRAFT);
     } catch (err) {
       setError(errorMessage(err) ?? "Could not add that item.");
     } finally {
@@ -125,12 +280,13 @@ export function ContainerItemsEditor({
     setEditDescription(item.description ?? "");
     setEditTag(item.tag ?? "");
     setEditHiddenDc(item.hidden_dc !== null ? String(item.hidden_dc) : "");
+    setEditCurseDraft(curseBlessingToDraft(item.curse_blessing));
   }
 
   async function handleSaveEdit(itemId: string) {
     const trimmed = editName.trim();
     const parsedHiddenDc = parseHiddenDc(editHiddenDc);
-    if (!trimmed || !parsedHiddenDc.valid || busy) return;
+    if (!trimmed || !parsedHiddenDc.valid || busy || !isCurseBlessingDraftValid(editCurseDraft)) return;
     setBusy(true);
     setError(null);
     try {
@@ -139,6 +295,7 @@ export function ContainerItemsEditor({
         description: editDescription.trim() === "" ? null : editDescription.trim(),
         tag: editTag.trim() === "" ? null : editTag.trim(),
         hidden_dc: parsedHiddenDc.value,
+        curse_blessing: draftToCurseBlessing(editCurseDraft),
       });
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setEditingId(null);
@@ -175,8 +332,9 @@ export function ContainerItemsEditor({
         </p>
       ) : (
         <div data-testid="container-items-list">
-          {items.map((item) =>
-            editingId === item.id ? (
+          {items.map((item) => {
+            const savedCurseBlessing = curseBlessingSummary(curseBlessingToDraft(item.curse_blessing));
+            return editingId === item.id ? (
               <div key={item.id} className={styles.toolRow} data-testid={`container-item-editing-${item.id}`}>
                 <TextInput
                   label="Name"
@@ -211,11 +369,21 @@ export function ContainerItemsEditor({
                   disabled={busy}
                   data-testid="container-item-edit-hidden-dc-input"
                 />
+                <CurseBlessingFields
+                  draft={editCurseDraft}
+                  onChange={setEditCurseDraft}
+                  idPrefix={`container-item-edit-${item.id}`}
+                />
                 <div className={styles.toolRow}>
                   <Button
                     size="sm"
                     variant="teal"
-                    disabled={busy || editName.trim() === "" || !parseHiddenDc(editHiddenDc).valid}
+                    disabled={
+                      busy ||
+                      editName.trim() === "" ||
+                      !parseHiddenDc(editHiddenDc).valid ||
+                      !isCurseBlessingDraftValid(editCurseDraft)
+                    }
                     onClick={() => void handleSaveEdit(item.id)}
                     data-testid={`save-container-item-${item.id}`}
                   >
@@ -234,6 +402,14 @@ export function ContainerItemsEditor({
                   {item.tag ? ` (${item.tag})` : ""}
                   {item.hidden_dc !== null ? ` [hidden, DC ${item.hidden_dc}]` : ""}
                 </span>
+                {savedCurseBlessing ? (
+                  <span
+                    className={styles.selectedMeta}
+                    data-testid={`container-item-curse-blessing-${item.id}`}
+                  >
+                    {savedCurseBlessing}
+                  </span>
+                ) : null}
                 <Button
                   size="sm"
                   variant="teal"
@@ -253,8 +429,8 @@ export function ContainerItemsEditor({
                   Remove
                 </Button>
               </div>
-            )
-          )}
+            );
+          })}
         </div>
       )}
       <TextInput
@@ -293,11 +469,14 @@ export function ContainerItemsEditor({
         disabled={busy}
         data-testid="container-item-hidden-dc-input"
       />
+      <CurseBlessingFields draft={curseDraft} onChange={setCurseDraft} idPrefix="container-item-new" />
       <div className={styles.toolRow}>
         <Button
           size="sm"
           variant="accent"
-          disabled={busy || name.trim() === "" || !parseHiddenDc(hiddenDc).valid}
+          disabled={
+            busy || name.trim() === "" || !parseHiddenDc(hiddenDc).valid || !isCurseBlessingDraftValid(curseDraft)
+          }
           onClick={() => void handleAdd()}
           data-testid="add-container-item-button"
         >

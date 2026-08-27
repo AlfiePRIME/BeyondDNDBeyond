@@ -46,6 +46,19 @@ export function ContainerPanel({
                 <span className={styles.objectName}>{item.name}</span>
               </div>
               {item.description ? <p>{item.description}</p> : null}
+              {/* Map Editor Batch A9: the DM's own opt-in "telegraphed"
+                  flag — a plain warning hint shown BEFORE the item is
+                  taken, never the item's actual kind/resolution/effect
+                  (that stays a surprise, matching concealed pits' own
+                  "DM-only-known until sprung" precedent, unless/until the
+                  DM has explicitly chosen to telegraph it). An untelegraphed
+                  cursed/blessed item — or a plain item with none set at all
+                  — renders nothing extra here. */}
+              {item.curse_blessing?.telegraphed ? (
+                <p className={styles.hint} data-testid={`container-panel-item-hint-${item.id}`}>
+                  You sense something unusual about this item…
+                </p>
+              ) : null}
               <Button
                 size="sm"
                 variant="accent"

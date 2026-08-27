@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { ConditionKey } from "@/rules-engine";
 
 /**
  * Map Editor Batch A4: a single item sitting inside a container — a chest
@@ -10,8 +11,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  *
  * Deliberately lightweight — name/description/icon/tag — NOT a full
  * character-sheet InventoryItem (see characters.ts): this is flavor loot,
- * not a weapon/armor stat block. curse_blessing stays null until a later
- * prompt (A9) populates it.
+ * not a weapon/armor stat block.
  */
 export interface MapObjectItem {
   id: string;
@@ -34,10 +34,138 @@ export interface MapObjectItem {
    * comment for why nothing needs to be persisted per (item, character)
    * pair. */
   hidden_dc: number | null;
-  /** Unpopulated as of Batch A4 — a later prompt (A9) defines the real
-   * shape (kind/resolution/effect/telegraphed) and starts writing here. */
-  curse_blessing: Record<string, unknown> | null;
+  /** Map Editor Batch A9: the item's curse/blessing configuration, or null
+   * for a plain (unenchanted) item — see CurseBlessing's own doc comment. */
+  curse_blessing: CurseBlessing | null;
   created_at: string;
+}
+
+export type CurseBlessingKind = "cursed" | "blessed";
+export type CurseBlessingResolution = "mechanical" | "narrative";
+
+/**
+ * Exactly one mechanical effect — reuses the app's REAL condition/HP/
+ * resource systems (conditions.ts's applyCondition, characters.ts's
+ * applyHpDelta, characterResources.ts's applyResourceDelta), never a
+ * bespoke curse-only mechanic, per the project owner's explicit
+ * instruction. `resourceName` (not a resourceId) because the DM configures
+ * this before any specific taking character exists — a character_resources
+ * row belonging to whoever eventually takes the item doesn't exist yet at
+ * authoring time. It's matched by name, case-insensitively, against the
+ * TAKING character's own resources at pickup time (see
+ * apply_character_resource_delta) — the same "flavor loot, not a rigid
+ * stat block" posture the rest of this table already has.
+ */
+export type CurseBlessingEffect =
+  | { kind: "condition"; conditionKey: ConditionKey }
+  | { kind: "hp_delta"; delta: number }
+  | { kind: "resource_delta"; resourceName: string; delta: number };
+
+/**
+ * Map Editor Batch A9: the structured payload map_object_items.curse_blessing
+ * (added, unpopulated, by A4's own migration 0060) actually holds once this
+ * prompt populates it. `effect` is null for a narrative resolution (a
+ * mechanical resolution always has exactly one). `telegraphed` is
+ * independent of kind/resolution — the DM's own opt-in to show a plain
+ * warning hint on the item BEFORE it's taken (see ContainerPanel), against
+ * the default of a curse/blessing being discovered only once triggered,
+ * matching concealed pits' own "DM-only-known until sprung" precedent.
+ */
+export interface CurseBlessing {
+  kind: CurseBlessingKind;
+  resolution: CurseBlessingResolution;
+  effect: CurseBlessingEffect | null;
+  telegraphed: boolean;
+}
+
+/** The map editor's own item-editing panel draft shape — every field a
+ * plain string/boolean so it can back controlled form inputs directly,
+ * converted to/from the real CurseBlessing payload only at save/load time
+ * (draftToCurseBlessing/curseBlessingToDraft below). `effectKind` and the
+ * per-effect fields are all kept, populated or not, regardless of which one
+ * is currently selected — switching the dropdown back and forth never loses
+ * whatever the DM already typed into the others. */
+export interface CurseBlessingDraft {
+  enabled: boolean;
+  kind: CurseBlessingKind;
+  resolution: CurseBlessingResolution;
+  effectKind: CurseBlessingEffect["kind"];
+  conditionKey: ConditionKey;
+  hpDelta: string;
+  resourceName: string;
+  resourceDelta: string;
+  telegraphed: boolean;
+}
+
+export const DEFAULT_CURSE_BLESSING_DRAFT: CurseBlessingDraft = {
+  enabled: false,
+  kind: "cursed",
+  resolution: "narrative",
+  effectKind: "hp_delta",
+  conditionKey: "poisoned",
+  hpDelta: "-1",
+  resourceName: "",
+  resourceDelta: "-1",
+  telegraphed: false,
+};
+
+/** Whether `draft` can be saved as-is — gates the editor's Add/Save button.
+ * A disabled (not enabled) draft is always valid (it becomes a plain null
+ * curse_blessing); a narrative or condition-effect draft is always valid
+ * once a kind is picked (every dropdown always has a selected value); an
+ * hp_delta/resource_delta draft needs its numeric field to actually parse,
+ * and resource_delta additionally needs a non-blank resource name to match
+ * against. */
+export function isCurseBlessingDraftValid(draft: CurseBlessingDraft): boolean {
+  if (!draft.enabled || draft.resolution !== "mechanical") return true;
+  if (draft.effectKind === "hp_delta") {
+    return draft.hpDelta.trim() !== "" && Number.isFinite(Number(draft.hpDelta));
+  }
+  if (draft.effectKind === "resource_delta") {
+    return (
+      draft.resourceName.trim() !== "" &&
+      draft.resourceDelta.trim() !== "" &&
+      Number.isFinite(Number(draft.resourceDelta))
+    );
+  }
+  return true;
+}
+
+/** Converts a (valid — see isCurseBlessingDraftValid) draft into the real
+ * persisted shape, or null when the DM has left curse/blessing off. */
+export function draftToCurseBlessing(draft: CurseBlessingDraft): CurseBlessing | null {
+  if (!draft.enabled) return null;
+  const effect: CurseBlessingEffect | null =
+    draft.resolution !== "mechanical"
+      ? null
+      : draft.effectKind === "condition"
+        ? { kind: "condition", conditionKey: draft.conditionKey }
+        : draft.effectKind === "hp_delta"
+          ? { kind: "hp_delta", delta: Number(draft.hpDelta) }
+          : { kind: "resource_delta", resourceName: draft.resourceName.trim(), delta: Number(draft.resourceDelta) };
+  return { kind: draft.kind, resolution: draft.resolution, effect, telegraphed: draft.telegraphed };
+}
+
+/** The inverse of draftToCurseBlessing — populates the editor's form when
+ * opening an existing item for editing (or DEFAULT_CURSE_BLESSING_DRAFT for
+ * a plain item with none set). */
+export function curseBlessingToDraft(curseBlessing: CurseBlessing | null): CurseBlessingDraft {
+  if (!curseBlessing) return { ...DEFAULT_CURSE_BLESSING_DRAFT };
+  return {
+    enabled: true,
+    kind: curseBlessing.kind,
+    resolution: curseBlessing.resolution,
+    effectKind: curseBlessing.effect?.kind ?? DEFAULT_CURSE_BLESSING_DRAFT.effectKind,
+    conditionKey:
+      curseBlessing.effect?.kind === "condition" ? curseBlessing.effect.conditionKey : DEFAULT_CURSE_BLESSING_DRAFT.conditionKey,
+    hpDelta: curseBlessing.effect?.kind === "hp_delta" ? String(curseBlessing.effect.delta) : DEFAULT_CURSE_BLESSING_DRAFT.hpDelta,
+    resourceName: curseBlessing.effect?.kind === "resource_delta" ? curseBlessing.effect.resourceName : "",
+    resourceDelta:
+      curseBlessing.effect?.kind === "resource_delta"
+        ? String(curseBlessing.effect.delta)
+        : DEFAULT_CURSE_BLESSING_DRAFT.resourceDelta,
+    telegraphed: curseBlessing.telegraphed,
+  };
 }
 
 /** Which container a call addresses — exactly one of the two, matching the
@@ -101,6 +229,8 @@ export async function addContainerItem(
     /** Map Editor Batch A5 — omitted/undefined and null both mean "not
      * hidden", matching every other optional field here. */
     hiddenDc?: number | null;
+    /** Map Editor Batch A9. */
+    curseBlessing?: CurseBlessing | null;
   }
 ): Promise<MapObjectItem> {
   const { data, error } = await supabase
@@ -114,6 +244,7 @@ export async function addContainerItem(
       icon: params.icon ?? null,
       tag: params.tag ?? null,
       hidden_dc: params.hiddenDc ?? null,
+      curse_blessing: params.curseBlessing ?? null,
     })
     .select()
     .single();
@@ -133,6 +264,8 @@ export async function updateContainerItem(
     tag?: string | null;
     /** Map Editor Batch A5 — null clears it back to not-hidden. */
     hidden_dc?: number | null;
+    /** Map Editor Batch A9. */
+    curse_blessing?: CurseBlessing | null;
   }
 ): Promise<MapObjectItem> {
   const { data, error } = await supabase

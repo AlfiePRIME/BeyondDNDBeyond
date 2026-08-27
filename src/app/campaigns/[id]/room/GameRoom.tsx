@@ -12,6 +12,7 @@ import {
   applyExhaustionDelta,
   applyHpDelta,
   applyNpcHpDelta,
+  applyResourceDelta,
   claimContainerItem,
   clearHiddenAsHider,
   createHandout,
@@ -25,6 +26,7 @@ import {
   deleteMapToken,
   endCombat,
   endSession,
+  getActiveCombatantForCharacter,
   getActiveCombatEncounter,
   getCharacter,
   getDiceTrayPreferencesForCampaign,
@@ -2797,13 +2799,56 @@ export function GameRoom({
           });
           setCharacterRows((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
         }
+        // Map Editor Batch A9: curses and blessings. `claimed.curse_blessing`
+        // is the DM's own per-item configuration (mapObjectItems.ts). A
+        // mechanical resolution reuses the SAME real effect-application
+        // functions every other mechanical change in this file already goes
+        // through — applyHpDelta/applyCondition/applyResourceDelta — never a
+        // bespoke curse-only code path; a narrative resolution applies no
+        // mechanical effect at all and instead leaves a note on A6's shared
+        // interaction_events table for the DM's own activity feed to pick up.
+        const curseBlessing = claimed.curse_blessing;
+        if (curseBlessing && curseBlessing.resolution === "mechanical" && curseBlessing.effect) {
+          const effect = curseBlessing.effect;
+          if (effect.kind === "hp_delta") {
+            await applyHpDelta(supabase, characterId, effect.delta);
+          } else if (effect.kind === "resource_delta") {
+            await applyResourceDelta(supabase, characterId, effect.resourceName, effect.delta);
+          } else {
+            // effect.kind === "condition": conditions hang off a COMBATANT
+            // row (combatant_conditions), not the character directly — see
+            // conditions.ts's own doc comment — so this only ever takes
+            // effect while the taking character has a combatant in the
+            // campaign's currently-active encounter. Outside combat there is
+            // no combatant row to attach the condition to; this is a real,
+            // documented limitation of reusing the existing condition
+            // system exactly as instructed, not a bug.
+            const activeCombatant = await getActiveCombatantForCharacter(supabase, campaignId, characterId);
+            if (activeCombatant) {
+              await applyCondition(supabase, activeCombatant.id, effect.conditionKey);
+            }
+          }
+          // Refreshes characterRows/combat (HP bars, condition badges) from
+          // the server in one shot — the same post-mutation refresh every
+          // other HP/condition-changing action in this file already calls.
+          await refreshCombat(supabase);
+        } else if (curseBlessing && curseBlessing.resolution === "narrative") {
+          await createInteractionEvent(supabase, {
+            campaignId,
+            mapObjectId: openContainer.source === "object" ? openContainer.objectId : null,
+            concealedPitId: openContainer.source === "pit" ? openContainer.pitId : null,
+            actionType: curseBlessing.kind === "cursed" ? "curse_narrative" : "blessing_narrative",
+            tag: claimed.tag ?? null,
+            actorUserId: currentUserId,
+          });
+        }
       } catch (err) {
         setContainerError(errorMessage(err) ?? "Could not take that item.");
       } finally {
         setContainerBusy(false);
       }
     },
-    [containerBusy, openContainer, characterRows, applyItemTaken]
+    [containerBusy, openContainer, characterRows, applyItemTaken, campaignId, currentUserId, refreshCombat]
   );
 
   // The DM's "push this map to the whole party" action (0046) — writes the
