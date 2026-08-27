@@ -11,6 +11,7 @@ import {
   applySeatOffset,
   clampToTableArrangement,
   computeCampaignSeatLayout,
+  getEffectiveSeat,
   rotationYTowardNearestTable,
   seatEllipseSemiAxes,
   type AppendedTable,
@@ -154,11 +155,13 @@ function computeTurnCameraPosition(
 // Seated look-around: a seated viewer can nudge where their own camera
 // LOOKS — "turning their head" — using the arrow keys, independent of
 // wherever `cameraPosition` currently is (plain seat default, the turn
-// camera's improved angle, or a live in-progress chair drag). This is
+// camera's improved angle, or a previously-persisted chair-drag offset —
+// never a LIVE in-progress one; the camera deliberately holds still for the
+// whole drag gesture, see the "Movable chairs" block comment above). This is
 // PURELY a rotation of the lookAt direction; it never touches camera
 // position, which stays entirely owned by the seat/turn-camera/chair-drag
 // logic elsewhere in this file (computeTurnCameraPosition above,
-// applySeatOffset, the chair-drag session).
+// applySeatOffset, getEffectiveSeat).
 //
 // Composition with the turn camera (the explicit judgment call the brief
 // asked for): look-around stays available, unmodified, while the turn
@@ -239,8 +242,15 @@ const lookAroundTarget = new Vector3();
 // ---------------------------------------------------------------------------
 // Movable chairs (drag gesture): a player may grab and drag their OWN chair
 // (never another member's, never the DM's throne — see draggableUserId
-// below) anywhere near the table arrangement, with their own seated camera
-// following live. Reuses this same file's existing press-drag-release
+// below) anywhere near the table arrangement. An earlier version of this
+// feature made the player's own seated camera follow live during the
+// gesture; the project owner reported that as disorienting ("still moves
+// the camera... please make this stop whilst moving objects") and asked
+// for it to be removed outright, so the camera now holds perfectly still
+// for the whole gesture and only settles once, after the drop, to wherever
+// the chair actually ends up (seatCameraPosition below reads through
+// getEffectiveSeat/seatOffsets — the last PERSISTED position — never the
+// live in-progress one). Reuses this same file's existing press-drag-release
 // pointer pattern (the ruler's own handleRulerPointerDown/handleRulerDragOver/
 // window-"pointerup" trio just below) rather than inventing a new gesture
 // shape: the scene owns the raw mechanics (which chair, where the pointer
@@ -726,10 +736,16 @@ export interface GameTableSceneProps {
    * itself; changes nothing about how anything renders or drags. */
   onOwnChairProjectedPosition?: (point: [number, number] | null) => void;
   /** Verification-only: this client's own seated camera position, fired
-   * whenever it genuinely changes — the direct proof for "that player's own
-   * camera view updates live while dragging" rather than trusting
-   * applySeatOffset's own cameraPosition translation by inference alone.
-   * Not read by GameTableScene itself. */
+   * whenever it genuinely changes. Camera-follow-during-drag was removed
+   * (project owner's explicit ask — see the "Movable chairs" block comment
+   * above), so this now exists to let a real Playwright drag simulation
+   * prove the NEGATIVE directly — that this value never fires again (and
+   * the camera position stays byte-for-byte identical) for the ENTIRE
+   * duration of an active chair drag — rather than trusting
+   * seatCameraPosition's own getEffectiveSeat-based derivation by inference
+   * alone. Still fires normally for every other legitimate camera change
+   * (seat mode switch, turn camera, a drag's post-drop settle). Not read by
+   * GameTableScene itself. */
   onOwnCameraDebug?: (position: readonly [number, number, number]) => void;
   /** Turn camera: fires whenever THIS viewer's own chair-drag session
    * starts or stops. Not verification-only like onOwnChairProjectedPosition/
@@ -762,12 +778,12 @@ export interface GameTableSceneProps {
    * up). This is what lets the app layer's own derived state (GameRoom.tsx's
    * memberTrayPositions) track a chair LIVE while it's being dragged, not
    * just once the drag ends and the persist-then-broadcast round trip
-   * catches up — the same live-tracking guarantee onOwnCameraDebug already
-   * proves for the seated camera, generalized to any OTHER consumer of
-   * "where is this specific chair right now" (a personal dice tray, most
-   * immediately). Only ever fires for `currentUserId`'s own seat — nothing
-   * else can ever be mid-drag on this client (draggableUserId's own doc
-   * comment). */
+   * catches up — deliberately the ONE place a live in-progress offset still
+   * flows anywhere (a personal dice tray following its owner's chair mid-
+   * drag is a wanted, harmless side effect the project owner never asked to
+   * change; only the CAMERA's own live tracking was). Only ever fires for
+   * `currentUserId`'s own seat — nothing else can ever be mid-drag on this
+   * client (draggableUserId's own doc comment). */
   onLiveChairOffset?: (override: { userId: string; offset: SeatOffset } | null) => void;
   /** Verification-only: this client's own look-around yaw/pitch offset (see
    * the "Seated look-around" block comment above), in radians, fired
@@ -1057,7 +1073,26 @@ export function GameTableScene({
   }, [isDraggingChair, camera, gl]);
 
   const mySeat = seats.find((seat) => seat.member.user_id === currentUserId);
-  const seatCameraPosition = mySeat ? mySeat.cameraPosition : FALLBACK_CAMERA_POSITION;
+  // Camera-follow-during-drag REMOVED (project owner's explicit ask:
+  // dragging your own chair — or watching your tray shift alongside it —
+  // must never move the camera while the drag is in progress). `mySeat`
+  // above reads through `seats`, which is intentionally live during an
+  // active drag (localChairOverride) so the CHAIR MESH itself still tracks
+  // the cursor smoothly — but `seatCameraPosition` deliberately reads
+  // through `layout`/`seatOffsets` instead (getEffectiveSeat, seating.ts),
+  // which only ever reflects the last PERSISTED offset, never the local,
+  // still-in-progress one. The practical effect: the seated camera holds
+  // perfectly still for the ENTIRE gesture (press through release), and
+  // only settles once — to wherever the chair actually ends up — after
+  // GameRoom.tsx's persist-then-broadcast round trip lands a new
+  // `seatOffsets` prop. That single post-drop settle is deliberately kept:
+  // it's the same "your camera sits wherever your chair currently is"
+  // invariant every OTHER seat position change (a page load, another
+  // client's earlier drag) already produces, and nothing in the bug report
+  // asked for that to change — only the LIVE, mid-gesture tracking Prompt 4b
+  // added is being removed here.
+  const myPersistedSeat = currentUserId ? getEffectiveSeat(layout, currentUserId, seatOffsets) : null;
+  const seatCameraPosition = myPersistedSeat ? myPersistedSeat.cameraPosition : FALLBACK_CAMERA_POSITION;
   // Turn camera: GameRoom.tsx's turnCameraActive prop already encodes the
   // camera-mode/dismiss/drag gating (see that prop's own doc comment), but
   // `isDraggingChair` is re-checked directly here rather than trusted
@@ -1065,8 +1100,9 @@ export function GameTableScene({
   // one render AFTER the state change lands here, so a parent reacting to
   // it is necessarily one frame behind. Checking the authoritative local
   // state directly instead closes that gap completely, guaranteeing the
-  // chair-drag camera-follow and the turn camera never fight even for a
-  // single frame.
+  // turn camera never applies mid-drag even for a single frame (moot for
+  // camera-follow itself now that it's gone, but the turn camera's own
+  // "never fight an in-progress drag" contract still needs this).
   const turnCameraApplied = turnCameraActive && cameraMode === "seat" && mySeat !== undefined && !isDraggingChair;
   const cameraPosition = turnCameraApplied ? computeTurnCameraPosition(seatCameraPosition) : seatCameraPosition;
 
