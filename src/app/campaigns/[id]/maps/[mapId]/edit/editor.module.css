@@ -182,12 +182,33 @@
   flex-wrap: wrap;
 }
 
+/* flex-shrink: 0 is load-bearing, not decoration. `.contextPanel` is a flex
+   column, and per the flexbox spec a flex item whose overflow is anything
+   other than `visible` gets an AUTOMATIC MINIMUM SIZE of 0 in the shrinking
+   axis — unlike its siblings here (plain text/buttons/inputs, whose
+   automatic minimum is their own min-content size, i.e. non-zero), this
+   grid's own `overflow-y: auto` makes it the one item the flex-shrink
+   algorithm is free to crush all the way to 0 first. Once the selected
+   object's editor UI (ObjectTagEditor/BehaviorEditor/ContainerItemsEditor)
+   grew tall enough that the column's total content regularly exceeds
+   .contextPanel's own capped max-height by more than this grid's 190px, the
+   whole deficit landed here — collapsing the asset palette to a real
+   zero-height, zero-clientHeight box (confirmed live: computed height/
+   clientHeight both 0px) that still "looks" visible to a naive check
+   (display/visibility/opacity all normal, children still present with
+   their own non-zero rects) but paints and hit-tests as nothing, so clicks
+   fall through to whatever sits at that pixel in the still-scrollable
+   .contextPanel behind it. `flex-shrink: 0` opts this one item out of the
+   shrink algorithm entirely, so it keeps its natural (max-height-capped)
+   size and .contextPanel's own overflow-y:auto — already sized to handle
+   exactly this overflow — takes over for the rest of the column instead. */
 .assetGrid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 6px;
   max-height: 190px;
   overflow-y: auto;
+  flex-shrink: 0;
   padding-right: 2px;
 }
 
