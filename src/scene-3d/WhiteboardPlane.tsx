@@ -15,7 +15,9 @@ import type { Camera } from "three";
 import {
   cellKey,
   ERASER_WIDTH_CELLS,
+  gridPointToPixel,
   PEN_WIDTH_CELLS,
+  pixelToGridPoint,
   planeSizeWorldUnits,
   sampleSegmentCells,
   TILE_PX,
@@ -23,9 +25,11 @@ import {
 } from "./whiteboardMath";
 
 /**
- * The DM-only annotation layer (docs/design/whiteboard-drawing-layer.md,
- * Prompt 2 — rendering, toolset, and draw-mode interaction; persistence and
- * cross-client sync are a later prompt, per that document's own §11 split).
+ * The DM-only annotation layer (docs/design/whiteboard-drawing-layer.md).
+ * Prompt 2 built the rendering, toolset, and draw-mode interaction below;
+ * Prompt 3 (§11) layered persistence and cross-client sync on top — see
+ * this file's own "Persistence and cross-client sync" doc-comment section
+ * further down for that half.
  *
  * Two separate meshes sharing one transform (the design's own §7.1), not one
  * mesh with conditionally-attached handlers:
@@ -60,22 +64,104 @@ import {
  * canvas>` — the exact per-cell raster-tile shape
  * docs/design/whiteboard-drawing-layer.md §4.4 designs for `map_whiteboard_tiles`
  * — populated at every stroke-end by cropping the composite canvas (§4.1),
- * so a later persistence prompt can encode each touched tile
- * (`tile.toBlob("image/png")`) and upsert it without restructuring this
- * component's own drawing/undo mechanics; only the network/DB call itself is
- * out of scope here.
+ * exactly the shape Prompt 3's persistence layer (below) encodes
+ * (`tile.toDataURL("image/png")`) and upserts, with no restructuring of
+ * this component's own drawing/undo mechanics needed to add that.
  *
- * Persistence is explicitly out of scope for this prompt — this cache lives
- * only in this component instance's own memory (lost on unmount, e.g. the
- * table ever going mapless), never written to a database or broadcast.
+ * Persistence and cross-client sync (docs/design/whiteboard-drawing-layer.md
+ * §5, Prompt 3) are layered on TOP of this exact same in-memory model, not a
+ * restructuring of it: `initialTiles` hydrates a freshly-created map's own
+ * composite canvas from whatever GameRoom already fetched
+ * (listWhiteboardTiles, via the per-viewer map bundle every map switch
+ * already re-fetches — this component stays data-access-free per this
+ * codebase's module boundary, so it only ever receives already-decoded
+ * plain data, never a SupabaseClient); `onTilesPersist`/`onClearPersist`
+ * fire with the exact same per-cell change list a stroke/undo/redo/clear
+ * already computes for its own in-memory tile store, so GameRoom can
+ * upsert/delete `map_whiteboard_tiles` rows and broadcast
+ * WHITEBOARD_TILES_CHANGED_EVENT/WHITEBOARD_CLEARED_EVENT with the
+ * already-durable value (the HANDOUT_EVENT persist-then-broadcast shape);
+ * `onLocalStroke{Start,Point,End}` fire from the identical pointer handlers
+ * that already drive local drawing, purely so GameRoom can additionally
+ * stream them over the ephemeral DICE_ROLLED_EVENT-shaped live tier: this
+ * component never touches the realtime channel itself, it just reports what
+ * it already knows the instant it knows it. `applyRemoteStroke*`/
+ * `applyTileChanges`/`loadTiles`/`clearRemote` (the imperative handle) are
+ * the RECEIVING side of both tiers — a remote stroke's points are drawn
+ * through the exact same `drawSegment` primitive the local pointer handlers
+ * use (§5.1's own "one shared pure function, two callers"), never a second
+ * rendering path.
  */
 
 export type WhiteboardTool = "pen" | "eraser";
+
+/** A durable per-cell tile as already-decoded plain data — the exact shape
+ * @/data-access's WhiteboardTile has, structurally, but declared fresh here
+ * rather than imported: scene-3d stays data-access-free (the
+ * MapSurfaceGroundType precedent), so this component only ever receives
+ * data GameRoom has already fetched/decoded, never a SupabaseClient of its
+ * own. `tilePng` is a plain base64-encoded PNG (no `data:` prefix) — this
+ * component prefixes it itself wherever it needs an actual `Image` source. */
+export interface WhiteboardTileData {
+  x: number;
+  y: number;
+  tilePng: string;
+}
+
+/** One cell's own persisted-tier UPDATE — `tilePng: null` means the cell
+ * was fully erased and its row should be deleted entirely (the sparse-
+ * storage convention this whole feature uses throughout). The
+ * WHITEBOARD_TILES_CHANGED_EVENT payload shape, and also exactly what a
+ * stroke-commit/undo/redo already computes for its own in-memory tile
+ * store — onTilesPersist/applyTileChanges both use this one shape for
+ * "what changed" in either direction (outgoing to GameRoom for persistence,
+ * incoming from GameRoom for a receiver's own resync). */
+export interface WhiteboardTileUpdate {
+  x: number;
+  y: number;
+  tilePng: string | null;
+}
+
+/** A continuous grid-space point, the live-tier wire unit (§5.2) — NOT raw
+ * TILE_PX pixels, so the wire format never has to change if TILE_PX itself
+ * is later tuned. See whiteboardMath.ts's pixelToGridPoint/gridPointToPixel. */
+export interface WhiteboardGridPoint {
+  u: number;
+  v: number;
+}
 
 export interface WhiteboardHandle {
   undo(): void;
   redo(): void;
   clear(): void;
+  /** Live-tier receiver (§5.1) — draws a REMOTE stroke's own points through
+   * the identical drawSegment primitive local pointer events use. Strokes
+   * are tracked by `strokeId` so multiple concurrent remote strokes (e.g. a
+   * second DM window drawing at the same time) never cross-contaminate each
+   * other's "last point" bookkeeping. */
+  applyRemoteStrokeStart(strokeId: string, tool: WhiteboardTool, color: string, point: WhiteboardGridPoint): void;
+  applyRemoteStrokePoints(strokeId: string, points: readonly WhiteboardGridPoint[]): void;
+  /** A receiver that missed the matching start (joined mid-stroke) simply
+   * has nothing tracked for this id — a harmless no-op, since the
+   * persisted tier's own applyTileChanges call at stroke-end always
+   * corrects the final pixels regardless (§5.1's own "never a wrong FINAL
+   * state" guarantee). */
+  applyRemoteStrokeEnd(strokeId: string): void;
+  /** Persisted-tier receiver (§5.1) — applies already-durable per-cell
+   * changes (a stroke-end broadcast, or another client's undo/redo) without
+   * touching THIS client's own undo/redo stack, which per §5.4 only ever
+   * records what THIS device itself drew. */
+  applyTileChanges(changes: readonly WhiteboardTileUpdate[]): void;
+  /** Full resync (§5.3) — rebuilds the composite canvas and tile store from
+   * scratch against exactly this list, dropping anything not listed here.
+   * Used for reconnect recovery; the identical function also runs (via
+   * `initialTiles`) on ordinary initial load/map-switch hydration. */
+  loadTiles(tiles: readonly WhiteboardTileData[]): void;
+  /** WHITEBOARD_CLEARED_EVENT receiver — wipes this client's own canvas/tile
+   * store without pushing a local undo entry (this is someone ELSE's clear,
+   * already durable; per §5.4 this device's own undo stack only records
+   * what THIS device did). */
+  clearRemote(): void;
 }
 
 export interface WhiteboardHistoryState {
@@ -143,6 +229,38 @@ export interface WhiteboardPlaneProps {
    * Playwright script to find a click target on, so this hands one back
    * directly instead of a blind scan. */
   onCenterProjectedPosition?: (point: [number, number] | null) => void;
+  /** This map's own already-persisted tiles (listWhiteboardTiles, fetched by
+   * GameRoom as part of the same per-viewer map bundle every load/switch
+   * already re-fetches — see the per-map cache's own hydration effect
+   * below) — hydrates a freshly-created MapWhiteboardState exactly once,
+   * the instant this exact (mapId, gridWidth, gridHeight) combination is
+   * first seen this session. Never re-applied on a later re-render with the
+   * same already-hydrated state (a `hydrated` flag on the state object
+   * itself guards this), so it can never clobber this client's own
+   * subsequent local edits or live/persisted-tier updates. */
+  initialTiles?: readonly WhiteboardTileData[];
+  /** Fires at the very start of a LOCAL stroke (pointerdown), before any
+   * drawing — purely so GameRoom can kick off the live-tier ephemeral
+   * broadcast stream (§5.1/§5.2). This component never touches the
+   * realtime channel itself. */
+  onLocalStrokeStart?: (mapId: string, info: { strokeId: string; tool: WhiteboardTool; color: string; point: WhiteboardGridPoint }) => void;
+  /** Fires once per point of an in-progress LOCAL stroke, after
+   * onLocalStrokeStart's own first point — GameRoom is responsible for any
+   * batching/send-interval decision (§5.2's "on the order of every 30-50ms"
+   * — an app-layer, not a rendering-layer, concern), so every point is
+   * reported immediately here regardless of wire cadence. */
+  onLocalStrokePoint?: (mapId: string, strokeId: string, point: WhiteboardGridPoint) => void;
+  onLocalStrokeEnd?: (mapId: string, strokeId: string) => void;
+  /** Fires once a LOCAL stroke/undo/redo produces a definitive new per-cell
+   * state (§5.1's persisted tier) — GameRoom upserts/deletes
+   * map_whiteboard_tiles and broadcasts WHITEBOARD_TILES_CHANGED_EVENT with
+   * this exact already-durable payload, the HANDOUT_EVENT shape. */
+  onTilesPersist?: (mapId: string, changes: readonly WhiteboardTileUpdate[]) => void;
+  /** Fires once a LOCAL clear actually wiped something (doClear's own
+   * "nothing to clear — no pointless empty entry" guard also suppresses
+   * this) — GameRoom deletes every map_whiteboard_tiles row for this map
+   * and broadcasts WHITEBOARD_CLEARED_EVENT. */
+  onClearPersist?: (mapId: string) => void;
 }
 
 interface UndoEntry {
@@ -152,6 +270,32 @@ interface UndoEntry {
    * paired redo entry's own snapshot (see doUndo below) — symmetric with no
    * separate "after" bookkeeping needed while a stroke is still in progress. */
   cells: ReadonlyMap<string, HTMLCanvasElement | null>;
+}
+
+/** One in-progress REMOTE stroke's own bookkeeping (the live tier's
+ * receiving side) — deliberately separate from StrokeSession below (which
+ * is this client's own LOCAL in-progress stroke): a client can be receiving
+ * a remote stroke while never drawing one itself at all (every player), or
+ * even while ALSO mid-stroke itself (a second DM window), so the two must
+ * never share state. Keyed by strokeId so multiple concurrent remote
+ * strokes can't cross-contaminate each other's own "last point". */
+interface RemoteStrokeState {
+  tool: WhiteboardTool;
+  color: string;
+  lastPixel: { x: number; y: number } | null;
+  /** Every cell this in-progress remote stroke has painted so far — the
+   * exact same `sampleSegmentCells`-driven bookkeeping StrokeSession.touched
+   * keeps for a LOCAL stroke (see applyStrokePoint), needed here for the
+   * identical reason: debugOf's own tileKeys mirror is sourced from
+   * `state.tiles` (the sparse PERSISTED tile cache), which a live-tier
+   * remote stroke deliberately never touches — cell attribution only
+   * happens at persist time (§4.1/§5.1). Without this, a Playwright script
+   * (or any other observer) would see NO evidence of a remote stroke's own
+   * already-rendered pixels until the persisted tier's tiles-changed
+   * broadcast lands at stroke-end, even though the ink is genuinely already
+   * on screen — this is purely a verification-visibility fix, not a
+   * behavior change: the actual composite canvas was already correct. */
+  touched: Set<string>;
 }
 
 interface MapWhiteboardState {
@@ -164,6 +308,12 @@ interface MapWhiteboardState {
   tiles: Map<string, HTMLCanvasElement>;
   undoStack: UndoEntry[];
   redoStack: UndoEntry[];
+  /** Guards initialTiles' own hydration to exactly once per state object —
+   * see WhiteboardPlaneProps.initialTiles's own doc comment. */
+  hydrated: boolean;
+  /** Every currently in-progress REMOTE stroke this client is receiving —
+   * see RemoteStrokeState's own doc comment. */
+  remoteStrokes: Map<string, RemoteStrokeState>;
 }
 
 /** A new action forks history — the redo branch is discarded — and the
@@ -184,7 +334,18 @@ function createMapWhiteboardState(gridWidth: number, gridHeight: number): MapWhi
   if (!ctx) throw new Error("2D canvas context unavailable — cannot build the whiteboard's composite canvas");
   const texture = new CanvasTexture(canvas);
   texture.colorSpace = SRGBColorSpace;
-  return { gridWidth, gridHeight, canvas, ctx, texture, tiles: new Map(), undoStack: [], redoStack: [] };
+  return {
+    gridWidth,
+    gridHeight,
+    canvas,
+    ctx,
+    texture,
+    tiles: new Map(),
+    undoStack: [],
+    redoStack: [],
+    hydrated: false,
+    remoteStrokes: new Map(),
+  };
 }
 
 /** Looks up (or lazily creates) `mapId`'s own cached state, rebuilding it
@@ -295,44 +456,196 @@ function historyOf(state: MapWhiteboardState): WhiteboardHistoryState {
   return { canUndo: state.undoStack.length > 0, canRedo: state.redoStack.length > 0 };
 }
 
+/** Unions `state.tiles`' own persisted keys with every currently in-progress
+ * REMOTE stroke's own touched cells (RemoteStrokeState.touched's own doc
+ * comment explains why the latter is needed at all) — so a receiver's
+ * debug mirror reflects what's genuinely visible on screen right now, live
+ * tier included, not only whatever has made it into the persisted sparse
+ * tile cache so far. */
 function debugOf(state: MapWhiteboardState): WhiteboardDebugState {
-  return { tileKeys: Array.from(state.tiles.keys()) };
+  const keys = new Set(state.tiles.keys());
+  for (const remote of state.remoteStrokes.values()) {
+    for (const key of remote.touched) keys.add(key);
+  }
+  return { tileKeys: Array.from(keys) };
 }
 
-function doUndo(state: MapWhiteboardState): void {
+/** A cell's own tile canvas to the plain base64 PNG string the persisted
+ * tier transmits/stores (WhiteboardTileUpdate/WhiteboardTileData's own
+ * shape) — `toDataURL` is synchronous (unlike `toBlob`), which keeps the
+ * stroke-commit/undo/redo paths below fully synchronous, matching every
+ * other in-memory mutation in this file. */
+function tileToBase64(tile: HTMLCanvasElement): string {
+  const dataUrl = tile.toDataURL("image/png");
+  const comma = dataUrl.indexOf(",");
+  return comma === -1 ? dataUrl : dataUrl.slice(comma + 1);
+}
+
+/** The inverse of tileToBase64 — decoding a PNG into actual pixels has no
+ * synchronous browser API (unlike encoding via toDataURL), so every caller
+ * of this (applyTileChangeOnState/loadTilesOnState below) is necessarily
+ * async, which is fine: both only ever run in response to a network event
+ * (a received broadcast, a reconnect refetch, a fresh map's own initial
+ * hydration), never on the local per-pointer-move hot path. */
+function loadTileImage(base64: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("whiteboard tile image failed to decode"));
+    img.src = `data:image/png;base64,${base64}`;
+  });
+}
+
+/** Applies one persisted-tier change (a receiver's own copy of what
+ * onTilesPersist already reported to GameRoom) to `state`'s composite
+ * canvas/tile store — used by both applyTileChanges (an incremental
+ * WHITEBOARD_TILES_CHANGED_EVENT) and loadTilesOnState (a full resync, one
+ * call per tile). Deliberately never touches undoStack/redoStack: per §5.4,
+ * undo is this DEVICE's own local history only, and this function is only
+ * ever invoked for changes that happened somewhere else (another client's
+ * stroke, or this exact client's OWN already-locally-applied stroke being
+ * confirmed back — either way, re-recording it here would double up this
+ * device's own undo stack for a change it may have already recorded, or
+ * pollute it with a change it never made itself). */
+async function applyTileChangeOnState(
+  state: MapWhiteboardState,
+  x: number,
+  y: number,
+  tilePng: string | null
+): Promise<void> {
+  const key = cellKey(x, y);
+  const px = x * TILE_PX;
+  const py = y * TILE_PX;
+  if (tilePng === null) {
+    state.ctx.clearRect(px, py, TILE_PX, TILE_PX);
+    state.tiles.delete(key);
+    state.texture.needsUpdate = true;
+    return;
+  }
+  const img = await loadTileImage(tilePng);
+  const tileCanvas = document.createElement("canvas");
+  tileCanvas.width = TILE_PX;
+  tileCanvas.height = TILE_PX;
+  const tileCtx = tileCanvas.getContext("2d");
+  if (tileCtx) tileCtx.drawImage(img, 0, 0);
+  state.ctx.clearRect(px, py, TILE_PX, TILE_PX);
+  state.ctx.drawImage(img, px, py);
+  state.tiles.set(key, tileCanvas);
+  state.texture.needsUpdate = true;
+}
+
+/** Full resync (§5.3's "rebuilds the composite canvas from scratch") —
+ * wipes everything first so a cell that used to have ink but was
+ * erased/undone while this client wasn't looking (disconnected, or hasn't
+ * visited this map yet this session) never lingers as a stale leftover,
+ * then redraws exactly the given list. Shared by initial-hydration
+ * (`initialTiles`), map-switch hydration, and reconnect recovery — one
+ * function, three call sites, per this whole feature's own "no special
+ * rendering-side handling" design (§6). */
+async function loadTilesOnState(state: MapWhiteboardState, tiles: readonly WhiteboardTileData[]): Promise<void> {
+  state.ctx.clearRect(0, 0, state.canvas.width, state.canvas.height);
+  state.tiles.clear();
+  await Promise.all(tiles.map((tile) => applyTileChangeOnState(state, tile.x, tile.y, tile.tilePng)));
+  state.texture.needsUpdate = true;
+}
+
+/** Live-tier receiver (§5.1) — draws a remote stroke's very first point
+ * through the identical drawSegment primitive a local pointerdown uses.
+ * Overwrites any stale same-id entry (a start received twice, or a
+ * strokeId collision across an implausibly long session) rather than
+ * erroring — a drawing feature has no reason to be fragile about a
+ * duplicate network message. */
+function applyRemoteStrokeStartOnState(
+  state: MapWhiteboardState,
+  strokeId: string,
+  tool: WhiteboardTool,
+  color: string,
+  point: WhiteboardGridPoint
+): void {
+  const { pixelX, pixelY } = gridPointToPixel(point.u, point.v);
+  const pixel = { x: pixelX, y: pixelY };
+  const touched = new Set<string>();
+  const halfWidthPx = lineWidthPx(tool) / 2;
+  for (const cell of sampleSegmentCells(null, pixel, halfWidthPx)) touched.add(cellKey(cell.x, cell.y));
+  drawSegment(state, tool, color, null, pixel);
+  state.remoteStrokes.set(strokeId, { tool, color, lastPixel: pixel, touched });
+}
+
+/** A receiver that missed the matching start (joined mid-stroke) simply has
+ * no tracked entry for this id — dropped silently, since the persisted
+ * tier's own stroke-end broadcast always corrects the final pixels
+ * regardless (§5.1's "never a wrong FINAL state" guarantee). */
+function applyRemoteStrokePointsOnState(
+  state: MapWhiteboardState,
+  strokeId: string,
+  points: readonly WhiteboardGridPoint[]
+): void {
+  const remote = state.remoteStrokes.get(strokeId);
+  if (!remote) return;
+  const halfWidthPx = lineWidthPx(remote.tool) / 2;
+  for (const point of points) {
+    const { pixelX, pixelY } = gridPointToPixel(point.u, point.v);
+    const pixel = { x: pixelX, y: pixelY };
+    for (const cell of sampleSegmentCells(remote.lastPixel, pixel, halfWidthPx)) remote.touched.add(cellKey(cell.x, cell.y));
+    drawSegment(state, remote.tool, remote.color, remote.lastPixel, pixel);
+    remote.lastPixel = pixel;
+  }
+}
+
+function doUndo(state: MapWhiteboardState): WhiteboardTileUpdate[] {
   const entry = state.undoStack.pop();
-  if (!entry) return;
+  if (!entry) return [];
   const redoCells = new Map<string, HTMLCanvasElement | null>();
+  const changes: WhiteboardTileUpdate[] = [];
   for (const [key, beforeTile] of entry.cells) {
     redoCells.set(key, state.tiles.get(key) ?? null);
     const [xs, ys] = key.split(",");
     restoreTile(state, Number(xs), Number(ys), beforeTile);
+    changes.push({ x: Number(xs), y: Number(ys), tilePng: beforeTile ? tileToBase64(beforeTile) : null });
   }
   state.redoStack.push({ cells: redoCells });
   state.texture.needsUpdate = true;
+  return changes;
 }
 
-function doRedo(state: MapWhiteboardState): void {
+function doRedo(state: MapWhiteboardState): WhiteboardTileUpdate[] {
   const entry = state.redoStack.pop();
-  if (!entry) return;
+  if (!entry) return [];
   const undoCells = new Map<string, HTMLCanvasElement | null>();
+  const changes: WhiteboardTileUpdate[] = [];
   for (const [key, afterTile] of entry.cells) {
     undoCells.set(key, state.tiles.get(key) ?? null);
     const [xs, ys] = key.split(",");
     restoreTile(state, Number(xs), Number(ys), afterTile);
+    changes.push({ x: Number(xs), y: Number(ys), tilePng: afterTile ? tileToBase64(afterTile) : null });
   }
   state.undoStack.push({ cells: undoCells });
   state.texture.needsUpdate = true;
+  return changes;
 }
 
-function doClear(state: MapWhiteboardState): void {
-  if (state.tiles.size === 0) return; // nothing to clear — no pointless empty undo entry
+/** Returns whether anything was actually cleared — `false` means "nothing
+ * to clear", the caller's own signal not to bother persisting/broadcasting
+ * a no-op clear. */
+function doClear(state: MapWhiteboardState): boolean {
+  if (state.tiles.size === 0) return false;
   const before = new Map(state.tiles);
   state.ctx.clearRect(0, 0, state.canvas.width, state.canvas.height);
   state.tiles.clear();
   state.undoStack.push({ cells: before });
   if (state.undoStack.length > HISTORY_LIMIT) state.undoStack.shift();
   state.redoStack = [];
+  state.texture.needsUpdate = true;
+  return true;
+}
+
+/** WHITEBOARD_CLEARED_EVENT receiver — the identical wipe doClear performs,
+ * but never pushes a local undo entry (someone ELSE's clear, per
+ * applyTileChangeOnState's own doc comment on why this file's
+ * network-receiving functions never touch undoStack/redoStack). */
+function clearRemoteState(state: MapWhiteboardState): void {
+  state.ctx.clearRect(0, 0, state.canvas.width, state.canvas.height);
+  state.tiles.clear();
   state.texture.needsUpdate = true;
 }
 
@@ -364,16 +677,22 @@ function applyStrokePoint(stroke: StrokeSession, pixelX: number, pixelY: number)
   stroke.lastPixel = to;
 }
 
-function commitStroke(stroke: StrokeSession): void {
+function commitStroke(stroke: StrokeSession): WhiteboardTileUpdate[] {
+  const changes: WhiteboardTileUpdate[] = [];
   for (const key of stroke.touched) {
     const [xs, ys] = key.split(",");
-    const cropped = cropTile(stroke.state.canvas, Number(xs), Number(ys));
-    if (isTileBlank(cropped)) stroke.state.tiles.delete(key);
+    const x = Number(xs);
+    const y = Number(ys);
+    const cropped = cropTile(stroke.state.canvas, x, y);
+    const blank = isTileBlank(cropped);
+    if (blank) stroke.state.tiles.delete(key);
     else stroke.state.tiles.set(key, cropped);
+    changes.push({ x, y, tilePng: blank ? null : tileToBase64(cropped) });
   }
   stroke.state.undoStack.push({ cells: stroke.before });
   if (stroke.state.undoStack.length > HISTORY_LIMIT) stroke.state.undoStack.shift();
   stroke.state.redoStack = [];
+  return changes;
 }
 
 // Window-level pointer-move/up continuation for an in-progress stroke — the
@@ -439,6 +758,12 @@ export const WhiteboardPlane = forwardRef<WhiteboardHandle, WhiteboardPlaneProps
     onHistoryChange,
     onDebug,
     onCenterProjectedPosition,
+    initialTiles,
+    onLocalStrokeStart,
+    onLocalStrokePoint,
+    onLocalStrokeEnd,
+    onTilesPersist,
+    onClearPersist,
   },
   ref
 ) {
@@ -464,10 +789,20 @@ export const WhiteboardPlane = forwardRef<WhiteboardHandle, WhiteboardPlaneProps
   // going stale.
   const onHistoryChangeRef = useRef(onHistoryChange);
   const onDebugRef = useRef(onDebug);
+  const onLocalStrokeStartRef = useRef(onLocalStrokeStart);
+  const onLocalStrokePointRef = useRef(onLocalStrokePoint);
+  const onLocalStrokeEndRef = useRef(onLocalStrokeEnd);
+  const onTilesPersistRef = useRef(onTilesPersist);
+  const onClearPersistRef = useRef(onClearPersist);
   useEffect(() => {
     onHistoryChangeRef.current = onHistoryChange;
     onDebugRef.current = onDebug;
-  }, [onHistoryChange, onDebug]);
+    onLocalStrokeStartRef.current = onLocalStrokeStart;
+    onLocalStrokePointRef.current = onLocalStrokePoint;
+    onLocalStrokeEndRef.current = onLocalStrokeEnd;
+    onTilesPersistRef.current = onTilesPersist;
+    onClearPersistRef.current = onClearPersist;
+  }, [onHistoryChange, onDebug, onLocalStrokeStart, onLocalStrokePoint, onLocalStrokeEnd, onTilesPersist, onClearPersist]);
 
   const reportHistory = useCallback((s: MapWhiteboardState) => onHistoryChangeRef.current?.(historyOf(s)), []);
   const reportDebug = useCallback((s: MapWhiteboardState) => onDebugRef.current?.(debugOf(s)), []);
@@ -481,29 +816,73 @@ export const WhiteboardPlane = forwardRef<WhiteboardHandle, WhiteboardPlaneProps
     reportDebug(state);
   }, [state, reportHistory, reportDebug]);
 
+  // Hydration (docs/design/whiteboard-drawing-layer.md §5.3) — fires once
+  // per genuinely NEW state object (guarded by `state.hydrated`, not by
+  // this effect's own dependency array, so a later re-render with a new
+  // `initialTiles` array reference for the SAME already-hydrated map can
+  // never clobber this client's own subsequent local edits or live/
+  // persisted-tier updates). `initialTiles` is deliberately read directly
+  // here rather than via a ref: this only ever needs the value current at
+  // the moment a brand new state is created, exactly once.
+  useEffect(() => {
+    if (state.hydrated) return;
+    state.hydrated = true;
+    if (initialTiles && initialTiles.length > 0) {
+      void loadTilesOnState(state, initialTiles).then(() => reportDebug(state));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally NOT reactive to initialTiles; see this effect's own doc comment above.
+  }, [state, reportDebug]);
+
   useImperativeHandle(
     ref,
     () => ({
       undo() {
-        doUndo(state);
+        const changes = doUndo(state);
+        if (changes.length > 0) onTilesPersistRef.current?.(mapId, changes);
         reportHistory(state);
         reportDebug(state);
       },
       redo() {
-        doRedo(state);
+        const changes = doRedo(state);
+        if (changes.length > 0) onTilesPersistRef.current?.(mapId, changes);
         reportHistory(state);
         reportDebug(state);
       },
       clear() {
-        doClear(state);
+        const cleared = doClear(state);
+        if (cleared) onClearPersistRef.current?.(mapId);
         reportHistory(state);
         reportDebug(state);
       },
+      applyRemoteStrokeStart(strokeId, remoteTool, remoteColor, point) {
+        applyRemoteStrokeStartOnState(state, strokeId, remoteTool, remoteColor, point);
+        reportDebug(state);
+      },
+      applyRemoteStrokePoints(strokeId, points) {
+        applyRemoteStrokePointsOnState(state, strokeId, points);
+        reportDebug(state);
+      },
+      applyRemoteStrokeEnd(strokeId) {
+        state.remoteStrokes.delete(strokeId);
+      },
+      applyTileChanges(changes) {
+        void Promise.all(changes.map((change) => applyTileChangeOnState(state, change.x, change.y, change.tilePng))).then(
+          () => reportDebug(state)
+        );
+      },
+      loadTiles(tiles) {
+        void loadTilesOnState(state, tiles).then(() => reportDebug(state));
+      },
+      clearRemote() {
+        clearRemoteState(state);
+        reportDebug(state);
+      },
     }),
-    [state, reportHistory, reportDebug]
+    [state, mapId, reportHistory, reportDebug]
   );
 
   const strokeRef = useRef<StrokeSession | null>(null);
+  const strokeIdRef = useRef<string | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   // Mirrors isDrawing's own two real transitions out to GameTableScene (see
   // onDrawingChange's own doc comment) — the onChairDraggingChange
@@ -520,9 +899,12 @@ export const WhiteboardPlane = forwardRef<WhiteboardHandle, WhiteboardPlaneProps
       const stroke: StrokeSession = { state, tool, color, lastPixel: null, touched: new Set(), before: new Map() };
       applyStrokePoint(stroke, pixelX, pixelY);
       strokeRef.current = stroke;
+      const strokeId = crypto.randomUUID();
+      strokeIdRef.current = strokeId;
+      onLocalStrokeStartRef.current?.(mapId, { strokeId, tool, color, point: pixelToGridPoint(pixelX, pixelY) });
       setIsDrawing(true);
     },
-    [state, tool, color, gridWidth, gridHeight, cellSize]
+    [state, tool, color, gridWidth, gridHeight, cellSize, mapId]
   );
 
   useEffect(() => {
@@ -530,18 +912,24 @@ export const WhiteboardPlane = forwardRef<WhiteboardHandle, WhiteboardPlaneProps
     const canvas = gl.domElement;
     function handleMove(event: PointerEvent) {
       const stroke = strokeRef.current;
-      if (!stroke) return;
+      const strokeId = strokeIdRef.current;
+      if (!stroke || !strokeId) return;
       const point = planePointFromClientXY(camera, canvas, event.clientX, event.clientY, worldY);
       if (!point) return;
       const { pixelX, pixelY } = worldToPixel(point.x, point.z, gridWidth, gridHeight, cellSize);
       applyStrokePoint(stroke, pixelX, pixelY);
+      onLocalStrokePointRef.current?.(mapId, strokeId, pixelToGridPoint(pixelX, pixelY));
     }
     function handleUp() {
       const stroke = strokeRef.current;
+      const strokeId = strokeIdRef.current;
       strokeRef.current = null;
+      strokeIdRef.current = null;
       setIsDrawing(false);
       if (stroke) {
-        commitStroke(stroke);
+        const changes = commitStroke(stroke);
+        if (changes.length > 0) onTilesPersistRef.current?.(mapId, changes);
+        if (strokeId) onLocalStrokeEndRef.current?.(mapId, strokeId);
         reportHistory(stroke.state);
         reportDebug(stroke.state);
       }
@@ -552,7 +940,7 @@ export const WhiteboardPlane = forwardRef<WhiteboardHandle, WhiteboardPlaneProps
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
     };
-  }, [isDrawing, camera, gl, worldY, gridWidth, gridHeight, cellSize, reportHistory, reportDebug]);
+  }, [isDrawing, camera, gl, worldY, gridWidth, gridHeight, cellSize, mapId, reportHistory, reportDebug]);
 
   // Verification-only per-frame projection — the onOwnChairProjectedPosition
   // precedent, generalized to this plane's own fixed local-space center

@@ -25,6 +25,7 @@ import {
   listMonsterStatBlocks,
   listNpcs,
   listRollLog,
+  listWhiteboardTiles,
 } from "@/data-access";
 import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
@@ -198,15 +199,19 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   if (effectiveMapId) {
     const map = await getMap(supabase, effectiveMapId);
     if (map) {
-      const [cells, objects, tokens, lightSources] = await Promise.all([
+      const [cells, objects, tokens, lightSources, whiteboardTiles] = await Promise.all([
         listMapCells(supabase, map.id),
         listMapObjects(supabase, map.id),
         listMapTokens(supabase, map.id),
         // Loaded for the client's per-player vision computation (Prompt 58)
         // — members read the live map's lights under the 0036 RLS.
         listLightSources(supabase, map.id),
+        // Whiteboard drawing layer (Prompt 3, docs/design/whiteboard-drawing-layer.md
+        // §5.3) — member-readable (0058), so the initial SSR render already
+        // shows the DM's drawing with no client-side flash-of-blank-board.
+        listWhiteboardTiles(supabase, map.id),
       ]);
-      initialLiveMap = { map, cells, objects, tokens, lightSources };
+      initialLiveMap = { map, cells, objects, tokens, lightSources, whiteboardTiles };
     }
   }
 

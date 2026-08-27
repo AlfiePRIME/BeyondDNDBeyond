@@ -89,6 +89,25 @@ export function pixelToCell(pixelX: number, pixelY: number): { x: number; y: num
 }
 
 /**
+ * Continuous pixel coordinate to the "grid-space" (u, v) units the live-tier
+ * sync stream transmits over the wire (docs/design/whiteboard-drawing-layer.md
+ * §5.2) — a plain `TILE_PX` division, so a point survives the trip to
+ * another client's own canvas (built at that client's own TILE_PX, always
+ * the same shared constant today, but never assumed to match by value) and
+ * so the wire format never has to change if TILE_PX itself is later tuned.
+ * The exact inverse of gridPointToPixel below.
+ */
+export function pixelToGridPoint(pixelX: number, pixelY: number): { u: number; v: number } {
+  return { u: pixelX / TILE_PX, v: pixelY / TILE_PX };
+}
+
+/** The exact inverse of pixelToGridPoint — a received remote stroke point's
+ * own (u, v) back to this client's local composite-canvas pixel space. */
+export function gridPointToPixel(u: number, v: number): { pixelX: number; pixelY: number } {
+  return { pixelX: u * TILE_PX, pixelY: v * TILE_PX };
+}
+
+/**
  * Every distinct cell a drawn segment from `from` (null for a stroke's very
  * first point, which has no prior segment) to `to` passes over, in pixel
  * space — accumulated into a stroke's own touched-cell set incrementally,

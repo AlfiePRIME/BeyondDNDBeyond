@@ -188,6 +188,13 @@ export {
   type ConcealedPit,
 } from "./concealedPits";
 export {
+  listWhiteboardTiles,
+  saveWhiteboardTiles,
+  clearWhiteboard,
+  type WhiteboardTile,
+  type WhiteboardTileChange,
+} from "./whiteboardTiles";
+export {
   listLightSources,
   createLightSource,
   updateLightSource,

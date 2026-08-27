@@ -60,6 +60,9 @@ import {
   setTokenAllegiance,
   startCombat,
   stopConcentrating,
+  clearWhiteboard,
+  listWhiteboardTiles,
+  saveWhiteboardTiles,
   subscribeToCampaignChanges,
   subscribeToCombatantHiddenFromChanges,
   subscribeToProfileChanges,
@@ -95,6 +98,7 @@ import {
   type SupabaseClient,
   type TokenAllegiance,
   type UiPreferences,
+  type WhiteboardTile,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
@@ -143,7 +147,9 @@ import {
   type SeatOffset,
   type TableLiveMap,
   type TokenSlidePhase,
+  type WhiteboardGridPoint,
   type WhiteboardHandle,
+  type WhiteboardTileUpdate,
   type WhiteboardTool,
 } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
@@ -226,6 +232,34 @@ const SEAT_MOVED_EVENT = "seat-moved";
 // client updates immediately), with the same onReconnect-refetch pairing
 // for a dropped broadcast.
 const DICE_TRAY_PREFERENCE_EVENT = "dice-tray-preference-changed";
+
+// Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md §5,
+// Prompt 3) — the two-tier sync design §3 concluded this feature needs
+// (nothing pre-existing was reusable whole): a LIVE tier, generalizing
+// DICE_ROLLED_EVENT's own ephemeral/no-persistence/no-reconnect shape from a
+// single poke to a stream of small in-progress-stroke deltas, paired with a
+// PERSISTED tier, the exact HANDOUT_EVENT persist-then-broadcast-plus-
+// onReconnect shape, for the durable per-cell result once a stroke/undo/
+// redo/clear completes. A dropped live-tier message only ever costs a
+// momentarily-behind remote view; the persisted tier always re-asserts the
+// authoritative pixels once the gesture completes, so it's never a wrong
+// FINAL state — the same trust split DICE_ROLLED_EVENT + roll_log's
+// postgres_changes feed already establish for a different feature.
+const WHITEBOARD_STROKE_START_EVENT = "whiteboard-stroke-start";
+const WHITEBOARD_STROKE_POINTS_EVENT = "whiteboard-stroke-points";
+const WHITEBOARD_STROKE_END_EVENT = "whiteboard-stroke-end";
+const WHITEBOARD_TILES_CHANGED_EVENT = "whiteboard-tiles-changed";
+const WHITEBOARD_CLEARED_EVENT = "whiteboard-cleared";
+
+// Batching interval for the live tier's own outgoing point stream (§5.2's
+// own "on the order of every 30-50ms" starting-point guidance) — accumulate
+// local pointer-move points here, flush whatever's pending on this
+// interval while a stroke is in progress, and flush any remainder
+// immediately at stroke-end. No existing precedent in this codebase to
+// anchor this to (§3 — nothing here has ever streamed a continuous gesture
+// cross-client before), so this is a reasonable starting point, not a
+// re-derived constant.
+const WHITEBOARD_STROKE_FLUSH_MS = 40;
 
 // Seen-cells memory writes (Prompt 58) are debounced this long past the
 // last newly-perceived cell — movement recomputes visibility far too often
@@ -364,6 +398,65 @@ interface DiceTrayPreferenceChangedPayload {
   preference: DiceTrayModelPreference;
 }
 
+// Whiteboard drawing layer payloads (docs/design/whiteboard-drawing-layer.md
+// §5.2) — every one of them carries mapId, even though the campaign channel
+// already scopes every broadcast to this campaign: the room's realtime
+// channel is shared across every map a campaign has, not scoped per-map (the
+// same CombatPayload-carries-campaignId-on-an-already-campaign-scoped-
+// channel reasoning). A receiver whose own currently-viewed map doesn't
+// match mapId simply ignores the event — this is what keeps per-map
+// independence correct for free.
+
+/** Live tier, stroke start — an ephemeral poke, DICE_ROLLED_EVENT-shaped:
+ * no DB write on this path, no onReconnect pairing for the stream itself,
+ * drop-if-missed (the persisted tier's own stroke-end broadcast always
+ * corrects the final pixels regardless). `point` is in continuous
+ * grid-space (u, v) units (whiteboardMath.ts's pixelToGridPoint), not raw
+ * TILE_PX pixels. */
+interface WhiteboardStrokeStartPayload {
+  mapId: string;
+  strokeId: string;
+  tool: WhiteboardTool;
+  color: string;
+  point: WhiteboardGridPoint;
+}
+
+/** Live tier, in-progress points — a batch accumulated since the last send
+ * (WHITEBOARD_STROKE_FLUSH_MS), not one broadcast per pointer-move tick. */
+interface WhiteboardStrokePointsPayload {
+  mapId: string;
+  strokeId: string;
+  points: WhiteboardGridPoint[];
+}
+
+/** Live tier, stroke end — lets a receiver drop its own per-strokeId
+ * bookkeeping (WhiteboardPlane's own remoteStrokes map) once the gesture is
+ * over; carries no pixels of its own, since the persisted tier's own
+ * WHITEBOARD_TILES_CHANGED_EVENT (below) already supplies the authoritative
+ * final result. */
+interface WhiteboardStrokeEndPayload {
+  mapId: string;
+  strokeId: string;
+}
+
+/** Persisted tier — the HANDOUT_EVENT shape: the DB is written first
+ * (saveWhiteboardTiles), then this broadcasts the exact already-durable
+ * per-cell result, so receivers never need a follow-up read. `tilePng: null`
+ * means that cell was fully erased (the sparse-storage convention — no row
+ * is the same as no ink). */
+interface WhiteboardTilesChangedPayload {
+  mapId: string;
+  tiles: WhiteboardTileUpdate[];
+}
+
+/** Persisted tier, "Clear" — its own event rather than an instance of
+ * WHITEBOARD_TILES_CHANGED_EVENT listing every deleted cell, since a clear
+ * can mean deleting potentially hundreds of rows; a single {mapId} poke is
+ * both cheaper to send and clearer in intent (§5.2). */
+interface WhiteboardClearedPayload {
+  mapId: string;
+}
+
 /** SEAT_MOVED_EVENT's payload — the exact already-persisted offset
  * (handleChairDragEnd's own resolveChairDrop result), the TokenPayload
  * shape: a receiver applies it directly, no follow-up read needed. */
@@ -385,6 +478,12 @@ export interface LiveMapData {
    * changing; the rows themselves refresh with the rest of the map
    * (initial load, live-map switches, reconnects). */
   lightSources: LightSource[];
+  /** The whiteboard drawing layer's own durable per-cell tiles
+   * (docs/design/whiteboard-drawing-layer.md §5.3, Prompt 3) —
+   * member-readable (0058), fetched alongside everything else in this
+   * bundle so a map switch/reconnect hydrates the drawing exactly like
+   * every other piece of this map's state, with no separate fetch path. */
+  whiteboardTiles: WhiteboardTile[];
 }
 
 /** TOKEN_SELECTED_EVENT's payload: `tokenId: null` clears — a broadcast
@@ -1507,6 +1606,130 @@ export function GameRoom({
   const handleWhiteboardRedo = useCallback(() => whiteboardHandleRef.current?.redo(), []);
   const handleWhiteboardClear = useCallback(() => whiteboardHandleRef.current?.clear(), []);
 
+  // Whiteboard drawing layer, Prompt 3 — persistence and live sync
+  // (docs/design/whiteboard-drawing-layer.md §5). Everything below is the
+  // orchestration layer: WhiteboardPlane itself stays data-access/realtime-
+  // free (per this codebase's own module boundary — scene-3d never imports
+  // @/data-access or @/realtime) and only ever reports what it locally
+  // knows the instant it knows it; GameRoom is what actually talks to the
+  // database and the campaign channel.
+
+  // Live tier (§5.1/§5.2) — a small batching buffer for the currently
+  // in-progress LOCAL stroke's own outgoing points, flushed on
+  // WHITEBOARD_STROKE_FLUSH_MS while drawing and immediately at stroke-end.
+  // Ref, not state: this is pure outgoing-wire bookkeeping, never rendered.
+  const whiteboardActiveStrokeRef = useRef<{ mapId: string; strokeId: string } | null>(null);
+  const whiteboardPendingPointsRef = useRef<WhiteboardGridPoint[]>([]);
+  const whiteboardFlushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const flushWhiteboardPoints = useCallback(() => {
+    const active = whiteboardActiveStrokeRef.current;
+    const points = whiteboardPendingPointsRef.current;
+    if (!active || points.length === 0) return;
+    whiteboardPendingPointsRef.current = [];
+    void campaignChannelRef.current?.publish<WhiteboardStrokePointsPayload>(WHITEBOARD_STROKE_POINTS_EVENT, {
+      mapId: active.mapId,
+      strokeId: active.strokeId,
+      points,
+    });
+  }, []);
+
+  const handleWhiteboardLocalStrokeStart = useCallback(
+    (
+      mapId: string,
+      info: { strokeId: string; tool: WhiteboardTool; color: string; point: WhiteboardGridPoint }
+    ) => {
+      whiteboardActiveStrokeRef.current = { mapId, strokeId: info.strokeId };
+      whiteboardPendingPointsRef.current = [];
+      if (whiteboardFlushTimerRef.current) clearInterval(whiteboardFlushTimerRef.current);
+      whiteboardFlushTimerRef.current = setInterval(flushWhiteboardPoints, WHITEBOARD_STROKE_FLUSH_MS);
+      void campaignChannelRef.current?.publish<WhiteboardStrokeStartPayload>(WHITEBOARD_STROKE_START_EVENT, {
+        mapId,
+        strokeId: info.strokeId,
+        tool: info.tool,
+        color: info.color,
+        point: info.point,
+      });
+    },
+    [flushWhiteboardPoints]
+  );
+
+  const handleWhiteboardLocalStrokePoint = useCallback((mapId: string, strokeId: string, point: WhiteboardGridPoint) => {
+    const active = whiteboardActiveStrokeRef.current;
+    if (!active || active.mapId !== mapId || active.strokeId !== strokeId) return;
+    whiteboardPendingPointsRef.current.push(point);
+  }, []);
+
+  const handleWhiteboardLocalStrokeEnd = useCallback(
+    (mapId: string, strokeId: string) => {
+      if (whiteboardFlushTimerRef.current) {
+        clearInterval(whiteboardFlushTimerRef.current);
+        whiteboardFlushTimerRef.current = null;
+      }
+      flushWhiteboardPoints();
+      const active = whiteboardActiveStrokeRef.current;
+      whiteboardActiveStrokeRef.current = null;
+      if (active && active.strokeId === strokeId) {
+        void campaignChannelRef.current?.publish<WhiteboardStrokeEndPayload>(WHITEBOARD_STROKE_END_EVENT, {
+          mapId,
+          strokeId,
+        });
+      }
+    },
+    [flushWhiteboardPoints]
+  );
+
+  // Tears down a stray flush timer if the whole room unmounts mid-stroke —
+  // an edge case (navigating away while the DM happens to be mid-drag), but
+  // a leaked setInterval would otherwise keep firing (and reading refs off
+  // an unmounted component's own closure) forever.
+  useEffect(() => {
+    return () => {
+      if (whiteboardFlushTimerRef.current) clearInterval(whiteboardFlushTimerRef.current);
+    };
+  }, []);
+
+  // Persisted tier (§5.1) — a stroke/undo/redo's own definitive per-cell
+  // result: write it durably FIRST, then broadcast the exact already-durable
+  // value (the HANDOUT_EVENT shape), so receivers who already rendered the
+  // live stream correctly need nothing further, and receivers who missed
+  // part of it get corrected without a follow-up read. Best-effort: a failed
+  // background save just means this DM's own local ink isn't durable yet
+  // (the same posture flushSeenCells' own catch already takes for a
+  // different background-write feature) — nothing else in this app surfaces
+  // a toast for this class of failure, and retrying would need replaying the
+  // exact touched tiles, not worth building for v1.
+  const handleWhiteboardTilesPersist = useCallback(
+    (mapId: string, changes: readonly WhiteboardTileUpdate[]) => {
+      if (changes.length === 0) return;
+      const supabase = createBrowserSupabaseClient();
+      void (async () => {
+        try {
+          await saveWhiteboardTiles(supabase, mapId, changes);
+          await campaignChannelRef.current?.publish<WhiteboardTilesChangedPayload>(WHITEBOARD_TILES_CHANGED_EVENT, {
+            mapId,
+            tiles: [...changes],
+          });
+        } catch {
+          // best-effort — see this handler's own doc comment.
+        }
+      })();
+    },
+    []
+  );
+
+  const handleWhiteboardClearPersist = useCallback((mapId: string) => {
+    const supabase = createBrowserSupabaseClient();
+    void (async () => {
+      try {
+        await clearWhiteboard(supabase, mapId);
+        await campaignChannelRef.current?.publish<WhiteboardClearedPayload>(WHITEBOARD_CLEARED_EVENT, { mapId });
+      } catch {
+        // best-effort — see handleWhiteboardTilesPersist's own doc comment.
+      }
+    })();
+  }, []);
+
   // Updates BOTH the campaign-wide token cache (campaignTokensState/Ref)
   // AND, iff relevant, the currently-loaded map's own token list
   // (liveMap/liveMapRef) — one function, called from every token
@@ -1742,13 +1965,18 @@ export function GameRoom({
     if (mapId) {
       const map = await getMap(supabase, mapId);
       if (!map) return;
-      const [cells, objects, tokens, lightSources] = await Promise.all([
+      const [cells, objects, tokens, lightSources, whiteboardTiles] = await Promise.all([
         listMapCells(supabase, mapId),
         listMapObjects(supabase, mapId),
         listMapTokens(supabase, mapId),
         listLightSources(supabase, mapId),
+        // Whiteboard drawing layer (Prompt 3): one more thing this map's own
+        // full bundle carries, so switching to/reloading a map hydrates its
+        // drawing exactly like every other piece of its state (docs/design/
+        // whiteboard-drawing-layer.md §5.3 — "no new reconnect concept").
+        listWhiteboardTiles(supabase, mapId),
       ]);
-      next = { map, cells, objects, tokens, lightSources };
+      next = { map, cells, objects, tokens, lightSources, whiteboardTiles };
     }
     if (seq !== refreshSeqRef.current) return;
     liveMapRef.current = next;
@@ -2033,6 +2261,67 @@ export function GameRoom({
       if (fresh) setDiceTrayPreferences(fresh);
     });
 
+    // Whiteboard drawing layer (Prompt 3) — every handler below filters on
+    // `payload.mapId !== liveMapRef.current?.map.id` first (§5.2's own
+    // per-map-independence wording: "a receiver whose own currently-viewed
+    // map doesn't match mapId simply ignores the event"), then forwards
+    // straight to WhiteboardPlane's own imperative handle, which is the
+    // ONLY thing that knows how to draw a remote stroke/apply a tile
+    // change/rebuild the composite canvas. liveMapRef (not liveMap state)
+    // deliberately, since these fire from a long-lived channel-subscription
+    // closure, not a per-render one — the exact same reasoning every other
+    // handler in this effect already uses it for.
+    const unsubscribeWhiteboardStrokeStart = channel.subscribe<WhiteboardStrokeStartPayload>(
+      WHITEBOARD_STROKE_START_EVENT,
+      (payload) => {
+        if (payload.mapId !== liveMapRef.current?.map.id) return;
+        whiteboardHandleRef.current?.applyRemoteStrokeStart(payload.strokeId, payload.tool, payload.color, payload.point);
+      }
+    );
+    const unsubscribeWhiteboardStrokePoints = channel.subscribe<WhiteboardStrokePointsPayload>(
+      WHITEBOARD_STROKE_POINTS_EVENT,
+      (payload) => {
+        if (payload.mapId !== liveMapRef.current?.map.id) return;
+        whiteboardHandleRef.current?.applyRemoteStrokePoints(payload.strokeId, payload.points);
+      }
+    );
+    const unsubscribeWhiteboardStrokeEnd = channel.subscribe<WhiteboardStrokeEndPayload>(
+      WHITEBOARD_STROKE_END_EVENT,
+      (payload) => {
+        if (payload.mapId !== liveMapRef.current?.map.id) return;
+        whiteboardHandleRef.current?.applyRemoteStrokeEnd(payload.strokeId);
+      }
+    );
+    const unsubscribeWhiteboardTilesChanged = channel.subscribe<WhiteboardTilesChangedPayload>(
+      WHITEBOARD_TILES_CHANGED_EVENT,
+      (payload) => {
+        if (payload.mapId !== liveMapRef.current?.map.id) return;
+        whiteboardHandleRef.current?.applyTileChanges(payload.tiles);
+      }
+    );
+    const unsubscribeWhiteboardCleared = channel.subscribe<WhiteboardClearedPayload>(
+      WHITEBOARD_CLEARED_EVENT,
+      (payload) => {
+        if (payload.mapId !== liveMapRef.current?.map.id) return;
+        whiteboardHandleRef.current?.clearRemote();
+      }
+    );
+    // Same dropped-broadcast reasoning as every other reconnect handler in
+    // this effect: a live-tier point stream mid-disconnect is simply gone
+    // (harmless — see WHITEBOARD_STROKE_START_EVENT's own doc comment), but
+    // a PERSISTED-tier change (a stroke that completed, an undo/redo/clear)
+    // sent while disconnected needs actual recovery — re-fetch every
+    // map_whiteboard_tiles row for whichever map this client currently has
+    // open and rebuild the composite canvas from scratch (§5.3), the exact
+    // "DB is the source of truth after a drop" reasoning as TOKEN_EVENT's
+    // own live-map reconnect handler above.
+    const unsubscribeWhiteboardReconnect = channel.onReconnect(async () => {
+      const mapId = liveMapRef.current?.map.id ?? null;
+      if (!mapId) return;
+      const tiles = await listWhiteboardTiles(supabase, mapId).catch(() => null);
+      if (tiles) whiteboardHandleRef.current?.loadTiles(tiles);
+    });
+
     return () => {
       unsubscribeLiveMap();
       unsubscribeTrigger();
@@ -2050,6 +2339,12 @@ export function GameRoom({
       unsubscribeSeatMovedReconnect();
       unsubscribeDiceTrayPreference();
       unsubscribeDiceTrayPreferenceReconnect();
+      unsubscribeWhiteboardStrokeStart();
+      unsubscribeWhiteboardStrokePoints();
+      unsubscribeWhiteboardStrokeEnd();
+      unsubscribeWhiteboardTilesChanged();
+      unsubscribeWhiteboardCleared();
+      unsubscribeWhiteboardReconnect();
       campaignChannelRef.current = null;
       void channel.leave();
     };
@@ -3746,6 +4041,11 @@ export function GameRoom({
       id: liveMap.map.id,
       gridWidth: liveMap.map.grid_width,
       gridHeight: liveMap.map.grid_height,
+      // Whiteboard drawing layer (Prompt 3) — a plain passthrough (no
+      // per-viewer masking of its own: the owner's decision is that players
+      // see the DM's ink live with no reveal gate, so unlike cells/objects/
+      // tokens above there is no tier-based filtering to apply here).
+      whiteboardTiles: liveMap.whiteboardTiles,
       cells: buildDenseCells(liveMap.map.grid_width, liveMap.map.grid_height, overlay).flatMap(
         (cell) => {
           if (!tierByCell) return [withHighlight(cell)];
@@ -4108,6 +4408,11 @@ export function GameRoom({
           onWhiteboardDebug={setWhiteboardDebug}
           onWhiteboardCenterProjectedPosition={setWhiteboardCenterScreen}
           onWhiteboardHandleReady={handleWhiteboardHandleReady}
+          onWhiteboardLocalStrokeStart={handleWhiteboardLocalStrokeStart}
+          onWhiteboardLocalStrokePoint={handleWhiteboardLocalStrokePoint}
+          onWhiteboardLocalStrokeEnd={handleWhiteboardLocalStrokeEnd}
+          onWhiteboardTilesPersist={handleWhiteboardTilesPersist}
+          onWhiteboardClearPersist={handleWhiteboardClearPersist}
         />
         {/* Prompt 8b: one personal dice tray per CONNECTED member —
             replacing the old single shared corner tray plus the DM's
@@ -4219,19 +4524,24 @@ export function GameRoom({
         })}
       </div>
       {/* Hidden render-state mirror for scripts/db/verify-whiteboard-drawing.mjs
-          (docs/design/whiteboard-drawing-layer.md, Prompt 2) — WebGL has no
-          DOM of its own for a test to inspect the composite canvas's actual
-          pixels, so `tileKeys`/`tileCount` (WhiteboardPlane's own onDebug)
-          stand in for "does a real drawn/erased/cleared mark exist right
-          now", and `centerScreenPoint` (onCenterProjectedPosition) gives a
-          real click target instead of a blind canvas scan. `drawMode`/
-          `tool`/`color`/`height`/`canUndo`/`canRedo` are this client's own
-          real toolbar state, present for every client (not DM-gated) purely
-          for mirror simplicity — a player's client always has drawMode
-          false and an always-disabled toolbar, since MapPanel never renders
-          the toggle for them at all. */}
+          (docs/design/whiteboard-drawing-layer.md, Prompts 2 and 3) — WebGL
+          has no DOM of its own for a test to inspect the composite canvas's
+          actual pixels, so `tileKeys`/`tileCount` (WhiteboardPlane's own
+          onDebug) stand in for "does a real drawn/erased/cleared mark exist
+          right now", and `centerScreenPoint` (onCenterProjectedPosition)
+          gives a real click target instead of a blind canvas scan.
+          `drawMode`/`tool`/`color`/`height`/`canUndo`/`canRedo` are this
+          client's own real toolbar state, present for every client (not
+          DM-gated) purely for mirror simplicity — a player's client always
+          has drawMode false and an always-disabled toolbar, since MapPanel
+          never renders the toggle for them at all. `mapId` (Prompt 3) is
+          this client's own CURRENTLY VIEWED map — needed for a real
+          multi-client per-map-independence test to confirm a player's own
+          tileKeys/tileCount genuinely reflect a DIFFERENT map's board than
+          the DM's, not just happen to already be empty. */}
       <div data-testid="whiteboard-state" hidden>
         {JSON.stringify({
+          mapId: liveMap?.map.id ?? null,
           drawMode,
           tool: whiteboardTool,
           color: whiteboardColor,
