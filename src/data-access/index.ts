@@ -278,6 +278,12 @@ export {
   type MonsterTemplate,
 } from "./monsterTemplates";
 export {
+  listMonsterTemplateOverridesForCampaign,
+  setMonsterTemplateOverride,
+  deleteMonsterTemplateOverride,
+  type MonsterTemplateOverride,
+} from "./monsterTemplateOverrides";
+export {
   createOpportunityAttacks,
   listOpportunityAttacks,
   resolveOpportunityAttack,

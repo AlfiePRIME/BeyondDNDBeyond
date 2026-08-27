@@ -26,6 +26,7 @@ import {
   listMapTokens,
   listMapTokensForCampaign,
   listMonsterStatBlocks,
+  listMonsterTemplateOverridesForCampaign,
   listMonsterTemplates,
   listNpcs,
   listRollLog,
@@ -96,6 +97,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     initialChatMessages,
     initialStatBlocks,
     initialMonsterTemplates,
+    initialTemplateOverrides,
     rosterNpcs,
     dmNoteRows,
     initialLorePages,
@@ -138,6 +140,18 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // user, but no non-DM surface reads it today, so there's no point
     // fetching it for a player).
     currentUserIsDM ? listMonsterTemplates(supabase) : Promise.resolve([]),
+    // Weather & Enemies C7: this campaign's own template-model overrides
+    // (0075) — the SAME DM-gated fetch convention as initialMonsterTemplates
+    // immediately above (0075's own SELECT policy is actually open to any
+    // campaign member, but no non-DM surface reads it today either, for the
+    // exact same reason: MonsterPanel's override upload UI is DM-only). See
+    // GameRoom.tsx's own initialTemplateOverrides/initialMonsterTemplates
+    // doc comments for the resulting pre-existing player-visibility gap
+    // this inherits (only the DM's own view resolves a template's model at
+    // all today, override or not).
+    currentUserIsDM
+      ? listMonsterTemplateOverridesForCampaign(supabase, campaignId)
+      : Promise.resolve([]),
     // The narrative roster, only for the DM's book's Enemies (MonsterPanel)
     // name pre-fill; players never see the book, so no point fetching.
     currentUserIsDM ? listNpcs(supabase, campaignId) : Promise.resolve([]),
@@ -272,6 +286,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       characters={characters}
       initialStatBlocks={initialStatBlocks}
       initialMonsterTemplates={initialMonsterTemplates}
+      initialTemplateOverrides={initialTemplateOverrides}
       rosterNpcs={rosterNpcs}
       initialHandouts={initialHandouts}
       initialCombat={initialCombat}
