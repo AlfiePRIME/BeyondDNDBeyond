@@ -7,6 +7,8 @@ export {
   type GameTableSceneProps,
   type TableLiveMap,
   type DayNightMode,
+  type WeatherKind,
+  resolveSceneFog,
 } from "./GameTableScene";
 export { type TokenSlidePhase } from "./useTokenSlide";
 export {

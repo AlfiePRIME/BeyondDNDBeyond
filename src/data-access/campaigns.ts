@@ -22,10 +22,23 @@ export interface Campaign {
   /** Purely cosmetic 3D-table lighting preset (Phase 2 of the Game Room
    * ambiance plan) — unrelated to the per-cell vision/light-level system. */
   day_night_mode: DayNightMode;
+  /** Current campaign weather (Weather & Enemies C1), the day/night-mode
+   * shape exactly: a plain campaigns column, DM-only at the RLS layer via
+   * the same blanket UPDATE policy. Only 'clear' and 'fog' render anything
+   * as of C1 — rain/thunderstorm/firestorm/acid_storm are reserved values
+   * later prompts (C2-C4) build their own visual effects on top of. */
+  weather_kind: WeatherKind;
+  /** Only meaningful for 'firestorm'/'acid_storm' (C4): whether the DM's
+   * periodic-damage timer is armed for the current weather. Always false
+   * (and inert) for every other weather_kind, including this prompt's own
+   * 'clear'/'fog'. */
+  weather_mechanical: boolean;
   created_at: string;
 }
 
 export type DayNightMode = "day" | "night";
+
+export type WeatherKind = "clear" | "fog" | "rain" | "thunderstorm" | "firestorm" | "acid_storm";
 
 export type CampaignRole = "dm" | "player";
 
@@ -333,6 +346,32 @@ export async function setDayNightMode(
 
   if (error) throw error;
   if (count === 0) throw new Error("Only the campaign's DM can change the table's lighting.");
+}
+
+/**
+ * Sets the campaign's current weather (Weather & Enemies C1) — the
+ * setDayNightMode shape exactly: a plain column write through campaigns'
+ * existing UPDATE RLS (0011, DM-only) with the same zero-rows-affected
+ * detection, no new policy needed. `mechanical` is only meaningful for
+ * 'firestorm'/'acid_storm' (C4's periodic-damage toggle) but is always
+ * written alongside `kind` — the DM's book presents both as one control, and
+ * a stale mechanical flag left on from a previous firestorm should never
+ * silently survive a switch to a weather kind it doesn't apply to. Live sync
+ * rides subscribeToCampaignChanges below, same as day_night_mode.
+ */
+export async function setWeather(
+  supabase: SupabaseClient,
+  campaignId: string,
+  kind: WeatherKind,
+  mechanical: boolean
+): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaigns")
+    .update({ weather_kind: kind, weather_mechanical: mechanical }, { count: "exact" })
+    .eq("id", campaignId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can change the weather.");
 }
 
 /**

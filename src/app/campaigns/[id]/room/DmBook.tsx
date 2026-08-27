@@ -13,6 +13,7 @@ import type {
   MonsterStatBlock,
   Npc,
   RollLogEntry,
+  WeatherKind,
 } from "@/data-access";
 import { DmNotes } from "../dm-notes/DmNotes";
 import type { RoomMember } from "./avatar-url";
@@ -32,6 +33,20 @@ const PAGES: { id: BookPage; label: string }[] = [
   { id: "lore", label: "Lore" },
   { id: "dayNight", label: "Day/Night" },
   { id: "activity", label: "Activity" },
+];
+
+/** Weather & Enemies C1: every weather_kind the schema's CHECK constraint
+ * allows. Offered here from day one even though only 'clear'/'fog' render
+ * anything yet — later prompts (C2 rain/thunderstorm, C4 firestorm/acid
+ * storm) add their own visual effects on top of this same picker without
+ * needing new UI wiring. */
+const WEATHER_OPTIONS: { id: WeatherKind; label: string }[] = [
+  { id: "clear", label: "☀️ Clear" },
+  { id: "fog", label: "🌫️ Fog" },
+  { id: "rain", label: "🌧️ Rain" },
+  { id: "thunderstorm", label: "⛈️ Thunderstorm" },
+  { id: "firestorm", label: "🔥 Firestorm" },
+  { id: "acid_storm", label: "☠️ Acid Storm" },
 ];
 
 /**
@@ -67,6 +82,15 @@ const PAGES: { id: BookPage; label: string }[] = [
  * DM-only feed of interaction_events (who triggered/took which tagged
  * object) and recent roll_log damage events — never shown to players, same
  * as every other tab in this book.
+ *
+ * Weather & Enemies C1 adds a Weather picker as a SECTION of this same
+ * Day/Night page (not its own tab) — both are cosmetic 3D-table scene
+ * controls a DM sets once and rarely revisits, so sharing one page keeps
+ * the book's tab count from growing for every small ambiance knob. Only
+ * 'clear'/'fog' render anything different as of this prompt (see
+ * GameTableScene's resolveSceneFog); every other option is offered from
+ * day one since the schema already allows them, with C2-C4 adding their
+ * own real effects on top later.
  */
 export function DmBook({
   // Closing back to the 3D book's closed state.
@@ -100,6 +124,11 @@ export function DmBook({
   dayNightBusy,
   dayNightError,
   onToggleDayNight,
+  // Weather (Weather & Enemies C1)
+  weatherKind,
+  weatherBusy,
+  weatherError,
+  onSetWeather,
   // Activity (DmBookActivityPage)
   initialInteractionEvents,
   initialRolls,
@@ -144,6 +173,15 @@ export function DmBook({
   dayNightBusy: boolean;
   dayNightError: string | null;
   onToggleDayNight: () => void;
+  /** campaigns.weather_kind, live-synced (Weather & Enemies C1). */
+  weatherKind: WeatherKind;
+  weatherBusy: boolean;
+  weatherError: string | null;
+  /** Always fires with BOTH kind and mechanical together — see setWeather's
+   * own doc comment on why mechanical always travels with kind. This
+   * prompt's own picker only ever calls it with `mechanical: false` (no UI
+   * for the mechanical toggle yet — that's C4's own addition). */
+  onSetWeather: (kind: WeatherKind, mechanical: boolean) => void;
   /** interaction_events at load time (DM-only per its RLS) — see
    * DmBookActivityPage's own doc comment for how this stays live. */
   initialInteractionEvents: InteractionEvent[];
@@ -259,6 +297,35 @@ export function DmBook({
             {dayNightError ? (
               <p role="alert" className={roomStyles.errorText} data-testid="day-night-error">
                 {dayNightError}
+              </p>
+            ) : null}
+            <span className={roomStyles.panelLabel}>Weather</span>
+            <p className={styles.dayNightHint}>
+              Sets the current weather for the whole party. Only Clear and Fog have a visible
+              effect for now — Rain, Thunderstorm, Firestorm, and Acid Storm are coming soon.
+            </p>
+            <div className={roomStyles.modeToggle} role="group" aria-label="Weather">
+              {WEATHER_OPTIONS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={[roomStyles.modeButton, weatherKind === option.id ? roomStyles.modeButtonActive : ""]
+                    .filter(Boolean)
+                    .join(" ")}
+                  aria-pressed={weatherKind === option.id}
+                  disabled={weatherBusy}
+                  onClick={() => {
+                    if (weatherKind !== option.id) onSetWeather(option.id, false);
+                  }}
+                  data-testid={`weather-select-${option.id}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            {weatherError ? (
+              <p role="alert" className={roomStyles.errorText} data-testid="weather-error">
+                {weatherError}
               </p>
             ) : null}
           </div>
