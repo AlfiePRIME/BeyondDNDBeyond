@@ -174,6 +174,7 @@ describe("data-access module", () => {
         avatar_ref: null,
         created_at: "",
         ui_preferences: { panelLayout: {} },
+        is_admin: false,
       })
     ).toBe(false);
     expect(
@@ -184,6 +185,7 @@ describe("data-access module", () => {
         avatar_ref: null,
         created_at: "",
         ui_preferences: { panelLayout: {} },
+        is_admin: false,
       })
     ).toBe(false);
   });
@@ -197,6 +199,7 @@ describe("data-access module", () => {
         avatar_ref: null,
         created_at: "",
         ui_preferences: { panelLayout: {} },
+        is_admin: false,
       })
     ).toBe(true);
   });
