@@ -47,6 +47,7 @@ import {
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
+  isBuildingPresetUrl,
   isWallFamilyUrl,
   MapEditorScene,
   resolveWallMountOffset,
@@ -1978,6 +1979,38 @@ export function MapEditor({
     [map.grid_width, map.grid_height, overlay, preview]
   );
 
+  const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
+  // Stored forward-direction correction per asset (model_orientation, see
+  // docs/design/model-orientation-and-posing.md §8) — same id-keyed map
+  // shape as assetUrlById, read alongside it below.
+  const assetForwardOffsetById = useMemo(
+    () => new Map(assets.map((asset) => [asset.id, asset.forwardOffsetDeg])),
+    [assets]
+  );
+
+  // Map Editor Batch A8b: which placed BUILDING-preset objects already have
+  // a transition authored on their own cell, so a DM populating a town map
+  // can see at a glance which buildings still need linking (rendered as a
+  // small 3D badge, and mirrored into editorSurfaceDebug below for
+  // verification — a WebGL canvas has no DOM of its own to inspect).
+  // map_transitions is purely cell-anchored (not object-anchored, per the
+  // project owner's decision — see mapTransitions.ts's own doc comment), and
+  // every A8a building preset auto-normalizes to a single-cell footprint
+  // (0066_building_presets.sql), so "does this building have a transition"
+  // reduces to "does a transition exist at exactly this object's own (x,y)"
+  // — no separate multi-cell-footprint lookup needed. Non-building objects
+  // are simply absent from this map, not present with some "n/a" value —
+  // ObjectMarker renders no badge at all for those.
+  const buildingLinkStatusByObjectId = useMemo(() => {
+    const linkedCellKeys = new Set(transitions.map((t) => cellKey(t.from_x, t.from_y)));
+    const statusById: Record<string, "linked" | "unlinked"> = {};
+    for (const object of objects) {
+      if (!isBuildingPresetUrl(assetUrlById.get(object.asset_id) ?? null)) continue;
+      statusById[object.id] = linkedCellKeys.has(cellKey(object.x, object.y)) ? "linked" : "unlinked";
+    }
+    return statusById;
+  }, [objects, assetUrlById, transitions]);
+
   // Hidden render-state mirror for verify-void-terrain.mjs/
   // verify-ground-types.mjs (the Game Room's vision-state precedent): the
   // WebGL scene has no DOM to locate, and this cells array IS the render
@@ -2012,17 +2045,12 @@ export function MapEditor({
         pitCells: cells
           .filter((cell) => cell.terrain === "pit")
           .map((cell) => ({ key: cellKey(cell.x, cell.y), elevation: cell.elevation })),
+        // Map Editor Batch A8b: mirrors buildingLinkStatusByObjectId exactly
+        // — see that memo's own doc comment for why a placed building's
+        // link-badge state has to be read this way in a real-browser check.
+        buildingLinkStatusByObjectId,
       }),
-    [map.id, cells]
-  );
-
-  const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
-  // Stored forward-direction correction per asset (model_orientation, see
-  // docs/design/model-orientation-and-posing.md §8) — same id-keyed map
-  // shape as assetUrlById, read alongside it below.
-  const assetForwardOffsetById = useMemo(
-    () => new Map(assets.map((asset) => [asset.id, asset.forwardOffsetDeg])),
-    [assets]
+    [map.id, cells, buildingLinkStatusByObjectId]
   );
 
   // Map Editor Batch A7: MapSurface's own onObjectHover (piggybacking on the
@@ -2114,6 +2142,7 @@ export function MapEditor({
           url: assetUrlById.get(object.asset_id) ?? null,
           forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
           tint: object.tint,
+          linkStatus: buildingLinkStatusByObjectId[object.id],
         };
       }),
       ...(preview?.objects.map((object) => ({
@@ -2127,7 +2156,7 @@ export function MapEditor({
         ghost: true,
       })) ?? []),
     ];
-  }, [objects, overlay, preview, assetUrlById, assetForwardOffsetById]);
+  }, [objects, overlay, preview, assetUrlById, assetForwardOffsetById, buildingLinkStatusByObjectId]);
 
   async function handleSave() {
     if (dirty.size === 0 || saving) return;
