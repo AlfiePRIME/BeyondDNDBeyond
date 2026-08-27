@@ -1,11 +1,20 @@
 import type {
+  Character,
   CombatCombatant,
   CombatantCondition,
   LightSource,
   MapObject,
+  MapObjectItem,
   MapToken,
 } from "@/data-access";
-import { CONDITION_BY_KEY, type ConditionKey, type ResolvedLightSource } from "@/rules-engine";
+import {
+  CONDITION_BY_KEY,
+  gridCellDistance,
+  passiveScore,
+  type ConditionKey,
+  type GridPoint,
+  type ResolvedLightSource,
+} from "@/rules-engine";
 
 // Per-player vision support for the Game Room (Prompt 58): the pure
 // app-layer glue between live map/combat state and the rules engine's
@@ -103,4 +112,51 @@ export function visionBlockedForCharacter(
   const combatant = combatants.find((candidate) => candidate.character_id === characterId);
   if (!combatant) return false;
   return visionBlockedForCombatant(conditions, combatant.id);
+}
+
+// Hidden items with passive-Perception reveal (Map Editor Batch A5): unlike
+// combatant_hidden_from (a real roll, persisted because it must survive
+// until something explicitly reveals it), an item's hidden_dc is reveal-by-
+// computation — a character's passive Perception is fully determined by
+// their own already-loaded ability scores/proficiencies/level, so there is
+// nothing to store per (item, character) pair, only something to compute,
+// fresh, every render. This is presentation masking in the Game Room, the
+// exact same posture hiddenFrom.ts's own top comment describes for "you
+// don't see a token hidden from you" — NOT an RLS concern (0061's own
+// migration comment: a member can already read a chest item's hidden_dc
+// column like any other column on an item they're allowed to read at all).
+
+/**
+ * "Near" a container, simplified to cell-adjacency — the container's own
+ * cell plus its 8 surrounding cells (gridCellDistance, i.e. Chebyshev
+ * distance, <= 1) — rather than a new distance/line-of-sight concept. A
+ * deliberate simplification (see this feature's own prompt notes): nothing
+ * elsewhere in the Game Room already models a finer-grained "how close is
+ * close enough to notice something small" concept to reuse instead.
+ */
+export function isNearContainer(containerCell: GridPoint, viewerCell: GridPoint): boolean {
+  return gridCellDistance(containerCell, viewerCell) <= 1;
+}
+
+/**
+ * Whether ONE specific item is visible to ONE specific character —
+ * independently of every other character who might also be looking at the
+ * same container, matching hiddenFrom's per-viewer shape rather than
+ * concealed_pits' single global reveal flag (two characters can have very
+ * different passive Perception scores). `item.hidden_dc === null` is A4's
+ * original always-visible-once-opened behavior, unconditionally — `near`
+ * (see isNearContainer) is checked before passive Perception is even
+ * computed, so a character far from the container never sees a hidden item
+ * no matter how perceptive they are.
+ */
+export function isItemVisibleToCharacter(
+  item: MapObjectItem,
+  character: Character,
+  near: boolean
+): boolean {
+  if (item.hidden_dc === null) return true;
+  if (!near) return false;
+  const proficient = character.proficiencies.includes("Perception");
+  const passivePerception = passiveScore("Perception", character, character.level, proficient);
+  return passivePerception >= item.hidden_dc;
 }

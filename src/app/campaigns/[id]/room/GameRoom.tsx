@@ -170,6 +170,8 @@ import {
   type CellState,
 } from "../maps/[mapId]/edit/lib/cellGrid";
 import {
+  isItemVisibleToCharacter,
+  isNearContainer,
   mostRecentOwnToken,
   resolveLightSourcePositions,
   visionBlockedForCharacter,
@@ -4790,6 +4792,41 @@ export function GameRoom({
     [liveMap]
   );
 
+  // Map Editor Batch A5: which of the currently-open container's items THIS
+  // viewer actually gets to see — a pure render-time filter over
+  // openContainer.items, never touching openContainer.items itself (that
+  // canonical, unfiltered array is what handleTakeContainerItem's own
+  // `remaining` count and the cross-client broadcast are built from; see
+  // its own comment). The DM bypasses every hidden_dc entirely (always sees
+  // everything, for prep), the exact visionMasking-above idiom
+  // (`if (currentUserIsDM || ...) return ...`). A pit's finder is
+  // trivially "near" by construction — falling into the trap IS standing on
+  // its own cell — so isNearContainer never needs the pit's own x/y (which
+  // a non-DM client couldn't read anyway, concealed_pits staying DM-only).
+  // A viewer with no character of their own (or none placed on this map
+  // yet) sees only the never-hidden items, the same safe default a missing
+  // observer gets everywhere else in this file.
+  const visibleContainerItems = useMemo(() => {
+    if (!openContainer) return [];
+    if (currentUserIsDM) return openContainer.items;
+    if (openContainer.source === "pit") {
+      const character = characterById.get(openContainer.characterId);
+      return character
+        ? openContainer.items.filter((item) => isItemVisibleToCharacter(item, character, true))
+        : openContainer.items.filter((item) => item.hidden_dc === null);
+    }
+    const object = liveMap?.objects.find((candidate) => candidate.id === openContainer.objectId);
+    const observerToken = mostRecentOwnToken(liveMap?.tokens ?? [], ownCharacterIds);
+    const character = observerToken?.character_id ? characterById.get(observerToken.character_id) : null;
+    const near =
+      object !== undefined &&
+      observerToken !== null &&
+      isNearContainer({ x: object.x, y: object.y }, { x: observerToken.x, y: observerToken.y });
+    return character
+      ? openContainer.items.filter((item) => isItemVisibleToCharacter(item, character, near))
+      : openContainer.items.filter((item) => item.hidden_dc === null);
+  }, [openContainer, currentUserIsDM, liveMap, ownCharacterIds, characterById]);
+
   return (
     <PanelLayoutProvider userId={currentUserId} initialPreferences={initialUiPreferences}>
     <div className={styles.room}>
@@ -5508,7 +5545,7 @@ export function GameRoom({
         {openContainer ? (
           <ContainerPanel
             label={openContainer.label}
-            items={openContainer.items}
+            items={visibleContainerItems}
             canTake={openContainer.source === "pit" ? true : ownCharacterIds.size > 0}
             busy={containerBusy}
             error={containerError}

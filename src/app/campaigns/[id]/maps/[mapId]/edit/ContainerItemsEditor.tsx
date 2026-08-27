@@ -21,6 +21,17 @@ function errorMessage(err: unknown): string | null {
     : null;
 }
 
+// Map Editor Batch A5: an empty field means "not hidden" (null) — anything
+// else must be a positive integer DC, the MonsterPanel's own positiveInt
+// convention (blank is legal here, unlike there, since "not hidden" is
+// this field's own default state, not an error).
+function parseHiddenDc(raw: string): { value: number | null; valid: boolean } {
+  const trimmed = raw.trim();
+  if (trimmed === "") return { value: null, valid: true };
+  const parsed = Number(trimmed);
+  return Number.isInteger(parsed) && parsed > 0 ? { value: parsed, valid: true } : { value: null, valid: false };
+}
+
 /**
  * Map Editor Batch A4: a chest or (still-concealed) pit's item contents —
  * flavor loot (name/description/optional icon/optional tag), NOT a full
@@ -48,11 +59,14 @@ export function ContainerItemsEditor({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [tag, setTag] = useState("");
+  // Map Editor Batch A5: blank means "not hidden" — see parseHiddenDc.
+  const [hiddenDc, setHiddenDc] = useState("");
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editTag, setEditTag] = useState("");
+  const [editHiddenDc, setEditHiddenDc] = useState("");
 
   useEffect(() => {
     // No setLoading(true) here: this component is mounted keyed by the
@@ -80,7 +94,8 @@ export function ContainerItemsEditor({
 
   async function handleAdd() {
     const trimmed = name.trim();
-    if (!trimmed || busy) return;
+    const parsedHiddenDc = parseHiddenDc(hiddenDc);
+    if (!trimmed || !parsedHiddenDc.valid || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -90,11 +105,13 @@ export function ContainerItemsEditor({
         name: trimmed,
         description: description.trim() === "" ? null : description.trim(),
         tag: tag.trim() === "" ? null : tag.trim(),
+        hiddenDc: parsedHiddenDc.value,
       });
       setItems((current) => [...current, created]);
       setName("");
       setDescription("");
       setTag("");
+      setHiddenDc("");
     } catch (err) {
       setError(errorMessage(err) ?? "Could not add that item.");
     } finally {
@@ -107,11 +124,13 @@ export function ContainerItemsEditor({
     setEditName(item.name);
     setEditDescription(item.description ?? "");
     setEditTag(item.tag ?? "");
+    setEditHiddenDc(item.hidden_dc !== null ? String(item.hidden_dc) : "");
   }
 
   async function handleSaveEdit(itemId: string) {
     const trimmed = editName.trim();
-    if (!trimmed || busy) return;
+    const parsedHiddenDc = parseHiddenDc(editHiddenDc);
+    if (!trimmed || !parsedHiddenDc.valid || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -119,6 +138,7 @@ export function ContainerItemsEditor({
         name: trimmed,
         description: editDescription.trim() === "" ? null : editDescription.trim(),
         tag: editTag.trim() === "" ? null : editTag.trim(),
+        hidden_dc: parsedHiddenDc.value,
       });
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setEditingId(null);
@@ -179,11 +199,23 @@ export function ContainerItemsEditor({
                   disabled={busy}
                   data-testid="container-item-edit-tag-input"
                 />
+                <TextInput
+                  label="Hidden DC (blank = not hidden)"
+                  type="number"
+                  min={1}
+                  value={editHiddenDc}
+                  onChange={(event) => setEditHiddenDc(event.target.value)}
+                  placeholder="e.g. 15"
+                  hint="A viewing character's passive Perception must meet or beat this to see the item."
+                  error={parseHiddenDc(editHiddenDc).valid ? undefined : "Enter a positive whole number, or leave blank."}
+                  disabled={busy}
+                  data-testid="container-item-edit-hidden-dc-input"
+                />
                 <div className={styles.toolRow}>
                   <Button
                     size="sm"
                     variant="teal"
-                    disabled={busy || editName.trim() === ""}
+                    disabled={busy || editName.trim() === "" || !parseHiddenDc(editHiddenDc).valid}
                     onClick={() => void handleSaveEdit(item.id)}
                     data-testid={`save-container-item-${item.id}`}
                   >
@@ -200,6 +232,7 @@ export function ContainerItemsEditor({
                   {item.name}
                   {item.description ? ` — ${item.description}` : ""}
                   {item.tag ? ` (${item.tag})` : ""}
+                  {item.hidden_dc !== null ? ` [hidden, DC ${item.hidden_dc}]` : ""}
                 </span>
                 <Button
                   size="sm"
@@ -248,11 +281,23 @@ export function ContainerItemsEditor({
         disabled={busy}
         data-testid="container-item-tag-input"
       />
+      <TextInput
+        label="Hidden DC (blank = not hidden)"
+        type="number"
+        min={1}
+        value={hiddenDc}
+        onChange={(event) => setHiddenDc(event.target.value)}
+        placeholder="e.g. 15"
+        hint="A viewing character's passive Perception must meet or beat this to see the item — ambient, no roll."
+        error={parseHiddenDc(hiddenDc).valid ? undefined : "Enter a positive whole number, or leave blank."}
+        disabled={busy}
+        data-testid="container-item-hidden-dc-input"
+      />
       <div className={styles.toolRow}>
         <Button
           size="sm"
           variant="accent"
-          disabled={busy || name.trim() === ""}
+          disabled={busy || name.trim() === "" || !parseHiddenDc(hiddenDc).valid}
           onClick={() => void handleAdd()}
           data-testid="add-container-item-button"
         >
