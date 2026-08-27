@@ -1,0 +1,53 @@
+.page {
+  width: 100%;
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 48px 24px 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.title {
+  font-family: var(--font-h);
+  font-weight: 400;
+  font-size: clamp(28px, 4vw, 40px);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
+.subtitle {
+  font-family: var(--font-b);
+  color: var(--dim);
+  max-width: 70ch;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  background: var(--surface2);
+}
+
+.sectionTitle {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.row {
+  font-size: 15px;
+  line-height: 1.5;
+}

@@ -544,3 +544,38 @@
   padding: 14px 18px;
   border-top: 1px solid var(--dim2);
 }
+
+/* ───────────────────────── ChatText ───────────────────────── */
+/* Per-span color/weight/style/decoration all come from parsed format codes
+ * (chatFormatting.ts) and are applied inline since they're dynamic per
+ * message — these two classes only carry the parts that are the same for
+ * every chat message regardless of its own codes. */
+
+.chatText {
+  font-family: var(--font-b);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chatSpan {
+  display: inline;
+}
+
+/* Standard visually-hidden technique: present to assistive tech, removed
+ * from the visual flow (so it never shifts the visible scrambled glyphs
+ * next to it) and never painted. Carries an obfuscated span's real text —
+ * the sibling glyphs a sighted user sees are aria-hidden and re-scramble
+ * every ~50ms, which would otherwise be read aloud as constantly-changing
+ * noise. */
+.chatObfuscatedSrOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
