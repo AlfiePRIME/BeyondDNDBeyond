@@ -1160,10 +1160,11 @@ export function GameRoom({
   // "WebGL has no DOM of its own for a test to find a click target"
   // reasoning as bookScreenPosition above.
   const [ownChairScreenPosition, setOwnChairScreenPosition] = useState<[number, number] | null>(null);
-  // Movable chairs: this client's own seated camera position, live — the
-  // direct proof for the "camera view updates live while dragging"
-  // acceptance criterion (GameTableScene's onOwnCameraDebug's own doc
-  // comment).
+  // Movable chairs: this client's own seated camera position, live —
+  // GameTableScene's onOwnCameraDebug's own doc comment. Camera-follow-
+  // during-drag was removed (project owner's explicit ask), so this now
+  // backs the opposite proof: that this value stays byte-for-byte
+  // unchanged for the entire duration of an active chair drag.
   const [ownCameraPosition, setOwnCameraPosition] = useState<readonly [number, number, number] | null>(null);
   // Seated look-around: this client's own look-around yaw/pitch offset,
   // live — GameTableScene's onLookAroundDebug, the same "WebGL has no DOM

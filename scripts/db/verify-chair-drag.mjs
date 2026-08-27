@@ -4,12 +4,22 @@
 // (src/data-access/seatOffsets.ts, seating.ts's SeatOffset/applySeatOffset/
 // getEffectiveSeat). A player can now grab and drag their OWN chair anywhere
 // near the table arrangement (GameTableScene.tsx's chairDragSessionRef/
-// handleChairPointerDown/the window "pointermove"/"pointerup" pair), with
-// their own seated camera following live, and the final drop is resolved
-// (clamped to a radius around the table arrangement, nudged clear of other
-// chairs/the dice tray/the DM's book) and persisted by GameRoom.tsx's
-// handleChairDragEnd, then broadcast to every other connected client on the
-// campaign channel's own SEAT_MOVED_EVENT.
+// handleChairPointerDown/the window "pointermove"/"pointerup" pair), and the
+// final drop is resolved (clamped to a radius around the table arrangement,
+// nudged clear of other chairs/the dice tray/the DM's book) and persisted by
+// GameRoom.tsx's handleChairDragEnd, then broadcast to every other connected
+// client on the campaign channel's own SEAT_MOVED_EVENT.
+//
+// An earlier version of this feature made the dragging player's own seated
+// camera follow live, mid-gesture. The project owner reported that as an
+// actual gameplay complaint ("when moving a chair or dice matt in game it
+// still moves the camera... please make this stop whilst moving objects")
+// and asked for it to be removed outright — GameTableScene.tsx's
+// seatCameraPosition now deliberately reads through getEffectiveSeat/
+// seatOffsets (the last PERSISTED offset) rather than the live in-progress
+// one, so the camera holds perfectly still for the whole gesture and only
+// settles once, after the drop. Check 2 below is this fix's own direct
+// regression test.
 //
 // Real end-to-end browser drags, not just seating.test.ts's already-
 // exhaustive unit coverage of the underlying resolveChairDrop/
@@ -28,18 +38,20 @@
 // the shared dice tray) from a screen-space mouse drag needs inverting the
 // seated camera's own perspective projection — rather than hand-replicating
 // three.js's camera matrix math, this script measures that mapping directly
-// off the real running app: GameTableScene's own onOwnCameraDebug callback
-// (mirrored into GameRoom's chair-drag-state debug div) reports this
-// client's live camera position every time it changes, and — because
-// applySeatOffset always translates cameraPosition by the IDENTICAL (dx, dz)
-// as the chair's own position (seating.ts's own doc comment on that
-// function) — the camera's own observed (dx, dz) drift from its pre-drag
-// value is, byte-for-byte, the chair's own world-space displacement. A tiny
-// two-probe measurement (nudge the mouse a few pixels right, then a few
-// pixels down, reading the resulting world displacement each time) gives a
-// real local Jacobian between screen pixels and world meters at the current
-// point, which a plain 2x2 solve inverts to aim the very next mouse move at
-// a genuine world-space target — re-measured fresh each iteration (a
+// off the real running app. Before the camera-follow fix, the dragging
+// player's own OBSERVED camera drift (chair-drag-state's ownCamera) doubled
+// as a proxy for the chair's own world-space displacement (applySeatOffset
+// translates both identically). Now that the camera deliberately stays put
+// during a drag, that proxy no longer exists — so this script instead reads
+// the chair's own live world position directly off GameRoom's
+// seat-layout-state debug mirror (`seats[].position`, which — unlike the
+// camera — IS still intentionally live-updated during an active drag, per
+// that state's own doc comment in GameRoom.tsx). A tiny two-probe
+// measurement (nudge the mouse a few pixels right, then a few pixels down,
+// reading the resulting world displacement each time) gives a real local
+// Jacobian between screen pixels and world meters at the current point,
+// which a plain 2x2 solve inverts to aim the very next mouse move at a
+// genuine world-space target — re-measured fresh each iteration (a
 // Newton's-method step) since the mapping is only LOCALLY linear. This is
 // the same "trust nothing not directly observed" spirit as this script
 // family's other real-browser checks.
@@ -51,10 +63,16 @@
 //      grab handle is never rendered for the DM's throne AT ALL, by anyone,
 //      not just gated by a runtime check a determined client could route
 //      around.
-//   2. A live drag genuinely updates the dragging player's own seated
-//      camera position mid-gesture (BEFORE release) — the direct proof for
-//      "that player's own camera view updates live while dragging", not an
-//      inference from unit-tested code alone.
+//   2. The dragging player's own seated camera position is sampled
+//      CONTINUOUSLY (at every single probe point of a real drag gesture —
+//      press through release, including every Newton's-method targeting
+//      step, not just a couple of hand-picked checkpoints) and never
+//      changes by even a millimeter, while the SAME chair's own world
+//      position (seat-layout-state) genuinely does move live, proving this
+//      isn't just "nothing happened yet". This is the direct regression
+//      test for the camera-follow-during-drag removal (this file's own
+//      header comment above) — the opposite of what this check used to
+//      assert before that fix.
 //   3. Dragging toward another occupied player's chair's own real world
 //      position lands the dragger's final PERSISTED offset at least one
 //      chair-frontage clear of it (the "another occupied chair" obstacle
@@ -68,15 +86,19 @@
 //   5. The new position survives a real page reload (setSeatOffset's own
 //      round trip through the database, not merely this session's local
 //      state).
-//   6. Dragging toward the shared dice tray's own known, fixed world
-//      position (table.ts's real formula, replayed here — the
-//      verify-table-capacity.mjs "replay the real formula instead of
-//      importing it" convention) lands the final position at least
-//      (chair radius + TRAY_RADIUS) clear of it (the "the dice tray"
-//      obstacle case).
+//   6. Dragging toward another connected member's own REAL, currently-live
+//      personal dice tray position (read straight off GameRoom's own
+//      dice-tray-layout-state mirror — Prompt 8b replaced the single
+//      fixed-corner shared tray with one per-member tray computed from
+//      THAT member's own live seat angle, so there's no longer a single
+//      fixed coordinate worth hand-replaying) lands the final position at
+//      least (chair radius + the tray's own real radius) clear of it (the
+//      "the dice tray" obstacle case) — and, again, never moves the camera
+//      (check 2's own regression, re-proven on a second independent drag).
 //   7. Dragging as far across the screen as the viewport allows never lands
 //      further than CHAIR_DRAG_CLAMP_RADIUS from the nearest table's own
-//      center (the documented clamp radius actually holding).
+//      center (the documented clamp radius actually holding) — and, once
+//      more, never moves the camera even for this most-extreme drag.
 //   8. A player cannot write another member's seat_offset at all — RLS
 //      (0004, unchanged by 0044) blocks it: zero rows affected, no thrown
 //      error, the exact query shape setSeatOffset itself issues (the same
@@ -143,13 +165,21 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // verify-table-capacity.mjs's own established convention for this script
 // family: a regression in the SHIPPED numbers would be caught by re-deriving
 // them independently, not silently hidden behind a shared import.
+//
+// The dice tray's own position is deliberately NOT replayed as a fixed
+// constant here (an earlier version of this file did — a leftover from
+// before Prompt 8b replaced the single fixed-corner shared tray with one
+// per-member personal tray computed from THAT member's own live seat angle,
+// seating.ts's computeMemberTrayPosition/resolveMemberTrayLayout). A stale
+// fixed coordinate silently stopped corresponding to any REAL tray obstacle
+// — this file's own Newton's-method targeting got precise enough to expose
+// it by landing dead-center on that now-meaningless point with nothing to
+// nudge it away. Check 6 below instead reads a real connected member's own
+// CURRENT resolved tray position straight off GameRoom's own
+// dice-tray-layout-state mirror (diceTrayLayoutState below) — this file's
+// own "trust nothing not directly observed" spirit, same as seat-layout-
+// state/chair-drag-state.
 // ---------------------------------------------------------------------------
-const TABLE_TOP = { width: 4.36, depth: 2.1 };
-const LEG_HEIGHT = 1.05;
-const TABLE_TOP_THICKNESS = 0.35;
-const TABLE_SURFACE_Y = LEG_HEIGHT + TABLE_TOP_THICKNESS; // 1.4
-const DEFAULT_TRAY_POSITION = [TABLE_TOP.width / 2 - 0.85, TABLE_SURFACE_Y + 0.01, -(TABLE_TOP.depth / 2 - 0.85)];
-const TRAY_RADIUS = 0.55;
 const PLAYER_CHAIR_FRONTAGE = 0.4669;
 const CHAIR_DRAG_CLAMP_RADIUS = 6;
 
@@ -214,13 +244,104 @@ async function seatLayoutState(page) {
   return JSON.parse(text);
 }
 
+/** GameRoom's own hidden mirror of every CONNECTED member's own resolved,
+ * live personal dice tray position (Prompt 8b) — verify-per-member-dice-
+ * trays.mjs's own established mirror, reused here instead of replaying
+ * computeMemberTrayPosition/resolveMemberTrayLayout's own math by hand, so
+ * check 6 below always targets a REAL, currently-live obstacle exactly as
+ * the app itself computes it right now (see the "dice tray obstacle"
+ * constants note above for why a hand-replayed constant stopped working).
+ * `radius` is the real, current PERSONAL_TRAY_RADIUS every tray shares. */
+async function diceTrayLayoutState(page) {
+  const text = await page.textContent('[data-testid="dice-tray-layout-state"]');
+  return JSON.parse(text);
+}
+
 /** GameRoom's own hidden mirror of THIS client's own draggable chair's live
- * screen projection and seated camera position — see this file's own header
- * comment for why the camera readout is what lets this script target a real
- * world-space point without hand-replicating three.js's camera math. */
+ * screen projection and seated camera position. Post camera-follow-removal,
+ * `ownCamera` is expected to stay CONSTANT for the entire duration of a
+ * drag — see probeState/allClose below, this file's own regression test for
+ * exactly that. */
 async function chairDragState(page) {
   const text = await page.textContent('[data-testid="chair-drag-state"]');
   return JSON.parse(text);
+}
+
+/** GameRoom's own hidden mirror used by verify-turn-camera.mjs — read here
+ * purely for its `chairDragging` field (GameTableScene's onChairDraggingChange,
+ * mirrored straight through), the one authoritative "is a real drag session
+ * actually active RIGHT NOW" signal, used by pressChairAndConfirmDragging
+ * below. */
+async function turnCameraState(page) {
+  const text = await page.textContent('[data-testid="turn-camera-state"]');
+  return JSON.parse(text);
+}
+
+/** Presses down on the chair at `screenPoint` (canvas-relative CSS pixels,
+ * e.g. ownChairScreen) and confirms a REAL drag session actually started
+ * (turnCameraState's own chairDragging) before returning. A pointer-down
+ * landing even a pixel or two outside the chair's own small raycast hit
+ * area silently does nothing — GameTableScene's handleChairPointerDown
+ * never fires, chairDragSessionRef never gets set — and every subsequent
+ * mouse move this file's own Jacobian targeting performs would then be
+ * measuring and "aiming" at nothing, surfacing many steps later as a
+ * confusing "no offset ever persisted" failure with no obvious cause.
+ * Retries the press (release, a short pause, press again at the same
+ * point) up to `maxAttempts` times before giving up loudly. */
+async function pressChairAndConfirmDragging(page, canvasBox, screenPoint, maxAttempts = 4) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await page.mouse.move(canvasBox.x + screenPoint[0], canvasBox.y + screenPoint[1]);
+    await page.mouse.down();
+    const deadline = Date.now() + 800;
+    while (Date.now() < deadline) {
+      const state = await turnCameraState(page);
+      if (state.chairDragging) return;
+      await sleep(50);
+    }
+    // Missed — release and try again from the same point.
+    await page.mouse.up();
+    await sleep(100);
+  }
+  throw new Error(`chair drag never actually started after ${maxAttempts} press attempts at ${JSON.stringify(screenPoint)}`);
+}
+
+/** One combined read of this client's dragged (or default) chair's LIVE
+ * world position (seat-layout-state's `seats[].position` — unlike the now-
+ * static camera, intentionally still updated on every "pointermove" tick of
+ * an active drag, GameRoom.tsx's own `seats` memo read through
+ * liveSeatOffsets, that memo's own doc comment) ALONGSIDE this same
+ * client's own seated camera position (chair-drag-state's `ownCamera`).
+ * Two sequential (never concurrent — a background poller issuing its own
+ * independent Playwright commands against the same page WHILE the Newton's-
+ * method loop below is also issuing mouse moves races the drag's own
+ * pointer events and corrupts its timing) textContent reads, bundled into
+ * one probe so every single Jacobian measurement point below doubles as a
+ * camera sample for free — the literal "samples camera position throughout
+ * a real drag gesture" the camera-follow-removal acceptance criterion asks
+ * for, denser than any fixed-interval poll could be without racing the
+ * drag's own mouse events. Camera ROTATION is deliberately not sampled
+ * separately: this scene's seated camera always `lookAt`s the same fixed
+ * LOOK_TARGET (GameTableScene.tsx), so its orientation is a pure function
+ * of its position and nothing else changes it during a chair drag
+ * (look-around is a keyboard gesture this script never touches) — proving
+ * position is constant is equivalent to proving rotation is too. */
+async function probeState(page, userId) {
+  const seatState = await seatLayoutState(page);
+  const camState = await chairDragState(page);
+  const seat = seatState.seats.find((candidate) => candidate.userId === userId);
+  return { position: seat ? seat.position : null, ownCamera: camState.ownCamera ?? null };
+}
+
+/** True iff every sample in `samples` is within `tol` meters of `baseline`
+ * on every axis — the camera-never-moves assertion, applied to a whole
+ * series of samples at once rather than one-off points. */
+function allClose(samples, baseline, tol = 1e-4) {
+  return samples.every(
+    (s) =>
+      Math.abs(s[0] - baseline[0]) <= tol &&
+      Math.abs(s[1] - baseline[1]) <= tol &&
+      Math.abs(s[2] - baseline[2]) <= tol
+  );
 }
 
 async function waitForOwnChairScreen(page, timeoutMs = 25000) {
@@ -275,59 +396,68 @@ function solve2x2(a, b, c, d, e, f) {
 /** One local Jacobian measurement of screen-pixels → world-meters around
  * `atScreen` (canvas-relative CSS pixels) — three probes (the baseline plus
  * one small pure-X and one small pure-Y nudge), each read back through
- * chair-drag-state's own live ownCamera (already known, per this file's
- * header comment, to move in perfect lockstep with the chair's own world
- * position). Leaves the mouse back at `atScreen` when done, so callers can
- * treat this as a read-only probe. */
-async function measureJacobian(page, box, atScreen, probePx = 14) {
+ * probeState's own live seat world position for `userId` (see probeState's
+ * own doc comment for why that — not the now-static camera — is the right
+ * observable for TARGETING). Leaves the mouse back at `atScreen` when done,
+ * so callers can treat this as a read-only probe. Every probeState call
+ * also returns `ownCamera`, collected here into `cameraSamples` — free
+ * camera-never-moved coverage at every single measurement point, not just
+ * this function's own primary job. */
+async function measureJacobian(page, box, atScreen, userId, probePx = 14) {
   await page.mouse.move(box.x + atScreen[0], box.y + atScreen[1]);
   await sleep(90);
-  const base = (await chairDragState(page)).ownCamera;
+  const base = await probeState(page, userId);
 
   await page.mouse.move(box.x + atScreen[0] + probePx, box.y + atScreen[1]);
   await sleep(90);
-  const px = (await chairDragState(page)).ownCamera;
+  const px = await probeState(page, userId);
 
   await page.mouse.move(box.x + atScreen[0], box.y + atScreen[1] + probePx);
   await sleep(90);
-  const py = (await chairDragState(page)).ownCamera;
+  const py = await probeState(page, userId);
 
   await page.mouse.move(box.x + atScreen[0], box.y + atScreen[1]);
   await sleep(90);
+  const back = await probeState(page, userId);
 
   return {
-    base,
+    base: base.position,
+    cameraSamples: [base.ownCamera, px.ownCamera, py.ownCamera, back.ownCamera],
     j: [
-      [(px[0] - base[0]) / probePx, (py[0] - base[0]) / probePx],
-      [(px[2] - base[2]) / probePx, (py[2] - base[2]) / probePx],
+      [(px.position[0] - base.position[0]) / probePx, (py.position[0] - base.position[0]) / probePx],
+      [(px.position[2] - base.position[2]) / probePx, (py.position[2] - base.position[2]) / probePx],
     ],
   };
 }
 
 /**
  * Drags the already-pressed chair toward a genuine WORLD-space target
- * (`targetDx`/`targetDz`, relative to wherever the chair sat when the drag
- * began) using repeated local-Jacobian Newton steps (measureJacobian/
- * solve2x2 above) — see this file's own header comment for why this beats
- * hand-replicating the camera's projection math. Caller is responsible for
- * page.mouse.down()/up() around this; `startScreen` is where the button was
- * pressed. Returns the final observed (dx, dz) so callers can assert against
- * what was ACTUALLY achieved, not merely what was aimed for (a nudge for
- * collision avoidance, or the clamp radius, can legitimately fall short of
- * an aggressive target — that's the whole point of the features being
- * tested).
+ * (`target.dx`/`target.dz`, relative to `defaultPosition` — that seat's own
+ * computed default, unaffected by the drag) using repeated local-Jacobian
+ * Newton steps (measureJacobian/solve2x2 above) — see this file's own
+ * header comment for why this beats hand-replicating the camera's
+ * projection math. Caller is responsible for page.mouse.down()/up() around
+ * this; `startScreen` is where the button was pressed. Returns the final
+ * observed (dx, dz) so callers can assert against what was ACTUALLY
+ * achieved, not merely what was aimed for (a nudge for collision avoidance,
+ * or the clamp radius, can legitimately fall short of an aggressive target
+ * — that's the whole point of the features being tested) — plus every
+ * camera sample collected along the way (`cameraSamples`, see
+ * measureJacobian's own doc comment), so callers get dense "throughout the
+ * whole gesture" camera coverage for free.
  */
-async function dragTowardWorldOffset(page, box, startScreen, target, opts = {}) {
+async function dragTowardWorldOffset(page, box, startScreen, userId, defaultPosition, target, opts = {}) {
   const maxIterations = opts.maxIterations ?? 5;
   const tolerance = opts.tolerance ?? 0.12;
-  const cam0 = (await chairDragState(page)).ownCamera;
   let screenPoint = [...startScreen];
-  let lastCam = cam0;
+  let lastPos = defaultPosition;
+  const cameraSamples = [];
   for (let i = 0; i < maxIterations; i++) {
-    const { base, j } = await measureJacobian(page, box, screenPoint);
-    lastCam = base;
-    const curDx = base[0] - cam0[0];
-    const curDz = base[2] - cam0[2];
+    const { base, j, cameraSamples: stepSamples } = await measureJacobian(page, box, screenPoint, userId);
+    cameraSamples.push(...stepSamples);
+    lastPos = base;
+    const curDx = base[0] - defaultPosition[0];
+    const curDz = base[2] - defaultPosition[2];
     const errDx = target.dx - curDx;
     const errDz = target.dz - curDz;
     if (Math.hypot(errDx, errDz) < tolerance) break;
@@ -336,9 +466,11 @@ async function dragTowardWorldOffset(page, box, startScreen, target, opts = {}) 
     screenPoint = [screenPoint[0] + step.x, screenPoint[1] + step.y];
     await page.mouse.move(box.x + screenPoint[0], box.y + screenPoint[1]);
     await sleep(120);
-    lastCam = (await chairDragState(page)).ownCamera;
+    const after = await probeState(page, userId);
+    lastPos = after.position;
+    cameraSamples.push(after.ownCamera);
   }
-  return { dx: lastCam[0] - cam0[0], dz: lastCam[2] - cam0[2] };
+  return { dx: lastPos[0] - defaultPosition[0], dz: lastPos[2] - defaultPosition[2], cameraSamples };
 }
 
 await ensureDevServer();
@@ -413,27 +545,30 @@ try {
   let aliceChair = await waitForOwnChairScreen(alicePage);
   check("alice's own client reports a draggable chair (ownChairScreen non-null)", aliceChair.ownChairScreen !== null);
 
-  // -- 2 & 3. A real drag: press, nudge (checked live, mid-gesture, for the
-  //    camera-follows-live requirement), then Newton-solve the rest of the
-  //    way toward BOB's own real world position (the "another occupied
-  //    chair" obstacle case), then release. --
+  // -- 2 & 3. A real drag: press, start continuously sampling the camera for
+  //    the camera-never-moves regression check, nudge (checked live,
+  //    mid-gesture, that the CHAIR's own world position genuinely moves —
+  //    proving the drag itself is real, even though the camera must not
+  //    follow it anymore), then Newton-solve the rest of the way toward
+  //    BOB's own real world position (the "another occupied chair" obstacle
+  //    case), then release. --
   const startScreen = aliceChair.ownChairScreen;
-  await alicePage.mouse.move(aliceCanvasBox.x + startScreen[0], aliceCanvasBox.y + startScreen[1]);
-  await alicePage.mouse.down();
+  await pressChairAndConfirmDragging(alicePage, aliceCanvasBox, startScreen);
   await sleep(150);
   const camAtPress = (await chairDragState(alicePage)).ownCamera;
 
   // A small, deliberately crude nudge — no precision targeting needed here,
-  // only "did the camera move at all, before release".
+  // only "did the CHAIR'S OWN WORLD POSITION move at all, before release".
   await alicePage.mouse.move(aliceCanvasBox.x + startScreen[0] + 60, aliceCanvasBox.y + startScreen[1] + 25);
   await sleep(200);
-  const camMidDrag = (await chairDragState(alicePage)).ownCamera;
-  const camMovedLive =
-    Math.hypot(camMidDrag[0] - camAtPress[0], camMidDrag[1] - camAtPress[1], camMidDrag[2] - camAtPress[2]) > 0.02;
+  const probeMidDrag = await probeState(alicePage, alice.id);
+  const chairMovedLive =
+    Math.hypot(probeMidDrag.position[0] - aliceDefault.position[0], probeMidDrag.position[2] - aliceDefault.position[2]) >
+    0.02;
   check(
-    "the dragging player's own seated camera position genuinely updates DURING the drag, before release",
-    camMovedLive,
-    JSON.stringify({ camAtPress, camMidDrag })
+    "the dragged chair's own world position genuinely updates DURING the drag, before release (proving the drag itself is real)",
+    chairMovedLive,
+    JSON.stringify({ aliceDefault: aliceDefault.position, worldMidDrag: probeMidDrag.position })
   );
 
   const targetTowardBob = { dx: bobDefault.position[0] - aliceDefault.position[0], dz: bobDefault.position[2] - aliceDefault.position[2] };
@@ -441,9 +576,19 @@ try {
     alicePage,
     aliceCanvasBox,
     [startScreen[0] + 60, startScreen[1] + 25],
+    alice.id,
+    aliceDefault.position,
     targetTowardBob
   );
+  const camBeforeRelease = (await chairDragState(alicePage)).ownCamera;
   await alicePage.mouse.up();
+
+  const allCameraSamples = [camAtPress, probeMidDrag.ownCamera, ...achievedTowardBob.cameraSamples, camBeforeRelease];
+  check(
+    "the dragging player's own seated camera position never moves, at ANY of the many points sampled throughout the whole drag gesture (press through release) — even though the chair itself just moved substantially",
+    allCameraSamples.length >= 3 && allClose(allCameraSamples, camAtPress),
+    JSON.stringify({ camAtPress, sampleCount: allCameraSamples.length, distinctSamples: [...new Set(allCameraSamples.map((s) => JSON.stringify(s)))] })
+  );
 
   // -- Persistence + non-overlap: wait for the async persist to land, then
   //    check the real database row directly. --
@@ -521,17 +666,44 @@ try {
   const aliceCanvasBox2 = await alicePage.locator("canvas").boundingBox();
   if (!aliceCanvasBox2) throw new Error("no canvas on alice's page after reload");
 
-  // -- 6. Dragging toward the shared dice tray's own known position lands
-  //    clear of it (the "the dice tray" obstacle case). --
-  const targetTowardTray = { dx: DEFAULT_TRAY_POSITION[0] - aliceDefault.position[0], dz: DEFAULT_TRAY_POSITION[2] - aliceDefault.position[2] };
-  await alicePage.mouse.move(aliceCanvasBox2.x + aliceChair.ownChairScreen[0], aliceCanvasBox2.y + aliceChair.ownChairScreen[1]);
-  await alicePage.mouse.down();
+  // -- 6. Dragging toward another connected member's own REAL, currently-
+  //    live personal dice tray position lands clear of it (the "the dice
+  //    tray" obstacle case — targeting BOB's own tray specifically: a
+  //    member's OWN tray is deliberately excluded from THEIR OWN obstacle
+  //    list, GameRoom.tsx's own handleChairDragEnd, so this has to be
+  //    someone ELSE's to actually exercise the nudge-away behavior) — also
+  //    re-proves the camera-never-moves regression on a SECOND, independent
+  //    drag (this one targeting the dice tray specifically, the other
+  //    object named in the original bug report). Bob never touches
+  //    anything of his own during this whole script, so his tray sits at
+  //    its one resolved spot the entire time — a stable, real target. --
+  const trayLayoutBeforeDrag = await diceTrayLayoutState(alicePage);
+  const bobTrayBefore = trayLayoutBeforeDrag.trays.find((t) => t.userId === bob.id);
+  if (!bobTrayBefore) throw new Error(`bob has no resolved personal tray — ${JSON.stringify(trayLayoutBeforeDrag)}`);
+  const trayRadius = trayLayoutBeforeDrag.radius;
+  const targetTowardTray = {
+    dx: bobTrayBefore.position[0] - aliceDefault.position[0],
+    dz: bobTrayBefore.position[2] - aliceDefault.position[2],
+  };
+  await pressChairAndConfirmDragging(alicePage, aliceCanvasBox2, aliceChair.ownChairScreen);
   await sleep(150);
-  await dragTowardWorldOffset(alicePage, aliceCanvasBox2, aliceChair.ownChairScreen, targetTowardTray, {
-    maxIterations: 6,
-    tolerance: 0.15,
-  });
+  const camAtPressTrayDrag = (await chairDragState(alicePage)).ownCamera;
+  const trayDragResult = await dragTowardWorldOffset(
+    alicePage,
+    aliceCanvasBox2,
+    aliceChair.ownChairScreen,
+    alice.id,
+    aliceDefault.position,
+    targetTowardTray,
+    { maxIterations: 6, tolerance: 0.15 }
+  );
   await alicePage.mouse.up();
+  check(
+    "dragging alice's chair toward the dice tray ALSO never moves the camera, throughout that whole gesture",
+    trayDragResult.cameraSamples.length > 0 &&
+      allClose([camAtPressTrayDrag, ...trayDragResult.cameraSamples], camAtPressTrayDrag),
+    JSON.stringify({ camAtPressTrayDrag, sampleCount: trayDragResult.cameraSamples.length })
+  );
 
   const aliceRowAfterTrayDrag = await pollRow(
     "campaign_members",
@@ -542,17 +714,20 @@ try {
     x: aliceDefault.position[0] + aliceRowAfterTrayDrag.seat_offset.dx,
     z: aliceDefault.position[2] + aliceRowAfterTrayDrag.seat_offset.dz,
   };
-  const distanceFromTray = Math.hypot(aliceFinalAfterTray.x - DEFAULT_TRAY_POSITION[0], aliceFinalAfterTray.z - DEFAULT_TRAY_POSITION[2]);
-  check(
-    "the aimed drag actually landed alice's chair meaningfully closer to the dice tray than her own starting spot",
-    Math.hypot(aliceFinalAfterTray.x - aliceDefault.position[0], aliceFinalAfterTray.z - aliceDefault.position[2]) >
-      Math.hypot(DEFAULT_TRAY_POSITION[0] - aliceDefault.position[0], DEFAULT_TRAY_POSITION[2] - aliceDefault.position[2]) - 1.5,
-    JSON.stringify({ aliceFinalAfterTray, aliceDefault, DEFAULT_TRAY_POSITION })
+  const distanceFromTray = Math.hypot(
+    aliceFinalAfterTray.x - bobTrayBefore.position[0],
+    aliceFinalAfterTray.z - bobTrayBefore.position[2]
   );
   check(
-    "the final position does NOT overlap the shared dice tray — nudged clear of it",
-    distanceFromTray >= PLAYER_CHAIR_FRONTAGE / 2 + TRAY_RADIUS - 0.02,
-    JSON.stringify({ distanceFromTray, required: PLAYER_CHAIR_FRONTAGE / 2 + TRAY_RADIUS })
+    "the aimed drag actually landed alice's chair meaningfully closer to bob's dice tray than her own starting spot",
+    Math.hypot(aliceFinalAfterTray.x - aliceDefault.position[0], aliceFinalAfterTray.z - aliceDefault.position[2]) >
+      Math.hypot(targetTowardTray.dx, targetTowardTray.dz) - 1.5,
+    JSON.stringify({ aliceFinalAfterTray, aliceDefault, bobTray: bobTrayBefore.position })
+  );
+  check(
+    "the final position does NOT overlap bob's dice tray — nudged clear of it",
+    distanceFromTray >= PLAYER_CHAIR_FRONTAGE / 2 + trayRadius - 0.02,
+    JSON.stringify({ distanceFromTray, required: PLAYER_CHAIR_FRONTAGE / 2 + trayRadius })
   );
   check(
     "the tray-avoiding drop still respects the clamp radius around the table",
@@ -574,14 +749,37 @@ try {
   //    corner is exactly the "as far as the gesture can physically reach"
   //    case the clamp exists for. --
   const viewport = alicePage.viewportSize() ?? { width: 1280, height: 720 };
-  await alicePage.mouse.move(aliceCanvasBox3.x + aliceChair.ownChairScreen[0], aliceCanvasBox3.y + aliceChair.ownChairScreen[1]);
-  await alicePage.mouse.down();
+  await pressChairAndConfirmDragging(alicePage, aliceCanvasBox3, aliceChair.ownChairScreen);
   await sleep(150);
-  await alicePage.mouse.move(aliceCanvasBox3.x + Math.min(viewport.width - 10, aliceCanvasBox3.width - 10), aliceCanvasBox3.y + 10, {
-    steps: 12,
-  });
-  await sleep(300);
+  const camAtPressClampDrag = (await chairDragState(alicePage)).ownCamera;
+
+  // Broken into several incremental moves (rather than one single
+  // steps:12 move) purely so the camera can be sampled BETWEEN them —
+  // sequential reads, never a concurrent background poller racing this
+  // gesture's own mouse events (see probeState's own doc comment on why
+  // that matters) — giving genuine "throughout the gesture" coverage for
+  // this most-extreme drag too, not just a before/after checkpoint.
+  const clampTargetX = aliceCanvasBox3.x + Math.min(viewport.width - 10, aliceCanvasBox3.width - 10);
+  const clampTargetY = aliceCanvasBox3.y + 10;
+  const clampOriginX = aliceCanvasBox3.x + aliceChair.ownChairScreen[0];
+  const clampOriginY = aliceCanvasBox3.y + aliceChair.ownChairScreen[1];
+  const cameraSamplesClampDrag = [];
+  const CLAMP_DRAG_STEPS = 6;
+  for (let i = 1; i <= CLAMP_DRAG_STEPS; i++) {
+    const t = i / CLAMP_DRAG_STEPS;
+    await alicePage.mouse.move(clampOriginX + (clampTargetX - clampOriginX) * t, clampOriginY + (clampTargetY - clampOriginY) * t, {
+      steps: 3,
+    });
+    await sleep(60);
+    cameraSamplesClampDrag.push((await chairDragState(alicePage)).ownCamera);
+  }
+  await sleep(200);
   await alicePage.mouse.up();
+  check(
+    "even the most extreme drag (all the way to a viewport corner) never moves the camera",
+    cameraSamplesClampDrag.length > 0 && allClose([camAtPressClampDrag, ...cameraSamplesClampDrag], camAtPressClampDrag),
+    JSON.stringify({ camAtPressClampDrag, sampleCount: cameraSamplesClampDrag.length })
+  );
 
   const aliceRowAfterClampDrag = await pollRow(
     "campaign_members",
