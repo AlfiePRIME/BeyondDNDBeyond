@@ -134,4 +134,6 @@ export {
   MAX_WHITEBOARD_HEIGHT,
   WHITEBOARD_HEIGHT_STEP,
   DEFAULT_WHITEBOARD_COLOR,
+  DEFAULT_WHITEBOARD_BRUSH_SIZE,
+  type WhiteboardBrushSize,
 } from "./whiteboardMath";

@@ -124,6 +124,7 @@ import {
   applySeatOffset,
   computeCampaignSeatLayout,
   computeMemberTrayPosition,
+  DEFAULT_WHITEBOARD_BRUSH_SIZE,
   DEFAULT_WHITEBOARD_COLOR,
   DEFAULT_WHITEBOARD_HEIGHT,
   DiceTumble,
@@ -148,6 +149,7 @@ import {
   type SeatOffset,
   type TableLiveMap,
   type TokenSlidePhase,
+  type WhiteboardBrushSize,
   type WhiteboardGridPoint,
   type WhiteboardHandle,
   type WhiteboardTileUpdate,
@@ -419,6 +421,7 @@ interface WhiteboardStrokeStartPayload {
   strokeId: string;
   tool: WhiteboardTool;
   color: string;
+  brushSize: WhiteboardBrushSize;
   point: WhiteboardGridPoint;
 }
 
@@ -1623,6 +1626,7 @@ export function GameRoom({
   const [drawMode, setDrawMode] = useState(false);
   const [whiteboardTool, setWhiteboardTool] = useState<WhiteboardTool>("pen");
   const [whiteboardColor, setWhiteboardColor] = useState(DEFAULT_WHITEBOARD_COLOR);
+  const [whiteboardBrushSize, setWhiteboardBrushSize] = useState<WhiteboardBrushSize>(DEFAULT_WHITEBOARD_BRUSH_SIZE);
   const [whiteboardHeight, setWhiteboardHeight] = useState(DEFAULT_WHITEBOARD_HEIGHT);
   const [whiteboardHistory, setWhiteboardHistory] = useState({ canUndo: false, canRedo: false });
   // Verification-only mirror of WhiteboardPlane's own tile store — see
@@ -1674,7 +1678,13 @@ export function GameRoom({
   const handleWhiteboardLocalStrokeStart = useCallback(
     (
       mapId: string,
-      info: { strokeId: string; tool: WhiteboardTool; color: string; point: WhiteboardGridPoint }
+      info: {
+        strokeId: string;
+        tool: WhiteboardTool;
+        color: string;
+        brushSize: WhiteboardBrushSize;
+        point: WhiteboardGridPoint;
+      }
     ) => {
       whiteboardActiveStrokeRef.current = { mapId, strokeId: info.strokeId };
       whiteboardPendingPointsRef.current = [];
@@ -1685,6 +1695,7 @@ export function GameRoom({
         strokeId: info.strokeId,
         tool: info.tool,
         color: info.color,
+        brushSize: info.brushSize,
         point: info.point,
       });
     },
@@ -2312,7 +2323,13 @@ export function GameRoom({
       WHITEBOARD_STROKE_START_EVENT,
       (payload) => {
         if (payload.mapId !== liveMapRef.current?.map.id) return;
-        whiteboardHandleRef.current?.applyRemoteStrokeStart(payload.strokeId, payload.tool, payload.color, payload.point);
+        whiteboardHandleRef.current?.applyRemoteStrokeStart(
+          payload.strokeId,
+          payload.tool,
+          payload.color,
+          payload.brushSize,
+          payload.point
+        );
       }
     );
     const unsubscribeWhiteboardStrokePoints = channel.subscribe<WhiteboardStrokePointsPayload>(
@@ -4441,6 +4458,7 @@ export function GameRoom({
           whiteboardHeight={whiteboardHeight}
           whiteboardTool={whiteboardTool}
           whiteboardColor={whiteboardColor}
+          whiteboardBrushSize={whiteboardBrushSize}
           onWhiteboardHistoryChange={setWhiteboardHistory}
           onWhiteboardDebug={setWhiteboardDebug}
           onWhiteboardCenterProjectedPosition={setWhiteboardCenterScreen}
@@ -4568,7 +4586,7 @@ export function GameRoom({
           onDebug) stand in for "does a real drawn/erased/cleared mark exist
           right now", and `centerScreenPoint` (onCenterProjectedPosition)
           gives a real click target instead of a blind canvas scan.
-          `drawMode`/`tool`/`color`/`height`/`canUndo`/`canRedo` are this
+          `drawMode`/`tool`/`color`/`brushSize`/`height`/`canUndo`/`canRedo` are this
           client's own real toolbar state, present for every client (not
           DM-gated) purely for mirror simplicity — a player's client always
           has drawMode false and an always-disabled toolbar, since MapPanel
@@ -4583,6 +4601,7 @@ export function GameRoom({
           drawMode,
           tool: whiteboardTool,
           color: whiteboardColor,
+          brushSize: whiteboardBrushSize,
           height: whiteboardHeight,
           canUndo: whiteboardHistory.canUndo,
           canRedo: whiteboardHistory.canRedo,
@@ -4955,6 +4974,8 @@ export function GameRoom({
           onSetWhiteboardTool={setWhiteboardTool}
           whiteboardColor={whiteboardColor}
           onSetWhiteboardColor={setWhiteboardColor}
+          whiteboardBrushSize={whiteboardBrushSize}
+          onSetWhiteboardBrushSize={setWhiteboardBrushSize}
           whiteboardHeight={whiteboardHeight}
           onSetWhiteboardHeight={setWhiteboardHeight}
           whiteboardCanUndo={whiteboardHistory.canUndo}

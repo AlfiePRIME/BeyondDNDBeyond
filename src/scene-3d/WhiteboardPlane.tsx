@@ -14,14 +14,15 @@ import { CanvasTexture, DoubleSide, Plane, Raycaster, SRGBColorSpace, Vector2, V
 import type { Camera } from "three";
 import {
   cellKey,
-  ERASER_WIDTH_CELLS,
+  ERASER_WIDTH_CELLS_BY_SIZE,
   gridPointToPixel,
-  PEN_WIDTH_CELLS,
+  PEN_WIDTH_CELLS_BY_SIZE,
   pixelToGridPoint,
   planeSizeWorldUnits,
   sampleSegmentCells,
   TILE_PX,
   worldToPixel,
+  type WhiteboardBrushSize,
 } from "./whiteboardMath";
 
 /**
@@ -139,7 +140,13 @@ export interface WhiteboardHandle {
    * are tracked by `strokeId` so multiple concurrent remote strokes (e.g. a
    * second DM window drawing at the same time) never cross-contaminate each
    * other's "last point" bookkeeping. */
-  applyRemoteStrokeStart(strokeId: string, tool: WhiteboardTool, color: string, point: WhiteboardGridPoint): void;
+  applyRemoteStrokeStart(
+    strokeId: string,
+    tool: WhiteboardTool,
+    color: string,
+    brushSize: WhiteboardBrushSize,
+    point: WhiteboardGridPoint
+  ): void;
   applyRemoteStrokePoints(strokeId: string, points: readonly WhiteboardGridPoint[]): void;
   /** A receiver that missed the matching start (joined mid-stroke) simply
    * has nothing tracked for this id — a harmless no-op, since the
@@ -205,6 +212,11 @@ export interface WhiteboardPlaneProps {
    * uses the drawn shape's alpha coverage, never its RGB) but harmless to
    * pass through unconditionally — one code path for both tools. */
   color: string;
+  /** Applies to WHICHEVER tool is currently active — a real marker and a
+   * real eraser both come in a few actual widths, so "brush size" scales
+   * whichever one is in hand rather than being pen-only (whiteboardMath.ts's
+   * PEN_WIDTH_CELLS_BY_SIZE/ERASER_WIDTH_CELLS_BY_SIZE's own doc comment). */
+  brushSize: WhiteboardBrushSize;
   /** Fires on every start/end of an in-progress stroke — the
    * onChairDraggingChange precedent (GameTableScene.tsx), which
    * GameTableScene uses to additionally disable OrbitControls while
@@ -243,7 +255,10 @@ export interface WhiteboardPlaneProps {
    * drawing — purely so GameRoom can kick off the live-tier ephemeral
    * broadcast stream (§5.1/§5.2). This component never touches the
    * realtime channel itself. */
-  onLocalStrokeStart?: (mapId: string, info: { strokeId: string; tool: WhiteboardTool; color: string; point: WhiteboardGridPoint }) => void;
+  onLocalStrokeStart?: (
+    mapId: string,
+    info: { strokeId: string; tool: WhiteboardTool; color: string; brushSize: WhiteboardBrushSize; point: WhiteboardGridPoint }
+  ) => void;
   /** Fires once per point of an in-progress LOCAL stroke, after
    * onLocalStrokeStart's own first point — GameRoom is responsible for any
    * batching/send-interval decision (§5.2's "on the order of every 30-50ms"
@@ -282,6 +297,7 @@ interface UndoEntry {
 interface RemoteStrokeState {
   tool: WhiteboardTool;
   color: string;
+  brushSize: WhiteboardBrushSize;
   lastPixel: { x: number; y: number } | null;
   /** Every cell this in-progress remote stroke has painted so far — the
    * exact same `sampleSegmentCells`-driven bookkeeping StrokeSession.touched
@@ -396,9 +412,13 @@ function isTileBlank(tile: HTMLCanvasElement): boolean {
  * the drawn ink can bleed past a sampled centerline point into a neighboring
  * cell — see `sampleSegmentCells`'s own `halfWidthPx` doc comment). One
  * function so the two can never drift apart and under/over-report which
- * cells a stroke actually touched relative to what it actually painted. */
-function lineWidthPx(tool: WhiteboardTool): number {
-  return (tool === "eraser" ? ERASER_WIDTH_CELLS : PEN_WIDTH_CELLS) * TILE_PX;
+ * cells a stroke actually touched relative to what it actually painted.
+ * `brushSize` (the owner's own "brush sizes" ask) picks which of that tool's
+ * OWN three-point table (whiteboardMath.ts) applies — see that table's own
+ * doc comment for why pen/eraser never share one. */
+function lineWidthPx(tool: WhiteboardTool, brushSize: WhiteboardBrushSize): number {
+  const table = tool === "eraser" ? ERASER_WIDTH_CELLS_BY_SIZE : PEN_WIDTH_CELLS_BY_SIZE;
+  return table[brushSize] * TILE_PX;
 }
 
 /** The one drawing primitive both the pen and the eraser use — the eraser is
@@ -412,11 +432,12 @@ function drawSegment(
   state: MapWhiteboardState,
   tool: WhiteboardTool,
   color: string,
+  brushSize: WhiteboardBrushSize,
   from: { x: number; y: number } | null,
   to: { x: number; y: number }
 ): void {
   const ctx = state.ctx;
-  const lineWidth = lineWidthPx(tool);
+  const lineWidth = lineWidthPx(tool, brushSize);
   ctx.save();
   ctx.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
   ctx.lineCap = "round";
@@ -560,15 +581,16 @@ function applyRemoteStrokeStartOnState(
   strokeId: string,
   tool: WhiteboardTool,
   color: string,
+  brushSize: WhiteboardBrushSize,
   point: WhiteboardGridPoint
 ): void {
   const { pixelX, pixelY } = gridPointToPixel(point.u, point.v);
   const pixel = { x: pixelX, y: pixelY };
   const touched = new Set<string>();
-  const halfWidthPx = lineWidthPx(tool) / 2;
+  const halfWidthPx = lineWidthPx(tool, brushSize) / 2;
   for (const cell of sampleSegmentCells(null, pixel, halfWidthPx)) touched.add(cellKey(cell.x, cell.y));
-  drawSegment(state, tool, color, null, pixel);
-  state.remoteStrokes.set(strokeId, { tool, color, lastPixel: pixel, touched });
+  drawSegment(state, tool, color, brushSize, null, pixel);
+  state.remoteStrokes.set(strokeId, { tool, color, brushSize, lastPixel: pixel, touched });
 }
 
 /** A receiver that missed the matching start (joined mid-stroke) simply has
@@ -582,12 +604,12 @@ function applyRemoteStrokePointsOnState(
 ): void {
   const remote = state.remoteStrokes.get(strokeId);
   if (!remote) return;
-  const halfWidthPx = lineWidthPx(remote.tool) / 2;
+  const halfWidthPx = lineWidthPx(remote.tool, remote.brushSize) / 2;
   for (const point of points) {
     const { pixelX, pixelY } = gridPointToPixel(point.u, point.v);
     const pixel = { x: pixelX, y: pixelY };
     for (const cell of sampleSegmentCells(remote.lastPixel, pixel, halfWidthPx)) remote.touched.add(cellKey(cell.x, cell.y));
-    drawSegment(state, remote.tool, remote.color, remote.lastPixel, pixel);
+    drawSegment(state, remote.tool, remote.color, remote.brushSize, remote.lastPixel, pixel);
     remote.lastPixel = pixel;
   }
 }
@@ -656,6 +678,7 @@ interface StrokeSession {
   state: MapWhiteboardState;
   tool: WhiteboardTool;
   color: string;
+  brushSize: WhiteboardBrushSize;
   lastPixel: { x: number; y: number } | null;
   touched: Set<string>;
   /** Each newly-touched cell's own tile immediately before THIS stroke drew
@@ -665,7 +688,7 @@ interface StrokeSession {
 
 function applyStrokePoint(stroke: StrokeSession, pixelX: number, pixelY: number): void {
   const to = { x: pixelX, y: pixelY };
-  const halfWidthPx = lineWidthPx(stroke.tool) / 2;
+  const halfWidthPx = lineWidthPx(stroke.tool, stroke.brushSize) / 2;
   for (const cell of sampleSegmentCells(stroke.lastPixel, to, halfWidthPx)) {
     const key = cellKey(cell.x, cell.y);
     if (!stroke.touched.has(key)) {
@@ -673,7 +696,7 @@ function applyStrokePoint(stroke: StrokeSession, pixelX: number, pixelY: number)
       stroke.before.set(key, stroke.state.tiles.get(key) ?? null);
     }
   }
-  drawSegment(stroke.state, stroke.tool, stroke.color, stroke.lastPixel, to);
+  drawSegment(stroke.state, stroke.tool, stroke.color, stroke.brushSize, stroke.lastPixel, to);
   stroke.lastPixel = to;
 }
 
@@ -754,6 +777,7 @@ export const WhiteboardPlane = forwardRef<WhiteboardHandle, WhiteboardPlaneProps
     interactive,
     tool,
     color,
+    brushSize,
     onDrawingChange,
     onHistoryChange,
     onDebug,
@@ -854,8 +878,8 @@ export const WhiteboardPlane = forwardRef<WhiteboardHandle, WhiteboardPlaneProps
         reportHistory(state);
         reportDebug(state);
       },
-      applyRemoteStrokeStart(strokeId, remoteTool, remoteColor, point) {
-        applyRemoteStrokeStartOnState(state, strokeId, remoteTool, remoteColor, point);
+      applyRemoteStrokeStart(strokeId, remoteTool, remoteColor, remoteBrushSize, point) {
+        applyRemoteStrokeStartOnState(state, strokeId, remoteTool, remoteColor, remoteBrushSize, point);
         reportDebug(state);
       },
       applyRemoteStrokePoints(strokeId, points) {
@@ -896,15 +920,23 @@ export const WhiteboardPlane = forwardRef<WhiteboardHandle, WhiteboardPlaneProps
       if (event.button !== 0) return;
       event.stopPropagation();
       const { pixelX, pixelY } = worldToPixel(event.point.x, event.point.z, gridWidth, gridHeight, cellSize);
-      const stroke: StrokeSession = { state, tool, color, lastPixel: null, touched: new Set(), before: new Map() };
+      const stroke: StrokeSession = {
+        state,
+        tool,
+        color,
+        brushSize,
+        lastPixel: null,
+        touched: new Set(),
+        before: new Map(),
+      };
       applyStrokePoint(stroke, pixelX, pixelY);
       strokeRef.current = stroke;
       const strokeId = crypto.randomUUID();
       strokeIdRef.current = strokeId;
-      onLocalStrokeStartRef.current?.(mapId, { strokeId, tool, color, point: pixelToGridPoint(pixelX, pixelY) });
+      onLocalStrokeStartRef.current?.(mapId, { strokeId, tool, color, brushSize, point: pixelToGridPoint(pixelX, pixelY) });
       setIsDrawing(true);
     },
-    [state, tool, color, gridWidth, gridHeight, cellSize, mapId]
+    [state, tool, color, brushSize, gridWidth, gridHeight, cellSize, mapId]
   );
 
   useEffect(() => {

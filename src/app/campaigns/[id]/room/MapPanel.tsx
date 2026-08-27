@@ -6,6 +6,7 @@ import {
   MAX_WHITEBOARD_HEIGHT,
   MIN_WHITEBOARD_HEIGHT,
   WHITEBOARD_HEIGHT_STEP,
+  type WhiteboardBrushSize,
   type WhiteboardTool,
 } from "@/scene-3d";
 import styles from "./room.module.css";
@@ -75,6 +76,8 @@ export function MapPanel({
   onSetWhiteboardTool,
   whiteboardColor,
   onSetWhiteboardColor,
+  whiteboardBrushSize,
+  onSetWhiteboardBrushSize,
   whiteboardHeight,
   onSetWhiteboardHeight,
   whiteboardCanUndo,
@@ -115,6 +118,10 @@ export function MapPanel({
   onSetWhiteboardTool: (tool: WhiteboardTool) => void;
   whiteboardColor: string;
   onSetWhiteboardColor: (color: string) => void;
+  /** Applies to whichever tool (pen or eraser) is currently active — see
+   * WhiteboardPlaneProps.brushSize's own doc comment. */
+  whiteboardBrushSize: WhiteboardBrushSize;
+  onSetWhiteboardBrushSize: (size: WhiteboardBrushSize) => void;
   whiteboardHeight: number;
   onSetWhiteboardHeight: (height: number) => void;
   whiteboardCanUndo: boolean;
@@ -180,6 +187,29 @@ export function MapPanel({
                 >
                   🧹 Eraser
                 </button>
+              </div>
+              <span className={styles.panelLabel}>Brush size</span>
+              <div className={styles.modeToggle} role="group" aria-label="Whiteboard brush size">
+                {(
+                  [
+                    { size: "small" as const, label: "S" },
+                    { size: "medium" as const, label: "M" },
+                    { size: "large" as const, label: "L" },
+                  ]
+                ).map(({ size, label }) => (
+                  <button
+                    key={size}
+                    type="button"
+                    className={[styles.modeButton, whiteboardBrushSize === size ? styles.modeButtonActive : ""]
+                      .filter(Boolean)
+                      .join(" ")}
+                    aria-pressed={whiteboardBrushSize === size}
+                    onClick={() => onSetWhiteboardBrushSize(size)}
+                    data-testid={`whiteboard-brush-${size}`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
               <TextInput
                 type="color"
