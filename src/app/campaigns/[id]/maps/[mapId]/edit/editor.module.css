@@ -216,6 +216,36 @@
   padding: 8px 10px;
 }
 
+/* Map Editor Batch A3: the tint swatch grid is a plain flex-wrap row with no
+   overflow of its own (unlike .assetGrid above) — its content's own
+   automatic minimum size is already non-zero, so it can't collapse to zero
+   height the same way .assetGrid needed flex-shrink:0 to avoid; ten small
+   circles wrap to at most two short rows regardless of .contextPanel's
+   width. */
+.tintSwatchGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tintSwatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--purple) 35%, transparent);
+  padding: 0;
+  cursor: pointer;
+}
+
+.tintSwatch:hover {
+  border-color: var(--teal);
+}
+
+.tintSwatchActive {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--teal) 55%, transparent);
+}
+
 .selectedMeta {
   font-family: var(--font-m);
   font-size: 11px;

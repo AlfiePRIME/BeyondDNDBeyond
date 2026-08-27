@@ -61,6 +61,7 @@ function mapObject(overrides: Partial<MapObject>): MapObject {
     blocks_line_of_sight: false,
     crossing_type: null,
     tag: null,
+    tint: null,
     revealed_to_players: true,
     created_at: "2026-08-24T10:00:00.000Z",
     asset: { name: "Torch", source_type: "preset", model_ref: "torch.glb" },

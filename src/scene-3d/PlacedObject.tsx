@@ -77,11 +77,14 @@ function PlaceholderProp() {
 function PropModel({
   url,
   forwardOffsetDeg,
+  tint,
   onPoseDebug,
   onMeasureDebug,
 }: {
   url: string;
   forwardOffsetDeg: number;
+  /** Map Editor Batch A3: see PosedCloneProps.tint's own doc comment. */
+  tint?: string | null;
   onPoseDebug?: (compatible: boolean) => void;
   /** Verification-only: mirrors this specific loaded model's own measured
    * bounding-box maxDim and derived scale factor out to a caller — the same
@@ -141,6 +144,7 @@ function PropModel({
       position={offset}
       rotation={[0, (forwardOffsetDeg * Math.PI) / 180, 0]}
       castShadow
+      tint={tint}
       onCompatibilityChange={onPoseDebug}
     />
   );
@@ -171,6 +175,7 @@ class PropErrorBoundary extends Component<PropErrorBoundaryProps, { failed: bool
 export function PlacedObject({
   url,
   forwardOffsetDeg = 0,
+  tint,
   onPoseDebug,
   onMeasureDebug,
 }: {
@@ -180,6 +185,10 @@ export function PlacedObject({
    * correction), exactly today's behavior for every asset predating this
    * feature. */
   forwardOffsetDeg?: number;
+  /** Map Editor Batch A3: see PosedCloneProps.tint's own doc comment. Works
+   * identically for a generated preset or a DM-uploaded custom model — this
+   * component never branches on where `url` resolved from. */
+  tint?: string | null;
   /** Verification-only: see PosedCloneProps.onCompatibilityChange's doc
    * comment. Omit it (as every real caller except the verification
    * pass-through does) and nothing about rendering changes. */
@@ -191,7 +200,13 @@ export function PlacedObject({
   return (
     <PropErrorBoundary url={url}>
       <Suspense fallback={<PlaceholderProp />}>
-        <PropModel url={url} forwardOffsetDeg={forwardOffsetDeg} onPoseDebug={onPoseDebug} onMeasureDebug={onMeasureDebug} />
+        <PropModel
+          url={url}
+          forwardOffsetDeg={forwardOffsetDeg}
+          tint={tint}
+          onPoseDebug={onPoseDebug}
+          onMeasureDebug={onMeasureDebug}
+        />
       </Suspense>
     </PropErrorBoundary>
   );

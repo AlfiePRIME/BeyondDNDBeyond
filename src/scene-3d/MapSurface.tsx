@@ -470,6 +470,13 @@ export interface MapSurfaceObject {
    * pattern). An object on an imperceptible cell is omitted by the caller
    * entirely, never dimmed. */
   dimmed?: boolean;
+  /** Map Editor Batch A3: a '#rrggbb' hex string applied as a multiply-tint
+   * against the model's own base color (PosedClone.tsx's buildTintedScene),
+   * or null/undefined for "no tint" — renders exactly as before this
+   * feature. Unlike `dimmed`'s shroud-overlay workaround above, this DOES
+   * genuinely recolor the glTF's own materials — per-instance-cloned first
+   * so it never leaks onto any other placed instance of the same asset. */
+  tint?: string | null;
 }
 
 interface ObjectMarkerProps {
@@ -486,6 +493,8 @@ interface ObjectMarkerProps {
   ghost: boolean;
   active: boolean;
   dimmed: boolean;
+  /** Map Editor Batch A3: see MapSurfaceObject.tint's own doc comment. */
+  tint: string | null;
   onSelect: (id: string, event: ThreeEvent<PointerEvent>) => void;
   /** Verification-only: see MapSurfaceProps.onObjectPoseDebug's doc comment. */
   onPoseDebug?: (id: string, compatible: boolean) => void;
@@ -522,6 +531,7 @@ const ObjectMarker = memo(function ObjectMarker({
   ghost,
   active,
   dimmed,
+  tint,
   onSelect,
   onPoseDebug,
   onMeasureDebug,
@@ -542,6 +552,7 @@ const ObjectMarker = memo(function ObjectMarker({
         <PlacedObject
           url={url}
           forwardOffsetDeg={forwardOffsetDeg}
+          tint={tint}
           onPoseDebug={onPoseDebug ? (compatible) => onPoseDebug(id, compatible) : undefined}
           onMeasureDebug={onMeasureDebug ? (measurement) => onMeasureDebug(id, measurement) : undefined}
         />
@@ -1252,6 +1263,7 @@ export function MapSurface({
           ghost={object.ghost ?? false}
           active={object.active ?? false}
           dimmed={object.dimmed ?? false}
+          tint={object.tint ?? null}
           onSelect={onSelectObject ?? NOOP_SELECT}
           onPoseDebug={onObjectPoseDebug}
           onMeasureDebug={onObjectMeasureDebug}
