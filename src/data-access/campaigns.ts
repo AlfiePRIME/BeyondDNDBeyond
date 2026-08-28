@@ -27,7 +27,11 @@ export interface Campaign {
    * shape exactly: a plain campaigns column, DM-only at the RLS layer via
    * the same blanket UPDATE policy. Only 'clear' and 'fog' render anything
    * as of C1 — rain/thunderstorm/firestorm/acid_storm are reserved values
-   * later prompts (C2-C4) build their own visual effects on top of. */
+   * later prompts (C2-C4) build their own visual effects on top of.
+   * 'cloudy' (migration 0079_cloudy_weather.sql) is a later addition: a
+   * purely atmospheric overcast sky (GameTableScene's CloudLayer), with
+   * zero effect on ground-level visibility or fog — see that migration's
+   * own comment for the full 'cloudy' vs 'fog' distinction. */
   weather_kind: WeatherKind;
   /** Only meaningful for 'firestorm'/'acid_storm' (C4): whether the DM's
    * periodic-damage timer is armed for the current weather. Always false
@@ -49,7 +53,7 @@ export interface Campaign {
 
 export type DayNightMode = "day" | "night";
 
-export type WeatherKind = "clear" | "fog" | "rain" | "thunderstorm" | "firestorm" | "acid_storm";
+export type WeatherKind = "clear" | "fog" | "cloudy" | "rain" | "thunderstorm" | "firestorm" | "acid_storm";
 
 export type CampaignRole = "dm" | "player";
 

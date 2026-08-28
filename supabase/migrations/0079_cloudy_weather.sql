@@ -1,0 +1,43 @@
+-- Weather & Enemies (post-C4 addition): widens campaigns.weather_kind
+-- (0070_weather.sql) with a seventh value, 'cloudy' — exactly the same
+-- drop-then-add CHECK-widening pattern 0039/0049/0051's own terrain_type/
+-- ground_type widenings already established (see 0051_water_terrain.sql's
+-- own comment for the full reasoning on why a named drop+add beats an
+-- inline check here). The constraint name was read from the running
+-- database (pg_constraint), not guessed: 0070's inline
+-- `check (weather_kind in (...))` auto-named it campaigns_weather_kind_check,
+-- confirmed directly via `select conname from pg_constraint where conname
+-- like '%weather_kind%'`.
+--
+-- 'cloudy' is a deliberately distinct third sky state from 'clear' and
+-- 'fog', not a synonym of either:
+--   - 'clear'  — the baseline sky. GameTableScene's cloud layer (this same
+--                addition) still renders a few sparse, bright/white puffs
+--                even here — a genuinely EMPTY sky read as "did the cloud
+--                layer fail to mount" during manual verification, so
+--                'clear' gets light, thin cloud cover rather than none at
+--                all (see GameTableScene.tsx's CLOUD_PRESETS.clear comment
+--                for the full reasoning).
+--   - 'cloudy' — a fully overcast sky: dense, grey-white drifting cloud
+--                cover overhead, but ZERO effect on ground-level visibility
+--                or the scene's fog (resolveSceneFog renders 'cloudy'
+--                identically to 'clear' — day/night's own fog stands
+--                unchanged). No particles, no mechanical damage eligibility
+--                (see the CHECK below staying scoped to firestorm/acid_storm
+--                for weather_mechanical's own separate constraint).
+--   - 'fog'    — unchanged from 0070: a LOW, thick, close-range haze
+--                (WEATHER_FOG_PRESET, near=3/far=15) that genuinely
+--                obscures ground-level sight lines. 'fog' does not, by
+--                itself, imply anything about the sky overhead — the new
+--                cloud layer still renders during fog (grey/dark, matching
+--                the low ceiling a real foggy sky usually sits under), but
+--                fog's own defining mechanic (the close, obscuring haze) is
+--                entirely unrelated to and unaffected by the cloud layer.
+-- In short: 'fog' is a ground-level visibility mechanic, 'cloudy' is a
+-- purely atmospheric sky-dressing mechanic — a map can be foggy without
+-- being cloudy (a magical ground mist under a clear sky) or cloudy without
+-- being foggy (an overcast day with fine ground visibility), even though
+-- this prompt only exposes one weather_kind slider at a time.
+alter table public.campaigns drop constraint if exists campaigns_weather_kind_check;
+alter table public.campaigns add constraint campaigns_weather_kind_check
+  check (weather_kind in ('clear', 'fog', 'cloudy', 'rain', 'thunderstorm', 'firestorm', 'acid_storm'));

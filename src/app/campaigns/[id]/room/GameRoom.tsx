@@ -178,6 +178,7 @@ import {
   PERSONAL_TRAY_SCALE,
   PLAYER_CHAIR_FRONTAGE,
   resolveChairDrop,
+  resolveCloudPreset,
   resolveMemberTrayLayout,
   resolveSceneFog,
   resolveWallMountOffset,
@@ -6237,6 +6238,19 @@ export function GameRoom({
           pixel-diffing a screenshot. */}
       <div data-testid="weather-particles-state" hidden>
         {JSON.stringify(weatherParticlesDebug)}
+      </div>
+      {/* Hidden render-state mirror for verify-weather-clouds.mjs — the
+          overhead CloudLayer has no per-kind null branch (it always
+          renders, for every weatherKind), so unlike weather-particles-state
+          above there is no "is it even mounted" question to answer; this
+          mirrors resolveCloudPreset(weatherKind) directly — the exact same
+          pure function CloudLayer's own useFrame loop calls every frame to
+          decide what to actually draw (see CloudLayer.tsx's own doc comment
+          on why there's exactly one source of truth here) — so a Playwright
+          check can confirm the real, exact per-kind color/opacity/coverage
+          without pixel-diffing a screenshot. */}
+      <div data-testid="cloud-state" hidden>
+        {JSON.stringify({ kind: weatherKind, preset: resolveCloudPreset(weatherKind) })}
       </div>
       {/* Hidden render-state mirror for verify-map-art-rendering.mjs (Map
           Art Generation E5) — GameTableScene's own onMapArtDebug, mirrored

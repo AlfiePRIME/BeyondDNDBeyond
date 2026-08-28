@@ -41,9 +41,18 @@ const PAGES: { id: BookPage; label: string }[] = [
  * allows. Offered here from day one even though only 'clear'/'fog' render
  * anything yet — later prompts (C2 rain/thunderstorm, C4 firestorm/acid
  * storm) add their own visual effects on top of this same picker without
- * needing new UI wiring. */
+ * needing new UI wiring. 'cloudy' (migration 0079_cloudy_weather.sql) is a
+ * later addition, placed between 'clear' and 'fog' — a rough escalating
+ * scale from fair weather to obscuring haze to storm to fantasy hazard.
+ * Every kind here (including 'cloudy') shows GameTableScene's overhead
+ * CloudLayer with a distinct tint; 'cloudy' is the only one that ALSO means
+ * "a full overcast sky" (see CloudLayer.tsx's own doc comment) while
+ * leaving ground-level visibility/fog completely unaffected — the
+ * deliberate distinction from 'fog', which does the opposite (a close,
+ * ground-hugging haze with no particular sky implication). */
 const WEATHER_OPTIONS: { id: WeatherKind; label: string }[] = [
   { id: "clear", label: "☀️ Clear" },
+  { id: "cloudy", label: "☁️ Cloudy" },
   { id: "fog", label: "🌫️ Fog" },
   { id: "rain", label: "🌧️ Rain" },
   { id: "thunderstorm", label: "⛈️ Thunderstorm" },
@@ -348,8 +357,11 @@ export function DmBook({
             ) : null}
             <span className={roomStyles.panelLabel}>Weather</span>
             <p className={styles.dayNightHint}>
-              Sets the current weather for the whole party. Clear, Fog, Rain, Thunderstorm (rain
-              plus synchronized lightning), Firestorm, and Acid Storm all have a visible effect.
+              Sets the current weather for the whole party. Every kind shows drifting clouds
+              overhead, tinted to match. Cloudy adds a full overcast sky with normal ground
+              visibility; Fog additionally adds a close, obscuring ground haze. Rain,
+              Thunderstorm (rain plus synchronized lightning), Firestorm, and Acid Storm all add
+              their own further visible effect.
             </p>
             <div className={roomStyles.modeToggle} role="group" aria-label="Weather">
               {WEATHER_OPTIONS.map((option) => (

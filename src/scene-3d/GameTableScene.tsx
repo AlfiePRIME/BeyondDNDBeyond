@@ -49,6 +49,7 @@ import {
   type WhiteboardBrushSize,
 } from "./whiteboardMath";
 import { WeatherParticles, type WeatherParticlesDebugState } from "./WeatherParticles";
+import { CloudLayer } from "./CloudLayer";
 
 // Room ambiance pulls from the app's design tokens (see
 // src/ui-components/tokens.css) — scene-3d can't import CSS custom
@@ -101,16 +102,19 @@ const DAY_NIGHT_PRESETS = {
 
 export type DayNightMode = keyof typeof DAY_NIGHT_PRESETS;
 
-/** Every campaign weather value (Weather & Enemies C1) — mirrors
+/** Every campaign weather value (Weather & Enemies C1, widened with
+ * 'cloudy' by migration 0079_cloudy_weather.sql) — mirrors
  * data-access/campaigns.ts's own WeatherKind (a separate, independently-
  * declared identical union, same DayNightMode-vs-DayNightMode split already
  * established above: this file's own type is the scene's local vocabulary,
  * not an import from data-access, so scene-3d never depends on it). Only
- * 'fog' does anything visually as of C1 — 'rain'/'thunderstorm'/'firestorm'/
- * 'acid_storm' are reserved for C2-C4's own separate overlay effects
- * layered on TOP of this scene (Droplets, lightning, particles), not part
- * of this file's own fog composition. */
-export type WeatherKind = "clear" | "fog" | "rain" | "thunderstorm" | "firestorm" | "acid_storm";
+ * 'fog' affects this file's own fog composition (resolveSceneFog below) —
+ * 'rain'/'thunderstorm'/'firestorm'/'acid_storm' are C2-C4's own separate
+ * overlay effects layered on TOP of this scene (Droplets, lightning,
+ * particles); 'cloudy' is CloudLayer's own overhead sky-dressing effect
+ * (see its doc comment for the full 'cloudy' vs 'fog' distinction) and,
+ * like every kind besides 'fog', renders identically to 'clear' here. */
+export type WeatherKind = "clear" | "fog" | "cloudy" | "rain" | "thunderstorm" | "firestorm" | "acid_storm";
 
 /** Weather's own fog (Weather & Enemies C1), used only when weatherKind is
  * 'fog' — deliberately NOT tied to either day/night preset's roomBg color
@@ -1700,6 +1704,13 @@ export function GameTableScene({
           weather_mechanical (GameRoom.tsx's own periodic-tick effect owns
           the damage side entirely). */}
       <WeatherParticles weatherKind={weatherKind} onDebug={onWeatherParticlesDebug} />
+
+      {/* Overhead cloud layer — unlike WeatherParticles above, this has NO
+          per-kind null branch: it renders for every weatherKind, including
+          'clear' and 'fog' (see CloudLayer.tsx's own doc comment for why a
+          conditional mount would be the wrong shape here, and for the full
+          per-kind color/density/altitude palette and its reasoning). */}
+      <CloudLayer weatherKind={weatherKind} />
 
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <circleGeometry args={[24, 48]} />
