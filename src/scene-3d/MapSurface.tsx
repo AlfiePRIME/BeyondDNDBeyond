@@ -1266,8 +1266,18 @@ const TokenMarker = memo(function TokenMarker({
   // whenever it's a bridge, no crossing structure, or every token before
   // this feature. Blended smoothly into the move-tween by useTokenSlide
   // itself, not popped on/off here.
-  const tiltPitch = crossingRotationDeg !== null ? crossingTiltPitchMagnitude : 0;
-  const tiltYaw = crossingRotationDeg !== null ? (crossingRotationDeg * Math.PI) / 180 : 0;
+  //
+  // Gated on `modelUrl` too (a real player-reported issue: a mathematically
+  // correct ~36° incline lean, confirmed against this exact deployed build
+  // via its own render-state debug mirror, still looked like the pawn had
+  // face-planted into the stairs) — the plain disc/pin has no body, front,
+  // or limbs to read as "leaning while climbing"; tilting a featureless
+  // vertical marker just reads as "fell over," at any camera angle. A real
+  // model (an NPC template's own posed mesh, or a player's uploaded custom
+  // model) has actual geometry that can convincingly occupy an inclined
+  // pose, so it keeps the true tilt.
+  const tiltPitch = modelUrl && crossingRotationDeg !== null ? crossingTiltPitchMagnitude : 0;
+  const tiltYaw = modelUrl && crossingRotationDeg !== null ? (crossingRotationDeg * Math.PI) / 180 : 0;
   const { ref: slideRef, phase } = useTokenSlide({
     gridX,
     gridY,

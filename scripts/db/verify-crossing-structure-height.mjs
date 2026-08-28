@@ -25,10 +25,16 @@
 //      rendered transform (MapSurfaceProps.onTokenTransformDebug), not just
 //      the props that were fed in.
 //   3. A token standing on STAIRS renders above the raw cell floor by the
-//      stairs' own real measured surface height, AND tilts by the flight's
-//      own real incline angle, yawed to match that stairs object's own
-//      placement rotation (checked at rotation 0 AND 90 — proves the yaw
-//      genuinely tracks the object, not a hardcoded direction).
+//      stairs' own real measured surface height. Tilt itself is gated on
+//      having a real model (a player-reported regression: a mathematically
+//      correct ~36° lean on a featureless disc/pin, which has no body/limbs
+//      to read as "leaning while climbing", visually looked like the pawn
+//      had face-planted into the stairs) — a PLAIN token (no model) gets the
+//      height offset only, never tilts; a MODELED token (an NPC's own posed
+//      mesh, or a player's uploaded custom model) tilts by the flight's own
+//      real incline angle, yawed to match that stairs object's own
+//      placement rotation (checked at rotation 0, 90, AND 180 — proves the
+//      yaw genuinely tracks the object, not a hardcoded direction).
 //   4. Regression: a token on ordinary elevated terrain with NO crossing
 //      structure renders at EXACTLY today's height (raw elevation only, no
 //      offset) with no tilt — MapPlan P5's raise/lower feature unregressed.
@@ -745,7 +751,14 @@ try {
   closeTo(transformState[tokenA].pitchDeg, 0, ANGLE_EPS, "a token on a BRIDGE does not tilt (pitch)");
   closeTo(transformState[tokenA].yawDeg, 0, ANGLE_EPS, "a token on a BRIDGE does not tilt (yaw)");
 
-  // Scenario B — stairs, rotation 0: height offset + tilt, yaw matches 0°.
+  // Scenario B — stairs, rotation 0, PLAIN token (no model — npc_name only):
+  // height offset still applies, but NEVER tilts. Real player-reported
+  // regression: a mathematically correct ~36° lean on a featureless
+  // disc/pin (no body/limbs to read as "leaning while climbing") looked
+  // like the pawn had face-planted into the stairs, confirmed against this
+  // exact deployed build via this very mirror. Fixed by gating tilt on
+  // having a real model at all — only a modeled token (see tokenH/I/L/J/K
+  // below) keeps the true incline.
   closeTo(
     transformState[tokenB].topY,
     step2 + stairsSurface,
@@ -757,27 +770,28 @@ try {
     transformState[tokenB].topY > step2 + TOPY_EPS
   );
   closeTo(
-    Math.abs(transformState[tokenB].pitchDeg),
-    stairsTiltDeg,
+    transformState[tokenB].pitchDeg,
+    0,
     ANGLE_EPS,
-    `a token on STAIRS (rotation 0°) tilts by the flight's real incline angle (expected magnitude ${stairsTiltDeg}°, got ${transformState[tokenB].pitchDeg}°)`
+    `a PLAIN (no-model) token on STAIRS never tilts — height offset only (got pitchDeg ${transformState[tokenB].pitchDeg}°)`
   );
-  closeTo(transformState[tokenB].yawDeg, 0, ANGLE_EPS, "stairs at rotation 0° yaws the tilt to 0°");
+  closeTo(transformState[tokenB].yawDeg, 0, ANGLE_EPS, "a PLAIN (no-model) token on STAIRS has no yaw either");
 
-  // Scenario E — stairs, rotation 90: SAME tilt magnitude, yaw tracks the
-  // object's own placement rotation (proves it isn't hardcoded).
+  // Scenario E — stairs, rotation 90, PLAIN token: same "never tilts" rule
+  // regardless of the object's own placement rotation.
   closeTo(
-    Math.abs(transformState[tokenE].pitchDeg),
-    stairsTiltDeg,
+    transformState[tokenE].pitchDeg,
+    0,
     ANGLE_EPS,
-    "a token on STAIRS (rotation 90°) tilts by the SAME real incline angle regardless of the object's own rotation"
+    "a PLAIN (no-model) token on STAIRS (rotation 90°) still never tilts"
   );
-  closeTo(transformState[tokenE].yawDeg, 90, ANGLE_EPS, "stairs at rotation 90° yaws the tilt to 90° — tracks the object, not hardcoded");
+  closeTo(transformState[tokenE].yawDeg, 0, ANGLE_EPS, "a PLAIN (no-model) token on STAIRS (rotation 90°) has no yaw either");
 
   // ────────────────────────────────────────────────────────────────────
-  // Scenarios F/G — the NEW "Stairs (Half)" preset: its OWN real surface
-  // height and tilt magnitude, never accidentally reusing the full-height
-  // stairs' own constants.
+  // Scenarios F/G — the "Stairs (Half)" preset, PLAIN tokens: its OWN real
+  // surface height still applies (preset-aware, never accidentally reusing
+  // the full-height stairs' own constant) — tilt is still never applied to
+  // a plain token, same rule as B/E above.
   // ────────────────────────────────────────────────────────────────────
   closeTo(
     transformState[tokenF].topY,
@@ -794,19 +808,19 @@ try {
     Math.abs(stairsHalfSurface - stairsSurface) > 1e-6
   );
   closeTo(
-    Math.abs(transformState[tokenF].pitchDeg),
-    stairsHalfTiltDeg,
+    transformState[tokenF].pitchDeg,
+    0,
     ANGLE_EPS,
-    `a token on Stairs (Half) (rotation 0°) tilts by ITS OWN real incline angle (expected magnitude ${stairsHalfTiltDeg}°, got ${transformState[tokenF].pitchDeg}°)`
+    `a PLAIN (no-model) token on Stairs (Half) never tilts either (got pitchDeg ${transformState[tokenF].pitchDeg}°)`
   );
-  closeTo(transformState[tokenF].yawDeg, 0, ANGLE_EPS, "Stairs (Half) at rotation 0° yaws the tilt to 0°");
+  closeTo(transformState[tokenF].yawDeg, 0, ANGLE_EPS, "a PLAIN (no-model) token on Stairs (Half) has no yaw either");
   closeTo(
-    Math.abs(transformState[tokenG].pitchDeg),
-    stairsHalfTiltDeg,
+    transformState[tokenG].pitchDeg,
+    0,
     ANGLE_EPS,
-    "a token on Stairs (Half) (rotation 90°) tilts by the SAME real incline angle regardless of the object's own rotation"
+    "a PLAIN (no-model) token on Stairs (Half) (rotation 90°) still never tilts"
   );
-  closeTo(transformState[tokenG].yawDeg, 90, ANGLE_EPS, "Stairs (Half) at rotation 90° yaws the tilt to 90° — tracks the object, not hardcoded");
+  closeTo(transformState[tokenG].yawDeg, 0, ANGLE_EPS, "a PLAIN (no-model) token on Stairs (Half) (rotation 90°) has no yaw either");
 
   // ────────────────────────────────────────────────────────────────────
   // Root-cause verification for the reported "pawn orientation flipped 180
@@ -817,13 +831,17 @@ try {
   // authored front (local +Z, buildGoblin()'s eyes/blade) points toward
   // the SAME side as the stairs' own real, rotated uphill end — i.e. it
   // climbs facing forward/upward, not backward.
+  //
+  // Also the other half of the plain-token-never-tilts fix above (B/E/F/G):
+  // a token WITH a real model (this Goblin) still gets the true incline
+  // magnitude — the gate is "has a model", not "is stairs vs not".
   // ────────────────────────────────────────────────────────────────────
-  for (const [label, tokenId, objectRotationDeg] of [
-    ["full-height stairs, rotation 0", tokenH, 0],
-    ["full-height stairs, rotation 90", tokenI, 90],
-    ["full-height stairs, rotation 180", tokenL, 180],
-    ["half-height stairs, rotation 0", tokenJ, 0],
-    ["half-height stairs, rotation 90", tokenK, 90],
+  for (const [label, tokenId, objectRotationDeg, expectedTiltDeg] of [
+    ["full-height stairs, rotation 0", tokenH, 0, stairsTiltDeg],
+    ["full-height stairs, rotation 90", tokenI, 90, stairsTiltDeg],
+    ["full-height stairs, rotation 180", tokenL, 180, stairsTiltDeg],
+    ["half-height stairs, rotation 0", tokenJ, 0, stairsHalfTiltDeg],
+    ["half-height stairs, rotation 90", tokenK, 90, stairsHalfTiltDeg],
   ]) {
     const { pitchDeg, yawDeg } = transformState[tokenId];
     const { dot, faces } = facesUphill(pitchDeg, yawDeg, objectRotationDeg);
@@ -831,6 +849,12 @@ try {
       `a directional (Goblin) token on ${label} faces UP the stairs (toward the object's own real rotated uphill end), not backward — dot=${dot.toFixed(3)}`,
       faces,
       JSON.stringify({ pitchDeg, yawDeg, objectRotationDeg, dot })
+    );
+    closeTo(
+      Math.abs(pitchDeg),
+      expectedTiltDeg,
+      ANGLE_EPS,
+      `a MODELED (Goblin) token on ${label} keeps the true incline tilt magnitude — unlike a plain disc/pin, it has real geometry to convincingly occupy the pose`
     );
   }
 
@@ -941,10 +965,10 @@ try {
       `after a REAL move onto stairs, the token settles at raw-elevation height + stairs surface height (expected ${moveStep2 + moveStairsSurface}, got ${afterMoveTransform.topY})`
     );
     closeTo(
-      Math.abs(afterMoveTransform.pitchDeg),
-      stairsTiltDeg,
+      afterMoveTransform.pitchDeg,
+      0,
       ANGLE_EPS,
-      "after a REAL move onto stairs, the token settles at the flight's real incline angle"
+      "after a REAL move onto stairs, this PLAIN (no-model) PC token settles with the height offset only — no tilt"
     );
   }
 
