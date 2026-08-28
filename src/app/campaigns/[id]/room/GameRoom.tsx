@@ -228,6 +228,7 @@ import { CombatPanel, type CombatState } from "./CombatPanel";
 import { ChatLogPanel } from "./ChatLogPanel";
 import { ContainerPanel } from "./ContainerPanel";
 import { DraggablePanel, PanelDockBar, PanelLayoutProvider } from "./DraggablePanel";
+import { SoundControl } from "./SoundControl";
 import { DiceLogPanel } from "./DiceLogPanel";
 import { DiceTrayPicker } from "./DiceTrayPicker";
 import { DmBook } from "./DmBook";
@@ -6945,6 +6946,11 @@ export function GameRoom({
               Renders nothing (null) while no panel is docked, so this is a
               pure no-op for anyone who's never used the new close button. */}
           <PanelDockBar />
+          {/* Sound Effects SP1: master volume slider + mute toggle — see
+              SoundControl.tsx's own doc comment for why it lives here
+              (alongside every other always-visible top-bar control) rather
+              than inside any one draggable panel. */}
+          <SoundControl />
           <span className={styles.roomLabel}>Game Room</span>
         </div>
       </header>

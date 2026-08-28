@@ -1,0 +1,76 @@
+.soundControl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* A thin, neon-accented range track/thumb matching this app's own
+   CRT/neon button styling (tokens.css's --teal/--surface2) rather than the
+   browser's stock slider chrome — the same "ported component gets a
+   from-scratch treatment matching this app's look" call every canvasui/
+   component already makes. */
+.volumeSlider {
+  width: 84px;
+  height: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--surface2);
+  border: 1px solid var(--dim);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.volumeSlider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--teal);
+  cursor: pointer;
+}
+
+.volumeSlider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: var(--teal);
+  cursor: pointer;
+}
+
+.volumeSlider::-moz-range-track {
+  height: 4px;
+  background: var(--surface2);
+  border-radius: 2px;
+}
+
+/* SP1's own verify-script test harness (see SoundControl.tsx's doc comment
+   on the sound-test-harness div for why this must stay REAL-clickable
+   rather than display:none). Pinned to a corner with the maximum z-index so
+   nothing else on the page can ever sit on top of it and block a click, at
+   a footprint small enough (2px buttons) to be visually negligible to a
+   real user without tripping Playwright's "zero-size = invisible"
+   actionability check. */
+.testHarness {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  z-index: 2147483647;
+  display: flex;
+  flex-wrap: wrap;
+  width: 120px;
+  overflow: hidden;
+}
+
+.testHarness button {
+  width: 2px;
+  height: 2px;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  overflow: hidden;
+  opacity: 0.02;
+}

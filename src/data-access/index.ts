@@ -38,10 +38,12 @@ export {
   getAvatarSignedUrl,
   subscribeToProfileChanges,
   subscribeToUiPreferencesChanges,
+  DEFAULT_SOUND_SETTINGS,
   type Profile,
   type AvatarSource,
   type UiPreferences,
   type PanelLayoutEntry,
+  type SoundSettings,
 } from "./profiles";
 export {
   listCharacterPawnsForCampaign,

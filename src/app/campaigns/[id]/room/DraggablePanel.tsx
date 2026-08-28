@@ -14,9 +14,11 @@ import {
   type ReactNode,
 } from "react";
 import {
+  DEFAULT_SOUND_SETTINGS,
   setUiPreferences,
   subscribeToUiPreferencesChanges,
   type PanelLayoutEntry,
+  type SoundSettings,
   type UiPreferences,
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
@@ -380,6 +382,21 @@ interface PanelLayoutContextValue {
    * — is already fully hidden and must never be treated as an obstacle or
    * as something to push). */
   registerPanelPresence(panelId: PanelId, element: HTMLElement | null, hasContent: boolean): void;
+  /**
+   * Sound Effects SP1 — the caller's own master volume/mute, persisted
+   * through this SAME provider (not a separate context) specifically so
+   * there is only ever ONE thing debouncing a write to
+   * profiles.ui_preferences: see this file's own `soundSettings` state
+   * (below) and profiles.ts's UiPreferences doc comment for why a second,
+   * independently-persisting owner of this jsonb document would silently
+   * clobber whichever field it doesn't know about on its own next write.
+   * Prefer `useSoundSettings()` (exported below) over reaching for these
+   * three members directly — it's the same data, named for what it actually
+   * is rather than "yet another PanelLayoutContextValue member".
+   */
+  getSoundSettings(): SoundSettings;
+  setSoundVolume(volume: number): void;
+  setSoundMuted(muted: boolean): void;
 }
 
 const PanelLayoutContext = createContext<PanelLayoutContextValue | null>(null);
@@ -454,6 +471,20 @@ export function PanelLayoutProvider({
     layoutRef.current = layout;
   }, [layout]);
 
+  // Sound Effects SP1 — master volume/mute, the SAME "own state, ref synced
+  // in an effect, merged into the debounced write" shape as `layout` above.
+  // Deliberately owned by THIS provider (not a sibling context) — see
+  // PanelLayoutContextValue's own doc comment on getSoundSettings for why a
+  // second, independent debounced writer of profiles.ui_preferences would
+  // be a real lost-update bug waiting to happen, not just a style choice.
+  const [soundSettings, setSoundSettingsState] = useState<SoundSettings>(
+    initialPreferences.soundSettings ?? DEFAULT_SOUND_SETTINGS
+  );
+  const soundSettingsRef = useRef(soundSettings);
+  useEffect(() => {
+    soundSettingsRef.current = soundSettings;
+  }, [soundSettings]);
+
   // ── Push-aside follow-up state ──────────────────────────────────────
   //
   // `pushedOffsets` is a TRANSIENT visual overlay, deliberately never
@@ -507,7 +538,17 @@ export function PanelLayoutProvider({
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persist = useCallback(() => {
     persistTimerRef.current = null;
-    setUiPreferences(supabase, userId, { panelLayout: layoutRef.current }).catch(() => undefined);
+    // Whole-document write (setUiPreferences' own contract) — includes
+    // BOTH fields every time, sourced from each one's own up-to-date ref,
+    // regardless of which one actually changed just now. This is what
+    // makes a single shared debounce/persist path safe for two
+    // independently-edited slices of the same jsonb column: neither a
+    // panel drag nor a volume-slider change can ever land a write that
+    // omits (and thereby erases) the other.
+    setUiPreferences(supabase, userId, {
+      panelLayout: layoutRef.current,
+      soundSettings: soundSettingsRef.current,
+    }).catch(() => undefined);
   }, [supabase, userId]);
 
   const schedulePersist = useCallback(() => {
@@ -534,6 +575,15 @@ export function PanelLayoutProvider({
     () =>
       subscribeToUiPreferencesChanges(supabase, userId, (preferences) => {
         setLayout(preferences.panelLayout ?? {});
+        // Sound Effects SP1: this same echo is also this provider's ONLY
+        // way of learning about a soundSettings change made by a DIFFERENT
+        // write to this row (another tab, or — within this tab — the sound
+        // control's own debounced write landing before this one's timer
+        // fires). Applying it here keeps `soundSettingsRef` current so the
+        // next time THIS provider's own persist() fires (e.g. from a panel
+        // drag, moments later), it re-sends the latest known soundSettings
+        // rather than a stale in-memory copy.
+        setSoundSettingsState(preferences.soundSettings ?? DEFAULT_SOUND_SETTINGS);
       }),
     [supabase, userId]
   );
@@ -605,6 +655,30 @@ export function PanelLayoutProvider({
           };
         return { ...current, [panelId]: { ...entry, docked: !entry.docked } };
       });
+      schedulePersist();
+    },
+    [schedulePersist]
+  );
+
+  // Sound Effects SP1's three context members — plain get/set pairs, the
+  // same shape setPosition/toggleCollapsed already use: update local state
+  // immediately (so a dragged slider/clicked toggle feels instant and the
+  // sound manager can apply it live — see useSoundSettings' own consumer,
+  // src/audio/SoundControl.tsx) and schedule the shared debounced persist.
+  const getSoundSettings = useCallback(() => soundSettings, [soundSettings]);
+
+  const setSoundVolume = useCallback(
+    (volume: number) => {
+      const clamped = Math.min(1, Math.max(0, volume));
+      setSoundSettingsState((current) => (current.volume === clamped ? current : { ...current, volume: clamped }));
+      schedulePersist();
+    },
+    [schedulePersist]
+  );
+
+  const setSoundMuted = useCallback(
+    (muted: boolean) => {
+      setSoundSettingsState((current) => (current.muted === muted ? current : { ...current, muted }));
       schedulePersist();
     },
     [schedulePersist]
@@ -770,6 +844,9 @@ export function PanelLayoutProvider({
       pushOffsetOf,
       clearPushOffset,
       registerPanelPresence,
+      getSoundSettings,
+      setSoundVolume,
+      setSoundMuted,
     }),
     [
       getEntry,
@@ -782,6 +859,9 @@ export function PanelLayoutProvider({
       pushOffsetOf,
       clearPushOffset,
       registerPanelPresence,
+      getSoundSettings,
+      setSoundVolume,
+      setSoundMuted,
     ]
   );
 
@@ -795,6 +875,29 @@ export function usePanelLayout(): PanelLayoutContextValue {
   const context = useContext(PanelLayoutContext);
   if (!context) throw new Error("DraggablePanel must be rendered inside a PanelLayoutProvider");
   return context;
+}
+
+/**
+ * Sound Effects SP1 — the caller's own persisted master volume/mute, plus
+ * setters. A thin, purpose-named wrapper over `usePanelLayout()` (see
+ * PanelLayoutContextValue's own doc comment for why this piggybacks on the
+ * panel-layout provider's plumbing rather than standing up a second
+ * ui_preferences writer): src/audio/SoundControl.tsx is this hook's one
+ * real consumer, and every other Sound Effects prompt should reach the
+ * user's volume/mute setting through here, not through `usePanelLayout()`
+ * directly.
+ */
+export function useSoundSettings(): {
+  settings: SoundSettings;
+  setVolume: (volume: number) => void;
+  setMuted: (muted: boolean) => void;
+} {
+  const layout = usePanelLayout();
+  return {
+    settings: layout.getSoundSettings(),
+    setVolume: layout.setSoundVolume,
+    setMuted: layout.setSoundMuted,
+  };
 }
 
 /**

@@ -21,6 +21,12 @@ const eslintConfig = defineConfig([
         // own element type rather than folded into "ai" — see src/image-ai
         // /index.ts's own header comment for why.
         { type: "image-ai", pattern: "src/image-ai/**" },
+        // Sound Effects SP1: the Web Audio API sound-manager engine — its
+        // own element type (not folded into ui-components, which is purely
+        // presentational and has no notion of an audio graph) so it stays
+        // independently changeable, same reasoning as every other module
+        // here.
+        { type: "audio", pattern: "src/audio/**" },
       ],
       // Element patterns match folders, not individual files — proxy.ts (the
       // Next.js 16 rename of middleware.ts) is a lone top-level file Next.js
@@ -162,6 +168,7 @@ const eslintConfig = defineConfig([
                 "@/realtime/**",
                 "@/ai/**",
                 "@/image-ai/**",
+                "@/audio/**",
               ],
               message:
                 "Import from the module's barrel (e.g. \"@/ui-components\") instead of reaching into its internal files.",
