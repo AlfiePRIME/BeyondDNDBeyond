@@ -26,6 +26,52 @@
   gap: 12px;
 }
 
+.colorSwatchRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.colorSwatch {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid var(--dim2);
+  cursor: pointer;
+  padding: 0;
+}
+
+.colorSwatch:hover {
+  border-color: var(--text);
+}
+
+.colorSwatch[data-selected="true"] {
+  border-color: var(--text);
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.colorInputWrap {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px dashed var(--dim2);
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.colorInput {
+  width: 44px;
+  height: 44px;
+  margin: -5px;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  background: none;
+}
+
 .presetGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

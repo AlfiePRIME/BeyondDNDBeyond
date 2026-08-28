@@ -843,8 +843,26 @@ export interface MapSurfaceToken {
    * PlacedObject component. null/undefined (every token before this
    * feature, and every freeform NPC/PC token after it) renders the
    * unchanged flat allegiance-colored disc — this is a pure addition, never
-   * a replacement, for any token this isn't set on. */
+   * a replacement, for any token this isn't set on. Also doubles as a PC
+   * token's own custom pawn model (Pawn Customization P2, character_pawns/
+   * 0080) — GameRoom resolves whichever of the two chains applies (a token
+   * is a PC XOR an NPC, 0019's own constraint) and hands back one modelUrl
+   * either way; this component never needs to know which chain produced it. */
   modelUrl?: string | null;
+  /** Pawn Customization P1: overrides the looked-up ALLEGIANCE_COLOR for
+   * this token's disc/plinth — set by GameRoom ONLY for a PC token
+   * currently displaying as party-aligned (allegiance === 'party'), to that
+   * token's owning user's own profiles.default_pawn_color (0079). A PC
+   * token flipped to hostile/neutral (e.g. charmed/dominated) deliberately
+   * keeps the plain hostile/neutral hue instead — that color carries
+   * combat-critical at-a-glance information no personal color preference
+   * should obscure — and an NPC/monster token (no owning player account to
+   * look up) never has this set, so it always falls through to the
+   * unchanged ALLEGIANCE_COLOR lookup below. null/undefined (every NPC
+   * token, and any PC token whose owner never customized their color —
+   * though profiles.default_pawn_color is never actually null, see 0079)
+   * reproduces today's exact hardcoded-teal rendering. */
+  colorOverride?: string | null;
 }
 
 const HP_BAR_WIDTH = 0.7;
@@ -1087,6 +1105,7 @@ const TokenMarker = memo(function TokenMarker({
   concentrating,
   dimmed,
   modelUrl,
+  colorOverride,
   onPointerDown,
   onSlideDebug,
   onMeasureDebug,
@@ -1111,6 +1130,9 @@ const TokenMarker = memo(function TokenMarker({
   dimmed: boolean;
   /** Weather & Enemies C6: see MapSurfaceToken.modelUrl's own doc comment. */
   modelUrl: string | null;
+  /** Pawn Customization P1: see MapSurfaceToken.colorOverride's own doc
+   * comment. */
+  colorOverride: string | null;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
   onSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
   /** Verification-only: see MapSurfaceProps.onTokenMeasureDebug's doc
@@ -1119,7 +1141,16 @@ const TokenMarker = memo(function TokenMarker({
   onMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
 }) {
   const [hovered, setHovered] = useState(false);
-  const color = dimmed ? DIMMED_ALLEGIANCE_COLOR[allegiance] : ALLEGIANCE_COLOR[allegiance];
+  // Pawn Customization P1: colorOverride (a PC token's own owner's account
+  // color, set by GameRoom only for a party-aligned PC token) replaces the
+  // looked-up ALLEGIANCE_COLOR base color when present; the dimmed
+  // transform still applies on top either way. DIMMED_ALLEGIANCE_COLOR's
+  // precomputed values are reused for the (still overwhelmingly common)
+  // no-override case — dimmedHex itself is cheap enough to call inline
+  // for the override case, which only ever runs for a dim, custom-colored
+  // PC token's own re-render, never per-frame.
+  const baseColor = colorOverride ?? ALLEGIANCE_COLOR[allegiance];
+  const color = dimmed ? (colorOverride ? dimmedHex(colorOverride) : DIMMED_ALLEGIANCE_COLOR[allegiance]) : baseColor;
   // A dim pawn keeps a sliver of glow — fully zero reads as a different
   // material, not a darker one. A raised (click-selected) pawn gets a
   // brighter glow on top of whatever dimmed already did — the lift alone
@@ -1578,6 +1609,7 @@ export function MapSurface({
           concentrating={token.concentrating ?? false}
           dimmed={token.dimmed ?? false}
           modelUrl={token.modelUrl ?? null}
+          colorOverride={token.colorOverride ?? null}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
           onSlideDebug={onTokenSlideDebug}
           onMeasureDebug={onTokenMeasureDebug}

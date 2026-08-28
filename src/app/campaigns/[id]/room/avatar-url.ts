@@ -16,7 +16,22 @@ export interface RoomMember extends CampaignMember {
    * §8), applied as an extra Y rotation when SeatAvatar renders it. 0 (no
    * correction) for every avatar predating this feature. */
   avatar_forward_offset_deg: number;
+  /** Pawn Customization P1: this member's account-wide default MAP TOKEN
+   * color (profiles.default_pawn_color, 0079) — completely unrelated to
+   * avatar_url/avatar_forward_offset_deg above, which are the seated table
+   * avatar. GameRoom's own token-render-props derivation reads this,
+   * id-keyed by user_id, to color a party-aligned PC token's pawn/plinth.
+   * Falls back to DEFAULT_PAWN_COLOR (matching 0079's own column default)
+   * only for the vanishingly unlikely case of a missing profile row —
+   * every real profile always has a real, non-null value here. */
+  default_pawn_color: string;
 }
+
+/** Mirrors 0079_default_pawn_color.sql's own column default exactly (the
+ * same TEAL every token rendered before this feature existed) — used only
+ * as page.tsx's fallback for a member whose profile row failed to load,
+ * never a real per-row default (the DB itself already guarantees NOT NULL). */
+export const DEFAULT_PAWN_COLOR = "#1ec8c8";
 
 /** resolveAvatarUrl's return shape — the URL scene-3d can load, paired with
  * its stored forward-direction correction (0 when none is set). */

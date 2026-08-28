@@ -5,6 +5,7 @@ import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { getProfile, listCampaignsForUser, listCharactersForUser } from "@/data-access";
 import { AppNav } from "../AppNav";
 import { AvatarPicker } from "./AvatarPicker";
+import { PawnColorPicker } from "./PawnColorPicker";
 import { DisplayNameForm } from "./DisplayNameForm";
 import { CharacterCreateLauncher } from "./CharacterCreateLauncher";
 import { CampaignManageRow } from "./CampaignManageRow";
@@ -42,6 +43,13 @@ export default async function AccountPage() {
             initialSource={profile?.avatar_source ?? null}
             initialRef={profile?.avatar_ref ?? null}
           />
+
+          <SectionHeader eyebrow="Account" title="Your map token color" />
+          <p className={styles.pickerHint}>
+            The color your character&apos;s pawn uses on the map table, in every campaign, whenever
+            that character has no custom uploaded model. This is separate from your avatar above.
+          </p>
+          <PawnColorPicker userId={user.id} initialColor={profile?.default_pawn_color ?? "#1ec8c8"} />
         </Panel>
 
         <Panel title="Character library" tone="teal">

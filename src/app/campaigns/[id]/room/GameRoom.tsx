@@ -218,6 +218,7 @@ import {
 } from "./vision";
 import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
+import type { ResolvedCharacterPawn } from "./pawn-url";
 import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
 import { buildDiceTumbleSpec } from "../roll/tumble";
@@ -880,6 +881,7 @@ export function GameRoom({
   initialStatBlocks,
   initialMonsterTemplates,
   initialTemplateOverrides,
+  initialCharacterPawns,
   rosterNpcs,
   initialHandouts,
   initialCombat,
@@ -963,6 +965,17 @@ export function GameRoom({
    * reloading), so it seeds real state below rather than being read as a
    * static prop. */
   initialTemplateOverrides: MonsterTemplateOverride[];
+  /** Pawn Customization P2: every character's own pawn appearance (0080) at
+   * load time, resolved to a loadable model URL — fetched for EVERY
+   * campaign member (0080's SELECT policy is any campaign member), feeding
+   * the SAME tableMap token-render-props resolution below (a PC token's
+   * `character_id` looks this up, id-keyed by characterId). Like
+   * initialMonsterTemplates, NOT kept as its own live-updating state:
+   * there's no in-room UI that mutates it (the upload/remove flow lives on
+   * the separate character-sheet page), so a DM/player's change reaches
+   * every open Game Room the same way C7's own override does — on nothing
+   * more than a reload/re-render, never a push. */
+  initialCharacterPawns: ResolvedCharacterPawn[];
   /** The Prompt 33 narrative roster, for the MonsterPanel's name
    * pre-fill; loaded only for the DM (empty for players, who never see
    * the panel). */
@@ -2805,6 +2818,13 @@ export function GameRoom({
   // subscribeToProfileChanges), not campaign presence — presence only covers
   // clients connected to this room's channel, and the change we care about
   // typically comes from the /account page in another tab or device.
+  //
+  // Pawn Customization P1 rides this SAME feed: default_pawn_color lands in
+  // `roster` right alongside avatar_url, so the tableMap token-render-props
+  // memo below (which derives colorOverride from `roster`) picks up a color
+  // change on its very next recompute — no page reload needed, and no
+  // separate subscription to wire up, since this effect already fires for
+  // exactly "this campaign member's profile just changed".
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
     const memberIds = new Set(members.map((member) => member.user_id));
@@ -2814,7 +2834,12 @@ export function GameRoom({
       setRoster((prev) =>
         prev.map((member) =>
           member.user_id === profile.id
-            ? { ...member, avatar_url: avatar.url, avatar_forward_offset_deg: avatar.forwardOffsetDeg }
+            ? {
+                ...member,
+                avatar_url: avatar.url,
+                avatar_forward_offset_deg: avatar.forwardOffsetDeg,
+                default_pawn_color: profile.default_pawn_color,
+              }
             : member
         )
       );
@@ -4940,6 +4965,25 @@ export function GameRoom({
     [characterRows]
   );
 
+  // Pawn Customization P1: every roster member's own account-wide default
+  // pawn color (0079), id-keyed by user_id — sourced from `roster` (not
+  // `members`) so a live color change picked up by the profile-sync effect
+  // above is reflected here on the very next render, the exact same
+  // "sourced from live state, not the static prop" reasoning
+  // overrideAssetIdByTemplateId already follows for templateOverrides.
+  const pawnColorByUserId = useMemo(
+    () => new Map(roster.map((member) => [member.user_id, member.default_pawn_color])),
+    [roster]
+  );
+  // Pawn Customization P2: every character's own pawn appearance (0080),
+  // id-keyed by character_id — the SAME "static prop, no in-room mutation
+  // UI" shape as monsterTemplateById above (the upload/remove flow lives on
+  // the separate character-sheet page, not in this room).
+  const characterPawnByCharacterId = useMemo(
+    () => new Map(initialCharacterPawns.map((pawn) => [pawn.characterId, pawn])),
+    [initialCharacterPawns]
+  );
+
   // ---------------------------------------------------------------------
   // Per-viewer map transitions (0046): the reactive derivation that decides
   // which single map THIS client's own `liveMap` should be showing right
@@ -5586,7 +5630,34 @@ export function GameRoom({
           (statBlock?.template_id ? overrideAssetIdByTemplateId.get(statBlock.template_id) : undefined) ??
           template?.default_asset_id ??
           null;
-        const modelUrl = resolvedAssetId ? (assetUrlById.get(resolvedAssetId) ?? null) : null;
+        const npcModelUrl = resolvedAssetId ? (assetUrlById.get(resolvedAssetId) ?? null) : null;
+        // Pawn Customization P2: a PC token's own custom pawn model
+        // (character_pawns.pawn_model_ref, 0080) — the SAME "live pointer,
+        // re-read fresh every render" reasoning as the NPC chain immediately
+        // above, just one FK hop earlier (character, not template). Mutually
+        // exclusive with npcModelUrl by construction (0019's own character_id
+        // XOR npc_name constraint means a token with a character_id never has
+        // a monster_stat_block_id), so this is a plain OR, never a priority
+        // decision between the two chains.
+        const pawnAppearance = token.character_id ? characterPawnByCharacterId.get(token.character_id) : undefined;
+        const modelUrl = pawnAppearance?.modelUrl ?? npcModelUrl;
+        // Pawn Customization P1: this token's owning user's own account
+        // color (0079), looked up via character_pawns' broadly-readable
+        // owner_id — NOT via `character` above, which is undefined for a
+        // party member's own token whenever the current viewer isn't its
+        // owner or the DM (characters' own owner-or-DM-only RLS, 0008).
+        // Substituted in place of ALLEGIANCE_COLOR.party ONLY while this
+        // token is actually displaying as party-aligned: a PC flipped to
+        // hostile/neutral (e.g. charmed/dominated) keeps the plain
+        // hostile/neutral hue instead, since that color carries
+        // combat-critical at-a-glance information a personal color
+        // preference shouldn't obscure. An NPC/monster token (no owning
+        // player account — pawnAppearance is undefined) always falls
+        // through to the unchanged ALLEGIANCE_COLOR lookup, even one marked
+        // 'party' allegiance (a friendly hireling/summon has no account of
+        // its own to color it by).
+        const ownerColor = pawnAppearance ? pawnColorByUserId.get(pawnAppearance.ownerId) : undefined;
+        const colorOverride = token.allegiance === "party" && ownerColor ? ownerColor : null;
         return [{
           id: token.id,
           x: token.x,
@@ -5596,6 +5667,7 @@ export function GameRoom({
           elevation: (overlay.get(cellKey(token.x, token.y)) ?? DEFAULT_CELL).elevation,
           allegiance: token.allegiance,
           modelUrl,
+          colorOverride,
           // The pre-existing, visible-to-everyone ring for TokenPanel's
           // separate armed "move" mechanism (DM free repositioning — see
           // TokenArm's own doc comment) — unrelated to, and unaffected by,
@@ -5628,7 +5700,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId, currentMapArtUrl]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId, currentMapArtUrl, characterPawnByCharacterId, pawnColorByUserId]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright
@@ -6432,11 +6504,21 @@ export function GameRoom({
           token id, proving an actual model loaded (positive maxDim) rather
           than just that a url string got passed through — a real Playwright
           check can confirm "shows a distinct model" against genuine
-          rendered output, not an assumption. */}
+          rendered output, not an assumption. Pawn Customization P1 adds
+          colorOverrideByTokenId alongside it, the SAME "sourced straight
+          from tableMap" proof applied to a token's resolved disc/plinth
+          color: null/absent means "plain ALLEGIANCE_COLOR" (an NPC, or a PC
+          not currently party-aligned), a hex string is the owning player's
+          own account color — a material color has no async load step to
+          separately confirm the way a model does, so resolving the value
+          IS the full proof here. */}
       <div data-testid="token-model-state" hidden>
         {JSON.stringify({
           modelUrlByTokenId: Object.fromEntries(
             (tableMap?.tokens ?? []).map((token) => [token.id, token.modelUrl ?? null])
+          ),
+          colorOverrideByTokenId: Object.fromEntries(
+            (tableMap?.tokens ?? []).map((token) => [token.id, token.colorOverride ?? null])
           ),
           measured: tokenModelMeasureDebug,
         })}

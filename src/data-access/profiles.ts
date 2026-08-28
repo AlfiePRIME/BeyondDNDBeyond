@@ -50,6 +50,15 @@ export interface Profile {
    * app_settings (0072). Auto-granted, never auto-revoked; see
    * maybeGrantAdmin below. */
   is_admin: boolean;
+  /** Pawn Customization P1 (0079): this user's account-wide default map-token
+   * color — a hex string, always set (NOT NULL, defaulting to the same TEAL
+   * every token rendered before this feature existed). Unrelated to
+   * avatar_source/avatar_ref above: this colors the MAP TOKEN pawn
+   * (MapSurface.tsx's TokenMarker), never the seated table avatar. A
+   * character can override it with its own custom model (character_pawns,
+   * 0080), but never with another account's color — this one value follows
+   * a user into every campaign and every character they own. */
+  default_pawn_color: string;
 }
 
 export async function getProfile(supabase: SupabaseClient, userId: string): Promise<Profile | null> {
@@ -189,6 +198,28 @@ export async function setProfileAvatar(
 }
 
 /**
+ * Sets the caller's own account-wide default pawn color (Pawn Customization
+ * P1, 0079) — the setProfileAvatar shape exactly, through the SAME
+ * self-only UPDATE policy (0001's `id = auth.uid()`), so a caller can never
+ * set another user's color no matter what userId is passed (RLS re-checks
+ * it server-side regardless of what this function is told to write). The
+ * 0079 CHECK constraint (`^#[0-9a-fA-F]{6}$`) backs up whatever client-side
+ * validation the color picker does.
+ */
+export async function setDefaultPawnColor(
+  supabase: SupabaseClient,
+  userId: string,
+  color: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("profiles")
+    .update({ default_pawn_color: color })
+    .eq("id", userId);
+
+  if (error) throw error;
+}
+
+/**
  * Overwrites the caller's whole ui_preferences document (Phase B) — a plain
  * column write through profiles' existing self-only UPDATE policy (0001),
  * the setProfileAvatar shape exactly. Whole-document replacement, not a
@@ -240,10 +271,18 @@ export async function getAvatarSignedUrl(
  * actively connected to a specific channel, but "the /account page in some
  * other tab changed a row everyone is looking at" is a database-level
  * concern, and data-access owns the Supabase touchpoints.
+ *
+ * default_pawn_color rides this SAME feed (Pawn Customization P1): a color
+ * change made on /account must reach every OTHER open Game Room tab (this
+ * campaign's, and any other campaign's) live, exactly the avatar_source/
+ * avatar_ref reasoning above — GameRoom.tsx's own roster-sync effect is
+ * what actually applies it to the render model.
  */
 export function subscribeToProfileChanges(
   supabase: SupabaseClient,
-  handler: (profile: Pick<Profile, "id" | "display_name" | "avatar_source" | "avatar_ref">) => void
+  handler: (
+    profile: Pick<Profile, "id" | "display_name" | "avatar_source" | "avatar_ref" | "default_pawn_color">
+  ) => void
 ): () => void {
   let removed = false;
   let channel: ReturnType<SupabaseClient["channel"]> | null = null;

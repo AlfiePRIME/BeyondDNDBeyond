@@ -208,6 +208,7 @@ describe("data-access module", () => {
         created_at: "",
         ui_preferences: { panelLayout: {} },
         is_admin: false,
+        default_pawn_color: "#1ec8c8",
       })
     ).toBe(false);
     expect(
@@ -219,6 +220,7 @@ describe("data-access module", () => {
         created_at: "",
         ui_preferences: { panelLayout: {} },
         is_admin: false,
+        default_pawn_color: "#1ec8c8",
       })
     ).toBe(false);
   });
@@ -233,6 +235,7 @@ describe("data-access module", () => {
         created_at: "",
         ui_preferences: { panelLayout: {} },
         is_admin: false,
+        default_pawn_color: "#1ec8c8",
       })
     ).toBe(true);
   });

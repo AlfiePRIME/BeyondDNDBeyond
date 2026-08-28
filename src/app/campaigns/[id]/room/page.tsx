@@ -34,8 +34,9 @@ import {
   listWhiteboardTiles,
 } from "@/data-access";
 import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
-import { resolveAvatarUrl, type RoomMember } from "./avatar-url";
+import { DEFAULT_PAWN_COLOR, resolveAvatarUrl, type RoomMember } from "./avatar-url";
 import { resolveHandout } from "./handout-url";
+import { resolveCampaignPawnAppearance } from "./pawn-url";
 import { mostRecentOwnToken } from "./vision";
 import type { CombatState } from "./CombatPanel";
 import { GameRoom, type LiveMapData } from "./GameRoom";
@@ -71,6 +72,11 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
         ...member,
         avatar_url: avatar.url,
         avatar_forward_offset_deg: avatar.forwardOffsetDeg,
+        // Pawn Customization P1: every real profile row always has a
+        // non-null value here (0079's column default) — the fallback below
+        // only ever covers a member whose profile row itself failed to
+        // load at all.
+        default_pawn_color: profile?.default_pawn_color ?? DEFAULT_PAWN_COLOR,
       };
     })
   );
@@ -99,6 +105,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     initialStatBlocks,
     initialMonsterTemplates,
     initialTemplateOverrides,
+    initialCharacterPawns,
     rosterNpcs,
     dmNoteRows,
     initialLorePages,
@@ -151,6 +158,12 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // campaign-scoped override ahead of the template's own default_asset_id
     // for every viewer, not just the DM's.
     listMonsterTemplateOverridesForCampaign(supabase, campaignId),
+    // Pawn Customization P2: every character's own pawn appearance (0080),
+    // resolved to a loadable model URL — fetched for EVERY campaign member
+    // (0080's SELECT policy is any campaign member, not owner-or-DM), the
+    // exact same "every viewer needs this to render every OTHER player's
+    // token too" reasoning as initialTemplateOverrides immediately above.
+    resolveCampaignPawnAppearance(supabase, campaignId),
     // The narrative roster, only for the DM's book's Enemies (MonsterPanel)
     // name pre-fill; players never see the book, so no point fetching.
     currentUserIsDM ? listNpcs(supabase, campaignId) : Promise.resolve([]),
@@ -292,6 +305,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialStatBlocks={initialStatBlocks}
       initialMonsterTemplates={initialMonsterTemplates}
       initialTemplateOverrides={initialTemplateOverrides}
+      initialCharacterPawns={initialCharacterPawns}
       rosterNpcs={rosterNpcs}
       initialHandouts={initialHandouts}
       initialCombat={initialCombat}
