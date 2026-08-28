@@ -67,7 +67,7 @@ export default async function CampaignNpcsPage({ params }: { params: Promise<{ i
             campaignId={campaignId}
             initialNpcs={initialNpcs}
             canManage={currentUserIsDM}
-            aiEnabled={isAiConfigured()}
+            aiEnabled={await isAiConfigured()}
           />
         </Panel>
       </main>

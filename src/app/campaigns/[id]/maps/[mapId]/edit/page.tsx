@@ -13,7 +13,15 @@ import {
   listMapTokens,
   listMapTransitions,
 } from "@/data-access";
-import { isAiConfigured } from "@/ai";
+// The map editor's "Generate Area" tool is generateMapArea.ts, which is
+// Anthropic-only regardless of app_settings.active_provider (structured,
+// forced-tool-use output the common generateText() interface doesn't cover
+// for the other two providers yet — see providers/anthropic.ts's
+// isAnthropicConfigured doc comment). Gating this button on the
+// multi-provider isAiConfigured() would light it up whenever ANY provider
+// is configured (e.g. Ollama) even though clicking it would still only ever
+// call Anthropic and fail.
+import { isAnthropicConfigured } from "@/ai";
 import { MapEditor } from "./MapEditor";
 import { resolvePaletteAssets } from "./lib/assetUrl";
 
@@ -79,7 +87,7 @@ export default async function MapEditPage({
       initialCells={cells}
       initialObjects={objects}
       assets={paletteAssets}
-      aiEnabled={isAiConfigured()}
+      aiEnabled={isAnthropicConfigured()}
       campaignMaps={campaignMaps}
       initialTransitions={transitions}
       initialConcealedPits={concealedPits}

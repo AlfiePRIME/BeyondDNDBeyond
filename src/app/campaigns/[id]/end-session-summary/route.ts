@@ -11,7 +11,7 @@ import {
 } from "@/data-access";
 import {
   generateSessionSummary,
-  isAiConfigured,
+  isAnthropicConfigured,
   SessionSummaryGenerationError,
   type SessionSummaryEventInput,
 } from "@/ai";
@@ -159,7 +159,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // be possible, AI-configured or not, matching every other AI-assisted
   // surface in this app (GenerateDraftControl's own "AI drafting is off —
   // everything else works without it").
-  if (windowIsEmpty || !isAiConfigured()) {
+  if (windowIsEmpty || !isAnthropicConfigured()) {
     return NextResponse.json({
       ok: true,
       narrative: "",

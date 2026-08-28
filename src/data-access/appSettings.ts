@@ -13,9 +13,9 @@ export type AiProvider = "anthropic" | "openai" | "ollama";
  * payload sent to the browser, which passing the raw row straight through
  * would risk. Read/write both go through the CALLER's own session (not a
  * service-role client) — app_settings' RLS (is_app_admin()-gated SELECT/
- * UPDATE) is exactly what's meant to authorize this, matching D1's design
- * note that only D3's separate, narrow isAiConfigured() check needs the
- * elevated service-role read this table was built to avoid requiring here.
+ * UPDATE) is exactly what's meant to authorize this. D3 adds the separate,
+ * narrow service-role reads this table was built to avoid requiring here —
+ * see getRawAiProviderConfig below and src/ai/activeProvider.ts.
  */
 export interface AppSettings {
   activeProvider: AiProvider;
@@ -84,4 +84,51 @@ export async function updateAppSettings(supabase: SupabaseClient, patch: AppSett
 
   if (error) throw error;
   if (count === 0) throw new Error("Only an app admin can update these settings.");
+}
+
+/**
+ * The RAW row — including the actual openai_api_key plaintext — for
+ * AI Backend & Admin D3's internal use ONLY: resolving which real backend
+ * an actual generateText() call should hit and what credential/host to use.
+ * This is deliberately a different function from getAppSettings above, not
+ * a variant of it — getAppSettings' entire reason for existing is to NEVER
+ * carry the plaintext key past its own return value (for the admin UI,
+ * under the admin's own session); this function's entire reason for
+ * existing is the opposite: something server-side has to see the real
+ * secret to ever call OpenAI/Ollama with it.
+ *
+ * Callers MUST pass a service-role client (see
+ * @/data-access/supabase-service-role) — never the caller's own session
+ * client, since app_settings' RLS would reject a non-admin's read of this
+ * table entirely, which is exactly the case a DM's own "Generate" action
+ * needs to keep working through. Callers MUST also never let this return
+ * value escape their own function's stack frame (src/ai/activeProvider.ts
+ * is the only caller; its own doc comment covers the two narrow, boolean-
+ * or-immediately-consumed-only uses this feeds).
+ */
+export interface RawAiProviderConfig {
+  activeProvider: AiProvider;
+  openaiApiKey: string | null;
+  ollamaHostUrl: string | null;
+  ollamaModel: string | null;
+}
+
+export async function getRawAiProviderConfig(
+  supabase: SupabaseClient
+): Promise<RawAiProviderConfig | null> {
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("active_provider, openai_api_key, ollama_host_url, ollama_model")
+    .eq("singleton", true)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+
+  return {
+    activeProvider: data.active_provider,
+    openaiApiKey: data.openai_api_key,
+    ollamaHostUrl: data.ollama_host_url,
+    ollamaModel: data.ollama_model,
+  };
 }

@@ -54,7 +54,7 @@ export default async function LorePageDetailPage({
           initialLinks={links}
           allPages={pages}
           canManage={currentUserIsDM}
-          aiEnabled={isAiConfigured()}
+          aiEnabled={await isAiConfigured()}
         />
       </main>
     </div>

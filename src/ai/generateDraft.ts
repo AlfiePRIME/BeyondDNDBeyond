@@ -1,13 +1,24 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { generateText } from "./generateText";
+import { isAiConfigured } from "./activeProvider";
+import { ANTHROPIC_TEXT_MODEL } from "./providers/anthropic";
 
 /** Which editor the draft is for — picks the system prompt and prose shape. */
 export type DraftKind = "npc" | "lore";
 
-// Haiku 4.5: a short creative-text draft doesn't need Sonnet/Opus-tier
-// reasoning, and the DM is waiting on the response in a modal. Shared with
-// generateMapArea — structured area drafts are schema-constrained fill-in
-// work, not deep reasoning, so the same fast tier fits there too.
-export const MODEL = "claude-haiku-4-5-20251001";
+// Re-exported so generateMapArea.ts/generateSessionSummary.ts's own direct
+// (structured, forced-tool-use) Anthropic calls keep using the same model
+// constant they always have — see providers/anthropic.ts for the constant
+// itself and this directory's README for why those two call sites stay
+// Anthropic-only rather than going through generateText().
+export const MODEL = ANTHROPIC_TEXT_MODEL;
+
+// Re-exported: AI Backend & Admin D3 rebuilt isAiConfigured() to check
+// app_settings' active_provider via a narrow service-role read (see
+// activeProvider.ts's own header comment for the full access-control
+// story) instead of just reading ANTHROPIC_API_KEY — every existing
+// consumer of `isAiConfigured` from "@/ai" or "./generateDraft" keeps
+// working unchanged, now `Promise<boolean>` instead of `boolean`.
+export { isAiConfigured };
 
 const MAX_DRAFT_TOKENS = 1024;
 
@@ -36,65 +47,38 @@ const SYSTEM_PROMPTS: Record<DraftKind, string> = {
 };
 
 /**
- * Whether the external LLM integration is usable at all. Server-side only —
- * call it from Server Components / Route Handlers and pass the boolean down,
- * never from client code (the key must not shape a client bundle).
- */
-export function isAiConfigured(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
-}
-
-/** Exported for unit tests — the exact request body sent to the Messages API. */
-export function buildDraftRequest(
-  prompt: string,
-  kind: DraftKind
-): Anthropic.MessageCreateParamsNonStreaming {
-  return {
-    model: MODEL,
-    max_tokens: MAX_DRAFT_TOKENS,
-    system: SYSTEM_PROMPTS[kind],
-    messages: [{ role: "user", content: prompt }],
-  };
-}
-
-/** Exported for unit tests — pulls the draft prose out of an API response. */
-export function extractDraftText(message: Anthropic.Message): string {
-  const text = message.content
-    .filter((block): block is Anthropic.TextBlock => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
-  if (!text) {
-    throw new Error("The model returned no draft text.");
-  }
-  return text;
-}
-
-/**
  * Generate a short editable draft (an NPC description or a lore-page body)
- * from the DM's plain-language brief. Requires ANTHROPIC_API_KEY — callers
- * should gate on isAiConfigured() first.
+ * from the DM's plain-language brief. Requires the active provider to be
+ * configured — callers should gate on isAiConfigured() first. Behavior and
+ * output are unchanged from before D3 when Anthropic is the active
+ * provider (the default): same system prompts, same MAX_DRAFT_TOKENS, same
+ * MAX_PROMPT_CHARS truncation. Which backend actually runs the generation
+ * is now decided by generateText() (see that file) based on
+ * app_settings.active_provider, rather than always being Anthropic.
  *
- * `transport.fetch` is the injectable seam for tests: the Anthropic client
- * routes every HTTP call through it (and honors ANTHROPIC_BASE_URL from the
- * environment), so both unit tests and end-to-end runs can substitute a fake
- * Messages API response without a real key or network call.
+ * `transport.fetch` is the same injectable seam as before D3: whichever
+ * provider ends up handling the call routes every HTTP request through it,
+ * so both unit tests and end-to-end runs can substitute a fake response
+ * without a real key, real network access, or a real chosen provider.
  */
 export async function generateNarrativeDraft(
   prompt: string,
   kind: DraftKind,
   transport?: { fetch?: typeof fetch }
 ): Promise<string> {
-  if (!isAiConfigured()) {
-    throw new Error("ANTHROPIC_API_KEY is not configured.");
+  if (!(await isAiConfigured())) {
+    throw new Error("AI generation is not configured.");
   }
   const trimmed = prompt.trim();
   if (!trimmed) {
     throw new Error("A prompt is required to generate a draft.");
   }
-  const client = new Anthropic({ fetch: transport?.fetch });
-  const message = await client.messages.create(
-    buildDraftRequest(trimmed.slice(0, MAX_PROMPT_CHARS), kind)
+  return generateText(
+    {
+      system: SYSTEM_PROMPTS[kind],
+      prompt: trimmed.slice(0, MAX_PROMPT_CHARS),
+      maxTokens: MAX_DRAFT_TOKENS,
+    },
+    transport
   );
-  return extractDraftText(message);
 }
