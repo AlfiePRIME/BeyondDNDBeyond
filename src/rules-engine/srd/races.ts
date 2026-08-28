@@ -292,7 +292,7 @@ export const RACES: RaceDefinition[] = [
     ],
     darkvisionFeet: 60,
     traits: [
-      { name: "Grovel Cower and Beg" },
+      { name: "Grovel, Cower, and Beg" },
       { name: "Pack Tactics" },
       { name: "Sunlight Sensitivity" },
     ],
