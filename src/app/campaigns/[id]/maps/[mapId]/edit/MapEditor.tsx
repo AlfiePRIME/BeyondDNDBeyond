@@ -2800,6 +2800,25 @@ export function MapEditor({
           {mapArtEnabled ? (
             <>
               <span className={styles.toolbarLabel}>Map art</span>
+              {mapArt?.stale ? (
+                // Map Art Generation E6 — set by grow_map_grid (0078) the
+                // instant a grow enlarges this map's footprint past what
+                // this accepted art actually covers. DM-only by construction
+                // (this whole drawer only ever renders inside the map
+                // editor, itself gated by page.tsx's isDM check) — a player
+                // sees no different behavior or indicator anywhere; the
+                // Game Room keeps rendering this exact same image exactly as
+                // before (E5), just covering less of the new, larger grid
+                // than it ideally would. Regenerating (the button below,
+                // already labeled "Regenerate" once art exists) re-exports
+                // a control image against the map's CURRENT grid_width/
+                // grid_height and clears this flag on accept — no separate
+                // action needed here beyond that same button.
+                <p className={styles.staleNotice} role="status" data-testid="map-art-stale-notice">
+                  ⚠ The grid grew since this art was generated — it no longer
+                  covers the full map. Regenerate to cover the new area.
+                </p>
+              ) : null}
               {mapArtUrl && !mapArtPreview ? (
                 // Signed Storage URLs are transient and can't be allowlisted
                 // for next/image's optimizer — same call as MapsManager's
