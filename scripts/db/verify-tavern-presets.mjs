@@ -48,7 +48,7 @@
 //      models.
 //
 // Needs a reachable Supabase instance (via .env / supabase/.env) with this
-// batch's own 0082 migration already applied (`node scripts/db/migrate.mjs`)
+// batch's own 0083 migration already applied (`node scripts/db/migrate.mjs`)
 // and the presets themselves generated
 // (`node scripts/assets/generate-tavern-presets.mjs`); starts `yarn dev`
 // itself (and polls /api/health) on PORT if nothing is already serving
@@ -85,8 +85,10 @@ const SCREENSHOT_DIR = join(SCRATCH_DIR, "tavern-presets-screenshots");
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
 // Mirrors scripts/assets/generate-tavern-presets.mjs's own PRESETS — the
-// fixed UUIDs seeded by 0082_tavern_presets.sql, continuing the a55e7NNN
-// sequence one past 0074's Witch (…029).
+// fixed UUIDs seeded by 0083_tavern_presets.sql (renumbered from this
+// branch's original 0082 at merge time — collided with the half-height
+// stairs preset's own 0082), continuing the a55e7NNN sequence one past
+// 0074's Witch (…029).
 const EXPECTED = [
   { uuid: "a55e7030-0000-4000-8000-000000000030", name: "Bar Counter", file: "bar-counter.glb" },
   { uuid: "a55e7031-0000-4000-8000-000000000031", name: "Bar Corner", file: "bar-corner.glb" },
