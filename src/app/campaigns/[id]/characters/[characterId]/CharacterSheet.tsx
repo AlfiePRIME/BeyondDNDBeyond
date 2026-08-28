@@ -55,6 +55,7 @@ import { Badge, Button, Panel, SectionHeader, Select, TextInput } from "@/ui-com
 import { postRoll, type RollRequest } from "../../roll/api";
 import { rollDetail, rollHeadline } from "../../roll/format";
 import { AdvantageToggle } from "../../room/DiceLogPanel";
+import { PawnModelPicker } from "./PawnModelPicker";
 import styles from "./sheet.module.css";
 
 const ABILITIES: AbilityScore[] = [
@@ -113,6 +114,7 @@ export function CharacterSheet({
   initialCharacter,
   initialResources,
   initialConditions,
+  initialPawnModelRef,
   canEdit,
 }: {
   campaignId: string;
@@ -121,6 +123,10 @@ export function CharacterSheet({
   /** Conditions on this character's combatant in the currently active
    * encounter — empty when the character isn't in a fight. */
   initialConditions: CombatantCondition[];
+  /** Pawn Customization P2: this character's own custom pawn model, if any
+   * (character_pawns.pawn_model_ref, 0080) — handed straight to
+   * PawnModelPicker below, which owns all further reads/writes of it. */
+  initialPawnModelRef: string | null;
   canEdit: boolean;
 }) {
   const [character, setCharacter] = useState(initialCharacter);
@@ -799,6 +805,12 @@ export function CharacterSheet({
             </div>
           </div>
         </Panel>
+
+        {canEdit ? (
+          <Panel title="Map token" tone="teal">
+            <PawnModelPicker characterId={character.id} initialPawnModelRef={initialPawnModelRef} />
+          </Panel>
+        ) : null}
 
         <Panel title="Conditions" tone="pink">
           {conditions.length === 0 ? (

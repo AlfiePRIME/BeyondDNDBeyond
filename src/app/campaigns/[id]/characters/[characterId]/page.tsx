@@ -8,6 +8,7 @@ import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
   getActiveCombatantForCharacter,
   getCharacter,
+  getCharacterPawn,
   isDM,
   listCharacterResources,
   listCombatantConditions,
@@ -73,12 +74,19 @@ export default async function CharacterSheetPage({
   const combatant = await getActiveCombatantForCharacter(supabase, campaignId, characterId);
   const initialConditions = combatant ? await listCombatantConditions(supabase, [combatant.id]) : [];
 
+  // Pawn Customization P2: this character's own pawn appearance row (0080)
+  // — always present (the character-creation trigger guarantees it), owner
+  // or DM readable, the exact same visibility as `character` itself, so no
+  // extra RLS caveat applies here beyond the 404 already checked above.
+  const pawn = await getCharacterPawn(supabase, characterId);
+
   return (
     <CharacterSheet
       campaignId={campaignId}
       initialCharacter={character}
       initialResources={resources}
       initialConditions={initialConditions}
+      initialPawnModelRef={pawn?.pawn_model_ref ?? null}
       canEdit={canEdit}
     />
   );

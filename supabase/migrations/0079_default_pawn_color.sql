@@ -1,0 +1,42 @@
+-- Pawn Customization P1: account-wide default map-token color.
+--
+-- Two completely separate "how a character looks" systems exist in this
+-- app: the SEATED table avatar (profiles.avatar_source/avatar_ref,
+-- SeatAvatar.tsx) and the MAP TOKEN pawn (MapSurface.tsx's TokenMarker,
+-- colored today by a hardcoded ALLEGIANCE_COLOR lookup). This column is for
+-- the SECOND system only — the seated-avatar columns above are untouched.
+--
+-- Account-wide (one row per user, not per-character): a player's chosen
+-- pawn color should follow them into every campaign and every character
+-- they own, the same "follows them" posture ui_preferences.panelLayout
+-- already established for a different per-user setting (0040's own doc
+-- comment). Per-character customization (a distinct, optional custom
+-- MODEL, overriding this color entirely) is a separate migration
+-- (0080_character_pawns.sql) — deliberately NOT the same table, since that
+-- one's visibility rule is "any campaign member who can see the token", not
+-- "any authenticated user", and mixing the two concerns into one column set
+-- would make that distinction easy to lose.
+--
+-- NOT NULL with a default matching TEAL exactly (#1ec8c8, MapSurface.tsx's
+-- own ALLEGIANCE_COLOR.party / tokens.css's --teal): every existing profile
+-- backfills to today's exact rendered color, and every new signup starts
+-- there too, until they actually change it on /account. This is simpler and
+-- safer than a nullable column with an app-layer fallback dance — the app
+-- layer never has to ask "does this profile have an opinion yet?", and
+-- there is zero risk of a stale null slipping through some code path that
+-- forgets the fallback.
+alter table public.profiles
+  add column default_pawn_color text not null default '#1ec8c8'
+    check (default_pawn_color ~ '^#[0-9a-fA-F]{6}$');
+
+-- No new RLS policy: profiles' existing self-service posture already covers
+-- this column exactly as asked —
+--   - SELECT: "profiles are readable by any authenticated user" (0001) —
+--     every other campaign member's client needs to read this to color that
+--     player's own token, the same broad-read posture avatar_source/
+--     avatar_ref already rely on for the seated-avatar system.
+--   - UPDATE: "a user can update only their own profile" (0001, using/with
+--     check id = auth.uid()) — a user can set their own color; nobody
+--     else's. Verified for real in verify-pawn-customization.mjs (an RLS
+--     check, not just a UI check): a second account's client attempting to
+--     update another user's default_pawn_color affects zero rows.

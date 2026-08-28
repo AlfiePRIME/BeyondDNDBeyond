@@ -32,6 +32,7 @@ export {
   upsertProfile,
   isProfileComplete,
   setProfileAvatar,
+  setDefaultPawnColor,
   setUiPreferences,
   uploadAvatarFile,
   getAvatarSignedUrl,
@@ -42,6 +43,14 @@ export {
   type UiPreferences,
   type PanelLayoutEntry,
 } from "./profiles";
+export {
+  listCharacterPawnsForCampaign,
+  getCharacterPawn,
+  setCharacterPawnModel,
+  uploadCharacterPawnModelFile,
+  getCharacterPawnSignedUrl,
+  type CharacterPawn,
+} from "./characterPawns";
 export {
   listCampaignsForUser,
   createCampaign,
