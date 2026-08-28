@@ -1,8 +1,12 @@
 #!/usr/bin/env node
-// AI Backend & Admin D3 verification: the common generateText() interface
+// AI Backend & Admin D3/D4 verification: the common generateText() interface
 // and its three provider implementations, isAiConfigured() rebuilt on a
-// narrow service-role read, and the non-admin access-control regression
-// this prompt exists to prevent.
+// narrow service-role read, the non-admin access-control regression D3
+// exists to prevent, and (D4's own addition) a genuine regression check that
+// the two real generation routes — generate-draft AND generate-area — still
+// work end to end with Anthropic as the active provider, plus one real
+// switch of the active provider to prove generate-draft actually uses the
+// newly-selected backend rather than a stale/cached Anthropic call.
 //
 // Exercises, via a REAL running Next.js server, REAL Supabase (service-role
 // seeding), REAL Playwright browsers, and a REAL local Ollama instance:
@@ -13,6 +17,17 @@
 //      environment): a real request through the real generate-draft route
 //      hits generateText() -> generateTextAnthropic() -> the fake server,
 //      and a signed-in NON-ADMIN DM sees the Generate button.
+//   1b. (D4) Anthropic active, generate-area/route.ts specifically: a real
+//      request through the real route hits generateMapArea() -> the
+//      Anthropic SDK's own ANTHROPIC_BASE_URL-honored client -> the SAME
+//      fake server (now also answering forced-tool-use requests, branching
+//      on tool_choice) -> validateGeneratedArea() -> a genuine structured
+//      area draft back to the caller. This is the one D3 left unverified:
+//      D3's own script only ever exercised generate-draft: generate-area is
+//      a materially different code path (isAnthropicConfigured, not
+//      isAiConfigured; forced tool use, not plain text; a DM-owned map and
+//      region instead of a bare prompt) and D4's acceptance criteria
+//      requires it be checked too.
 //   2. Switching active_provider to Ollama (a REAL local instance at
 //      http://localhost:11434, model llama3.1:8b) with NO server restart:
 //      the very next generate-draft request produces genuine local-model
@@ -41,6 +56,13 @@
 // injected-transport unit tests (request shape, auth header, response
 // parsing) — this script only proves OpenAI's READINESS SIGNAL (button
 // enable/disable), never a real or fake OpenAI network call.
+//
+// generate-area stays Anthropic-only regardless of active_provider (see
+// isAnthropicConfigured's own doc comment in src/ai/providers/anthropic.ts),
+// so unlike generate-draft it is exercised ONLY under Phase 1b below — there
+// is no "switch provider and re-test generate-area" phase, because switching
+// the active provider away from Anthropic has no effect on it at all; that
+// is the intended, audited behavior, not a gap.
 //
 // Seeds its one non-admin test user, campaign, and app_settings row
 // directly via the service-role client — never a blind UI click-scan.
@@ -129,14 +151,25 @@ async function healthOk() {
   return fetch(`${APP_URL}/api/health`, { cache: "no-store" }).then((res) => res.ok).catch(() => false);
 }
 
-// A tiny fake Anthropic Messages API returning a PLAIN TEXT response —
-// unlike scripts/db/lib/fakeAnthropic.mjs (Chat & Summary B6's own fake,
-// hardcoded to the tool_use shape generateSessionSummary/generateMapArea
-// use), generateNarrativeDraft's requests expect ordinary prose back, so
-// this is a separate, smaller double rather than a reuse.
+// A tiny fake Anthropic Messages API. Both real call sites this script
+// exercises against Anthropic — generateNarrativeDraft (generate-draft
+// route, plain text) and generateMapArea (generate-area route, forced tool
+// use) — construct their SDK client with no injected fetch and rely solely
+// on ANTHROPIC_BASE_URL, so a single dev-server process can only ever point
+// at ONE fake server for both. This one branches on the request shape: a
+// forced-tool-use request (tool_choice.type === "tool", generateMapArea's
+// own buildAreaRequest shape) gets a tool_use response; anything else falls
+// back to the original plain-text response generateNarrativeDraft expects.
+// Unlike scripts/db/lib/fakeAnthropic.mjs (Chat & Summary B6's own fake,
+// which ONLY ever answers in the tool_use shape and is parameterized by a
+// caller-supplied buildResponse), this fake needs to answer both shapes from
+// the same running server, so it stays a separate, purpose-built double
+// rather than a reuse.
 function startFakeAnthropicTextServer() {
   let requestCount = 0;
   let lastRequestBody = null;
+  let areaRequestCount = 0;
+  let lastAreaRequestBody = null;
   const server = http.createServer((req, res) => {
     if (req.method === "POST" && req.url === "/v1/messages") {
       const chunks = [];
@@ -148,6 +181,41 @@ function startFakeAnthropicTextServer() {
         } catch {
           body = null;
         }
+
+        if (body?.tool_choice?.type === "tool") {
+          // generateMapArea's forced-tool-use shape (buildAreaRequest) — echo
+          // back a small, deliberately-identifiable, schema-valid proposal:
+          // one difficult-terrain, elevation-2 cell at (0,0), no objects (no
+          // asset palette is seeded for this phase, so an empty objects
+          // array is the only valid response regardless of what's asked).
+          areaRequestCount += 1;
+          lastAreaRequestBody = body;
+          const toolName = body.tool_choice.name;
+          const message = {
+            id: `msg_fake_area_${areaRequestCount}`,
+            type: "message",
+            role: "assistant",
+            model: body?.model ?? "claude-haiku-4-5-20251001",
+            content: [
+              {
+                type: "tool_use",
+                id: `toolu_fake_${areaRequestCount}`,
+                name: toolName,
+                input: {
+                  cells: [{ x: 0, y: 0, elevation: 2, terrain: "difficult" }],
+                  objects: [],
+                },
+              },
+            ],
+            stop_reason: "tool_use",
+            stop_sequence: null,
+            usage: { input_tokens: 60, output_tokens: 24 },
+          };
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(message));
+          return;
+        }
+
         requestCount += 1;
         lastRequestBody = body;
         const message = {
@@ -183,6 +251,8 @@ function startFakeAnthropicTextServer() {
         url: `http://127.0.0.1:${address.port}`,
         getRequestCount: () => requestCount,
         getLastRequestBody: () => lastRequestBody,
+        getAreaRequestCount: () => areaRequestCount,
+        getLastAreaRequestBody: () => lastAreaRequestBody,
         close: () => new Promise((r) => server.close(r)),
       });
     });
@@ -265,6 +335,7 @@ const cleanupUserIds = [];
 let browser = null;
 let originalSettings = null;
 let campaignId = null;
+let mapId = null;
 let fakeAnthropic = null;
 
 try {
@@ -296,6 +367,15 @@ try {
   await admin.from("campaigns").insert({ id: campaignId, name: "Provider Abstraction Test", creator: dm.id });
   await admin.from("campaign_members").insert([{ campaign_id: campaignId, user_id: dm.id, role: "dm" }]);
 
+  // A small map for Phase 1b's generate-area/route.ts exercise — seeded
+  // directly via the service-role client (never a blind UI click-scan), same
+  // as verify-map-grid-growth.mjs's own pattern. campaign_maps cascades on
+  // campaign delete (0014), so no separate cleanup is needed.
+  mapId = crypto.randomUUID();
+  await admin
+    .from("campaign_maps")
+    .insert({ id: mapId, campaign_id: campaignId, name: "Provider Abstraction Test Map", grid_width: 5, grid_height: 5 });
+
   const cookieHeader = sessionCookies(dm.session).map((c) => `${c.name}=${c.value}`).join("; ");
 
   async function fetchGenerateDraft(prompt) {
@@ -303,6 +383,14 @@ try {
       method: "POST",
       headers: { "content-type": "application/json", Cookie: cookieHeader },
       body: JSON.stringify({ prompt, kind: "npc" }),
+    });
+  }
+
+  async function fetchGenerateArea(prompt, region) {
+    return fetch(`${APP_URL}/campaigns/${campaignId}/maps/${mapId}/generate-area`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({ prompt, ...region }),
     });
   }
 
@@ -347,6 +435,53 @@ try {
     "the returned draft is genuinely the fake Anthropic server's text (round-tripped correctly)",
     typeof anthropicBody?.draft === "string" && anthropicBody.draft.includes("fake Anthropic server"),
     anthropicBody
+  );
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Phase 1b (D4) — generate-area/route.ts end to end, Anthropic active.
+  // This route is Anthropic-only regardless of active_provider (gated on
+  // isAnthropicConfigured, not isAiConfigured — see providers/anthropic.ts),
+  // so active_provider is left exactly as Phase 1 set it. Proves the whole
+  // chain is real: route -> generateMapArea -> Anthropic SDK (ANTHROPIC_
+  // BASE_URL) -> the fake server's tool_use branch -> validateGeneratedArea
+  // -> a genuine structured draft handed back to the caller.
+  // ═══════════════════════════════════════════════════════════════════
+  console.log("\n--- Phase 1b: generate-area/route.ts, Anthropic active ---");
+
+  const beforeAreaCount = fakeAnthropic.getAreaRequestCount();
+  const areaRes = await fetchGenerateArea("a cracked, difficult patch of ground", {
+    x: 0,
+    y: 0,
+    width: 3,
+    height: 3,
+  });
+  const areaBody = await areaRes.json().catch(() => null);
+  check("generate-area succeeds when Anthropic is the active provider", areaRes.ok && areaBody?.ok === true, areaBody);
+  check(
+    "the real request actually reached the fake Anthropic server's tool-use branch — proves generateMapArea's Anthropic wiring is real, not a stub",
+    fakeAnthropic.getAreaRequestCount() === beforeAreaCount + 1
+  );
+  check(
+    "the request used a forced tool_choice naming propose_map_area (generateMapArea's own structured-output contract)",
+    fakeAnthropic.getLastAreaRequestBody()?.tool_choice?.type === "tool" &&
+      fakeAnthropic.getLastAreaRequestBody()?.tool_choice?.name === "propose_map_area",
+    fakeAnthropic.getLastAreaRequestBody()?.tool_choice
+  );
+  check(
+    "the request used the same MODEL as generate-draft (claude-haiku-4-5-20251001)",
+    fakeAnthropic.getLastAreaRequestBody()?.model === "claude-haiku-4-5-20251001",
+    fakeAnthropic.getLastAreaRequestBody()?.model
+  );
+  check(
+    "the returned area is genuinely the fake server's structured draft, validated and round-tripped correctly",
+    areaBody?.area?.cells?.length === 1 &&
+      areaBody.area.cells[0].x === 0 &&
+      areaBody.area.cells[0].y === 0 &&
+      areaBody.area.cells[0].elevation === 2 &&
+      areaBody.area.cells[0].terrain === "difficult" &&
+      Array.isArray(areaBody.area.objects) &&
+      areaBody.area.objects.length === 0,
+    areaBody
   );
 
   // ═══════════════════════════════════════════════════════════════════
