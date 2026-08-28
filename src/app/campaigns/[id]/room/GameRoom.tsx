@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import type { RootState } from "@react-three/fiber";
+import { playSound, SOUND_KEYS } from "@/audio";
 import {
   addCombatant,
   addFreeformCombatant,
@@ -263,6 +264,17 @@ const COMBAT_EVENT = "combat-changed";
 // shape (DB written first, then broadcast so already-connected clients update
 // immediately without their own extra read).
 const CELL_REVEALED_EVENT = "cell-revealed";
+// Sound Effects SP4: a cross-map transition has just been executed/confirmed
+// (handleConfirmTransition, after transitionMapToken persists) — ephemeral,
+// the TOKEN_SELECTED_EVENT/DICE_ROLLED_EVENT shape: nothing durable to
+// recover on reconnect (a dropped broadcast just costs a missed door-sound
+// cue, never a wrong persisted state), so no onReconnect pair. The
+// confirming DM's own client plays the sound directly, right where it
+// publishes this (publish never echoes to its own sender, the same
+// reasoning as every other mutation in this file) — this event is what
+// makes every OTHER connected client, the transitioning token's own owner
+// included, hear it too, regardless of which map they currently have open.
+const DOOR_TRANSITION_EVENT = "door-transition";
 // Map Editor Batch A4: item containers. ITEM_TAKEN_EVENT is the
 // TRIGGER_EVENT shape (persist via claim_map_object_item first, then
 // broadcast so every other client with that same container's panel open
@@ -459,6 +471,15 @@ interface TokenPayload {
  * covers it — reconnecting re-reads the whole map fresh via refreshLiveMap. */
 interface CellRevealedPayload {
   cell: MapCell;
+}
+
+/** Sound Effects SP4 — a poke, not a snapshot (the TOKEN_SELECTED_EVENT/
+ * DICE_ROLLED_EVENT shape): every receiver's own applyTokenChange has
+ * already (or will, via TOKEN_EVENT) pick up the moved token's real new
+ * state, so this carries only enough to be a useful debug/future
+ * extension point, never anything a receiver needs to render from. */
+interface DoorTransitionPayload {
+  tokenId: string;
 }
 
 /** Map Editor Batch A10: a live-placed object's full current row, sent only
@@ -2997,6 +3018,17 @@ export function GameRoom({
       CELL_REVEALED_EVENT,
       (payload) => applyCellChange(payload.cell)
     );
+    // Sound Effects SP4: see DOOR_TRANSITION_EVENT's own doc comment — every
+    // OTHER connected client (the confirming DM's own client already played
+    // this directly in handleConfirmTransition) hears the same cue the
+    // instant a cross-map transition is confirmed, regardless of which map
+    // this client currently has open.
+    const unsubscribeDoorTransition = channel.subscribe<DoorTransitionPayload>(
+      DOOR_TRANSITION_EVENT,
+      () => {
+        void playSound(SOUND_KEYS.DOOR_TRANSITION);
+      }
+    );
     // Map Editor Batch A4: item containers. No onReconnect pair for either
     // — see ITEM_TAKEN_EVENT/PIT_ITEMS_FOUND_EVENT's own doc comments for
     // why a dropped broadcast is harmless here.
@@ -3195,6 +3227,7 @@ export function GameRoom({
       unsubscribeObjectUpserted();
       unsubscribeToken();
       unsubscribeCellRevealed();
+      unsubscribeDoorTransition();
       unsubscribeItemTaken();
       unsubscribePitItemsFound();
       unsubscribeHandout();
@@ -4792,6 +4825,17 @@ export function GameRoom({
           applyTokenChange(moved.id, moved);
           await publishTokenChange(moved.id, moved);
         }
+        // Sound Effects SP4: the exact moment this transition is executed/
+        // confirmed — once per confirm gesture (not once per mover in a
+        // whole-party crossing). Played directly on this confirming client
+        // first (publish never echoes to its own sender, see
+        // DOOR_TRANSITION_EVENT's own doc comment), then broadcast so every
+        // other connected client — the crossing token's own owner among
+        // them — hears it too.
+        void playSound(SOUND_KEYS.DOOR_TRANSITION);
+        await campaignChannelRef.current?.publish<DoorTransitionPayload>(DOOR_TRANSITION_EVENT, {
+          tokenId: offer.token.id,
+        });
         setTransitionOffer(null);
         // Per-viewer map transitions (0046): moving a token never forces
         // whose VIEW it's on. Each mover's own client (ownTokenMapId,
