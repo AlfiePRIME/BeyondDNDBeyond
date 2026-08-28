@@ -54,6 +54,12 @@ describe("scriptedDiceAnimator.step", () => {
     expect(() => scriptedDiceAnimator.step(oddSpec, 10)).not.toThrow();
     expect(scriptedDiceAnimator.step(oddSpec, 10).settled).toBe(true);
   });
+
+  it("SP8: never reports impacted — there is no real collision for a keyframed tumble to detect", () => {
+    for (const t of [0, 0.1, 0.3, 0.55, 1, 5]) {
+      expect(scriptedDiceAnimator.step(SPEC, t).impacted).toBe(false);
+    }
+  });
 });
 
 // -----------------------------------------------------------------------
@@ -220,4 +226,40 @@ describe("physicsDiceAnimator (after the WASM engine has loaded)", () => {
   it("pickDiceAnimator falls back to scriptedDiceAnimator for a non-positive die count", () => {
     expect(pickDiceAnimator(0)).toBe(scriptedDiceAnimator);
   });
+
+  // -----------------------------------------------------------------------
+  // SP8 — real Rapier collision-event wiring (docs/design/dice-numbers-and-
+  // physics.md §11's tray boundary + this file's own DicePose.impacted doc
+  // comment). A die dropped into a tray under real gravity is guaranteed to
+  // hit the floor at least once — these aren't testing "does a bounce
+  // happen to occur" (chance), they're testing "does the ALREADY-CERTAIN
+  // floor contact get reported through the new signal at all".
+  // -----------------------------------------------------------------------
+  it("reports impacted: true on at least one real frame during a genuine tumble (the die's own certain floor/wall contact)", () => {
+    const rollId = nextRollId("impact-detected");
+    const spec: DiceTumbleDieSpec = { id: `${rollId}:0`, sides: 20, result: 5 };
+    const dt = 1 / 60;
+    let pose = physicsDiceAnimator.step(spec, 0);
+    let sawImpact = pose.impacted;
+    for (let t = dt; t <= 3 && !pose.settled; t += dt) {
+      pose = physicsDiceAnimator.step(spec, t);
+      sawImpact = sawImpact || pose.impacted;
+    }
+    expect(sawImpact).toBe(true);
+    disposeDicePhysicsRoll(rollId);
+  });
+
+  it("impacted returns to false once the die has settled and the shared world stops stepping — never a stale stuck-true signal", () => {
+    const rollId = nextRollId("impact-resets");
+    const spec: DiceTumbleDieSpec = { id: `${rollId}:0`, sides: 6, result: 4 };
+    const finalPose = runToSettled(spec);
+    expect(finalPose.settled).toBe(true);
+    // Queried again well after settling, once pendingCount has reached 0 and
+    // the world genuinely stops stepping — must read false, not whatever the
+    // last real impact happened to leave behind.
+    const afterSettle = physicsDiceAnimator.step(spec, 10);
+    expect(afterSettle.impacted).toBe(false);
+    disposeDicePhysicsRoll(rollId);
+  });
+
 });

@@ -28,6 +28,21 @@ export interface DicePose {
   /** Euler XYZ radians. */
   rotation: readonly [number, number, number];
   settled: boolean;
+  /** SP8 (docs/design/dice-numbers-and-physics.md's own physics seam,
+   * reused rather than re-invented): true on the exact frame(s) this die
+   * was involved in a REAL Rapier collision-started event during this
+   * step — the tray floor, a wall, or another die in the same roll. Always
+   * false for scriptedDiceAnimator (no real collisions to report — see its
+   * own step() below) and for physicsDiceAnimator before the WASM engine
+   * has loaded (the defensive scriptedDiceAnimator delegation further
+   * down). This is the RAW per-frame signal, deliberately never debounced
+   * or rate-limited here — a real chaotic bounce phase can legitimately
+   * report true on several close-together frames as a die catches, tips,
+   * and re-catches. A caller wanting to trigger a sound on it
+   * (useDiceTumble's own onImpact callback) owns its own throttling — see
+   * DiceTumble.tsx's Die component, which is where that policy actually
+   * lives. */
+  impacted: boolean;
 }
 
 /**
@@ -176,6 +191,7 @@ export const scriptedDiceAnimator: DiceAnimator = {
       position: [x, y, z],
       rotation: [euler.x, euler.y, euler.z],
       settled: elapsedSeconds >= SETTLE_SECONDS,
+      impacted: false,
     };
   },
 };
@@ -316,14 +332,20 @@ const PHYSICS_WALL_SEGMENTS = 12;
 
 /** Builds one roll's physics world's own static floor + wall — every roll
  * gets an identical boundary regardless of which tray model a member has
- * actually chosen to render (docs/design/dice-numbers-and-physics.md §11). */
+ * actually chosen to render (docs/design/dice-numbers-and-physics.md §11).
+ * SP8: every collider here also opts into COLLISION_EVENTS (the floor and
+ * every wall segment are real, audible impact surfaces — a die's very
+ * first landing is almost always against the floor, not another die) so
+ * physicsDiceAnimator's own event-draining loop (below) sees a genuine
+ * "started" event the instant a die's collider first touches down. */
 function buildTrayBoundary(Rapier: RapierNamespace, world: InstanceType<RapierNamespace["World"]>): void {
   const body = world.createRigidBody(Rapier.RigidBodyDesc.fixed());
 
   const floor = Rapier.ColliderDesc.cylinder(0.01, PHYSICS_TRAY_RADIUS)
     .setTranslation(0, -0.01, 0)
     .setFriction(0.8)
-    .setRestitution(0.2);
+    .setRestitution(0.2)
+    .setActiveEvents(Rapier.ActiveEvents.COLLISION_EVENTS);
   world.createCollider(floor, body);
 
   for (let i = 0; i < PHYSICS_WALL_SEGMENTS; i++) {
@@ -346,7 +368,8 @@ function buildTrayBoundary(Rapier: RapierNamespace, world: InstanceType<RapierNa
       )
       .setRotation({ x: wallQuaternion.x, y: wallQuaternion.y, z: wallQuaternion.z, w: wallQuaternion.w })
       .setFriction(0.5)
-      .setRestitution(0.4);
+      .setRestitution(0.4)
+      .setActiveEvents(Rapier.ActiveEvents.COLLISION_EVENTS);
     world.createCollider(wall, body);
   }
 }
@@ -490,6 +513,36 @@ interface RollPhysicsWorld {
    * pose is now a pure function of its own frozen snapshot + elapsed time),
    * a real (if modest) CPU saving during a roll's LINGER_MS tail. */
   pendingCount: number;
+  /** SP8: this roll's own Rapier EventQueue — real collision-started/-ended
+   * events, drained every low-level world.step() call below (see the
+   * physicsDiceAnimator step() function's own comment on exactly why "every
+   * call", not just once per outer frame, matters: Rapier's own
+   * autoDrain=true silently DISCARDS a step's events if a second step()
+   * runs before they're drained — confirmed directly by real prototyping
+   * against this exact package version before choosing this approach; see
+   * this feature's own design notes). One per roll, matching `world`'s own
+   * per-roll lifetime — freed alongside it in disposeDicePhysicsRoll. */
+  eventQueue: InstanceType<RapierNamespace["EventQueue"]>;
+  /** Maps a die's own collider handle (Rapier's internal id, assigned at
+   * `createCollider` time — collider handles are scoped PER WORLD, so this
+   * map must live on the per-roll RollPhysicsWorld, never a single
+   * module-global map, or two different rolls' dice could collide on the
+   * same handle value) back to that die's `spec.id`, so a drained collision
+   * event (which only carries raw collider handles) can be attributed to
+   * the right die. Only dice are registered here — the tray floor/wall
+   * colliders (buildTrayBoundary) are never a lookup target, only ever the
+   * OTHER side of a die's collision. */
+  handleToDieId: Map<number, string>;
+  /** The set of this roll's own die ids that had a genuine collision-started
+   * event during THIS macro frame's world-step burst — reset to empty right
+   * before the burst (if one runs), populated during it, then read
+   * (non-destructively — every die in the roll reads this same frame's set,
+   * regardless of call order) by every die's own step() call this same
+   * frame. Reset-but-not-repopulated on a frame where every die has already
+   * transitioned (pendingCount === 0, so the world no longer steps) — see
+   * physicsDiceAnimator's own step() for why this must still be cleared
+   * every frame even when nothing steps, not just when something does. */
+  impactedDieIdsThisFrame: Set<string>;
 }
 
 const rollWorlds = new Map<string, RollPhysicsWorld>();
@@ -499,7 +552,22 @@ function getOrCreateRollWorld(Rapier: RapierNamespace, rollId: string): RollPhys
   if (!roll) {
     const world = new Rapier.World({ x: 0, y: -9.81, z: 0 });
     buildTrayBoundary(Rapier, world);
-    roll = { world, dice: new Map(), lastSteppedElapsed: 0, pendingCount: 0 };
+    // autoDrain=true per Rapier's own strong recommendation (EventQueue's
+    // own doc comment) — this module always drains explicitly and
+    // immediately after every step() call anyway (see the note on
+    // RollPhysicsWorld.eventQueue above), so autoDrain never has anything
+    // left to silently clean up; it's just defense in depth against a
+    // theoretical future call site that steps without draining.
+    const eventQueue = new Rapier.EventQueue(true);
+    roll = {
+      world,
+      dice: new Map(),
+      lastSteppedElapsed: 0,
+      pendingCount: 0,
+      eventQueue,
+      handleToDieId: new Map(),
+      impactedDieIdsThisFrame: new Set(),
+    };
     rollWorlds.set(rollId, roll);
   }
   return roll;
@@ -564,8 +632,16 @@ function createDieBody(Rapier: RapierNamespace, roll: RollPhysicsWorld, spec: Di
     .setAngularDamping(0.35)
     .setCcdEnabled(true);
   const body = roll.world.createRigidBody(bodyDesc);
-  const colliderDesc = colliderDescFor(Rapier, kind).setFriction(0.7).setRestitution(0.35).setDensity(1);
-  roll.world.createCollider(colliderDesc, body);
+  // SP8: COLLISION_EVENTS makes this specific die's contacts (against the
+  // floor, a wall, or another die — buildTrayBoundary already opts every
+  // boundary collider in too) show up in roll.eventQueue's own drain below.
+  const colliderDesc = colliderDescFor(Rapier, kind)
+    .setFriction(0.7)
+    .setRestitution(0.35)
+    .setDensity(1)
+    .setActiveEvents(Rapier.ActiveEvents.COLLISION_EVENTS);
+  const collider = roll.world.createCollider(colliderDesc, body);
+  roll.handleToDieId.set(collider.handle, spec.id);
 
   const record: DiePhysicsRecord = {
     body,
@@ -581,19 +657,22 @@ function createDieBody(Rapier: RapierNamespace, roll: RollPhysicsWorld, spec: Di
 }
 
 /** Frees a finished roll's Rapier World (and, per Rapier's own docs, every
- * body/collider it owns — no need to free those individually). Rapier's WASM
- * memory is NOT garbage-collected by the JS engine, so skipping this would
- * be a real, slow memory leak across a long session with many rolls
- * (docs/design/dice-numbers-and-physics.md §7's own explicit warning). Safe
- * to call for any roll id, including one that never used physics at all
- * (scripted-animator-only rolls never appear in `rollWorlds`) — a plain
- * no-op in that case, so DiceTumble.tsx's own onDone hook can call this
- * unconditionally for every finished roll without knowing which animator it
- * used.
+ * body/collider it owns — no need to free those individually) AND its own
+ * EventQueue (SP8 — a second, independent piece of WASM-owned memory
+ * `world.free()` does NOT also release). Rapier's WASM memory is NOT
+ * garbage-collected by the JS engine, so skipping either would be a real,
+ * slow memory leak across a long session with many rolls (docs/design/
+ * dice-numbers-and-physics.md §7's own explicit warning, which SP8's own
+ * EventQueue addition is equally subject to). Safe to call for any roll id,
+ * including one that never used physics at all (scripted-animator-only
+ * rolls never appear in `rollWorlds`) — a plain no-op in that case, so
+ * DiceTumble.tsx's own onDone hook can call this unconditionally for every
+ * finished roll without knowing which animator it used.
  */
 export function disposeDicePhysicsRoll(rollId: string): void {
   const roll = rollWorlds.get(rollId);
   if (!roll) return;
+  roll.eventQueue.free();
   roll.world.free();
   rollWorlds.delete(rollId);
 }
@@ -662,22 +741,53 @@ export const physicsDiceAnimator: DiceAnimator = {
     // new elapsedSeconds value advances the whole world by the elapsed gap;
     // every other die's own step() call at that SAME elapsedSeconds this
     // frame just reads its already-updated transform below, without
-    // stepping again. Skipped entirely once every die in the roll has
-    // already transitioned (pendingCount === 0) — nothing left that needs
-    // live physics.
-    if (roll.pendingCount > 0 && elapsedSeconds > roll.lastSteppedElapsed) {
-      let remaining = Math.min(
-        elapsedSeconds - roll.lastSteppedElapsed,
-        MAX_SUBSTEP_SECONDS * MAX_SUBSTEPS_PER_FRAME
-      );
-      while (remaining > 1e-9) {
-        const dt = Math.min(remaining, MAX_SUBSTEP_SECONDS);
-        roll.world.timestep = dt;
-        roll.world.step();
-        remaining -= dt;
+    // stepping again.
+    if (elapsedSeconds > roll.lastSteppedElapsed) {
+      // Reset every frame this world genuinely advances to a NEW elapsed
+      // time, even on a frame where pendingCount has already hit 0 and the
+      // substep loop below doesn't run — otherwise a stale "impacted" from
+      // the LAST real physics frame would read as true forever afterward
+      // (SP8: this field has no other reset path, unlike lastSteppedElapsed/
+      // pendingCount which the substep loop itself keeps current).
+      roll.impactedDieIdsThisFrame.clear();
+      // Skipped entirely once every die in the roll has already transitioned
+      // (pendingCount === 0) — nothing left that needs live physics.
+      if (roll.pendingCount > 0) {
+        let remaining = Math.min(
+          elapsedSeconds - roll.lastSteppedElapsed,
+          MAX_SUBSTEP_SECONDS * MAX_SUBSTEPS_PER_FRAME
+        );
+        while (remaining > 1e-9) {
+          const dt = Math.min(remaining, MAX_SUBSTEP_SECONDS);
+          roll.world.timestep = dt;
+          roll.world.step(roll.eventQueue);
+          // Drained immediately after EVERY individual step() call, not
+          // just once after the whole substep loop — confirmed by real
+          // prototyping (this feature's own design investigation) that
+          // Rapier's autoDrain=true silently discards a step's events if a
+          // second step() runs before they're drained, which this substep
+          // loop can genuinely do (a stalled/backgrounded tab catching up
+          // several substeps in one JS-visible frame). Accumulating into
+          // impactedDieIdsThisFrame (rather than overwriting) across
+          // however many substeps this one macro-frame needed is what makes
+          // "drained per-substep" and "read once per macro-frame by every
+          // die" both correct at the same time.
+          roll.eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+            if (!started) return;
+            const dieId1 = roll.handleToDieId.get(handle1);
+            if (dieId1) roll.impactedDieIdsThisFrame.add(dieId1);
+            const dieId2 = roll.handleToDieId.get(handle2);
+            if (dieId2) roll.impactedDieIdsThisFrame.add(dieId2);
+          });
+          remaining -= dt;
+        }
       }
     }
     roll.lastSteppedElapsed = elapsedSeconds;
+    // Read (never consumed/cleared here) by every die's own step() call this
+    // same frame, regardless of which die's call actually triggered the
+    // stepping above — see impactedDieIdsThisFrame's own doc comment.
+    const impacted = roll.impactedDieIdsThisFrame.has(spec.id);
 
     if (record.transitionElapsed === null) {
       const linvel = record.body.linvel(rapierLinvelScratch!);
@@ -722,6 +832,7 @@ export const physicsDiceAnimator: DiceAnimator = {
           position: [translation.x, translation.y, translation.z],
           rotation: [eulerScratch.x, eulerScratch.y, eulerScratch.z],
           settled: false,
+          impacted,
         };
       }
     }
@@ -746,6 +857,7 @@ export const physicsDiceAnimator: DiceAnimator = {
       position: [snapshotX, y, snapshotZ],
       rotation: [eulerScratch.x, eulerScratch.y, eulerScratch.z],
       settled: blendT >= 1,
+      impacted,
     };
   },
 };

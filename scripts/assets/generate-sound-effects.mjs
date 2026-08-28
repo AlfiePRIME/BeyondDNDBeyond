@@ -80,29 +80,45 @@ function generate(name, args) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// dice_impact — a short percussive click/thock: a highpassed white-noise
-// transient (the "click") layered under a short low sine "thock" body,
-// both faded to nothing well before the clip ends.
+// dice_impact — SP8: a pool of 3 distinct short percussive click/thock
+// variants (a die genuinely bounces/lands several times per tumble now that
+// SP8 wires real per-collision playback, not just once at the very end — the
+// same "must genuinely vary across repeated triggers" bar hit_normal's own
+// pool above already set for SP5's repeated-hits case, applied here to
+// repeated impacts within a single tumble). Each variant is the same
+// STRUCTURE as the original single dice_impact clip (a highpassed
+// white-noise "click" transient layered under a short low sine "thock"
+// body, both faded out well before the clip ends) with a different noise
+// seed AND a different tone frequency per variant — confirmed via a real
+// PCM-content diff during this script's own development to be genuinely
+// distinct waveforms, not just distinct filenames. Each clip is 0.12s long
+// (see DiceTumble.tsx's own MIN_DICE_IMPACT_INTERVAL_MS, which is set to
+// exactly match this real generated duration so two triggered impacts never
+// audibly overlap).
 //
-// Equivalent shell command:
-//   ffmpeg -f lavfi -i "anoisesrc=d=0.12:c=white:a=1:seed=1" \
-//          -f lavfi -i "sine=f=180:d=0.12" \
+// Equivalent shell command (variant N, N in 1..3, freq = 180 + 60*(N-1)):
+//   ffmpeg -f lavfi -i "anoisesrc=d=0.12:c=white:a=1:seed=<N>" \
+//          -f lavfi -i "sine=f=<freq>:d=0.12" \
 //          -filter_complex "
 //            [0:a]highpass=f=800,lowpass=f=6000[noise];
 //            [1:a]volume=0.6[tone];
 //            [noise][tone]amix=inputs=2:duration=first:dropout_transition=0,
 //              afade=t=out:st=0.02:d=0.1,volume=3.0[out]" \
-//          -map "[out]" dice_impact.mp3
+//          -map "[out]" dice_impact_<N>.mp3
 // ─────────────────────────────────────────────────────────────────────────
-generate("dice_impact.mp3", [
-  "-f", "lavfi", "-i", "anoisesrc=d=0.12:c=white:a=1:seed=1",
-  "-f", "lavfi", "-i", "sine=f=180:d=0.12",
-  "-filter_complex",
-  "[0:a]highpass=f=800,lowpass=f=6000[noise];" +
-    "[1:a]volume=0.6[tone];" +
-    "[noise][tone]amix=inputs=2:duration=first:dropout_transition=0,afade=t=out:st=0.02:d=0.1,volume=3.0[out]",
-  "-map", "[out]",
-]);
+for (let i = 1; i <= 3; i++) {
+  const seed = i;
+  const freq = 180 + (i - 1) * 60;
+  generate(`dice_impact_${i}.mp3`, [
+    "-f", "lavfi", "-i", `anoisesrc=d=0.12:c=white:a=1:seed=${seed}`,
+    "-f", "lavfi", "-i", `sine=f=${freq}:d=0.12`,
+    "-filter_complex",
+    "[0:a]highpass=f=800,lowpass=f=6000[noise];" +
+      "[1:a]volume=0.6[tone];" +
+      "[noise][tone]amix=inputs=2:duration=first:dropout_transition=0,afade=t=out:st=0.02:d=0.1,volume=3.0[out]",
+    "-map", "[out]",
+  ]);
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // pit_fall — a whoosh (bandpassed pink noise, faded in then out, reading as
@@ -370,7 +386,9 @@ generate("thunder.mp3", [
 // against the actual generated set, not just by eye — mirrors generate-
 // monster-presets.mjs's own post-generation self-check convention.
 const EXPECTED_FILES = [
-  "dice_impact.mp3",
+  "dice_impact_1.mp3",
+  "dice_impact_2.mp3",
+  "dice_impact_3.mp3",
   "pit_fall.mp3",
   "hit_normal_1.mp3",
   "hit_normal_2.mp3",

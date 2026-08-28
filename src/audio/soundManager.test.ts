@@ -69,6 +69,10 @@ describe("SOUND_KEYS registry", () => {
     expect(getVariantCount(SOUND_KEYS.HIT_NORMAL)).toBeGreaterThanOrEqual(3);
   });
 
+  it("gives dice_impact a real pool of at least 3 distinct variants (SP8: a tumble now plays this repeatedly, not just once, so it needs the same genuine variety hit_normal's pool established)", () => {
+    expect(getVariantCount(SOUND_KEYS.DICE_IMPACT)).toBeGreaterThanOrEqual(3);
+  });
+
   it("marks exactly rain_loop/wind_loop/fire_loop as loop-capable channels — thunder is a one-shot, not a loop", () => {
     expect(new Set(LOOP_SOUND_KEYS)).toEqual(new Set(["rain_loop", "wind_loop", "fire_loop"]));
     expect(LOOP_SOUND_KEYS).not.toContain(SOUND_KEYS.THUNDER);

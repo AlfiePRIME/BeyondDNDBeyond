@@ -195,7 +195,11 @@ try {
   // signed-in page's own cookie jar (Part 2) is what makes this a genuine
   // check of the real, playable file.
   const REGISTRY_FILES = [
-    "dice_impact.mp3",
+    // SP8 turned dice_impact into a 3-file pool (like hit_normal below) —
+    // see soundManager.ts's own SOUND_FILES doc comment.
+    "dice_impact_1.mp3",
+    "dice_impact_2.mp3",
+    "dice_impact_3.mp3",
     "pit_fall.mp3",
     "hit_normal_1.mp3",
     "hit_normal_2.mp3",
