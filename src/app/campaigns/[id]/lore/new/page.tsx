@@ -39,7 +39,7 @@ export default async function NewLorePagePage({ params }: { params: Promise<{ id
 
         <Panel title="New lore page" tone="purple" glow>
           <p className={styles.hint}>Add a page to {campaign.name}&apos;s world.</p>
-          <NewLorePageForm campaignId={campaignId} aiEnabled={isAiConfigured()} />
+          <NewLorePageForm campaignId={campaignId} aiEnabled={await isAiConfigured()} />
         </Panel>
       </main>
     </div>

@@ -1,12 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { isAiConfigured } from "./generateDraft";
+import { isAnthropicConfigured } from "./providers/anthropic";
 
 /**
  * Chat & Summary B6: the end-of-session AI summary generator. Extends this
- * module's existing pattern (generateDraft's isAiConfigured gate and
- * injectable-fetch testing seam, generateMapArea's forced-tool-use +
- * validate + retry-once shape) rather than reusing either directly — the
- * input here is a full session's chat transcript plus mechanical event log,
+ * module's existing pattern (generateMapArea's isAnthropicConfigured gate,
+ * injectable-fetch testing seam, and forced-tool-use + validate + retry-once
+ * shape — see providers/anthropic.ts's isAnthropicConfigured doc comment for
+ * why this stays gated on Anthropic specifically, not the multi-provider
+ * isAiConfigured(), post AI Backend & Admin D3) rather than reusing it
+ * directly — the input here is a full session's chat transcript plus
+ * mechanical event log,
  * not a short DM-authored brief (generateDraft's MAX_PROMPT_CHARS-bounded
  * use case) or a schema-only fill-in task (generateMapArea's region grid).
  *
@@ -307,9 +310,11 @@ export class SessionSummaryGenerationError extends Error {}
 /**
  * Generates a two-part end-of-session summary (narrative recap + structured
  * highlights) for one session's full start-to-end window. Requires
- * ANTHROPIC_API_KEY — callers should gate on isAiConfigured() first, same as
- * every other generator in this module — EXCEPT for a session with no chat
- * and no activity at all: that case returns an explicitly-empty summary
+ * ANTHROPIC_API_KEY — callers should gate on isAnthropicConfigured() first
+ * (this feature is Anthropic-only regardless of app_settings.active_provider
+ * — see providers/anthropic.ts's isAnthropicConfigured doc comment) —
+ * EXCEPT for a session with no chat and no activity at all: that case
+ * returns an explicitly-empty summary
  * immediately, without an API call, regardless of whether AI is configured
  * (there is nothing to summarize either way, and this is the "completes
  * gracefully, not an error" case this prompt's Acceptance Criteria call
@@ -325,7 +330,7 @@ export async function generateSessionSummary(
   if (isEmptyWindow(window)) {
     return { narrative: "", highlights: [] };
   }
-  if (!isAiConfigured()) {
+  if (!isAnthropicConfigured()) {
     throw new Error("ANTHROPIC_API_KEY is not configured.");
   }
 

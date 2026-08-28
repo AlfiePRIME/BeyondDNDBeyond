@@ -4,16 +4,22 @@
 // eslint.config.mjs). Every other module goes through here (or one of the
 // sub-entry-points below) for persistence.
 //
-// Three additional entry points exist for code that Next.js restricts to a
-// specific runtime — importing them from this main barrel would leak
+// Four additional entry points exist for code that Next.js restricts to a
+// specific runtime, or (supabase-service-role) that deliberately bypasses
+// RLS entirely — importing them from this main barrel would leak
 // server/edge-only code (e.g. next/headers) into client bundles and break
-// the build:
-//   @/data-access/supabase-server     — Server Components/Actions/Route Handlers
-//   @/data-access/supabase-browser    — Client Components
-//   @/data-access/supabase-middleware — Edge Middleware
+// the build, or make an RLS-bypassing client too easy to reach for by
+// accident:
+//   @/data-access/supabase-server       — Server Components/Actions/Route Handlers
+//   @/data-access/supabase-browser      — Client Components
+//   @/data-access/supabase-middleware   — Edge Middleware
+//   @/data-access/supabase-service-role — AI Backend & Admin D3's narrow,
+//                                          server-side-only exception (see
+//                                          that file's own doc comment and
+//                                          src/ai/activeProvider.ts)
 //
 // Note on client creation generally: there is no shared/singleton Supabase
-// client — each of the three create*Client functions builds a fresh
+// client — each of the four create*Client functions builds a fresh
 // instance per call. A single shared instance would leak one user's
 // session/cookies into another user's request on the server.
 //
@@ -416,9 +422,11 @@ export {
 export {
   getAppSettings,
   updateAppSettings,
+  getRawAiProviderConfig,
   type AiProvider,
   type AppSettings,
   type AppSettingsUpdate,
+  type RawAiProviderConfig,
 } from "./appSettings";
 
 export const MODULE_NAME = "data-access" as const;

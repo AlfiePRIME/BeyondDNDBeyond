@@ -48,7 +48,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     );
   }
 
-  if (!isAiConfigured()) {
+  if (!(await isAiConfigured())) {
     // The UI hides the generate action when unconfigured, so this only
     // guards direct calls.
     return NextResponse.json(

@@ -4,7 +4,7 @@ import { getMap, isDM, listAssetsForCampaign, listMapObjects } from "@/data-acce
 import {
   AreaGenerationError,
   generateMapArea,
-  isAiConfigured,
+  isAnthropicConfigured,
   MAX_AREA_CELLS,
   MAX_PROMPT_CHARS,
 } from "@/ai";
@@ -54,7 +54,7 @@ export async function POST(
     );
   }
 
-  if (!isAiConfigured()) {
+  if (!isAnthropicConfigured()) {
     return NextResponse.json(
       { ok: false, message: "AI generation isn't configured on this server." },
       { status: 503 }

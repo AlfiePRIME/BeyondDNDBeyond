@@ -80,6 +80,37 @@ const eslintConfig = defineConfig([
               message:
                 "proxy.ts may not import @anthropic-ai/sdk directly — go through @/ai instead.",
             },
+            // AI Backend & Admin D3: the OpenAI and Ollama providers are
+            // both implemented with plain fetch (see src/ai/providers/
+            // openai.ts and ollama.ts for why — no first-party TypeScript
+            // SDK dependency was added for either), so there is no
+            // "openai"/"ollama" package in package.json today. These two
+            // rules exist anyway, preemptively, in the same shape as the
+            // @anthropic-ai/sdk rules above: if a future prompt ever adds
+            // either package, src/ai stays the sole choke point for it from
+            // the day it lands, rather than after someone notices a
+            // violation. Harmless no-ops until then (eslint-plugin-
+            // boundaries only flags an import that actually exists).
+            {
+              from: { element: { type: "!ai" } },
+              disallow: { to: { module: { origin: "external", source: "openai" } } },
+              message: "Only the ai module may import the openai SDK directly — go through @/ai instead.",
+            },
+            {
+              from: { file: { categories: { anyOf: ["proxy"] } } },
+              disallow: { to: { module: { origin: "external", source: "openai" } } },
+              message: "proxy.ts may not import the openai SDK directly — go through @/ai instead.",
+            },
+            {
+              from: { element: { type: "!ai" } },
+              disallow: { to: { module: { origin: "external", source: "ollama" } } },
+              message: "Only the ai module may import the ollama SDK directly — go through @/ai instead.",
+            },
+            {
+              from: { file: { categories: { anyOf: ["proxy"] } } },
+              disallow: { to: { module: { origin: "external", source: "ollama" } } },
+              message: "proxy.ts may not import the ollama SDK directly — go through @/ai instead.",
+            },
             {
               // rules-engine is pure game logic: no UI, DB, realtime, scene, or AI deps.
               from: { element: { type: "rules-engine" } },
@@ -120,18 +151,20 @@ const eslintConfig = defineConfig([
                 "Import from the module's barrel (e.g. \"@/ui-components\") instead of reaching into its internal files.",
             },
             {
-              // data-access has three additional, deliberate entry points
+              // data-access has four additional, deliberate entry points
               // beyond its main barrel — see the comment atop
               // src/data-access/index.ts for why (Next.js runtime
-              // restrictions on next/headers, next/server, etc.).
+              // restrictions on next/headers, next/server, etc., plus D3's
+              // narrow service-role exception).
               group: [
                 "@/data-access/**",
                 "!@/data-access/supabase-server",
                 "!@/data-access/supabase-browser",
                 "!@/data-access/supabase-middleware",
+                "!@/data-access/supabase-service-role",
               ],
               message:
-                "Import from the module's barrel (\"@/data-access\") or one of its three documented sub-entry-points, not another internal file.",
+                "Import from the module's barrel (\"@/data-access\") or one of its four documented sub-entry-points, not another internal file.",
             },
           ],
         },

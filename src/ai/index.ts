@@ -1,20 +1,27 @@
 // Public entry point for the ai module — the app's one external, non-self-
-// hosted integration (the Anthropic API; see README.md). This is the ONLY
-// module allowed to import @anthropic-ai/sdk directly — enforced by
-// eslint-plugin-boundaries (see eslint.config.mjs) — so a future consumer
-// (e.g. map-content generation) reuses this client instead of standing up a
-// second one.
+// hosted integration (Anthropic, OpenAI, and Ollama — see README.md). This
+// is the ONLY module allowed to import @anthropic-ai/sdk (or, should a
+// future prompt add one, an "openai"/"ollama" SDK package) directly —
+// enforced by eslint-plugin-boundaries (see eslint.config.mjs) — so every
+// consumer reuses this module's own generateText() instead of standing up
+// its own client.
 //
-// Server-side only: everything here reads ANTHROPIC_API_KEY from the server
-// process's environment. Route Handlers and Server Components may import it;
-// client components must never — they get a boolean prop derived from
-// isAiConfigured() and call the generate Route Handler over fetch.
+// Server-side only. isAiConfigured() (AI Backend & Admin D3) reflects
+// app_settings.active_provider's own readiness via a narrow, server-side-
+// only service-role Supabase read — see activeProvider.ts's own header
+// comment for the full access-control story. Route Handlers and Server
+// Components may import this module; client components must never — they
+// get a boolean prop derived from isAiConfigured() and call a generate
+// Route Handler over fetch.
 export {
-  isAiConfigured,
   generateNarrativeDraft,
   MAX_PROMPT_CHARS,
+  MODEL,
   type DraftKind,
 } from "./generateDraft";
+export { isAiConfigured } from "./activeProvider";
+export { generateText, type GenerateTextParams, type GenerateTextTransport } from "./generateText";
+export { isAnthropicConfigured } from "./providers/anthropic";
 export {
   generateMapArea,
   validateGeneratedArea,

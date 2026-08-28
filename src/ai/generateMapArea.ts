@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { TerrainType } from "@/rules-engine";
-import { isAiConfigured, MAX_PROMPT_CHARS, MODEL } from "./generateDraft";
+import { MAX_PROMPT_CHARS, MODEL } from "./generateDraft";
+import { isAnthropicConfigured } from "./providers/anthropic";
 
 /** An asset the model may place, reduced to the two fields it needs: the id
  * it must echo back and the name it reasons about. */
@@ -318,7 +319,7 @@ export async function generateMapArea(
   transport?: { fetch?: typeof fetch },
   occupiedCells?: ReadonlySet<string>
 ): Promise<GeneratedArea> {
-  if (!isAiConfigured()) {
+  if (!isAnthropicConfigured()) {
     throw new Error("ANTHROPIC_API_KEY is not configured.");
   }
   const trimmed = prompt.trim().slice(0, MAX_PROMPT_CHARS);
