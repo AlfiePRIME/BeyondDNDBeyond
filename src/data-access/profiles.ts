@@ -38,6 +38,33 @@ export interface PanelLayoutEntry {
 }
 
 /**
+ * Sound Effects SP1 — the caller's own master audio setting, added to
+ * ui_preferences alongside `panelLayout` (same jsonb column, same
+ * debounced-write/cross-tab-sync convention — see `soundSettings`'s own doc
+ * comment on UiPreferences below for why persisting a SECOND independent
+ * slice of this document needed real care, unlike `docked` which was just a
+ * new field on an ALREADY-owned slice). `volume` is 0 (silent) to 1 (full);
+ * `muted` is a separate on/off switch that overrides volume without
+ * discarding whatever level the user last set (unmuting restores exactly
+ * that level, not a reset to some default) — the same "the persisted field
+ * IS the restore state" shape PanelLayoutEntry.collapsed/docked already
+ * established. src/audio/soundManager.ts is the only real estate that reads
+ * this to drive an actual GainNode; every other Sound Effects prompt only
+ * ever touches sound state through that module's playSound/startLoop/
+ * stopLoop, never this shape directly.
+ */
+export interface SoundSettings {
+  volume: number;
+  muted: boolean;
+}
+
+/** A profile that has never touched the sound control gets this — full
+ * volume, unmuted — the same "everything before this feature existed keeps
+ * working exactly as it did" default every other ui_preferences addition
+ * (height, docked) has established for an absent field. */
+export const DEFAULT_SOUND_SETTINGS: SoundSettings = { volume: 1, muted: false };
+
+/**
  * profiles.ui_preferences' only schema (0040) — schemaless jsonb otherwise,
  * the behavior_config/roll_log.breakdown convention: the app layer defines
  * the real shape, not the database. `panelLayout` is keyed by the stable
@@ -47,9 +74,24 @@ export interface PanelLayoutEntry {
  * campaign and session. A key may be absent (never dragged/collapsed yet);
  * DraggablePanel's layout context supplies that panel's hardcoded default
  * in that case.
+ *
+ * `soundSettings` (Sound Effects SP1) is optional/omittable for the exact
+ * same reason — absent until the first volume/mute change, DEFAULT_SOUND_
+ * SETTINGS covers it until then. IMPORTANT for whoever touches either field
+ * next: setUiPreferences (below) is a WHOLE-DOCUMENT replace by design (see
+ * its own doc comment) — safe for a single owner holding "the complete,
+ * already-merged document" in memory, which is exactly why `panelLayout`
+ * alone never needed a merge. Now that a SECOND, independently-edited slice
+ * exists, whichever React context persists one of these two fields must
+ * merge in the other's LAST KNOWN value first (see PanelLayoutProvider's own
+ * `soundSettings` state in DraggablePanel.tsx, kept in sync via this same
+ * row's subscribeToUiPreferencesChanges echo) rather than writing `{
+ * panelLayout }` or `{ soundSettings }` alone — either would silently wipe
+ * out the other field on the next debounced write.
  */
 export interface UiPreferences {
   panelLayout: Record<string, PanelLayoutEntry>;
+  soundSettings?: SoundSettings;
 }
 
 export interface Profile {
