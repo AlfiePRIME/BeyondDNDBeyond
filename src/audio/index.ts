@@ -33,3 +33,8 @@ export {
   type LoopSoundKey,
   type SoundManagerDebugSnapshot,
 } from "./soundManager";
+
+// Sound Effects SP9 — weather ambience: see weatherAudio.ts's own top-of-file
+// doc comment for the full resolveWeatherAudio/applyWeatherAudio writeup and
+// the exact per-weather-kind channel matrix.
+export { resolveWeatherAudio, applyWeatherAudio, type WeatherKind, type WeatherAudioChannels } from "./weatherAudio";
