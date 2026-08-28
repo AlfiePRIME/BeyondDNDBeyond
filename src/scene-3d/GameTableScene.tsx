@@ -882,8 +882,13 @@ export interface GameTableSceneProps {
    * (Weather & Enemies C6) — see its own doc comment. */
   onTokenMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
   /** Verification-only pass-through to MapSurface's onTokenTransformDebug
-   * (bridges and stairs surface-height + tilt) — see its own doc comment. */
-  onTokenTransformDebug?: (id: string, transform: { topY: number; pitchDeg: number; yawDeg: number }) => void;
+   * (bridges and stairs surface-height + tilt, extended with gridX/gridY
+   * for the click-select-to-move pawn-model repro investigation) — see its
+   * own doc comment. */
+  onTokenTransformDebug?: (
+    id: string,
+    transform: { gridX: number; gridY: number; topY: number; pitchDeg: number; yawDeg: number }
+  ) => void;
   /** This viewer's own visible chair offsets, keyed by user_id — scene-3d's
    * own SeatOffset (seating.ts), not data-access's structurally-identical
    * twin (the SeatMember/module-boundary convention already documented on

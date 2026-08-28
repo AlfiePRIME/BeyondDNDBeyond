@@ -1276,19 +1276,22 @@ export function GameRoom({
     },
     []
   );
-  // Bridges and stairs surface-height + tilt (a post-roadmap addition):
-  // mirrors each token's own ACTUAL rendered transform (MapSurfaceProps.
-  // onTokenTransformDebug's own doc comment) — same dedup reasoning as
-  // handleObjectMeasureDebug/handleTokenMeasureDebug above.
+  // Bridges and stairs surface-height + tilt (a post-roadmap addition),
+  // extended with gridX/gridY for the click-select-to-move pawn-model repro
+  // investigation: mirrors each token's own ACTUAL rendered transform
+  // (MapSurfaceProps.onTokenTransformDebug's own doc comment) — same dedup
+  // reasoning as handleObjectMeasureDebug/handleTokenMeasureDebug above.
   const [tokenTransformDebug, setTokenTransformDebug] = useState<
-    Record<string, { topY: number; pitchDeg: number; yawDeg: number }>
+    Record<string, { gridX: number; gridY: number; topY: number; pitchDeg: number; yawDeg: number }>
   >({});
   const handleTokenTransformDebug = useCallback(
-    (id: string, transform: { topY: number; pitchDeg: number; yawDeg: number }) => {
+    (id: string, transform: { gridX: number; gridY: number; topY: number; pitchDeg: number; yawDeg: number }) => {
       setTokenTransformDebug((current) => {
         const existing = current[id];
         if (
           existing &&
+          existing.gridX === transform.gridX &&
+          existing.gridY === transform.gridY &&
           existing.topY === transform.topY &&
           existing.pitchDeg === transform.pitchDeg &&
           existing.yawDeg === transform.yawDeg
@@ -6496,14 +6499,18 @@ export function GameRoom({
         {JSON.stringify({ sliding: slidingTokenIds })}
       </div>
       {/* Hidden render-state mirror for scripts/db/verify-crossing-structure-
-          height.mjs — see MapSurfaceProps.onTokenTransformDebug's own doc
-          comment. Keyed by map_tokens.id; `topY` is the token's own ACTUAL
-          rendered world Y (baseHeight + elevation*step, PLUS the crossing
-          structure's own real-measured surface-height offset when the
-          token stands on one); `pitchDeg`/`yawDeg` are its actual rendered
-          tilt — 0/0 for a bridge, no crossing structure, or ordinary
-          elevated terrain. A key absent entirely means that token hasn't
-          settled its first frame yet. */}
+          height.mjs and scripts/db/verify-pawn-move-click-select.mjs — see
+          MapSurfaceProps.onTokenTransformDebug's own doc comment. Keyed by
+          map_tokens.id; `gridX`/`gridY` are the token's own ACTUAL rendered
+          grid position (useTokenSlide's interpolated route position at
+          settle — always exactly the target once settled, whether the
+          token renders a custom model or the plain disc); `topY` is its
+          ACTUAL rendered world Y (baseHeight + elevation*step, PLUS the
+          crossing structure's own real-measured surface-height offset when
+          the token stands on one); `pitchDeg`/`yawDeg` are its actual
+          rendered tilt — 0/0 for a bridge, no crossing structure, or
+          ordinary elevated terrain. A key absent entirely means that token
+          hasn't settled its first frame yet. */}
       <div data-testid="token-transform-state" hidden>
         {JSON.stringify(tokenTransformDebug)}
       </div>

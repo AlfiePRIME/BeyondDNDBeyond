@@ -62,18 +62,27 @@ export interface UseTokenSlideParams {
    * doesn't spin the long way around through 0°/90°/180° when a token
    * steps on or off it. */
   tiltYaw?: number;
-  /** Verification-only (bridges and stairs surface-height + tilt): fires
-   * with the EXACT (topY, pitch, yaw) values written to the group this
-   * frame, exactly once per settle — including the very first "settle" a
-   * freshly-mounted, never-moved token reaches (see the useFrame callback
-   * below: `settledRef.current` starts false specifically so this branch
-   * always runs at least once). Called imperatively from inside useFrame,
-   * the same "call straight out of the per-frame loop" precedent
-   * `setPhase` above already establishes — never gated on React state, so
-   * it can't miss a stationary token that never triggers the effect above.
-   * Omit it (as every real caller does today) and nothing changes about
-   * how a token renders or moves. */
-  onSettled?: (pose: { topY: number; pitchRad: number; yawRad: number }) => void;
+  /** Verification-only (bridges and stairs surface-height + tilt; extended
+   * for the click-select-to-move pawn-model repro investigation to also
+   * report gridX/gridY): fires with the EXACT (gridX, gridY, topY, pitch,
+   * yaw) values written to the group this frame, exactly once per settle —
+   * including the very first "settle" a freshly-mounted, never-moved token
+   * reaches (see the useFrame callback below: `settledRef.current` starts
+   * false specifically so this branch always runs at least once). Called
+   * imperatively from inside useFrame, the same "call straight out of the
+   * per-frame loop" precedent `setPhase` above already establishes — never
+   * gated on React state, so it can't miss a stationary token that never
+   * triggers the effect above. gridX/gridY are read from `gridPos` — the
+   * SAME interpolated value this frame actually wrote onto the group's
+   * `position.x`/`position.z` (divided by cellSize, offset removed) — not
+   * just echoed back from this hook's own `gridX`/`gridY` props, so a
+   * caller can tell "the props changed" apart from "the group's own
+   * rendered transform actually reached the new cell" (a stale ref or a
+   * route that silently failed to (re)start would show up here as gridX/
+   * gridY never reaching the new target, even though the props already
+   * did). Omit it (as every real caller does today) and nothing changes
+   * about how a token renders or moves. */
+  onSettled?: (pose: { gridX: number; gridY: number; topY: number; pitchRad: number; yawRad: number }) => void;
 }
 
 /**
@@ -223,11 +232,11 @@ export function useTokenSlide({
       // loop without paying a per-frame re-render cost.
       if (phase !== "settled") setPhase("settled");
       // Verification-only: see UseTokenSlideParams.onSettled's own doc
-      // comment — fires with the SAME y/pitch/yaw just computed above,
-      // exactly once per settle, regardless of whether `phase` itself
-      // changed (a token that mounts already settled still needs to report
-      // its real transform at least once).
-      onSettled?.({ topY: y, pitchRad: pitch, yawRad: yaw });
+      // comment — fires with the SAME gridPos/y/pitch/yaw just computed
+      // above, exactly once per settle, regardless of whether `phase`
+      // itself changed (a token that mounts already settled still needs to
+      // report its real transform at least once).
+      onSettled?.({ gridX: gridPos.x, gridY: gridPos.y, topY: y, pitchRad: pitch, yawRad: yaw });
     }
 
     const group = ref.current;
