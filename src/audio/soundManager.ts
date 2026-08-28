@@ -7,8 +7,9 @@
  *      plan will ever use. Every trigger prompt (SP3 token_move, SP4
  *      door_transition, SP5 hit_normal/hit_critical/hit_miss, SP6 death,
  *      SP7 pit_fall, SP8 dice_impact, SP9 rain_loop/wind_loop/thunder/
- *      fire_loop, nat_20/nat_1 for a natural roll on any non-attack d20)
- *      must import its key from here — never invent an ad-hoc
+ *      fire_loop, nat_20/nat_1 for a natural roll on any non-attack d20,
+ *      lobby_music/calm_music/combat_music for the Lobby and Game Room
+ *      music loops) must import its key from here — never invent an ad-hoc
  *      string. SP2's admin override system also keys its override table off
  *      these exact values (a CHECK constraint against this list, not a
  *      foreign key, since this registry is a code-level constant).
@@ -89,6 +90,15 @@ export const SOUND_KEYS = {
   /** A natural 1 on any non-attack d20 roll — same attack exclusion as
    * NAT_20 above (always resolves to HIT_MISS there already). */
   NAT_1: "nat_1",
+  /** Menu music loop, active on the Lobby page for its whole lifetime. */
+  LOBBY_MUSIC: "lobby_music",
+  /** Ambient in-game music loop, active in the Game Room while combat is
+   * NOT active — mutually exclusive with COMBAT_MUSIC (see
+   * resolveGameMusic in GameRoom.tsx). */
+  CALM_MUSIC: "calm_music",
+  /** In-game music loop, active in the Game Room while combat IS active —
+   * mutually exclusive with CALM_MUSIC. */
+  COMBAT_MUSIC: "combat_music",
 } as const;
 
 /** Every valid sound key — the type every playSound/startLoop/stopLoop
@@ -104,7 +114,14 @@ export const ALL_SOUND_KEYS: SoundKey[] = Object.values(SOUND_KEYS);
  * via startLoop/stopLoop rather than a one-shot via playSound (SP9's rain/
  * wind/fire channels). `thunder` is a one-shot even though it's
  * weather-related — it fires once per lightning flash, never loops. */
-export const LOOP_SOUND_KEYS = [SOUND_KEYS.RAIN_LOOP, SOUND_KEYS.WIND_LOOP, SOUND_KEYS.FIRE_LOOP] as const;
+export const LOOP_SOUND_KEYS = [
+  SOUND_KEYS.RAIN_LOOP,
+  SOUND_KEYS.WIND_LOOP,
+  SOUND_KEYS.FIRE_LOOP,
+  SOUND_KEYS.LOBBY_MUSIC,
+  SOUND_KEYS.CALM_MUSIC,
+  SOUND_KEYS.COMBAT_MUSIC,
+] as const;
 
 export type LoopSoundKey = (typeof LOOP_SOUND_KEYS)[number];
 
@@ -142,6 +159,9 @@ const SOUND_FILES: Record<SoundKey, string[]> = {
   fire_loop: ["/sounds/fire_loop.mp3"],
   nat_20: ["/sounds/nat_20.mp3"],
   nat_1: ["/sounds/nat_1.mp3"],
+  lobby_music: ["/sounds/lobby_music.mp3"],
+  calm_music: ["/sounds/calm_music.mp3"],
+  combat_music: ["/sounds/combat_music.mp3"],
 };
 
 /** How many distinct files a key's pool has — exposed mainly so a

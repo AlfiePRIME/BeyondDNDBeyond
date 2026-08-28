@@ -215,6 +215,9 @@ try {
     "thunder.mp3",
     "nat_20.mp3",
     "nat_1.mp3",
+    "lobby_music.mp3",
+    "calm_music.mp3",
+    "combat_music.mp3",
   ];
 
   // =========================================================================
@@ -307,9 +310,23 @@ try {
     initialDebug?.volume === 1 && initialDebug?.muted === false,
     JSON.stringify(initialDebug)
   );
+  // The Game Room now auto-starts calm_music on mount regardless of combat
+  // state (src/audio/gameMusic.ts's applyGameMusic, wired via a GameRoom.tsx
+  // effect that runs unconditionally from the very first render) — a real
+  // AudioContext already exists here BEFORE this script's own manual
+  // playSound(token_move) click below, since startLoop's lazy ensureContext()
+  // fires for calm_music first. This assertion's original intent (playSound
+  // lazily creates the context rather than one existing for free at import
+  // time) still holds — it's just calm_music, not this script's own click,
+  // that's now the FIRST real playback to trigger it.
   check(
-    "no AudioContext exists yet — nothing has played a sound on this page",
-    initialDebug?.audioContextState === "uninitialized",
+    "a real AudioContext already exists on page load — calm_music's own auto-start already triggered it",
+    initialDebug?.audioContextState === "running",
+    JSON.stringify(initialDebug)
+  );
+  check(
+    "calm_music is already active on page load, before this script's own playSound(token_move) click",
+    initialDebug?.activeLoops?.calm_music?.state === "active",
     JSON.stringify(initialDebug)
   );
 

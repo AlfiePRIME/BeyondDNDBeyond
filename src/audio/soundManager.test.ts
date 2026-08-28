@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("SOUND_KEYS registry", () => {
-  it("defines exactly the 14 keys this whole Sound Effects plan (SP1-SP9 plus the natural-roll follow-up) uses", () => {
+  it("defines exactly the 17 keys this whole Sound Effects plan (SP1-SP9 plus the natural-roll and game-music follow-ups) uses", () => {
     expect(new Set(ALL_SOUND_KEYS)).toEqual(
       new Set([
         "dice_impact",
@@ -56,9 +56,12 @@ describe("SOUND_KEYS registry", () => {
         "fire_loop",
         "nat_20",
         "nat_1",
+        "lobby_music",
+        "calm_music",
+        "combat_music",
       ])
     );
-    expect(ALL_SOUND_KEYS).toHaveLength(14);
+    expect(ALL_SOUND_KEYS).toHaveLength(17);
   });
 
   it("gives every registry key at least one baked file", () => {
@@ -75,8 +78,10 @@ describe("SOUND_KEYS registry", () => {
     expect(getVariantCount(SOUND_KEYS.DICE_IMPACT)).toBeGreaterThanOrEqual(3);
   });
 
-  it("marks exactly rain_loop/wind_loop/fire_loop as loop-capable channels — thunder is a one-shot, not a loop", () => {
-    expect(new Set(LOOP_SOUND_KEYS)).toEqual(new Set(["rain_loop", "wind_loop", "fire_loop"]));
+  it("marks exactly rain_loop/wind_loop/fire_loop/lobby_music/calm_music/combat_music as loop-capable channels — thunder is a one-shot, not a loop", () => {
+    expect(new Set(LOOP_SOUND_KEYS)).toEqual(
+      new Set(["rain_loop", "wind_loop", "fire_loop", "lobby_music", "calm_music", "combat_music"])
+    );
     expect(LOOP_SOUND_KEYS).not.toContain(SOUND_KEYS.THUNDER);
   });
 });

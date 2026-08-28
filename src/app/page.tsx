@@ -138,7 +138,11 @@ export default async function LobbyPage() {
             <p className={styles.lobbyHint}>
               Everyone signed in right now gathers here — grab a seat while the party assembles.
             </p>
-            <LobbyPresence currentUserId={user.id} currentUserDisplayName={profile!.display_name} />
+            <LobbyPresence
+              currentUserId={user.id}
+              currentUserDisplayName={profile!.display_name}
+              initialSoundSettings={profile!.ui_preferences?.soundSettings}
+            />
           </Panel>
         </main>
       </div>

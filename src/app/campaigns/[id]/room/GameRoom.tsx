@@ -152,7 +152,7 @@ import {
   type VisibilityCellInput,
   type VisibilityTier,
 } from "@/rules-engine";
-import { applyWeatherAudio, resolveWeatherAudio } from "@/audio";
+import { applyGameMusic, applyWeatherAudio, resolveGameMusic, resolveWeatherAudio } from "@/audio";
 import {
   Badge,
   Button,
@@ -2123,6 +2123,18 @@ export function GameRoom({
   useEffect(() => {
     applyWeatherAudio(weatherKind);
   }, [weatherKind]);
+  // Game Room music: resolves+applies which of the two mutually-exclusive
+  // music channels (calm_music/combat_music — src/audio's own
+  // resolveGameMusic/applyGameMusic, gameMusic.ts) should be playing given
+  // whether combat is currently active. `combat !== null` is this
+  // component's own already-established truth signal for "combat is live"
+  // (set inside refreshCombat above, the same boolean action-economy gating
+  // elsewhere in this file already reads) — same idempotent-every-call
+  // reasoning as the weather-audio effect just above, no transition ref
+  // needed.
+  useEffect(() => {
+    applyGameMusic(combat !== null);
+  }, [combat]);
   // Chat & Summary B6: pause/resume, live-synced below via the same
   // campaigns postgres_changes feed as economyStrict/dayNightMode.
   // sessionPaused (derived, not its own state) is the "stopped for a break,
@@ -6591,6 +6603,13 @@ export function GameRoom({
           replacement for it. */}
       <div data-testid="weather-audio-state" hidden>
         {JSON.stringify({ kind: weatherKind, channels: resolveWeatherAudio(weatherKind) })}
+      </div>
+      {/* Same "what SHOULD be active" mirror convention as weather-audio-state
+          above, for the calm/combat music channels — the real, fade-delayed
+          activation is separately confirmed via SoundControl's own
+          sound-manager-debug mirror. */}
+      <div data-testid="game-music-state" hidden>
+        {JSON.stringify({ combatActive: combat !== null, channels: resolveGameMusic(combat !== null) })}
       </div>
       {/* Hidden render-state mirror for verify-map-art-rendering.mjs (Map
           Art Generation E5) — GameTableScene's own onMapArtDebug, mirrored
