@@ -59,6 +59,25 @@ export const RACES: RaceDefinition[] = [
         darkvisionFeet: 120,
         traits: [{ name: "Drow Weapon Training" }, { name: "Drow Magic" }, { name: "Sunlight Sensitivity" }],
       },
+      {
+        name: "Eladrin",
+        abilityScoreIncreases: [{ ability: "charisma", amount: 1 }],
+        traits: [{ name: "Fey Step" }],
+      },
+      {
+        name: "Sea Elf",
+        abilityScoreIncreases: [{ ability: "constitution", amount: 1 }],
+        traits: [
+          { name: "Child of the Sea" },
+          { name: "Friend of the Sea" },
+          { name: "Sea Elf Training" },
+        ],
+      },
+      {
+        name: "Shadar-kai",
+        abilityScoreIncreases: [{ ability: "constitution", amount: 1 }],
+        traits: [{ name: "Blessing of the Raven Queen" }, { name: "Necrotic Resistance" }],
+      },
     ],
   },
   {
@@ -172,6 +191,411 @@ export const RACES: RaceDefinition[] = [
     darkvisionFeet: 60,
     resistances: ["fire"],
     traits: [{ name: "Hellish Resistance" }, { name: "Infernal Legacy" }],
+  },
+  // -- Volo's Guide to Monsters --
+  {
+    name: "Aarakocra",
+    size: "medium",
+    speedFeet: 25,
+    abilityScoreIncreases: [
+      { ability: "dexterity", amount: 2 },
+      { ability: "wisdom", amount: 1 },
+    ],
+    traits: [{ name: "Flight" }, { name: "Talons" }],
+  },
+  {
+    name: "Bugbear",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "strength", amount: 2 },
+      { ability: "dexterity", amount: 1 },
+    ],
+    darkvisionFeet: 60,
+    traits: [
+      { name: "Long-Limbed" },
+      { name: "Powerful Build" },
+      { name: "Sneaky" },
+      { name: "Surprise Attack" },
+    ],
+  },
+  {
+    name: "Firbolg",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "wisdom", amount: 2 },
+      { ability: "strength", amount: 1 },
+    ],
+    traits: [
+      { name: "Firbolg Magic" },
+      { name: "Hidden Step" },
+      { name: "Powerful Build" },
+      { name: "Speech of Beast and Leaf" },
+    ],
+  },
+  {
+    name: "Goblin",
+    size: "small",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "dexterity", amount: 2 },
+      { ability: "constitution", amount: 1 },
+    ],
+    darkvisionFeet: 60,
+    traits: [{ name: "Fury of the Small" }, { name: "Nimble Escape" }],
+  },
+  {
+    name: "Goliath",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "strength", amount: 2 },
+      { ability: "constitution", amount: 1 },
+    ],
+    traits: [
+      { name: "Natural Athlete" },
+      { name: "Stone's Endurance" },
+      { name: "Powerful Build" },
+      { name: "Mountain Born" },
+    ],
+  },
+  {
+    name: "Hobgoblin",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "constitution", amount: 2 },
+      { ability: "intelligence", amount: 1 },
+    ],
+    darkvisionFeet: 60,
+    traits: [{ name: "Martial Training" }, { name: "Saving Face" }],
+  },
+  {
+    name: "Kenku",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "dexterity", amount: 2 },
+      { ability: "wisdom", amount: 1 },
+    ],
+    darkvisionFeet: 60,
+    traits: [{ name: "Expert Forgery" }, { name: "Kenku Training" }, { name: "Mimicry" }],
+  },
+  {
+    name: "Kobold",
+    size: "small",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "dexterity", amount: 2 },
+      { ability: "strength", amount: -2 },
+    ],
+    darkvisionFeet: 60,
+    traits: [
+      { name: "Grovel, Cower, and Beg" },
+      { name: "Pack Tactics" },
+      { name: "Sunlight Sensitivity" },
+    ],
+  },
+  {
+    name: "Lizardfolk",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "constitution", amount: 2 },
+      { ability: "wisdom", amount: 1 },
+    ],
+    traits: [
+      { name: "Bite" },
+      { name: "Cunning Artisan" },
+      { name: "Hold Breath" },
+      { name: "Hunter's Lore" },
+      { name: "Natural Armor" },
+      { name: "Hungry Jaws" },
+    ],
+  },
+  {
+    name: "Orc",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "strength", amount: 2 },
+      { ability: "constitution", amount: 1 },
+      { ability: "intelligence", amount: -2 },
+    ],
+    darkvisionFeet: 60,
+    traits: [{ name: "Aggressive" }, { name: "Menacing" }, { name: "Powerful Build" }],
+  },
+  {
+    name: "Tabaxi",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "dexterity", amount: 2 },
+      { ability: "charisma", amount: 1 },
+    ],
+    darkvisionFeet: 60,
+    traits: [{ name: "Cat's Claws" }, { name: "Cat's Talent" }, { name: "Feline Agility" }],
+  },
+  {
+    name: "Triton",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "strength", amount: 1 },
+      { ability: "constitution", amount: 1 },
+      { ability: "charisma", amount: 1 },
+    ],
+    darkvisionFeet: 60,
+    traits: [
+      { name: "Amphibious" },
+      { name: "Control Air and Water" },
+      { name: "Emissary of the Sea" },
+      { name: "Guardians of the Depths" },
+    ],
+  },
+  {
+    name: "Yuan-ti Pureblood",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "charisma", amount: 2 },
+      { ability: "intelligence", amount: 1 },
+    ],
+    darkvisionFeet: 60,
+    traits: [
+      { name: "Innate Spellcasting" },
+      { name: "Magic Resistance" },
+      { name: "Poison Immunity" },
+    ],
+  },
+  // -- Tortle Package / Eberron: Rising from the Last War appendix --
+  {
+    name: "Tortle",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "strength", amount: 2 },
+      { ability: "wisdom", amount: 1 },
+    ],
+    traits: [
+      { name: "Claws" },
+      { name: "Hold Breath" },
+      { name: "Natural Armor" },
+      { name: "Shell Defense" },
+      { name: "Survival Instinct" },
+    ],
+  },
+  // -- Elemental Evil Player's Companion --
+  {
+    name: "Genasi",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [{ ability: "constitution", amount: 2 }],
+    traits: [],
+    subraces: [
+      {
+        name: "Air Genasi",
+        abilityScoreIncreases: [{ ability: "dexterity", amount: 1 }],
+        traits: [{ name: "Unarmored Air" }, { name: "Mingle with the Wind" }],
+      },
+      {
+        name: "Earth Genasi",
+        abilityScoreIncreases: [{ ability: "strength", amount: 1 }],
+        traits: [{ name: "Earth Walk" }, { name: "Merge with Stone" }],
+      },
+      {
+        name: "Fire Genasi",
+        abilityScoreIncreases: [{ ability: "intelligence", amount: 1 }],
+        darkvisionFeet: 60,
+        traits: [{ name: "Fire Resistance" }, { name: "Reach to the Blaze" }],
+      },
+      {
+        name: "Water Genasi",
+        abilityScoreIncreases: [{ ability: "wisdom", amount: 1 }],
+        traits: [
+          { name: "Acid Resistance" },
+          { name: "Amphibious" },
+          { name: "Call to the Wave" },
+        ],
+      },
+    ],
+  },
+  // -- Mordenkainen's Tome of Foes --
+  {
+    name: "Duergar",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "strength", amount: 1 },
+      { ability: "constitution", amount: 2 },
+    ],
+    darkvisionFeet: 120,
+    traits: [
+      { name: "Duergar Resilience" },
+      { name: "Duergar Magic" },
+      { name: "Sunlight Sensitivity" },
+    ],
+  },
+  // -- Eberron: Rising from the Last War --
+  {
+    name: "Changeling",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "charisma", amount: 2 },
+      { ability: "choice", amount: 1 },
+    ],
+    traits: [
+      { name: "Shapechanger" },
+      { name: "Changeling Instincts" },
+      { name: "Divergent Persona" },
+    ],
+  },
+  {
+    name: "Kalashtar",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "wisdom", amount: 2 },
+      { ability: "charisma", amount: 1 },
+    ],
+    traits: [
+      { name: "Dual Mind" },
+      { name: "Mental Discipline" },
+      { name: "Mind Link" },
+      { name: "Severed from Dreams" },
+    ],
+  },
+  {
+    name: "Shifter",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "dexterity", amount: 2 },
+      { ability: "choice", amount: 1 },
+    ],
+    darkvisionFeet: 60,
+    traits: [{ name: "Shifting" }],
+    subraces: [
+      {
+        name: "Beasthide",
+        abilityScoreIncreases: [{ ability: "constitution", amount: 1 }],
+        traits: [{ name: "Beasthide" }],
+      },
+      {
+        name: "Longtooth",
+        abilityScoreIncreases: [{ ability: "strength", amount: 1 }],
+        traits: [{ name: "Bite" }],
+      },
+      {
+        name: "Swiftstride",
+        abilityScoreIncreases: [{ ability: "dexterity", amount: 1 }],
+        traits: [{ name: "Swift" }],
+      },
+      {
+        name: "Wildhunt",
+        abilityScoreIncreases: [{ ability: "wisdom", amount: 1 }],
+        traits: [{ name: "Wildhunt Senses" }],
+      },
+    ],
+  },
+  {
+    name: "Warforged",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "constitution", amount: 2 },
+      { ability: "choice", amount: 1 },
+    ],
+    traits: [
+      { name: "Constructed Resilience" },
+      { name: "Sentry's Rest" },
+      { name: "Integrated Protection" },
+      { name: "Specialized Design" },
+    ],
+  },
+  // -- Guildmasters' Guide to Ravnica --
+  {
+    name: "Centaur",
+    size: "medium",
+    speedFeet: 40,
+    abilityScoreIncreases: [
+      { ability: "strength", amount: 2 },
+      { ability: "wisdom", amount: 1 },
+    ],
+    traits: [{ name: "Charge" }, { name: "Hooves" }, { name: "Equine Build" }, { name: "Survivor" }],
+  },
+  {
+    name: "Loxodon",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "constitution", amount: 2 },
+      { ability: "wisdom", amount: 1 },
+    ],
+    traits: [
+      { name: "Loxodon Serenity" },
+      { name: "Natural Armor" },
+      { name: "Powerful Build" },
+      { name: "Trunk" },
+    ],
+  },
+  {
+    name: "Minotaur",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "strength", amount: 2 },
+      { ability: "constitution", amount: 1 },
+    ],
+    traits: [
+      { name: "Horns" },
+      { name: "Goring Rush" },
+      { name: "Hammering Horns" },
+      { name: "Imposing Presence" },
+    ],
+  },
+  {
+    name: "Vedalken",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "intelligence", amount: 2 },
+      { ability: "wisdom", amount: 1 },
+    ],
+    traits: [{ name: "Vedalken Dispassion" }, { name: "Tireless Precision" }],
+  },
+  // -- Mythic Odysseys of Theros --
+  {
+    name: "Leonin",
+    size: "medium",
+    speedFeet: 30,
+    abilityScoreIncreases: [
+      { ability: "constitution", amount: 2 },
+      { ability: "strength", amount: 1 },
+    ],
+    traits: [
+      { name: "Daunting Roar" },
+      { name: "Hunter's Instincts" },
+      { name: "Natural Weapons" },
+    ],
+  },
+  {
+    name: "Satyr",
+    size: "medium",
+    speedFeet: 35,
+    abilityScoreIncreases: [
+      { ability: "charisma", amount: 2 },
+      { ability: "dexterity", amount: 1 },
+    ],
+    traits: [
+      { name: "Fey" },
+      { name: "Ram" },
+      { name: "Magic Resistance" },
+      { name: "Mirthful Leaps" },
+      { name: "Reveler" },
+    ],
   },
 ];
 
