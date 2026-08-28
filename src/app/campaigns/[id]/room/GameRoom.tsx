@@ -209,7 +209,6 @@ import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } fr
 // that resolution only ever runs on the DM's own client, per its own doc
 // comment, and hooking there would leave every other connected client
 // silent).
-import { playSound, SOUND_KEYS } from "@/audio";
 import {
   buildDenseCells,
   cellKey,
