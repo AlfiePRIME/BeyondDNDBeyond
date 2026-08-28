@@ -1276,6 +1276,30 @@ export function GameRoom({
     },
     []
   );
+  // Bridges and stairs surface-height + tilt (a post-roadmap addition):
+  // mirrors each token's own ACTUAL rendered transform (MapSurfaceProps.
+  // onTokenTransformDebug's own doc comment) — same dedup reasoning as
+  // handleObjectMeasureDebug/handleTokenMeasureDebug above.
+  const [tokenTransformDebug, setTokenTransformDebug] = useState<
+    Record<string, { topY: number; pitchDeg: number; yawDeg: number }>
+  >({});
+  const handleTokenTransformDebug = useCallback(
+    (id: string, transform: { topY: number; pitchDeg: number; yawDeg: number }) => {
+      setTokenTransformDebug((current) => {
+        const existing = current[id];
+        if (
+          existing &&
+          existing.topY === transform.topY &&
+          existing.pitchDeg === transform.pitchDeg &&
+          existing.yawDeg === transform.yawDeg
+        ) {
+          return current;
+        }
+        return { ...current, [id]: transform };
+      });
+    },
+    []
+  );
   // Investigation-only (teleport/mis-scale bug hunt): mirrors each seated
   // member's own loaded avatar model's measured bounding-box height and
   // derived scale factor — same reasoning as avatarPoseDebug above.
@@ -5478,6 +5502,17 @@ export function GameRoom({
     // fresh from the CURRENT host wall here rather than trusting anything
     // cached on the mounted object's own row.
     const objectsById = new Map(liveMap.objects.map((candidate) => [candidate.id, candidate]));
+    // Bridges and stairs surface-height fix (a post-roadmap addition): the
+    // crossing object (if any) at each cell, keyed once up front rather
+    // than crossingAt's own per-call `.find()` scan — this runs once per
+    // token AND once per object below, so a Map avoids an O(objects ×
+    // (tokens + objects)) scan on a busy map. The editor only ever lets one
+    // FREESTANDING object occupy a cell (crossingAt's own doc comment), so
+    // "the" crossing object per cell is unambiguous.
+    const crossingObjectByCell = new Map<string, MapObject>();
+    for (const object of liveMap.objects) {
+      if (object.crossing_type) crossingObjectByCell.set(cellKey(object.x, object.y), object);
+    }
     return {
       id: liveMap.map.id,
       gridWidth: liveMap.map.grid_width,
@@ -5580,6 +5615,15 @@ export function GameRoom({
             ghost: hiddenNow,
             active: behavior?.action === "toggle_state" && behavior.triggered,
             dimmed: tier === "dim",
+            // Bridges and stairs surface-height fix: an ordinary object
+            // sharing a crossing structure's cell renders on TOP of it, not
+            // at the bare floor beneath — but the crossing object's OWN row
+            // never looks up itself here (it already renders correctly at
+            // its own base; only something else sitting on the SAME cell
+            // needs the extra height).
+            crossingSurface: object.crossing_type
+              ? undefined
+              : (crossingObjectByCell.get(cellKey(object.x, object.y))?.crossing_type ?? undefined),
           },
         ];
       }),
@@ -5659,6 +5703,12 @@ export function GameRoom({
         // its own to color it by).
         const ownerColor = pawnAppearance ? pawnColorByUserId.get(pawnAppearance.ownerId) : undefined;
         const colorOverride = token.allegiance === "party" && ownerColor ? ownerColor : null;
+        // Bridges and stairs surface-height fix + stairs tilt: the crossing
+        // object (if any) UNDER this token's own cell — a token is never
+        // itself the crossing object (only map_objects rows carry
+        // crossing_type), so unlike the objects loop above there's no
+        // self-exclusion to apply here.
+        const crossingHere = crossingObjectByCell.get(cellKey(token.x, token.y));
         return [{
           id: token.id,
           x: token.x,
@@ -5669,6 +5719,13 @@ export function GameRoom({
           allegiance: token.allegiance,
           modelUrl,
           colorOverride,
+          crossingSurface: crossingHere?.crossing_type ?? undefined,
+          // Tilt only ever applies for "stairs" — see MapSurfaceToken's own
+          // doc comment; a bridge crossingHere still sets crossingSurface
+          // above (for the height fix) but leaves this null, so
+          // MapSurface's own bridge-never-tilts guard is belt-and-suspenders
+          // rather than the only thing preventing it.
+          crossingRotationDeg: crossingHere?.crossing_type === "stairs" ? crossingHere.rotation : undefined,
           // The pre-existing, visible-to-everyone ring for TokenPanel's
           // separate armed "move" mechanism (DM free repositioning — see
           // TokenArm's own doc comment) — unrelated to, and unaffected by,
@@ -6045,6 +6102,7 @@ export function GameRoom({
           onObjectPoseDebug={handleObjectPoseDebug}
           onObjectMeasureDebug={handleObjectMeasureDebug}
           onTokenMeasureDebug={handleTokenMeasureDebug}
+          onTokenTransformDebug={handleTokenTransformDebug}
           seatOffsets={seatOffsets}
           onChairDragEnd={handleChairDragEnd}
           onOwnChairProjectedPosition={setOwnChairScreenPosition}
@@ -6436,6 +6494,18 @@ export function GameRoom({
           observe a slide's timing directly. */}
       <div data-testid="token-slide-state" hidden>
         {JSON.stringify({ sliding: slidingTokenIds })}
+      </div>
+      {/* Hidden render-state mirror for scripts/db/verify-crossing-structure-
+          height.mjs — see MapSurfaceProps.onTokenTransformDebug's own doc
+          comment. Keyed by map_tokens.id; `topY` is the token's own ACTUAL
+          rendered world Y (baseHeight + elevation*step, PLUS the crossing
+          structure's own real-measured surface-height offset when the
+          token stands on one); `pitchDeg`/`yawDeg` are its actual rendered
+          tilt — 0/0 for a bridge, no crossing structure, or ordinary
+          elevated terrain. A key absent entirely means that token hasn't
+          settled its first frame yet. */}
+      <div data-testid="token-transform-state" hidden>
+        {JSON.stringify(tokenTransformDebug)}
       </div>
       {/* Hidden render-state mirror for the DM's book prop (Phase 5) — same
           "WebGL has no DOM" reasoning as every other mirror on this page.

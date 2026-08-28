@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   TOKEN_SLIDE_SECONDS,
   positionAlongRoute,
+  shortestAngleLerp,
   tokenSlideProgress,
   tokenSlideRoute,
 } from "./tokenSlide";
@@ -123,5 +124,37 @@ describe("positionAlongRoute", () => {
     const route = tokenSlideRoute({ x: 0, y: 0 }, { x: 2, y: 0 });
     expect(positionAlongRoute(route, -1)).toEqual({ x: 0, y: 0 });
     expect(positionAlongRoute(route, 2)).toEqual({ x: 2, y: 0 });
+  });
+});
+
+describe("shortestAngleLerp", () => {
+  it("starts exactly at `from` and ends exactly at `to`", () => {
+    expect(shortestAngleLerp(0, Math.PI / 2, 0)).toBeCloseTo(0, 10);
+    expect(shortestAngleLerp(0, Math.PI / 2, 1)).toBeCloseTo(Math.PI / 2, 10);
+  });
+
+  it("plain lerp for a small delta with no wraparound involved", () => {
+    expect(shortestAngleLerp(0, Math.PI / 2, 0.5)).toBeCloseTo(Math.PI / 4, 10);
+  });
+
+  it("takes the short way from 270° back to 0° (a +90° turn, not -270°)", () => {
+    const from = (270 * Math.PI) / 180;
+    const to = 0;
+    const halfway = shortestAngleLerp(from, to, 0.5);
+    // The short way from 270° to 360°(=0°) passes through 315° — NOT
+    // through 180°/90°, which a naive `from + (to - from) * t` would do.
+    expect(halfway).toBeCloseTo((315 * Math.PI) / 180, 10);
+  });
+
+  it("takes the short way from 0° to 270° (a -90° turn, not +270°)", () => {
+    const from = 0;
+    const to = (270 * Math.PI) / 180;
+    const halfway = shortestAngleLerp(from, to, 0.5);
+    expect(halfway).toBeCloseTo((-45 * Math.PI) / 180, 10);
+  });
+
+  it("is a no-op when from and to already match", () => {
+    const angle = (123 * Math.PI) / 180;
+    expect(shortestAngleLerp(angle, angle, 0.5)).toBeCloseTo(angle, 10);
   });
 });
