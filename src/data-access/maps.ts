@@ -24,12 +24,25 @@ export interface CampaignMap {
  * start rather than an ad-hoc blob. One row per map (map_id is the primary
  * key) — accepting new art replaces this row, the same "at most one"
  * cardinality reference_image_ref already has.
+ *
+ * stale (E6, 0078): true once this map's grid has grown (any edge, any
+ * amount — grow_map_grid's own trailing UPDATE) since this art was
+ * generated, meaning it no longer covers the map's full current footprint.
+ * Never set client-side: grow_map_grid sets it true server-side as part of
+ * the same transaction that grows the grid, and acceptMapArt below clears it
+ * back to false as part of recording fresh art. Purely advisory for display
+ * (a DM-only badge/notice in the map editor, per this prompt's own scope) —
+ * it does not gate map-art's RLS or change what the Game Room renders;
+ * GameTableScene/MapSurface (E5) keep showing the same accepted image
+ * exactly as before, just covering less of the new, larger grid than it
+ * ideally would.
  */
 export interface MapArt {
   map_id: string;
   image_ref: string;
   style_prompt: string;
   generated_at: string;
+  stale: boolean;
 }
 
 export interface MapFolder {
@@ -461,6 +474,13 @@ export type MapGrowthEdge = (typeof MAP_GROWTH_EDGES)[number];
  * caller-orchestrated multi-statement sequence. DM-only via the same RLS
  * grow_map_grid itself runs under (no SECURITY DEFINER — see its own
  * doc comment).
+ *
+ * Map Art Generation E6 (0078): the same RPC call also flags this map's
+ * generated art (if any) `stale` — every edge grows the map's footprint,
+ * and any already-generated art was rendered against the OLD, smaller
+ * dimensions. This happens entirely server-side, in the same transaction as
+ * the grid resize itself; nothing about this wrapper function's own
+ * call/return shape changes.
  */
 export async function growMapGrid(
   supabase: SupabaseClient,
@@ -794,6 +814,13 @@ export async function getMapArtSignedUrl(
  * Deleting the PREVIOUS art's Storage object (if replacing one) is the
  * caller's own separate best-effort step, matching setMapReferenceImage's
  * own division of labor.
+ *
+ * stale is explicitly set false here (E6) rather than left to whatever an
+ * upsert's column-omission default would be: a fresh acceptance is, by
+ * definition, generated against the map's CURRENT grid_width/grid_height
+ * (generate-art/route.ts reads the map live at request time), so it is
+ * never stale the moment it's accepted — this is the one and only place
+ * that ever clears the flag grow_map_grid sets.
  */
 export async function acceptMapArt(
   supabase: SupabaseClient,
@@ -808,6 +835,7 @@ export async function acceptMapArt(
         image_ref: params.imageRef,
         style_prompt: params.stylePrompt,
         generated_at: new Date().toISOString(),
+        stale: false,
       },
       { onConflict: "map_id" }
     )

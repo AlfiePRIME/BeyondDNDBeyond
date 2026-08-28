@@ -294,6 +294,30 @@
   background: var(--surface2);
 }
 
+/* Map Art Generation E6 — DM-only stale-art notice (grow_map_grid, 0078,
+   flagged this map's art after a grid grow). `--orange` matches this app's
+   existing warning-notice convention (maps.module.css's own .linkWarning),
+   not `--red`/.errorText: this is advisory ("the art is out of date, here's
+   the fix") rather than a failure. Never rendered for a player — this whole
+   section lives inside the map editor, which is DM-only end to end
+   (page.tsx's own isDM gate), so no separate visibility check is needed
+   here beyond what already guards the rest of this drawer. */
+.staleNotice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--orange) 55%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+  color: var(--orange);
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+}
+
 /* Ctrl+click quick-place popover (Map Editor Batch A1). `.quickPlaceOverlay`
    is an invisible, full-viewport click-catcher — Modal.tsx's own dismissal
    shape (a click lands on the overlay only when its target IS the overlay
