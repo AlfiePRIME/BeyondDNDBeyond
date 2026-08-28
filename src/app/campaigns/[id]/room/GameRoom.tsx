@@ -2789,8 +2789,17 @@ export function GameRoom({
       ]);
       // Map Editor Batch A4: which of THIS map's objects currently hold
       // items — a second query rather than folding into the Promise.all
-      // above since it depends on `objects`' own ids.
-      const containerItems = await listItemsForMapObjects(supabase, objects.map((object) => object.id));
+      // above since it depends on `objects`' own ids. A failure here (a
+      // transient proxy/network hiccup) is a nice-to-have miss — chests just
+      // won't show as containers this refresh — not a reason to drop the
+      // whole map (cells/objects/tokens are already fetched above and
+      // shouldn't be thrown away over this one secondary read).
+      const containerItems = await listItemsForMapObjects(supabase, objects.map((object) => object.id)).catch(
+        (err) => {
+          console.error("refreshLiveMap: listItemsForMapObjects failed, falling back to no containers", err);
+          return [];
+        }
+      );
       const containerObjectIds = new Set(
         containerItems.flatMap((item) => (item.map_object_id ? [item.map_object_id] : []))
       );

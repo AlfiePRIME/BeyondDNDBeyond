@@ -193,26 +193,42 @@ export async function listContainerItems(
   return data ?? [];
 }
 
+/** A PostgREST `.in()` filter embeds every id directly in the request URL —
+ * a map with enough objects (98 objects on one real campaign's town map)
+ * produces a query string long enough to get 502'd by the reverse-proxy
+ * chain in front of Supabase before it ever reaches Postgres. Chunking
+ * keeps every single request's URL short regardless of how large a map
+ * grows, at the cost of N/BATCH round trips instead of one — a trade this
+ * table's read volume (one bulk read per map load/switch, not a hot path)
+ * comfortably affords. */
+const MAX_MAP_OBJECT_IDS_PER_QUERY = 40;
+
 /** Every item across a whole batch of MapObjects at once — the Game Room's
  * own bulk "which of this map's objects are openable containers right now"
  * read (so a chest can be listed/opened without requiring the DM to have
  * configured a click-trigger action on it at all), player-readable for a
  * chest on the live map exactly like listContainerItems above. Returns []
  * without querying for an empty input, since `.in()` with no values is
- * otherwise a always-true/always-false footgun depending on the client. */
+ * otherwise a always-true/always-false footgun depending on the client.
+ * Chunks mapObjectIds (see MAX_MAP_OBJECT_IDS_PER_QUERY) rather than one
+ * `.in()` over the whole list — see that constant's own comment. */
 export async function listItemsForMapObjects(
   supabase: SupabaseClient,
   mapObjectIds: string[]
 ): Promise<MapObjectItem[]> {
   if (mapObjectIds.length === 0) return [];
-  const { data, error } = await supabase
-    .from("map_object_items")
-    .select()
-    .in("map_object_id", mapObjectIds)
-    .order("created_at", { ascending: true });
-
-  if (error) throw error;
-  return data ?? [];
+  const batches: string[][] = [];
+  for (let i = 0; i < mapObjectIds.length; i += MAX_MAP_OBJECT_IDS_PER_QUERY) {
+    batches.push(mapObjectIds.slice(i, i + MAX_MAP_OBJECT_IDS_PER_QUERY));
+  }
+  const results = await Promise.all(
+    batches.map(async (batch) => {
+      const { data, error } = await supabase.from("map_object_items").select().in("map_object_id", batch);
+      if (error) throw error;
+      return data ?? [];
+    })
+  );
+  return results.flat().sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
 /** DM-only, enforced by map_object_items' own INSERT RLS (0060) — joined
