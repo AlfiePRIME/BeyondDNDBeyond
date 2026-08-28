@@ -125,14 +125,22 @@ export interface DropletsInstance {
 const DEFAULTS: Required<Omit<DropletsOptions, "interactive">> = {
   intensity: 0.85,
   speed: 1,
-  dropWidth: 0.32,
-  dropLength: 2.4,
+  dropWidth: 0.06,
+  dropLength: 4.0,
   refraction: 0.045,
   blur: 0.4,
   vignette: 0.3,
   tintColor: [0.53, 0.58, 0.66],
   tintStrength: 0.06,
 };
+
+// How many times the Droplets React component retries a failed
+// `output.getContext("webgl2", ...)` call before giving up for the rest of
+// this mount — see the retry loop in the Droplets component below for why
+// this is worth retrying at all (transient context exhaustion) rather than
+// treating every failure as permanent.
+const CONTEXT_CREATE_MAX_RETRIES = 3;
+const CONTEXT_RETRY_DELAY_MS = 300;
 
 const VERT = `#version 300 es
 precision highp float;
@@ -355,6 +363,28 @@ export function createDroplets(
     gl!.drawArrays(gl!.TRIANGLE_STRIP, 0, 4);
   }
 
+  // Directly clears the drawing buffer to fully transparent (0,0,0,0),
+  // bypassing the shader/uniform pipeline entirely — a plain <canvas>
+  // retains whatever pixels were last presented once its rAF loop stops
+  // scheduling new frames, so relying on the shader ever actually being
+  // asked to draw an alpha=0 frame isn't enough: the loop can be halted
+  // (visibility going false, an unmount, or normal fade completion) at a
+  // point where the LAST frame it drew was still mid-fade (alpha > 0). This
+  // is the single point every stop path below routes through so a stale,
+  // non-transparent frame can never persist visibly once the effect is
+  // supposed to be inactive.
+  function clearToTransparent() {
+    gl!.bindFramebuffer(gl!.FRAMEBUFFER, null);
+    gl!.viewport(0, 0, output.width, output.height);
+    gl!.clearColor(0, 0, 0, 0);
+    gl!.clear(gl!.COLOR_BUFFER_BIT);
+  }
+
+  function stopLoop() {
+    running = false;
+    clearToTransparent();
+  }
+
   let raf = 0;
   let lastTime = performance.now();
   let destroyed = false;
@@ -367,7 +397,14 @@ export function createDroplets(
   function frame(now: number) {
     if (destroyed) return;
     if (!visible) {
-      running = false;
+      // The IntersectionObserver callback below can flip `visible` to false
+      // between rAF callbacks (it's not itself tied to the animation
+      // frame), including mid-fade while `alpha` is still well above 0. Left
+      // alone, this branch used to just stop scheduling frames — freezing
+      // whatever partially-faded frame was last drawn onto the canvas
+      // indefinitely, sitting directly over the live 3D scene. Force a
+      // fully-transparent frame instead, unconditionally.
+      stopLoop();
       return;
     }
     const delta = Math.min(Math.max((now - lastTime) / 1000, 0), 1 / 30);
@@ -382,7 +419,13 @@ export function createDroplets(
     if (Math.abs(targetAlpha - alpha) < 0.002) alpha = targetAlpha;
     render();
     if (targetAlpha === 0 && alpha === 0) {
-      running = false;
+      // render() above already drew this frame at uAlpha=0, but stopLoop's
+      // own direct clear is kept as the defensive, shader-independent
+      // guarantee rather than trusting the uniform pipeline alone — cheap
+      // (one extra clear on the rare frame the loop actually stops) and
+      // makes every stop path share the exact same "must end up
+      // transparent" invariant.
+      stopLoop();
       return;
     }
     raf = requestAnimationFrame(frame);
@@ -432,6 +475,12 @@ export function createDroplets(
     destroy() {
       destroyed = true;
       cancelAnimationFrame(raf);
+      // Same "must never leave a stale frame visible" invariant as every
+      // stop path in frame() above — an unmount is still a way the loop
+      // stops, and this canvas element isn't guaranteed to be removed from
+      // the DOM synchronously with this call (React's commit is a separate
+      // step), so force it transparent before releasing GPU resources.
+      clearToTransparent();
       observer.disconnect();
       intersection.disconnect();
       motionQuery.removeEventListener("change", onMotionChange);
@@ -478,25 +527,58 @@ export function Droplets({
   useEffect(() => {
     const output = outputRef.current;
     if (!output || !sourceCanvas) return;
-    const instance = createDroplets({ source: sourceCanvas, output }, options);
-    instanceRef.current = instance;
-    if (!instance) {
-      setFailed(true);
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    // `output.getContext("webgl2", ...)` can fail — plausibly WebGL2
+    // context exhaustion, since every Game Room tab already runs one
+    // WebGL2 context for R3F, and switching weather kinds while a prior
+    // Droplets instance's context wasn't fully released can leave the
+    // browser/GPU momentarily at whatever concurrent-context limit it
+    // enforces. That's typically a transient condition (freed once garbage
+    // collection or another tab's context release catches up), not a
+    // permanent one, so retry a few times with a short backoff before
+    // giving up — a single failed attempt used to permanently leave
+    // `ready:false` with no way for GameRoom.tsx to ever roll back
+    // `dropletsMounted` or retry itself.
+    function attempt(retriesLeft: number) {
+      if (cancelled || !sourceCanvas) return;
+      const instance = createDroplets({ source: sourceCanvas, output: output! }, options);
+      instanceRef.current = instance;
+      if (instance) {
+        // `active` here is THIS render's own prop value, not stale — this
+        // effect only ever actually runs (vs. just being redeclared) when
+        // `sourceCanvas` changes, and each such run necessarily executes
+        // the closure from the render that made it change, so whatever
+        // `active` was passed on THAT render is already current. Handles
+        // the common case where `sourceCanvas` arrives (R3F's `onCreated`,
+        // one render after mount) while `active` is already true (e.g. a
+        // campaign that loads with weather already set to 'rain').
+        instance.setActive(active);
+        onStatusChange?.({ ready: true });
+        return;
+      }
       onStatusChange?.({ ready: false });
-    } else {
-      // `active` here is THIS render's own prop value, not stale — this
-      // effect only ever actually runs (vs. just being redeclared) when
-      // `sourceCanvas` changes, and each such run necessarily executes the
-      // closure from the render that made it change, so whatever `active`
-      // was passed on THAT render is already current. Handles the common
-      // case where `sourceCanvas` arrives (R3F's `onCreated`, one render
-      // after mount) while `active` is already true (e.g. a campaign that
-      // loads with weather already set to 'rain').
-      instance.setActive(active);
-      onStatusChange?.({ ready: true });
+      if (retriesLeft > 0) {
+        retryTimer = setTimeout(() => attempt(retriesLeft - 1), CONTEXT_RETRY_DELAY_MS);
+      } else {
+        // Retries exhausted — give up for good this mount. Setting `failed`
+        // makes this component render `null` (see the render guard below),
+        // which removes its own output <canvas> from the DOM entirely: the
+        // one guarantee that matters here is that a permanently-broken
+        // WebGL2 context can never leave stale/broken canvas content
+        // visible, even though the rain effect itself stays unavailable
+        // for the rest of this session.
+        setFailed(true);
+      }
     }
+
+    attempt(CONTEXT_CREATE_MAX_RETRIES);
+
     return () => {
-      instance?.destroy();
+      cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+      instanceRef.current?.destroy();
       instanceRef.current = null;
       onStatusChange?.({ ready: false });
     };
