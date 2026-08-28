@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { playSound, SOUND_KEYS, type SoundKey } from "@/audio";
 import { Button } from "@/ui-components";
 import {
   listActionOverrides,
@@ -42,6 +43,25 @@ const MODE_LABEL: Record<AdvantageMode, string> = {
 const MODES: AdvantageMode[] = ["normal", "advantage", "disadvantage"];
 
 const LOG_CAP = 50;
+
+/**
+ * Sound Effects SP5: which sound category (if any) a freshly-inserted
+ * roll_log row should trigger — an ordinary hit (a random hit_normal
+ * variant — playSound's own Math.random() pick, unbiased below), a
+ * critical hit, or a miss. Read directly off the breakdown's own
+ * `hit`/`critical` flags, which resolveAttackDamage, resolveNpcAttackDamage,
+ * AND the plain miss/untargeted insertRoll path (rolls.ts/route.ts) all
+ * populate on every attack roll — unlike `damage`/`applied`, which are
+ * null both for a genuine miss AND for a hit against an untracked target,
+ * so neither is a reliable hit/miss signal on its own. Returns null for
+ * every non-attack roll kind (checks, saves, freeform, etc.), which the
+ * caller below simply doesn't play a sound for.
+ */
+function attackRollSoundKey(roll: RollLogEntry): SoundKey | null {
+  if (roll.kind !== "attack" || roll.breakdown.type !== "d20" || !roll.breakdown.attack) return null;
+  if (roll.breakdown.attack.critical) return SOUND_KEYS.HIT_CRITICAL;
+  return roll.breakdown.attack.hit ? SOUND_KEYS.HIT_NORMAL : SOUND_KEYS.HIT_MISS;
+}
 
 /** The six standard polyhedral dice, as quick-roll shortcuts alongside (not
  * instead of) the free-form notation box below — each one posts the exact
@@ -229,6 +249,22 @@ export function DiceLogPanel({
           ? current
           : [roll, ...current].slice(0, LOG_CAP)
       );
+      // Sound Effects SP5: this panel's roll_log subscription already
+      // reaches every connected client (the DiceLogPanel doc comment
+      // above) — including the roller's own, since a postgres_changes
+      // INSERT fires exactly once per subscribed channel regardless of who
+      // wrote the row, and this panel is unconditionally mounted (inside
+      // an always-live DraggablePanel, merely display:none when hidden —
+      // see DraggablePanel.tsx) for every member AND the DM. No new
+      // plumbing needed: playing the hit/crit/miss sound straight from this
+      // handler, alongside the existing setRolls call, matches that
+      // "everyone sees (hears) every roll" behavior for free. Deliberately
+      // NOT also wired into DmBookActivityPage's own roll_log subscription
+      // — that page mounts/unmounts with the DM's book-tab selection, so a
+      // DM with the Activity tab open at the same time would otherwise
+      // hear every hit/miss/crit twice.
+      const soundKey = attackRollSoundKey(roll);
+      if (soundKey) void playSound(soundKey);
     });
   }, [campaignId]);
 
