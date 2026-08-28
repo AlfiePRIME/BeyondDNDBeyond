@@ -204,7 +204,6 @@ import {
   type WhiteboardTool,
 } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
-import { playSound, SOUND_KEYS } from "@/audio";
 import {
   buildDenseCells,
   cellKey,
