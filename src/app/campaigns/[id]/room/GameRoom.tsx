@@ -202,6 +202,12 @@ import {
   type WhiteboardTool,
 } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
+// Sound Effects SP7: see applyCellChange's own doc comment below for exactly
+// why this is the one correct hook point (never handleTokenLanded directly —
+// that resolution only ever runs on the DM's own client, per its own doc
+// comment, and hooking there would leave every other connected client
+// silent).
+import { playSound, SOUND_KEYS } from "@/audio";
 import {
   buildDenseCells,
   cellKey,
@@ -2179,6 +2185,28 @@ export function GameRoom({
   // learns concealed_pits exists at all, per its RLS — this is purely for
   // every OTHER connected client, DM included, to render the pit the
   // instant it's revealed).
+  //
+  // Sound Effects SP7 (docs/design/pits-and-falling.md's own reveal
+  // mechanism, reused rather than re-derived): this function has exactly
+  // two call sites in this whole file — handleTokenLanded's own direct call,
+  // on the DM's authoritative client, at the exact instant a concealed
+  // pit's trap springs on a FAILED save; and the CELL_REVEALED_EVENT
+  // subscribe handler below, which fires that same reveal on every OTHER
+  // already-connected client. No other code path in this file ever calls
+  // this function, and no other code path ever writes map_cells with
+  // terrain_type: "pit" through it either — a passed save never reaches
+  // here at all (handleTokenLanded reverts the move instead, see its own
+  // "Success" branch), and an ordinary map-editing session lives entirely
+  // outside the Game Room. That makes `cell.terrain_type === "pit"` here an
+  // unambiguous, already-synced "a token just genuinely fell into a
+  // concealed pit and failed its save" signal — unlike a raw dexterity-save
+  // roll_log row (indistinguishable from any OTHER unrelated dex save
+  // without fragile correlation against a following HP-drop). Playing the
+  // sound INSIDE this shared helper, rather than at either call site
+  // individually, is what makes it audible on BOTH the DM's own client (the
+  // direct call) and every other already-connected player's client (the
+  // broadcast receiver) from one place — see SOUND_KEYS.PIT_FALL's own doc
+  // comment for why this is scoped to the concealed-pit case specifically.
   const applyCellChange = useCallback((cell: MapCell) => {
     const current = liveMapRef.current;
     if (!current || cell.map_id !== current.map.id) return;
@@ -2192,6 +2220,9 @@ export function GameRoom({
         : [...current.cells, cell],
     };
     setLiveMapState(liveMapRef.current);
+    if (cell.terrain_type === "pit") {
+      void playSound(SOUND_KEYS.PIT_FALL);
+    }
   }, []);
 
   // Map Editor Batch A10: applyCellChange's own shape — upserts one object
