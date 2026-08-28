@@ -14,6 +14,12 @@ export {
 // onWeatherParticlesDebug pass-through — see WeatherParticles.tsx's own doc
 // comment.
 export { type WeatherParticlesDebugState } from "./WeatherParticles";
+// Overhead cloud layer's own pure per-weatherKind appearance function — the
+// resolveSceneFog precedent exactly, exported so GameRoom.tsx's own hidden
+// weather debug mirror can report a real, exact cloud-preset read without
+// needing anything off the live WebGL scene. See CloudLayer.tsx's own doc
+// comment for the full palette and reasoning.
+export { resolveCloudPreset, type CloudPreset } from "./CloudLayer";
 export { type TokenSlidePhase } from "./useTokenSlide";
 export {
   MapEditorScene,
