@@ -4,6 +4,7 @@ import { Fragment, memo, useEffect, useMemo, useState } from "react";
 import { Billboard } from "@react-three/drei";
 import { BufferAttribute, BufferGeometry, CanvasTexture, Color, SRGBColorSpace } from "three";
 import type { ThreeEvent } from "@react-three/fiber";
+import { playSound, SOUND_KEYS } from "@/audio";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
 import { crossingSurfaceHeight, crossingTiltPitchRadians, isStairsPresetUrl } from "./crossingSurface";
@@ -1305,6 +1306,19 @@ const TokenMarker = memo(function TokenMarker({
   useEffect(() => {
     onSlideDebug?.(id, phase);
   }, [id, phase, onSlideDebug]);
+  // Sound Effects SP3: the token-move cue, fired exactly once per real move
+  // — the SAME phase transition onSlideDebug above observes, kept as its
+  // own separate effect (not folded into that one) so this real gameplay
+  // trigger doesn't depend on onSlideDebug being wired up at all (it's
+  // optional/verification-only). `phase` only ever flips to "sliding" from
+  // useTokenSlide's own target-actually-changed effect (never per-frame,
+  // never on a no-op re-render — see useTokenSlide's own doc comments), and
+  // a mounting token always starts "settled", so this effect's dependency
+  // array guarantees the sound plays on a genuine move start and never on
+  // mount/reload of a token that isn't moving.
+  useEffect(() => {
+    if (phase === "sliding") void playSound(SOUND_KEYS.TOKEN_MOVE);
+  }, [phase]);
   return (
     <group ref={slideRef} scale={scale}>
       <group position={[0, raised ? RAISE_HEIGHT : 0, 0]}>
