@@ -4,8 +4,8 @@ import { Component, memo, Suspense, useCallback, useEffect, useMemo, useRef, use
 import { Clone, OrbitControls, PerspectiveCamera, RoundedBox, useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
-import { Box3, Plane, Raycaster, Vector2, Vector3 } from "three";
-import type { Camera, Object3D } from "three";
+import { Box3, Plane, Raycaster, SRGBColorSpace, TextureLoader, Vector2, Vector3 } from "three";
+import type { Camera, Object3D, Texture } from "three";
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y, TABLE_TOP_JOIN_DEPTH } from "./table";
 import {
   applySeatOffset,
@@ -30,6 +30,7 @@ import {
   type MapSurfaceToken,
 } from "./MapSurface";
 import { computeTableMapMetrics } from "./mapFit";
+import { computeMapArtFit } from "./mapArtFit";
 import type { TokenSlidePhase } from "./useTokenSlide";
 import {
   WhiteboardPlane,
@@ -672,6 +673,92 @@ const TableSeat = memo(function TableSeat({
   );
 });
 
+// Map Art Generation E5: sits just beneath the floor cells' own bottom
+// faces (which sit at this group's local y=0 — see MapSurface's own
+// cells.map) and just above the bare tabletop (the map group itself is
+// already nudged TABLE_SURFACE_Y + 0.002 above the real wood — see that
+// group's own comment below) — the identical "sandwiched, never z-fights
+// either neighbor" reasoning as the map editor's own REFERENCE_IMAGE_Y
+// (MapEditorScene.tsx), just a smaller absolute offset since this table's
+// own fitted cellSize (mapFit.ts) is typically well under the editor's
+// fixed 1-unit cells.
+const MAP_ART_PLANE_Y = -0.001;
+
+/**
+ * The live Game Room's own generated-art image plane — deliberately lives
+ * here, not in MapSurface.tsx: MapSurface is shared with the map EDITOR
+ * scene (MapEditorScene.tsx), and this feature is scoped to the live table
+ * only (this prompt's own Task). Fitted with the exact contain-fit formula
+ * the editor's own DM-positionable reference image already solved
+ * (mapArtFit.ts's computeMapArtFit, factored out of that feature so both
+ * reuse one implementation) — but always centered at scale 1, with no
+ * DM-adjustable x/y/scale of its own: a map's accepted art is generated
+ * from a control image sized directly off that map's real grid
+ * (controlImage.ts), so it's expected to already closely match the grid's
+ * aspect ratio, needing no manual placement.
+ */
+function MapArtPlane({
+  url,
+  gridWidth,
+  gridHeight,
+  cellSize,
+  onReadyChange,
+}: {
+  url: string;
+  gridWidth: number;
+  gridHeight: number;
+  cellSize: number;
+  /** Fires false the instant a fresh url starts loading (or this plane
+   * unmounts because the map itself lost its art), then true once the real
+   * texture has finished loading — GameTableScene gates MapSurface's own
+   * mapArtActive on this so ordinary floor cells never flash transparent
+   * before there's anything loaded underneath them (the ReferenceImagePlane
+   * precedent's own "no texture yet -> render nothing" gate, generalized to
+   * also drive a SIBLING component's rendering, not just this one).
+   * `onReadyChange` must be a stable (useCallback'd) reference — it's a
+   * real effect dependency below, the TableSeat/ObjectMarker convention
+   * this whole file already follows for callbacks handed to a memoized or
+   * effect-owning child. */
+  onReadyChange?: (ready: boolean) => void;
+}) {
+  const [texture, setTexture] = useState<Texture | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    onReadyChange?.(false);
+    new TextureLoader().load(url, (loaded) => {
+      if (disposed) {
+        loaded.dispose();
+        return;
+      }
+      loaded.colorSpace = SRGBColorSpace;
+      setTexture(loaded);
+      onReadyChange?.(true);
+    });
+    return () => {
+      disposed = true;
+      onReadyChange?.(false);
+      setTexture((previous) => {
+        previous?.dispose();
+        return null;
+      });
+    };
+  }, [url, onReadyChange]);
+
+  if (!texture) return null;
+  const art = texture.image as { width: number; height: number };
+  const { planeWidth, planeHeight } = computeMapArtFit(gridWidth, gridHeight, cellSize, art.width, art.height);
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, MAP_ART_PLANE_Y, 0]}>
+      <planeGeometry args={[planeWidth, planeHeight]} />
+      {/* Basic material, tone mapping off: the accepted art should read as
+          the DM's actual generated image, not as a lit surface tinted by
+          the room's own day/night lighting rig — the same reasoning
+          MapEditorScene's own ReferenceImagePlane material uses. */}
+      <meshBasicMaterial map={texture} toneMapped={false} />
+    </mesh>
+  );
+}
+
 /** The currently-live map, already resolved to renderable form by the app
  * layer (dense cells, viewer-appropriate object flags, loadable URLs). */
 export interface TableLiveMap {
@@ -694,6 +781,16 @@ export interface TableLiveMap {
    * required for TableLiveMap's own core meaning, which predates the
    * whiteboard feature. */
   whiteboardTiles?: readonly WhiteboardTileData[];
+  /** Map Art Generation E5: a signed, already-resolved URL for this map's
+   * currently-accepted generated art (GameRoom.tsx resolves it via
+   * getMapArtSignedUrl, the "already resolved to renderable form" rule this
+   * whole interface's own doc comment states — scene-3d stays data-access-
+   * free), or null/undefined when this map has no accepted art. Null
+   * renders this map EXACTLY as before this feature: no image plane, no
+   * transparent floor, no faint grid variant — see MapArtPlane and
+   * MapSurfaceProps.mapArtActive's own doc comments for what turning it on
+   * actually changes. */
+  mapArtUrl?: string | null;
 }
 
 export interface GameTableSceneProps {
@@ -744,6 +841,18 @@ export interface GameTableSceneProps {
    * without pixel-diffing a screenshot. Omitting it changes nothing about
    * what renders. */
   onWeatherParticlesDebug?: (state: WeatherParticlesDebugState | null) => void;
+  /** Verification-only: mirrors whether generated map art is CURRENTLY
+   * active for the live map — an accepted map_art row present (liveMap.
+   * mapArtUrl set) AND its texture has actually finished loading (see
+   * MapArtPlane's own onReadyChange), the exact moment ordinary floor
+   * cells switch to the transparent-fill treatment. WebGL has no DOM of
+   * its own for a test to confirm that render decision directly, the same
+   * reasoning as every other onXDebug prop here. null while there's no
+   * live map at all; otherwise a real boolean, momentarily false right
+   * after a freshly-accepted art's texture starts loading and true once
+   * it's ready. Omit it (as every real caller does today) and nothing
+   * about how anything renders changes. */
+  onMapArtDebug?: (state: { mapId: string; active: boolean } | null) => void;
   /** Verification-only pass-through to MapSurface's onTokenSlideDebug — see
    * its own doc comment. Purely a mirror of each token's slide animation
    * state; omitting it changes nothing about how tokens move or render. */
@@ -957,6 +1066,7 @@ export function GameTableScene({
   dayNightMode = "day",
   weatherKind = "clear",
   onWeatherParticlesDebug,
+  onMapArtDebug,
   onTokenSlideDebug,
   onAvatarPoseDebug,
   onAvatarMeasureDebug,
@@ -1430,6 +1540,25 @@ export function GameTableScene({
     [liveMap]
   );
 
+  // Map Art Generation E5: true only once MapArtPlane's own texture has
+  // actually finished loading — see its onReadyChange doc comment for why
+  // this gate exists (avoids a flash of transparent floor with nothing
+  // loaded underneath yet). Reset to false by MapArtPlane's own effect
+  // cleanup whenever liveMap.mapArtUrl changes or clears, so switching to a
+  // map with no art (or a fresh map mid-generation) never leaves a stale
+  // `true` behind.
+  const [mapArtReady, setMapArtReady] = useState(false);
+  const handleMapArtReadyChange = useCallback((ready: boolean) => setMapArtReady(ready), []);
+  const mapArtActive = Boolean(liveMap?.mapArtUrl) && mapArtReady;
+  const liveMapId = liveMap?.id ?? null;
+  // Verification-only mirror — see GameTableSceneProps.onMapArtDebug's own
+  // doc comment. Keyed off the real primitives, not the whole `liveMap`
+  // object (which changes reference on every token slide/vision update),
+  // so this only actually fires on a genuine map-art state transition.
+  useEffect(() => {
+    onMapArtDebug?.(liveMapId ? { mapId: liveMapId, active: mapArtActive } : null);
+  }, [liveMapId, mapArtActive, onMapArtDebug]);
+
   const handleCellPointerDown = useCallback(
     (x: number, y: number, event: ThreeEvent<PointerEvent>) => {
       if (event.button !== 0) return;
@@ -1603,6 +1732,21 @@ export function GameTableScene({
               completely unchanged) centered on that seam, straddling both
               tables equally, rather than pushed flush against either one. */}
           <group position={[0, TABLE_SURFACE_Y + 0.002, 0]}>
+            {/* Map Art Generation E5: rendered BEFORE MapSurface for
+                readability only — three.js's own depth test (not JSX
+                order) is what actually makes this show through the floor
+                cells' transparent fill once mapArtActive engages them; an
+                absent liveMap.mapArtUrl renders nothing at all, the
+                pre-E5 rendering for every map with no accepted art. */}
+            {liveMap.mapArtUrl ? (
+              <MapArtPlane
+                url={liveMap.mapArtUrl}
+                gridWidth={liveMap.gridWidth}
+                gridHeight={liveMap.gridHeight}
+                cellSize={mapMetrics.cellSize}
+                onReadyChange={handleMapArtReadyChange}
+              />
+            ) : null}
             <MapSurface
               gridWidth={liveMap.gridWidth}
               gridHeight={liveMap.gridHeight}
@@ -1611,6 +1755,7 @@ export function GameTableScene({
               objects={liveMap.objects}
               tokens={liveMap.tokens}
               gridOverlay
+              mapArtActive={mapArtActive}
               // Ruler mode owns the pointer outright: a cell press measures
               // instead of placing/moving/selecting, POI objects go inert
               // (their hit boxes would otherwise swallow the press), and

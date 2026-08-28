@@ -4,6 +4,7 @@ import {
   getActiveCombatEncounter,
   getDiceTrayPreferencesForCampaign,
   getMap,
+  getMapArt,
   getProfile,
   getSeatOffsetsForCampaign,
   listAssetsForCampaign,
@@ -239,7 +240,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   if (effectiveMapId) {
     const map = await getMap(supabase, effectiveMapId);
     if (map) {
-      const [cells, objects, tokens, lightSources, whiteboardTiles] = await Promise.all([
+      const [cells, objects, tokens, lightSources, whiteboardTiles, mapArt] = await Promise.all([
         listMapCells(supabase, map.id),
         listMapObjects(supabase, map.id),
         listMapTokens(supabase, map.id),
@@ -250,6 +251,12 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
         // §5.3) — member-readable (0058), so the initial SSR render already
         // shows the DM's drawing with no client-side flash-of-blank-board.
         listWhiteboardTiles(supabase, map.id),
+        // Map Art Generation E5: null for a map with no accepted art —
+        // member-readable (0077, can_read_map-gated, the same posture as
+        // the map row itself), so the initial SSR render already knows
+        // whether to render the live table's transparent-floor/faint-grid
+        // mode with no client-side flash of ordinary opaque floor first.
+        getMapArt(supabase, map.id),
       ]);
       // Map Editor Batch A4: which of this map's objects already hold
       // items — same second-query-after-objects reasoning as GameRoom's
@@ -258,7 +265,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       const containerObjectIds = new Set(
         containerItems.flatMap((item) => (item.map_object_id ? [item.map_object_id] : []))
       );
-      initialLiveMap = { map, cells, objects, tokens, lightSources, whiteboardTiles, containerObjectIds };
+      initialLiveMap = { map, cells, objects, tokens, lightSources, whiteboardTiles, mapArt, containerObjectIds };
     }
   }
 

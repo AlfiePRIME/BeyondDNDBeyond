@@ -46,6 +46,10 @@ export {
 } from "./MapSurface";
 export { computeTableMapMetrics } from "./mapFit";
 export { buildGridOverlayPositions } from "./gridOverlay";
+// Map Art Generation E5 — the reference-image feature's own contain-fit
+// math (MapEditorScene.tsx's ReferenceImagePlane), factored out so
+// GameTableScene's own MapArtPlane reuses it verbatim.
+export { computeMapArtFit } from "./mapArtFit";
 export { PlacedObject, PLACED_OBJECT_SIZE, isWallFamilyUrl, isBuildingPresetUrl } from "./PlacedObject";
 // Avatar's own normalization target — exported for the account/campaign
 // upload flows' rotate-and-confirm preview (OrientationPreview), which must
