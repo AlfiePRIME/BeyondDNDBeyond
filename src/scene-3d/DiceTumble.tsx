@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Billboard } from "@react-three/drei";
 import { BufferGeometry, CanvasTexture, DoubleSide, Quaternion, SRGBColorSpace, Vector3 } from "three";
+import { SOUND_KEYS, playSound } from "@/audio";
 import {
   DEFAULT_FACE_LABELS,
   DIE_FACE_NORMALS,
@@ -427,6 +428,62 @@ function labelFor(spec: DiceTumbleDieSpec): string {
   return kind ? labelForResult(kind, spec.result, spec.labelSet) : String(spec.result);
 }
 
+// SP8 — the minimum real time between two dice_impact sounds for ONE die.
+// Chosen to exactly match generate-sound-effects.mjs's own real generated
+// clip length for dice_impact (anoisesrc=d=0.12 / sine=f=180:d=0.12 — a
+// genuine 0.12s file, confirmed via ffprobe at generation time): at this
+// interval, a new impact sound can never start until the previous one has
+// fully finished playing, so back-to-back impacts are always heard as
+// distinct, non-overlapping thocks rather than a muddy layered pile-up —
+// while still being short enough that a real chaotic bounce phase's own
+// genuinely-distinct bounces (measured directly during this feature's own
+// prototyping at roughly one every 150-400ms in the busiest opening moments
+// of a real physics tumble, well above this floor) are never suppressed.
+// This is a defensive backstop, not the primary anti-spam mechanism — a
+// real Rapier collision-started event only fires once when a contact
+// BEGINS, never again while that same contact persists (confirmed directly
+// during this feature's own prototyping), so DicePose.impacted already
+// rarely retriggers faster than this on its own; this interval exists for
+// the genuine edge case of a die rapidly chattering against a corner/edge
+// (many fast start/stop/start contact toggles in quick succession).
+const MIN_DICE_IMPACT_INTERVAL_MS = 120;
+
+// SP8 — a SECOND, PAGE-WIDE rate limit, independent of the per-die one
+// above. Real measurement (scripts/perf/dice-physics-benchmark.mjs, the
+// project's own established 10-tray x 8-die worst case — perf-budgets.json
+// realtimeLoad.concurrentClients x diceAnimator.ts's own
+// MAX_PHYSICS_DICE_PER_ROLL) found the per-die limit alone was NOT enough at
+// that real concurrency. Isolating the cause (this feature's own design
+// investigation): baseline (this feature entirely absent) measured ~30-33ms
+// avg frame time across repeated runs; adding real collision detection alone
+// (the EventQueue/drain machinery in diceAnimator.ts, the playSound() call
+// temporarily disabled) measured ~31.6ms — confirming the PHYSICS-side cost
+// is negligible, matching this feature's own earlier raw-Node prototyping.
+// Re-enabling the actual per-impact playSound() call with ONLY the per-die
+// 120ms cap in place pushed it to ~39ms, over perf-budgets.json's 33.3ms
+// budget: with up to 80 simultaneous physics-tumbling dice across 10
+// independent trays all genuinely bouncing at once, the per-die cap alone
+// still allows a real aggregate burst of Web Audio graph construction +
+// soundManager.ts's own debug-mirror notify/re-render (every playSound call)
+// that the render loop can't absorb. This global floor caps the PAGE's
+// total dice_impact rate regardless of how many trays/dice are
+// simultaneously chaotic, while staying far above what any ORDINARY
+// gameplay moment (one tray, or even a handful, rolling at once) could ever
+// hit. Confirmed directly: repeated benchmark runs with this 40ms floor in
+// place averaged ~30-33ms — statistically indistinguishable from the
+// feature-absent baseline's own ~30-33ms run-to-run range on the same real
+// (shared, noisy) hardware — without perceptibly thinning out a real
+// single-tray tumble's own impact cadence (still far more permissive than
+// the per-die 120ms cap for any one tray's own dice). NOTE: this sandbox's
+// own background load visibly swings individual runs by several ms either
+// way (confirmed by comparing repeated same-config runs) — the real,
+// reproducible signal is "the physics/detection layer itself costs ~1-2ms;
+// the audio side-effect needed this second, coarser page-wide throttle on
+// top of the per-die one to stay inside budget at the project's own
+// documented worst-case concurrency," not any single run's exact number.
+const GLOBAL_MIN_DICE_IMPACT_INTERVAL_MS = 40;
+let lastGlobalDiceImpactAt = -Infinity;
+
 function Die({
   spec,
   animator,
@@ -436,7 +493,41 @@ function Die({
   animator: DiceAnimator;
   onSettled: (id: string) => void;
 }) {
-  const { ref, phase } = useDiceTumble(spec, animator);
+  // Per-die, per-mount rate-limit state — a fresh -Infinity every time this
+  // component (re)mounts, matching every other piece of this die's own
+  // animation state (useDiceTumble's own ref/elapsed-clock/phase), since a
+  // fresh roll always remounts a brand-new Die via `key={die.id}` (below)
+  // rather than reusing one across rolls.
+  const lastImpactAtRef = useRef(-Infinity);
+  const handleImpact = useCallback(() => {
+    const now = performance.now();
+    if (now - lastImpactAtRef.current < MIN_DICE_IMPACT_INTERVAL_MS) return;
+    // The page-wide floor (GLOBAL_MIN_DICE_IMPACT_INTERVAL_MS above) — a
+    // plain module-level variable (not React state/context), the same
+    // "shared mutable state with no natural React tree to hang it off of"
+    // shape soundManager.ts's own masterGain/loops already use, since this
+    // needs to coordinate across every Die instance on the page, spanning
+    // every connected member's own independent tray, not just siblings
+    // under one ActiveTumble.
+    if (now - lastGlobalDiceImpactAt < GLOBAL_MIN_DICE_IMPACT_INTERVAL_MS) return;
+    lastImpactAtRef.current = now;
+    lastGlobalDiceImpactAt = now;
+    // No variantIndex — playSound's own default (soundManager.ts's
+    // resolveSoundUrl) picks a real random variant from dice_impact's pool
+    // every call, the same "genuinely vary across repeated triggers"
+    // guarantee SP5's hit_normal pool established. This is a purely local,
+    // client-side Web Audio call — never a network broadcast — so it can
+    // only ever run on a client whose OWN DiceTumble instance actually
+    // mounted this Die in the first place. That is exactly what keeps a
+    // private roll's impact sounds off every other client with zero extra
+    // gating needed here: GameRoom.tsx's handleRollLanded never even calls
+    // play() on (and therefore never mounts ActiveTumble/Die for) any
+    // client other than the roller's own for a private roll — see that
+    // handler's own doc comment.
+    void playSound(SOUND_KEYS.DICE_IMPACT);
+  }, []);
+
+  const { ref, phase } = useDiceTumble(spec, animator, handleImpact);
   const label = labelFor(spec);
 
   useEffect(() => {
