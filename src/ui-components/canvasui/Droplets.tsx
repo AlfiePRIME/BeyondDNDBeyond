@@ -154,11 +154,12 @@ void main () {
 // A from-scratch rain-on-glass shader (see this file's top-of-file doc
 // comment on why it's not a literal upstream port): three independently
 // scaled/seeded layers of falling drops, each contributing a UV-space
-// refraction vector plus a "wetness" mask, summed and used to (a) bend the
-// sampled background UV, (b) soften the background under wet patches, and
-// (c) add a small specular highlight on each drop's leading edge — then a
-// vignette and a cold-glass tint on top, same finishing touches VHS.tsx
-// already uses for its own scanline/vignette/saturation pass.
+// refraction vector, a "wetness" mask, and a directional specular term,
+// summed and used to (a) bend the sampled background UV like a lens, (b)
+// soften the background under wet patches, and (c) add a small, edge-
+// weighted specular glint on each drop rather than a flat interior fill —
+// then a vignette and a cold-glass tint on top, same finishing touches
+// VHS.tsx already uses for its own scanline/vignette/saturation pass.
 const FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -177,6 +178,31 @@ uniform vec3 uTintColor;
 uniform float uTintStrength;
 uniform float uAlpha;
 
+// Two real, live-tested bugs fixed here (project owner caught both after
+// the prior "blob sizing" pass shipped — see this prompt's own task
+// description for the full write-up). NOTE: no backtick characters in this
+// comment block — it lives inside a JS template literal, so a literal
+// backtick would prematurely close the FRAG string.
+//   1. dropY used to be mix(-0.55, 0.55, phase), which RISES over time.
+//      vUv (and therefore this shader's 'uv') is a standard bottom-up
+//      convention: vUv.y=1 is the visual TOP of the canvas, vUv.y=0 is the
+//      visual BOTTOM (confirmed directly — outColor = vec4(vUv.y,0,0,1)
+//      renders bright red at the top of the frame and black at the
+//      bottom). A rising dropY therefore moved every drop UP the screen —
+//      backwards. Flipped to mix(0.55, -0.55, phase) below so drops
+//      genuinely fall top-to-bottom.
+//   2. The old shape was a plain radial/elliptical mask filled with a flat
+//      'color += highlight' scalar across its ENTIRE interior — uniform,
+//      colorless brightening with no gradient or lensing, i.e. a flat
+//      white oval. Replaced with: an asymmetric teardrop/comet taper (a
+//      compact round head in the direction of travel, a longer trailing
+//      streak that stretches and thins as it's about to fade/wrap — see
+//      headScale/tailScale below), a substantially stronger and
+//      non-linear (bigger near the core, tapering at the edge) refraction
+//      displacement so the background actually reads as lensed through
+//      the drop, and a directional specular glint (a fake hemisphere
+//      normal dotted against a fixed light direction) positioned toward
+//      one edge instead of washing the whole shape.
 float hash21 (vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
@@ -184,8 +210,8 @@ float hash21 (vec2 p) {
 }
 
 // One layer of falling drop streaks at a given cell density/speed/seed.
-// Returns (distortion.xy, wetnessMask) for that layer alone.
-vec3 dropLayer (vec2 uv, float scale, float speedMul, float seed) {
+// Returns (distortion.xy, wetnessMask, specular) for that layer alone.
+vec4 dropLayer (vec2 uv, float scale, float speedMul, float seed) {
   float aspect = uResolution.x / max(uResolution.y, 1.0);
   vec2 grid = vec2(uv.x * aspect, uv.y) * scale;
   vec2 cellId = floor(grid);
@@ -194,24 +220,61 @@ vec3 dropLayer (vec2 uv, float scale, float speedMul, float seed) {
   float rnd = hash21(cellId + seed);
   float fallSpeed = 0.35 + rnd * 0.65;
   float phase = fract(uTime * uSpeed * speedMul * fallSpeed + rnd * 11.0);
-  float dropY = mix(-0.55, 0.55, phase);
-  vec2 toDrop = cellUv - vec2((rnd - 0.5) * 0.7, dropY);
-  toDrop.y /= max(uDropLength, 0.05);
+  // Falls from top (+0.55) to bottom (-0.55) as phase advances — see this
+  // shader's own top-of-file bugfix note above for why this direction (not
+  // the reverse) is the one that actually falls down the screen.
+  float dropY = mix(0.55, -0.55, phase);
+  float offsetX = (rnd - 0.5) * 0.7;
+  float rawX = cellUv.x - offsetX;
+  float rawY = cellUv.y - dropY;
+
+  // Brightest/most opaque right after "spawning" at the top of its cycle,
+  // thinning out before it wraps back to the top again — also now shapes
+  // the trailing taper below, not just overall opacity.
   float trailFade = 0.35 + 0.65 * smoothstep(1.0, 0.0, phase);
+
+  // Teardrop/comet taper: a compact round head in the direction of travel
+  // (falling, so "ahead" = below the center, rawY < 0) and a longer,
+  // thinning trailing streak behind it (above the center, rawY > 0) that
+  // stretches further just before it fades — reads as "a drop with a
+  // fading trail," not a static radial oval.
+  float headScale = max(uDropWidth * 1.15, 0.03);
+  float tailScale = max(uDropLength * mix(1.85, 1.0, trailFade), 0.05);
+  float yScale = rawY < 0.0 ? headScale : tailScale;
+  vec2 toDrop = vec2(rawX, rawY / yScale);
+
   float d = length(toDrop) / max(uDropWidth, 0.02);
   float mask = smoothstep(1.0, 0.0, d) * trailFade;
-  vec2 grad = toDrop * mask;
-  return vec3(grad, mask);
+
+  // Refraction: push the background outward from the drop's core like a
+  // real lens bulge. The (1.0 + 2.6 * (1.0 - d)) factor weights the push
+  // several times stronger near the drop's core (d near 0) than near its
+  // own edge (d near 1, where 'mask' is already fading it to zero anyway),
+  // boosted well above the old flat 'toDrop * mask' magnitude so it's
+  // actually visible as lensing rather than a sub-pixel nudge.
+  vec2 grad = toDrop * mask * (1.0 + 2.6 * (1.0 - d));
+
+  // Specular: a small hemisphere-normal glint, not a flat fill. The xy
+  // part of the fake normal comes from the drop-local offset (zero at dead
+  // center, so this never needs an unsafe normalize of a near-zero
+  // vector); a fixed z lets normalize() stay well-defined everywhere.
+  vec2 nrm = toDrop / max(uDropWidth, 0.02) * clamp(1.0 - d, 0.0, 1.0);
+  vec3 normal = normalize(vec3(nrm, 0.55));
+  vec3 lightDir = normalize(vec3(-0.35, 0.55, 0.72));
+  float spec = pow(max(dot(normal, lightDir), 0.0), 26.0) * mask;
+
+  return vec4(grad, mask, spec);
 }
 
 void main () {
   vec2 uv = vUv;
 
-  vec3 a = dropLayer(uv, 5.5, 1.0, 0.0);
-  vec3 b = dropLayer(uv, 9.0, 1.35, 17.0);
-  vec3 c = dropLayer(uv, 3.3, 0.7, 41.0);
+  vec4 a = dropLayer(uv, 5.5, 1.0, 0.0);
+  vec4 b = dropLayer(uv, 9.0, 1.35, 17.0);
+  vec4 c = dropLayer(uv, 3.3, 0.7, 41.0);
   vec2 distortion = a.xy + b.xy * 0.7 + c.xy * 0.5;
   float wetness = clamp(a.z + b.z * 0.7 + c.z * 0.5, 0.0, 1.5);
+  float specular = a.w + b.w * 0.7 + c.w * 0.5;
 
   vec2 refracted = clamp(uv + distortion * uRefraction * uIntensity, vec2(0.001), vec2(0.999));
   vec2 sampleUv = vec2(refracted.x, 1.0 - refracted.y);
@@ -228,8 +291,13 @@ void main () {
     color = mix(color, blurred, clamp(wetness, 0.0, 1.0));
   }
 
-  float highlight = smoothstep(0.55, 1.0, wetness) * 0.22 * uIntensity;
-  color += highlight;
+  // Edge-weighted specular glint (see dropLayer's own doc comment) instead
+  // of the old flat 'color += highlight' wash — reads as a small bright
+  // point on a shaped drop, not a uniformly-lit oval. A much smaller
+  // residual wetness-based lift is kept so the drop's body still reads as
+  // faintly wet glass, not just an outline-plus-glint.
+  color += specular * 0.85 * uIntensity;
+  color += smoothstep(0.6, 1.0, wetness) * 0.05 * uIntensity;
 
   vec2 vd = (uv - 0.5) * vec2(uResolution.x / max(uResolution.y, 1.0), 1.0);
   color *= 1.0 - uVignette * smoothstep(0.35, 1.05, length(vd));
