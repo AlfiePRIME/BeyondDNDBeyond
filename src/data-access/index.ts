@@ -450,5 +450,18 @@ export {
   type RawAiProviderConfig,
   type RawMapArtConfig,
 } from "./appSettings";
+// Sound Effects SP2's admin override system — see 0084_sound_overrides.sql
+// and soundOverrides.ts's own header comment for why `soundKey` is typed as
+// a plain string here rather than importing SoundKey from "@/audio" (this
+// module must not depend upward on a feature module that itself depends on
+// data-access).
+export {
+  listSoundOverrides,
+  getSoundOverride,
+  getSoundOverridePublicUrl,
+  setSoundOverride,
+  deleteSoundOverride,
+  type SoundOverride,
+} from "./soundOverrides";
 
 export const MODULE_NAME = "data-access" as const;

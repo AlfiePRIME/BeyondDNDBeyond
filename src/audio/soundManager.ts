@@ -23,10 +23,12 @@
  * scheduled — including an active loop — with no need to touch each
  * playing node individually. Master volume/mute itself is persisted
  * per-user via profiles.ui_preferences (see DraggablePanel.tsx's
- * `useSoundSettings` — this module has no Supabase/React dependency of its
- * own; whatever calls setMasterVolume/setMuted is responsible for wiring
- * that persistence up, keeping this module a plain, framework-agnostic
- * audio engine).
+ * `useSoundSettings` — this module has no Supabase/React dependency for
+ * THAT; whatever calls setMasterVolume/setMuted is responsible for wiring
+ * that persistence up). The one deliberate exception is resolveSoundUrl
+ * below (SP2): it does depend on @/data-access, to check for a live admin
+ * override before falling back to SOUND_FILES — see its own doc comment.
+ * Every other function here stays exactly as framework-agnostic as before.
  *
  * Loop crossfade discipline deliberately mirrors Droplets.tsx's own
  * fade-to-fully-silent rule (see that file's top-of-file doc comment and
@@ -38,6 +40,15 @@
  * (SP9's weather-kind flip-flopping) cancels the in-flight fade instead of
  * stacking a second overlapping source.
  */
+
+// Sound Effects SP2: the one real dependency this otherwise plain module
+// has — see resolveSoundUrl's own doc comment below. "@/data-access/
+// supabase-browser" is one of data-access's four documented sub-entry-points
+// (see that module's own index.ts header comment) for the Client-Component
+// browser client specifically; everything else comes from the main barrel,
+// same as any other consumer.
+import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
+import { getSoundOverride, getSoundOverridePublicUrl } from "@/data-access";
 
 /** The one central registry of every sound key this whole Sound Effects
  * plan (SP1-SP9) will ever use. A plain string-literal union underneath
@@ -136,11 +147,43 @@ export function getVariantCount(key: SoundKey): number {
  * see SOUND_FILES' own doc comment: SP2's override check is a real
  * asynchronous Supabase read, and every call site below already awaits
  * this.
+ *
+ * Sound Effects SP2: an admin-uploaded override (src/data-access's
+ * sound_overrides table, 0084_sound_overrides.sql) always wins over the
+ * baked default when one exists for this key. This is a genuine live
+ * pointer — re-read fresh on EVERY call, never cached across calls, the
+ * same "always re-resolve, don't cache forever" convention this session
+ * already established for campaign_monster_template_overrides/map_art —
+ * so an admin's upload or "reset to default" takes effect on the very next
+ * playback with no other plumbing anywhere (no realtime channel to
+ * subscribe/unsubscribe, no state to invalidate). This is also the one
+ * spot in this otherwise plain, framework-agnostic module with a real
+ * Supabase dependency (via @/data-access, never @supabase/supabase-js
+ * directly — the boundaries/dependencies rule in eslint.config.mjs only
+ * gate-keeps THAT), by SP1's own design: everything else here (volume/mute
+ * persistence, the debug mirror) stays exactly as framework-agnostic as
+ * before, wired up by whatever calls it instead.
+ *
+ * Any failure resolving the override (offline, an RLS edge case, this
+ * migration not yet applied to a given environment) must never block
+ * ordinary playback — silently fall back to the baked default, keeping
+ * SP2 fully optional/additive per its own acceptance bar: every sound key
+ * keeps working using ONLY SP1's baked defaults with zero configuration.
  */
 async function resolveSoundUrl(key: SoundKey, variantIndex?: number): Promise<string> {
   const files = SOUND_FILES[key];
   const index = variantIndex !== undefined ? ((variantIndex % files.length) + files.length) % files.length : Math.floor(Math.random() * files.length);
-  return files[index];
+  const defaultUrl = files[index];
+
+  try {
+    const supabase = createBrowserSupabaseClient();
+    const override = await getSoundOverride(supabase, key);
+    if (override) return getSoundOverridePublicUrl(supabase, override.storage_ref);
+  } catch {
+    // Fall through to the baked default below — see this function's own
+    // doc comment on why a resolution failure must never block playback.
+  }
+  return defaultUrl;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
