@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Overhead cloud layer (CloudLayer.tsx) + the new 'cloudy' weather_kind
-// (migration 0079_cloudy_weather.sql) verification.
+// (migration 0081_cloudy_weather.sql) verification.
 //
 // Hybrid shape per verify-weather.mjs (this feature's own direct
 // architectural precedent, itself the precedent every other weather
