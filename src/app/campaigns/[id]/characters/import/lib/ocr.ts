@@ -6,13 +6,22 @@ import { ptBoxToPixelRect, type PtBox } from "./regions";
 // carved-out LLM call elsewhere in the app) — tesseract.js defaults to
 // fetching this from a CDN, so langPath must point here instead.
 // process.cwd() (not __dirname) deliberately keeps this a plain runtime
-// filesystem read rather than something a bundler tries to trace/copy —
-// `next dev`/`next start` both run from the repo root with the full source
-// tree present, so the file is always alongside this route. Built with
-// string concatenation rather than `path.join` — see the comment in
-// raster.ts on why `path.join` on a dynamic base crashes the Turbopack
-// build when it tries to trace it as an asset reference.
-const LANG_PATH = `${process.cwd()}/src/app/campaigns/[id]/characters/import/tessdata`;
+// filesystem read rather than something a bundler tries to trace/copy.
+// Lives under public/ (NOT src/) specifically because of `next build`'s
+// standalone output mode: production runs `node server.js` from
+// `.next/standalone`, where process.cwd() resolves there too, and standalone
+// output only ever carries `public/` and `.next/static` (copied by the
+// deploy step, same as every other static asset) — it does NOT carry `src/`
+// at all. This file used to live under src/app/.../tessdata, which worked
+// under `next dev`/`next start` (both run from the repo root with the full
+// source tree present) but silently broke character PDF import specifically
+// in the standalone production deployment — confirmed live: a real user
+// report of "character PDF importing is broken again," root-caused to
+// `.next/standalone/src` simply not existing. Built with string
+// concatenation rather than `path.join` — see the comment in raster.ts on
+// why `path.join` on a dynamic base crashes the Turbopack build when it
+// tries to trace it as an asset reference.
+const LANG_PATH = `${process.cwd()}/public/tessdata`;
 
 export async function createOcrWorker(): Promise<Worker> {
   return createWorker("eng", 1, {
