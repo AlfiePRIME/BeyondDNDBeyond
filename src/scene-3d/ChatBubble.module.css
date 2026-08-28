@@ -9,6 +9,7 @@
    loaded globally via src/app/globals.css) and B2's own ChatText styling. */
 
 .bubble {
+  width: max-content;
   max-width: 260px;
   padding: 8px 12px;
   border-radius: 10px;
