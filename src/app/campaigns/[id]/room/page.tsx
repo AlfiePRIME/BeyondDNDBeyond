@@ -133,25 +133,23 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // Monster stat blocks (Prompt 61), member-readable — AC auto-fill
     // for stat-blocked NPC targets needs them on every client.
     listMonsterStatBlocks(supabase, campaignId),
-    // Weather & Enemies C5: the GLOBAL monster template library (0073),
-    // only for the DM's book's Enemies (MonsterPanel) "add from library"
-    // browser — same DM-gated fetch convention as rosterNpcs immediately
-    // below (0073's SELECT policy is actually open to any authenticated
-    // user, but no non-DM surface reads it today, so there's no point
-    // fetching it for a player).
-    currentUserIsDM ? listMonsterTemplates(supabase) : Promise.resolve([]),
+    // Weather & Enemies C5: the GLOBAL monster template library (0073) —
+    // fetched for EVERY campaign member, not just the DM (0073's own SELECT
+    // policy is open to any authenticated user). MonsterPanel's "add from
+    // library" browser is still DM-only UI, but GameRoom's own C6 token-model
+    // resolution (the tableMap memo) runs per-viewer and needs
+    // monsterTemplateById populated for every client — a player's own
+    // browser is exactly the one that has to actually render a templated
+    // monster's distinct model during play. See GameRoom.tsx's own
+    // initialMonsterTemplates doc comment for the fuller history.
+    listMonsterTemplates(supabase),
     // Weather & Enemies C7: this campaign's own template-model overrides
-    // (0075) — the SAME DM-gated fetch convention as initialMonsterTemplates
-    // immediately above (0075's own SELECT policy is actually open to any
-    // campaign member, but no non-DM surface reads it today either, for the
-    // exact same reason: MonsterPanel's override upload UI is DM-only). See
-    // GameRoom.tsx's own initialTemplateOverrides/initialMonsterTemplates
-    // doc comments for the resulting pre-existing player-visibility gap
-    // this inherits (only the DM's own view resolves a template's model at
-    // all today, override or not).
-    currentUserIsDM
-      ? listMonsterTemplateOverridesForCampaign(supabase, campaignId)
-      : Promise.resolve([]),
+    // (0075) — same reasoning as initialMonsterTemplates immediately above:
+    // fetched for every member (0075's own SELECT policy is any campaign
+    // member), since GameRoom's token-model resolution reads this
+    // campaign-scoped override ahead of the template's own default_asset_id
+    // for every viewer, not just the DM's.
+    listMonsterTemplateOverridesForCampaign(supabase, campaignId),
     // The narrative roster, only for the DM's book's Enemies (MonsterPanel)
     // name pre-fill; players never see the book, so no point fetching.
     currentUserIsDM ? listNpcs(supabase, campaignId) : Promise.resolve([]),
