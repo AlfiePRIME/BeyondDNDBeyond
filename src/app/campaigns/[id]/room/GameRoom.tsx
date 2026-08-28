@@ -40,6 +40,8 @@ import {
   getCharacter,
   getDiceTrayPreferencesForCampaign,
   getMap,
+  getMapArt,
+  getMapArtSignedUrl,
   getSeatOffsetsForCampaign,
   listCharactersForCampaign,
   listCombatCombatants,
@@ -110,6 +112,7 @@ import {
   type LightSource,
   type LorePage,
   type LorePageLink,
+  type MapArt,
   type MapCell,
   type MapObject,
   type MapObjectBehavior,
@@ -235,6 +238,12 @@ import { LiveObjectsPanel } from "./LiveObjectsPanel";
 import { MapPanel, type InteractiveEntry } from "./MapPanel";
 import { TokenPanel, type TokenArm } from "./TokenPanel";
 import styles from "./room.module.css";
+
+// Map Art Generation E5 — same one-hour TTL as the map editor's own
+// MAP_ART_SIGNED_URL_TTL_SECONDS (MapEditor.tsx): long enough that a
+// multi-hour session's own re-render never needs a fresh sign mid-scene,
+// short enough that a leaked URL doesn't stay valid indefinitely.
+const MAP_ART_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 const SESSION_ENDED_EVENT = "session-ended";
 // All on the CAMPAIGN channel, not the room channel — the room topic's
@@ -617,6 +626,14 @@ export interface LiveMapData {
    * bundle so a map switch/reconnect hydrates the drawing exactly like
    * every other piece of this map's state, with no separate fetch path. */
   whiteboardTiles: WhiteboardTile[];
+  /** Map Art Generation E5: this map's currently-accepted generated art row
+   * (0077), or null when none has been accepted yet — member-readable
+   * (can_read_map-gated), fetched alongside everything else in this bundle
+   * so a map switch/reconnect picks up whatever's currently accepted with
+   * no separate fetch path. GameRoom resolves this into a signed URL (see
+   * mapArtSignedUrl below) before ever handing it to the scene — scene-3d
+   * stays data-access-free, per TableLiveMap.mapArtUrl's own doc comment. */
+  mapArt: MapArt | null;
   /** Map Editor Batch A4: every object.id on this map currently holding at
    * least one item — MapPanel's own "Containers" list reads this to offer
    * a reliable, click-agnostic Open action (a raw 3D click on the object
@@ -1961,6 +1978,10 @@ export function GameRoom({
   // why this exists. Purely informational; nothing here reads it back to
   // decide anything.
   const [weatherParticlesDebug, setWeatherParticlesDebug] = useState<WeatherParticlesDebugState | null>(null);
+  // Map Art Generation E5 — verification-only mirror of GameTableScene's own
+  // onMapArtDebug; see its doc comment. Purely informational; nothing here
+  // reads it back to decide anything.
+  const [mapArtDebug, setMapArtDebug] = useState<{ mapId: string; active: boolean } | null>(null);
   // Weather & Enemies C3: thunderstorm's own synchronized lightning overlay
   // — mirrored below (lightning-state) so a real two-client Playwright
   // check can prove every connected client computes the IDENTICAL flash
@@ -2711,7 +2732,7 @@ export function GameRoom({
     if (mapId) {
       const map = await getMap(supabase, mapId);
       if (!map) return;
-      const [cells, objects, tokens, lightSources, whiteboardTiles] = await Promise.all([
+      const [cells, objects, tokens, lightSources, whiteboardTiles, mapArt] = await Promise.all([
         listMapCells(supabase, mapId),
         listMapObjects(supabase, mapId),
         listMapTokens(supabase, mapId),
@@ -2721,6 +2742,9 @@ export function GameRoom({
         // drawing exactly like every other piece of its state (docs/design/
         // whiteboard-drawing-layer.md §5.3 — "no new reconnect concept").
         listWhiteboardTiles(supabase, mapId),
+        // Map Art Generation E5: one more thing this map's own full bundle
+        // carries — see LiveMapData.mapArt's own doc comment.
+        getMapArt(supabase, mapId),
       ]);
       // Map Editor Batch A4: which of THIS map's objects currently hold
       // items — a second query rather than folding into the Promise.all
@@ -2729,7 +2753,7 @@ export function GameRoom({
       const containerObjectIds = new Set(
         containerItems.flatMap((item) => (item.map_object_id ? [item.map_object_id] : []))
       );
-      next = { map, cells, objects, tokens, lightSources, whiteboardTiles, containerObjectIds };
+      next = { map, cells, objects, tokens, lightSources, whiteboardTiles, mapArt, containerObjectIds };
     }
     if (seq !== refreshSeqRef.current) return;
     liveMapRef.current = next;
@@ -5350,6 +5374,41 @@ export function GameRoom({
     return combined.size > 0 ? combined : null;
   }, [visibleSelections, liveMap, cellOverlay, combat, characterRows]);
 
+  // Map Art Generation E5 — same "sign the currently-accepted ref for
+  // display" effect shape as the map editor's own signedMapArt effect
+  // (MapEditor.tsx), but this one runs for EVERY viewer, not just the DM:
+  // map-art's own RLS (0077) is can_read_map, not can_write_map, so any
+  // campaign member reading the live table may mint a signed URL for it.
+  // `ref`-keyed the identical way, so a race between two accepts (or a
+  // rapid map switch) can never show a stale image under a fresh mapArt row.
+  const [mapArtSignedUrl, setMapArtSignedUrl] = useState<{ ref: string; url: string } | null>(null);
+  useEffect(() => {
+    if (!liveMap?.mapArt) return;
+    const art = liveMap.mapArt;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const url = await getMapArtSignedUrl(createBrowserSupabaseClient(), art.image_ref, MAP_ART_SIGNED_URL_TTL_SECONDS);
+        if (!cancelled) setMapArtSignedUrl({ ref: art.image_ref, url });
+      } catch {
+        // Best-effort: a failed sign just means the table renders this map
+        // with no art plane and no transparent floor (liveMap.mapArtUrl
+        // stays null below) — the same safe fallback as art that hasn't
+        // finished loading yet, never a broken/blank render.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [liveMap?.mapArt]);
+  // The signed URL only counts once it matches THIS map's CURRENT accepted
+  // ref — the exact same staleness guard MapEditor.tsx's own
+  // currentMapArtUrl uses, so a map switch (or a fresh accept replacing the
+  // ref) never briefly shows the previous map/generation's art while the
+  // new signed URL is still in flight.
+  const currentMapArtUrl =
+    liveMap?.mapArt && mapArtSignedUrl?.ref === liveMap.mapArt.image_ref ? mapArtSignedUrl.url : null;
+
   const tableMap = useMemo<TableLiveMap | null>(() => {
     if (!liveMap || !cellOverlay) return null;
     const overlay = cellOverlay;
@@ -5383,6 +5442,11 @@ export function GameRoom({
       // see the DM's ink live with no reveal gate, so unlike cells/objects/
       // tokens above there is no tier-based filtering to apply here).
       whiteboardTiles: liveMap.whiteboardTiles,
+      // Map Art Generation E5 — already resolved to a signed URL (or null)
+      // above; also a plain passthrough, no per-viewer masking of its own
+      // (accepted art is real player-facing content, can_read_map-gated the
+      // same as the map itself, not a DM-only secret to filter by tier).
+      mapArtUrl: currentMapArtUrl,
       cells: buildDenseCells(liveMap.map.grid_width, liveMap.map.grid_height, overlay).flatMap(
         (cell) => {
           if (!tierByCell) return [withHighlight(cell)];
@@ -5564,7 +5628,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId, currentMapArtUrl]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright
@@ -5901,6 +5965,7 @@ export function GameRoom({
           dayNightMode={dayNightMode}
           weatherKind={weatherKind}
           onWeatherParticlesDebug={setWeatherParticlesDebug}
+          onMapArtDebug={setMapArtDebug}
           onTokenSlideDebug={handleTokenSlideDebug}
           onAvatarPoseDebug={handleAvatarPoseDebug}
           onAvatarMeasureDebug={handleAvatarMeasureDebug}
@@ -6172,6 +6237,17 @@ export function GameRoom({
           pixel-diffing a screenshot. */}
       <div data-testid="weather-particles-state" hidden>
         {JSON.stringify(weatherParticlesDebug)}
+      </div>
+      {/* Hidden render-state mirror for verify-map-art-rendering.mjs (Map
+          Art Generation E5) — GameTableScene's own onMapArtDebug, mirrored
+          here for the same "WebGL has no DOM of its own" reasoning as every
+          other mirror on this page. null while there's no live map at all;
+          `active: false` for a live map with no accepted art (or whose
+          art's texture hasn't finished loading yet); `active: true` only
+          once the transparent-floor/faint-grid treatment is genuinely
+          engaged. */}
+      <div data-testid="map-art-state" hidden>
+        {JSON.stringify(mapArtDebug)}
       </div>
       {/* Hidden render-state mirror for verify-per-viewer-map.mjs (0046):
           no DOM otherwise exposes campaignDefaultMapId/dmSelectedMapId/

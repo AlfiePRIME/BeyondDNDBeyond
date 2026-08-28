@@ -94,6 +94,27 @@ const CELL_GAP_RATIO = 0.08;
 // memo.
 const NOOP_SELECT = () => undefined;
 
+// Map Art Generation E5: "essentially transparent" per the project owner's
+// own spec, applied to a cell's TOP face only (see BOX_TOP_FACE_INDEX's own
+// doc comment for why the sides stay opaque) — real screenshots
+// (docs/map-art-poc-output/e5-*) confirmed a fully-invisible (opacity 0) top
+// face loses the hover/highlight emissive glow entirely (three.js
+// alpha-blends the WHOLE fragment, emissive included, by the material's own
+// opacity), so a small nonzero value keeps that glow legible while the art
+// underneath still reads clearly through the fill.
+const MAP_ART_FLOOR_OPACITY = 0.06;
+
+// BoxGeometry always builds its 6 faces in this fixed order — +X, -X, +Y
+// (top), -Y (bottom), +Z, -Z — and assigns them geometry GROUPS 0-5 in
+// that same order (three.js's own BoxGeometry source), which is what a
+// mesh's own materials array (or, in JSX, one <meshStandardMaterial
+// attach={`material-${n}`}> per group) indexes into. Index 2 is therefore
+// always the top face regardless of a box's span/height/position — not a
+// value tuned per this app's own geometry, but three.js's own fixed,
+// version-stable face-build order.
+const BOX_TOP_FACE_INDEX = 2;
+const BOX_FACE_INDICES = [0, 1, 2, 3, 4, 5] as const;
+
 /**
  * World-unit sizing for one rendered map: how big a cell is, how thick the
  * elevation-0 slab is, and how much height one elevation step adds. The
@@ -274,6 +295,11 @@ interface CellBlockProps {
   visibility: MapSurfaceVisibility | undefined;
   highlighted: boolean;
   ground: MapSurfaceGroundType | undefined;
+  /** Map Art Generation E5 — see MapSurfaceProps.mapArtActive's own doc
+   * comment. Always false for the map editor (MapEditorScene never sets
+   * it) and for a map with no accepted art, reproducing every existing
+   * caller's exact rendering. */
+  mapArtActive: boolean;
   onDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
   onOver?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
 }
@@ -297,12 +323,42 @@ const CellBlock = memo(function CellBlock({
   visibility,
   highlighted,
   ground,
+  mapArtActive,
   onDown,
   onOver,
 }: CellBlockProps) {
   const [hovered, setHovered] = useState(false);
   const interactive = Boolean(onDown ?? onOver);
   const hoverLit = interactive && hovered;
+  // Map Art Generation E5: the project owner's own spec ("floor tile
+  // colours... essentially transparent") targets plain, mechanically-
+  // uninteresting floor — every cell whose ONLY signal today is a flat
+  // color swatch, terrain (normal/difficult) or a purely cosmetic ground
+  // type alike. It deliberately does NOT reach the three cases called out
+  // as hazard/gameplay-critical rather than decorative:
+  //   - a pit (terrain === "pit"): its own dark PIT_BASE/PIT_HIGH read and
+  //     the real walled shaft geometry stay exactly as today.
+  //   - water ground: named a hazard signal explicitly in this feature's
+  //     own brief, so it stays opaque regardless of elevation.
+  //   - any cell currently under vision-masking (`visibility` set — a
+  //     LIVE "dim" or memory "remembered" cell): that darkened/grayscale
+  //     read IS the signal; also making it transparent would dilute
+  //     "you can barely make this out" into "you can see the art
+  //     perfectly", the opposite of the intended effect.
+  // Elevated (non-pit, non-water) terrain DOES qualify, on purpose: its
+  // real 3D box geometry (rise from y=0 to topY, computed by MapSurface's
+  // own cells.map, completely untouched here) stays exactly as today —
+  // only the FILL changes, the identical treatment as flat floor. Losing
+  // the geometry would be a real line-of-sight/movement-cost legibility
+  // regression; keeping it while also revealing the art is a pure
+  // addition, and the generated art's own control-image conditioning
+  // already lightens elevated cells (controlImage.ts's
+  // lightnessForElevation), so the accepted art is expected to already
+  // depict a raised/hillier look there.
+  const showArt = mapArtActive && terrain !== "pit" && ground !== "water" && visibility === undefined;
+  const color = cellColor(terrain, elevation, light, visibility, ground);
+  const emissive = hoverLit ? TEAL : highlighted ? HIGHLIGHT_COLOR : PURPLE;
+  const emissiveIntensity = hoverLit ? 0.4 : highlighted ? 0.35 : preview ? 0.3 : 0;
   return (
     <mesh
       position={[worldX, centerY, worldZ]}
@@ -326,13 +382,46 @@ const CellBlock = memo(function CellBlock({
           cell should still visibly confirm "this is the one about to be
           confirmed", not blend into the rest of the highlighted set. Never
           gated on `interactive`: a highlighted cell glows whether or not
-          THIS render also attached pointer handlers to it. */}
-      <meshStandardMaterial
-        color={cellColor(terrain, elevation, light, visibility, ground)}
-        emissive={hoverLit ? TEAL : highlighted ? HIGHLIGHT_COLOR : PURPLE}
-        emissiveIntensity={hoverLit ? 0.4 : highlighted ? 0.35 : preview ? 0.3 : 0}
-        roughness={0.65}
-      />
+          THIS render also attached pointer handlers to it.
+          Map Art Generation E5: when showArt is false this renders BYTE-
+          FOR-BYTE the pre-E5 single shared material for all 6 box faces —
+          zero behavior/perf change for every map with no active art, or
+          for a pit/water/vision-masked cell on a map that does. When true,
+          ONLY the TOP face (BOX_TOP_FACE_INDEX) goes near-transparent; the
+          four side walls (and the never-seen bottom) stay fully opaque in
+          the cell's own terrain color — see BOX_TOP_FACE_INDEX's own doc
+          comment for why: a real screenshot (docs/map-art-poc-output/
+          e5-*) caught the whole-box version failing badly at ordinary
+          seated-camera angles, where many adjacent cells' thin translucent
+          SIDE walls stack behind one another along a shallow viewing ray
+          and their alpha compounds (1-(1-a)^n for n overlapping layers)
+          back toward opaque, hiding the art almost entirely despite each
+          individual layer being barely-there. Opaque sides sidestep that
+          entirely — they also happen to double as a sensible "cliff face"
+          read for a raised cell (Elevated terrain's own doc note above),
+          which a see-through box never had. */}
+      {showArt ? (
+        BOX_FACE_INDICES.map((faceIndex) => (
+          <meshStandardMaterial
+            key={faceIndex}
+            attach={`material-${faceIndex}`}
+            color={color}
+            emissive={emissive}
+            emissiveIntensity={emissiveIntensity}
+            roughness={0.65}
+            transparent={faceIndex === BOX_TOP_FACE_INDEX}
+            opacity={faceIndex === BOX_TOP_FACE_INDEX ? MAP_ART_FLOOR_OPACITY : 1}
+            depthWrite={faceIndex !== BOX_TOP_FACE_INDEX}
+          />
+        ))
+      ) : (
+        <meshStandardMaterial
+          color={color}
+          emissive={emissive}
+          emissiveIntensity={emissiveIntensity}
+          roughness={0.65}
+        />
+      )}
     </mesh>
   );
 });
@@ -1162,17 +1251,40 @@ const TokenMarker = memo(function TokenMarker({
 // Accent purple, semi-transparent: legible on both the dark low cells and
 // the near-white high ones, without competing with the teal/red token hues.
 const GRID_LINE_COLOR = "#cc55ff";
+const GRID_LINE_OPACITY = 0.4;
+
+// Map Art Generation E5: once ordinary floor fill goes transparent
+// (MAP_ART_FLOOR_OPACITY above), this overlay becomes the ONLY surviving
+// per-cell boundary cue — adjacent cells no longer differ by flat fill
+// color at all, so "can a player still tell cells apart" rests entirely on
+// this line now. The purple accent above was tuned to read against the
+// app's own cool cell palette; real screenshots against actual generated
+// art (docs/map-art-poc-output/e5-*) showed it can vanish against a
+// similarly-hued (purple/violet) region of a busy painted map, so map-art
+// mode uses a neutral near-white line instead — reads consistently against
+// any art palette — at a lower opacity than the purple default: the
+// default's 0.4 was tuned to stand out against FLAT, low-saturation cell
+// colors, but against real painted art even a neutral white line at that
+// same strength fought the art more than the "barely visible" spec called
+// for.
+const MAP_ART_GRID_LINE_COLOR = "#ffffff";
+const MAP_ART_GRID_LINE_OPACITY = 0.16;
 
 function GridOverlay({
   gridWidth,
   gridHeight,
   cells,
   metrics,
+  mapArtActive,
 }: {
   gridWidth: number;
   gridHeight: number;
   cells: readonly MapSurfaceCell[];
   metrics: MapSurfaceMetrics;
+  /** Map Art Generation E5 — see MapSurfaceProps.mapArtActive's own doc
+   * comment. Swaps this overlay's own color/opacity constants only; the
+   * underlying line geometry (buildGridOverlayPositions) is unchanged. */
+  mapArtActive: boolean;
 }) {
   const geometry = useMemo(() => {
     const g = new BufferGeometry();
@@ -1185,7 +1297,12 @@ function GridOverlay({
   useEffect(() => () => geometry.dispose(), [geometry]);
   return (
     <lineSegments geometry={geometry}>
-      <lineBasicMaterial color={GRID_LINE_COLOR} transparent opacity={0.4} depthWrite={false} />
+      <lineBasicMaterial
+        color={mapArtActive ? MAP_ART_GRID_LINE_COLOR : GRID_LINE_COLOR}
+        transparent
+        opacity={mapArtActive ? MAP_ART_GRID_LINE_OPACITY : GRID_LINE_OPACITY}
+        depthWrite={false}
+      />
     </lineSegments>
   );
 }
@@ -1212,6 +1329,23 @@ export interface MapSurfaceProps {
    * keep the grid and its terracing legible; the editor's unit-scale cells
    * don't need it. */
   gridOverlay?: boolean;
+  /** Map Art Generation E5: true when this map has active generated art
+   * (an accepted map_art row whose signed image has actually finished
+   * loading — see GameTableScene's own MapArtPlane/mapArtReady) rendered
+   * BENEATH this component. MapSurface never loads or renders the art
+   * texture itself — it lives in GameTableScene, a sibling of this
+   * component, since this feature is scoped to the live table only, never
+   * the map editor's own separate scene (MapEditorScene never sets this).
+   * When true: ordinary floor cells (CellBlock's own showArt gate — see
+   * its doc comment for the exact pit/water/vision carve-outs) switch to a
+   * near-transparent fill so the art shows through, and the grid overlay
+   * switches to its fainter, neutral map-art variant (GridOverlay's own
+   * MAP_ART_GRID_LINE_COLOR/OPACITY) since transparent fill removes the
+   * "adjacent cells differ by color" cue the purple accent used to merely
+   * supplement. Defaults to false, reproducing every existing caller's
+   * exact rendering — this is a strictly opt-in, per-map visual mode, never
+   * a global rendering change. */
+  mapArtActive?: boolean;
   /** When provided, placed objects become click targets that intercept the
    * cell beneath; when absent they're inert and clicks fall through to the
    * cell, so sculpt tools still paint occupied cells. */
@@ -1297,6 +1431,7 @@ export function MapSurface({
   selectedObjectIds,
   tokens,
   gridOverlay = false,
+  mapArtActive = false,
   onSelectObject,
   onObjectHover,
   onCellPointerDown,
@@ -1377,6 +1512,7 @@ export function MapSurface({
                   visibility={cell.visibility}
                   highlighted={cell.highlighted ?? false}
                   ground={cell.ground}
+                  mapArtActive={mapArtActive}
                   onDown={onCellPointerDown}
                   onOver={onCellPointerOver}
                 />
@@ -1449,7 +1585,13 @@ export function MapSurface({
       ))}
 
       {gridOverlay ? (
-        <GridOverlay gridWidth={gridWidth} gridHeight={gridHeight} cells={cells} metrics={metrics} />
+        <GridOverlay
+          gridWidth={gridWidth}
+          gridHeight={gridHeight}
+          cells={cells}
+          metrics={metrics}
+          mapArtActive={mapArtActive}
+        />
       ) : null}
     </>
   );
