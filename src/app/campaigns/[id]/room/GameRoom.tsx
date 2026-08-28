@@ -227,7 +227,7 @@ import { ChatDock } from "./ChatDock";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { ChatLogPanel } from "./ChatLogPanel";
 import { ContainerPanel } from "./ContainerPanel";
-import { DraggablePanel, PanelLayoutProvider } from "./DraggablePanel";
+import { DraggablePanel, PanelDockBar, PanelLayoutProvider } from "./DraggablePanel";
 import { DiceLogPanel } from "./DiceLogPanel";
 import { DiceTrayPicker } from "./DiceTrayPicker";
 import { DmBook } from "./DmBook";
@@ -6872,6 +6872,11 @@ export function GameRoom({
           >
             {cameraMode === "seat" ? "Free camera" : "Return to seat"}
           </Button>
+          {/* Dock/close follow-up: one glyph button per currently-docked
+              panel — see DraggablePanel.tsx's own PanelDockBar doc comment.
+              Renders nothing (null) while no panel is docked, so this is a
+              pure no-op for anyone who's never used the new close button. */}
+          <PanelDockBar />
           <span className={styles.roomLabel}>Game Room</span>
         </div>
       </header>

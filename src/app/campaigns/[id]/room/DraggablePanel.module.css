@@ -12,6 +12,18 @@
   /* A drag must not trigger the browser's native touch scroll/zoom
      gestures on the panel itself. */
   touch-action: none;
+  /* Push-aside follow-up: the ONLY thing this transitions is the
+     standalone `translate` property (set inline, DraggablePanel.tsx,
+     whenever this panel is being pushed aside by another one opening/
+     resizing) — deliberately not `left`/`top`/`all`, so plain
+     drag-to-reposition and resize both stay perfectly 1:1 with the
+     pointer, exactly as before this feature. tokens.css's own global
+     `prefers-reduced-motion` rule already collapses every
+     transition-duration to near-zero for a reduced-motion visitor, so
+     that's handled for free — see ChatBubble.module.css for the identical
+     "opacity-only transition, no separate media query" convention this
+     mirrors for the `translate` property instead. */
+  transition: translate 220ms ease;
 }
 
 /* Every retrofitted panel's historical default position, migrated
@@ -146,16 +158,26 @@
   display: none;
 }
 
-/* A small chip peeking off the panel's top-right corner — deliberately
+/* A small chip row peeking off the panel's top-right corner — deliberately
    NOT inside the panel's own header row (which several panels already
    pack with a badge/status text), so it can't collide with existing
-   header content. Selector doubled up on .wrapper for specificity over
-   Button's own base rules (position/padding) without !important. */
-.wrapper .collapseToggle {
+   header content. Holds two distinct controls (collapse, then dock/close —
+   see DraggablePanel.tsx's own doc comment on why these are separate) as
+   flex siblings rather than each being individually absolutely positioned,
+   so adding the second button was purely additive: one position rule for
+   the row, not two near-duplicate ones for each button. Selector doubled
+   up on .wrapper for specificity over Button's own base rules
+   (position/padding) without !important. */
+.wrapper .panelChrome {
   position: absolute;
   top: -11px;
   right: -11px;
   z-index: 1;
+  display: flex;
+  gap: 4px;
+}
+
+.wrapper .chromeButton {
   width: 22px;
   height: 22px;
   min-width: 0;
@@ -169,12 +191,12 @@
 }
 
 /* Panel-resize follow-up: the vertical resize grip along a panel's bottom
-   edge. A plain sibling of `children`/.collapseToggle (DraggablePanel.tsx
+   edge. A plain sibling of `children`/.panelChrome (DraggablePanel.tsx
    renders it, not any of the 11 wrapped panels' own markup), absolutely
    positioned against .wrapper — a plain (non-flex) block container whose
    own rendered box already exactly matches its single in-flow child (the
    wrapped panel's own root element, `children`)'s box, since
-   .collapseToggle/.resizeHandle are both taken out of flow themselves. A
+   .panelChrome/.resizeHandle are both taken out of flow themselves. A
    generously tall (8px) hit target straddling the edge, not just the
    thin 3px visible bar, so the actual grab target is comfortable without
    looking oversized. */
@@ -214,4 +236,30 @@
 
 .wrapper.resizing {
   user-select: none;
+}
+
+/* Dock/close follow-up: PanelDockBar's own row, mounted once inside
+   GameRoom's existing top bar (room.module.css's `.overlayControls`)
+   alongside PAUSE SESSION / MEASURE DISTANCE / etc. `flex-wrap` so a table
+   with many panels closed at once wraps to a second line instead of
+   overflowing the header on a narrower viewport, rather than the fixed
+   `.overlayControls` row silently growing past the screen edge. */
+.dockBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dockButton {
+  width: 30px;
+  height: 30px;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  border-radius: 999px;
 }
