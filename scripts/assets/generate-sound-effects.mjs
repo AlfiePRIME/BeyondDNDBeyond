@@ -450,6 +450,114 @@ generate("nat_1.mp3", [
   "-map", "[out]",
 ]);
 
+// ─────────────────────────────────────────────────────────────────────────
+// lobby_music — warm menu music: a slow 4-note major/6th arpeggio (C4-E4-
+// G4-A4, 1.2s apart, long overlapping decays so notes ring into each other)
+// over a very quiet sustained low pad drone (C3). Unlike rain/wind/fire's
+// pure-noise loops, a periodic musical loop needs its own tiny (50ms)
+// anti-click fade on the drone (a true zero-fade sustained tone has an
+// audible phase discontinuity at the loop seam) — imperceptible as a
+// "fade" against a background pad, distinct from the deliberate full
+// ADSR envelopes on the arpeggio notes themselves. Total loop length is set
+// by the last note's own decay tail (adelay 3600ms + d=2000ms = 5.6s).
+//
+// Equivalent shell command:
+//   ffmpeg -f lavfi -i "sine=f=261.63:d=2.0" -f lavfi -i "sine=f=329.63:d=2.0" \
+//          -f lavfi -i "sine=f=392.00:d=2.0" -f lavfi -i "sine=f=440.00:d=2.0" \
+//          -f lavfi -i "sine=f=130.81:d=5.6" \
+//          -filter_complex "
+//            [0:a]volume=0.4,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=1.6,adelay=0|0[n1];
+//            [1:a]volume=0.4,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=1.6,adelay=1200|1200[n2];
+//            [2:a]volume=0.4,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=1.6,adelay=2400|2400[n3];
+//            [3:a]volume=0.4,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=1.6,adelay=3600|3600[n4];
+//            [4:a]volume=0.12,afade=t=in:st=0:d=0.05,afade=t=out:st=5.5:d=0.05[pad];
+//            [n1][n2][n3][n4][pad]amix=inputs=5:duration=longest:dropout_transition=0,volume=2.2[out]" \
+//          -map "[out]" lobby_music.mp3
+// ─────────────────────────────────────────────────────────────────────────
+generate("lobby_music.mp3", [
+  "-f", "lavfi", "-i", "sine=f=261.63:d=2.0",
+  "-f", "lavfi", "-i", "sine=f=329.63:d=2.0",
+  "-f", "lavfi", "-i", "sine=f=392.00:d=2.0",
+  "-f", "lavfi", "-i", "sine=f=440.00:d=2.0",
+  "-f", "lavfi", "-i", "sine=f=130.81:d=5.6",
+  "-filter_complex",
+  "[0:a]volume=0.4,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=1.6,adelay=0|0[n1];" +
+    "[1:a]volume=0.4,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=1.6,adelay=1200|1200[n2];" +
+    "[2:a]volume=0.4,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=1.6,adelay=2400|2400[n3];" +
+    "[3:a]volume=0.4,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=1.6,adelay=3600|3600[n4];" +
+    "[4:a]volume=0.12,afade=t=in:st=0:d=0.05,afade=t=out:st=5.5:d=0.05[pad];" +
+    "[n1][n2][n3][n4][pad]amix=inputs=5:duration=longest:dropout_transition=0,volume=2.2[out]",
+  "-map", "[out]",
+]);
+
+// ─────────────────────────────────────────────────────────────────────────
+// calm_music — sparse ambient in-game bed: two sine drones a fifth apart
+// (C3/G3), each faded in/out by 50ms only (the same anti-click reasoning as
+// lobby_music's pad above — these ARE the whole texture here, not a
+// background layer under melody), plus one quiet high "twinkle" partway
+// through the loop for a little movement without ever reading as melody.
+//
+// Equivalent shell command:
+//   ffmpeg -f lavfi -i "sine=f=130.81:d=6.0" -f lavfi -i "sine=f=196.00:d=6.0" \
+//          -f lavfi -i "sine=f=1046.50:d=0.6" \
+//          -filter_complex "
+//            [0:a]volume=0.25,afade=t=in:st=0:d=0.05,afade=t=out:st=5.9:d=0.1[drone1];
+//            [1:a]volume=0.22,afade=t=in:st=0:d=0.05,afade=t=out:st=5.9:d=0.1[drone2];
+//            [2:a]volume=0.2,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=0.25,adelay=4000|4000[twinkle];
+//            [drone1][drone2][twinkle]amix=inputs=3:duration=longest:dropout_transition=0,volume=1.6[out]" \
+//          -map "[out]" calm_music.mp3
+// ─────────────────────────────────────────────────────────────────────────
+generate("calm_music.mp3", [
+  "-f", "lavfi", "-i", "sine=f=130.81:d=6.0",
+  "-f", "lavfi", "-i", "sine=f=196.00:d=6.0",
+  "-f", "lavfi", "-i", "sine=f=1046.50:d=0.6",
+  "-filter_complex",
+  "[0:a]volume=0.25,afade=t=in:st=0:d=0.05,afade=t=out:st=5.9:d=0.1[drone1];" +
+    "[1:a]volume=0.22,afade=t=in:st=0:d=0.05,afade=t=out:st=5.9:d=0.1[drone2];" +
+    "[2:a]volume=0.2,afade=t=in:st=0:d=0.05,afade=t=out:st=0.3:d=0.25,adelay=4000|4000[twinkle];" +
+    "[drone1][drone2][twinkle]amix=inputs=3:duration=longest:dropout_transition=0,volume=1.6[out]",
+  "-map", "[out]",
+]);
+
+// ─────────────────────────────────────────────────────────────────────────
+// combat_music — driving in-game bed: a gated bass pulse (aevalsrc, ~150bpm
+// eighth-note pulses at 0.2s intervals, alternating root/fifth minor E2/B2
+// via floor(t/0.2) mod 2) plus a faster, higher gated accent voice an
+// octave up (E3/B3) for rhythmic urgency, plus a tremolo'd bandpassed-noise
+// texture layer (the same noise-crack technique as hit_critical.mp3 above,
+// tremolo'd instead of a single transient). All three are pure
+// noise/periodic-gate material with no melodic content to seam-click on, so
+// none need an anti-click fade — same as rain/wind/fire's own reasoning.
+// Loop length is 2.4s (12 eighth-note slots), a whole number of pulse
+// periods so the gate pattern itself tiles seamlessly.
+//
+// Equivalent shell command:
+//   ffmpeg -f lavfi -i \
+//     "aevalsrc=exprs='0.5*sin(2*PI*if(eq(mod(floor(t/0.2)\,2)\,0)\,82.41\,123.47)*t)*if(lt(mod(t\,0.2)\,0.12)\,1\,0)':d=2.4:s=44100" \
+//          -f lavfi -i \
+//     "aevalsrc=exprs='0.3*sin(2*PI*if(eq(mod(floor(t/0.2)\,2)\,0)\,164.81\,246.94)*t)*if(lt(mod(t\,0.2)\,0.06)\,1\,0)':d=2.4:s=44100" \
+//          -f lavfi -i "anoisesrc=d=2.4:c=white:a=1:seed=5" \
+//          -filter_complex "
+//            [0:a]volume=1.0[bass];
+//            [1:a]volume=1.0[accent];
+//            [2:a]bandpass=f=2400:width_type=h:w=2800,tremolo=f=8:d=0.7,volume=0.35[texture];
+//            [bass][accent][texture]amix=inputs=3:duration=longest:dropout_transition=0,volume=1.8[out]" \
+//          -map "[out]" combat_music.mp3
+// ─────────────────────────────────────────────────────────────────────────
+generate("combat_music.mp3", [
+  "-f", "lavfi", "-i",
+  "aevalsrc=exprs='0.5*sin(2*PI*if(eq(mod(floor(t/0.2)\\,2)\\,0)\\,82.41\\,123.47)*t)*if(lt(mod(t\\,0.2)\\,0.12)\\,1\\,0)':d=2.4:s=44100",
+  "-f", "lavfi", "-i",
+  "aevalsrc=exprs='0.3*sin(2*PI*if(eq(mod(floor(t/0.2)\\,2)\\,0)\\,164.81\\,246.94)*t)*if(lt(mod(t\\,0.2)\\,0.06)\\,1\\,0)':d=2.4:s=44100",
+  "-f", "lavfi", "-i", "anoisesrc=d=2.4:c=white:a=1:seed=5",
+  "-filter_complex",
+  "[0:a]volume=1.0[bass];" +
+    "[1:a]volume=1.0[accent];" +
+    "[2:a]bandpass=f=2400:width_type=h:w=2800,tremolo=f=8:d=0.7,volume=0.35[texture];" +
+    "[bass][accent][texture]amix=inputs=3:duration=longest:dropout_transition=0,volume=1.8[out]",
+  "-map", "[out]",
+]);
+
 // Sanity check this task's own "every registry key has a real file" bar
 // against the actual generated set, not just by eye — mirrors generate-
 // monster-presets.mjs's own post-generation self-check convention.
@@ -472,6 +580,9 @@ const EXPECTED_FILES = [
   "thunder.mp3",
   "nat_20.mp3",
   "nat_1.mp3",
+  "lobby_music.mp3",
+  "calm_music.mp3",
+  "combat_music.mp3",
 ];
 const generatedNames = new Set(results.map((r) => r.name));
 for (const expected of EXPECTED_FILES) {

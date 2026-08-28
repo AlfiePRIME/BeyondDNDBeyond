@@ -38,3 +38,7 @@ export {
 // doc comment for the full resolveWeatherAudio/applyWeatherAudio writeup and
 // the exact per-weather-kind channel matrix.
 export { resolveWeatherAudio, applyWeatherAudio, type WeatherKind, type WeatherAudioChannels } from "./weatherAudio";
+
+// Game Room music (calm/combat) — see gameMusic.ts's own top-of-file doc
+// comment for the full resolveGameMusic/applyGameMusic writeup.
+export { resolveGameMusic, applyGameMusic, type GameMusicChannels } from "./gameMusic";
