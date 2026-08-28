@@ -6,6 +6,7 @@ import { Canvas } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
 import { Badge, Button, Select, TextInput } from "@/ui-components";
 import {
+  acceptMapArt,
   clearMapReferenceImage,
   createConcealedPit,
   createLightSource,
@@ -13,9 +14,11 @@ import {
   createMapTransition,
   deleteConcealedPit,
   deleteLightSource,
+  deleteMapArtFile,
   deleteMapObject,
   deleteMapReferenceImageFile,
   deleteMapTransition,
+  getMapArtSignedUrl,
   getMapReferenceImageSignedUrl,
   growMapGrid,
   MAP_GROWTH_EDGES,
@@ -24,6 +27,7 @@ import {
   setMapReferenceImage,
   updateLightSource,
   updateMapObject,
+  uploadMapArtFile,
   uploadMapReferenceImageFile,
   upsertMapCells,
   GROUND_TYPES,
@@ -36,6 +40,7 @@ import {
   type LightSource,
   type LightSourceAnchor,
   type LightSourceBrightness,
+  type MapArt,
   type MapCell,
   type MapGrowthEdge,
   type MapObject,
@@ -111,6 +116,13 @@ const MAX_AREA_CELLS = 400;
 // wrong-type file fails with a readable message instead of a policy error.
 const REFERENCE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 const REFERENCE_SIGNED_URL_TTL_SECONDS = 60 * 60;
+
+// Map Art Generation E4. Kept in sync with MAX_STYLE_PROMPT_CHARS in the
+// generate-art Route Handler — not imported from there since that file is
+// server-only and this is a client component (the same reason
+// MAX_AREA_PROMPT_LENGTH above isn't imported from @/ai either).
+const MAX_MAP_ART_STYLE_PROMPT_LENGTH = 500;
+const MAP_ART_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 // Nothing is placeable on a cell with no floor — the void-terrain rule the
 // Game Room applies to tokens, applied here to everything the editor anchors
@@ -221,6 +233,8 @@ export function MapEditor({
   initialObjects,
   assets,
   aiEnabled,
+  mapArtEnabled,
+  initialMapArt,
   campaignMaps,
   initialTransitions,
   initialConcealedPits,
@@ -235,6 +249,14 @@ export function MapEditor({
   initialObjects: MapObject[];
   assets: PaletteAsset[];
   aiEnabled: boolean;
+  /** Map Art Generation E4 — isMapArtConfigured()'s own boolean-only,
+   * service-role-backed check (any DM, not just the app admin). Gates the
+   * "Map art" section in the Map drawer, exactly like aiEnabled gates the
+   * "Generate area" tool. */
+  mapArtEnabled: boolean;
+  /** The map's currently-accepted generated art, if any — null until a DM
+   * has generated and accepted one. */
+  initialMapArt: MapArt | null;
   campaignMaps: CampaignMap[];
   initialTransitions: MapTransition[];
   initialConcealedPits: ConcealedPit[];
@@ -397,6 +419,25 @@ export function MapEditor({
     y: map.reference_image_y ?? 0,
     scale: map.reference_image_scale ?? 1,
   });
+
+  // Map Art Generation E4 — the "Map art" section of the Map drawer:
+  // style-prompt input → real ComfyUI generation → preview → explicit
+  // accept, the same prompt/generate/preview/accept shape the "Generate
+  // area" tool already established, but for a whole-map operation (like
+  // Reference image above it) rather than a per-region tool.
+  const [mapArt, setMapArt] = useState<MapArt | null>(initialMapArt);
+  // Same "keyed by the ref it was signed for" derivation as signedReference
+  // above.
+  const [signedMapArt, setSignedMapArt] = useState<{ ref: string; url: string } | null>(null);
+  const mapArtUrl =
+    mapArt && signedMapArt?.ref === mapArt.image_ref ? signedMapArt.url : null;
+  const [mapArtStylePrompt, setMapArtStylePrompt] = useState("");
+  const [mapArtPreview, setMapArtPreview] = useState<{ dataUrl: string; stylePrompt: string } | null>(
+    null
+  );
+  const [mapArtGenerating, setMapArtGenerating] = useState(false);
+  const [mapArtAccepting, setMapArtAccepting] = useState(false);
+  const [mapArtError, setMapArtError] = useState<string | null>(null);
 
   const [region, setRegion] = useState<EditorRegion | null>(null);
   const [areaPrompt, setAreaPrompt] = useState("");
@@ -1489,6 +1530,108 @@ export function MapEditor({
     } finally {
       setReferenceBusy(false);
     }
+  }
+
+  // Map Art Generation E4 — same "sign the currently-accepted ref for
+  // display" effect shape as the reference image's own effect above, but
+  // this signed URL is meaningful for ANY campaign member (map-art's RLS is
+  // can_read_map, not can_write_map) — this component only ever renders it
+  // for the DM's own editor view, though.
+  useEffect(() => {
+    if (!mapArt) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const url = await getMapArtSignedUrl(
+          createBrowserSupabaseClient(),
+          mapArt.image_ref,
+          MAP_ART_SIGNED_URL_TTL_SECONDS
+        );
+        if (!cancelled) setSignedMapArt({ ref: mapArt.image_ref, url });
+      } catch {
+        if (!cancelled) setMapArtError("Couldn't load the current map art — reload to retry.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mapArt]);
+
+  /**
+   * Calls the generate-art Route Handler (a real, possibly multi-minute
+   * ComfyUI generation — E1's research doc §8 measured 79-120s on the
+   * validated hardware) and stores the result as a pending preview.
+   * Deliberately does NOT touch Storage or map_art here — the DM hasn't
+   * accepted anything yet.
+   */
+  async function handleGenerateMapArt() {
+    if (mapArtGenerating || mapArtAccepting) return;
+    setMapArtGenerating(true);
+    setMapArtError(null);
+    setMapArtPreview(null);
+    try {
+      const response = await fetch(`/campaigns/${campaignId}/maps/${map.id}/generate-art`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stylePrompt: mapArtStylePrompt.trim() || undefined }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        image?: { dataUrl: string; width: number; height: number };
+        stylePrompt?: string;
+        message?: string;
+      } | null;
+      if (!response.ok || !payload?.ok || !payload.image) {
+        setMapArtError(payload?.message ?? "Couldn't generate map art — try again.");
+        return;
+      }
+      setMapArtPreview({
+        dataUrl: payload.image.dataUrl,
+        stylePrompt: payload.stylePrompt ?? mapArtStylePrompt.trim(),
+      });
+    } catch {
+      setMapArtError("Couldn't generate map art — try again.");
+    } finally {
+      setMapArtGenerating(false);
+    }
+  }
+
+  /**
+   * Stores the previewed generation as the map's accepted art — the exact
+   * moment it becomes player-visible (map-art's own RLS, 0077). Uploads the
+   * previewed Blob straight to Storage under the DM's own session (the same
+   * direct-from-client pattern uploadMapReferenceImageFile/
+   * setMapReferenceImage already use), then records the association row.
+   * The PREVIOUS art's Storage object (if replacing one) is removed only
+   * after the new one is safely persisted, its own failure swallowed —
+   * matching handleReferenceUpload's own cleanup-is-best-effort ordering.
+   */
+  async function handleAcceptMapArt() {
+    const current = mapArtPreview;
+    if (!current || mapArtAccepting) return;
+    setMapArtAccepting(true);
+    setMapArtError(null);
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const blob = await (await fetch(current.dataUrl)).blob();
+      const previous = mapArt;
+      const path = await uploadMapArtFile(supabase, map.id, blob);
+      const saved = await acceptMapArt(supabase, map.id, {
+        imageRef: path,
+        stylePrompt: current.stylePrompt,
+      });
+      if (previous) void deleteMapArtFile(supabase, previous.image_ref).catch(() => undefined);
+      setMapArt(saved);
+      setMapArtPreview(null);
+    } catch (err) {
+      setMapArtError(errorMessage(err) ?? "Couldn't save the generated map art — try again.");
+    } finally {
+      setMapArtAccepting(false);
+    }
+  }
+
+  function handleDiscardMapArt() {
+    setMapArtPreview(null);
   }
 
   const referenceImage = useMemo<EditorReferenceImage | null>(() => {
@@ -2644,6 +2787,100 @@ export function MapEditor({
             <p role="alert" className={styles.errorText} data-testid="reference-error">
               {referenceError}
             </p>
+          ) : null}
+
+          {/* Map art (Map Art Generation E4): a whole-map operation, same
+              drawer as Grid size/Reference image above, not a per-cell tool
+              — a real ComfyUI generation (E1's research: 79-120s on the
+              validated hardware) → a real preview → an explicit Accept that
+              stores it player-visible (map-art bucket/RLS, 0077), mirroring
+              the app's existing generate → preview → accept pattern
+              (Generate area, below) with a completely different underlying
+              mechanism. */}
+          {mapArtEnabled ? (
+            <>
+              <span className={styles.toolbarLabel}>Map art</span>
+              {mapArtUrl && !mapArtPreview ? (
+                // Signed Storage URLs are transient and can't be allowlisted
+                // for next/image's optimizer — same call as MapsManager's
+                // thumbnail images.
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={mapArtUrl}
+                  alt="Current generated map art"
+                  className={styles.mapArtThumb}
+                  data-testid="map-art-current"
+                />
+              ) : null}
+              <TextInput
+                label="Style prompt"
+                value={mapArtStylePrompt}
+                onChange={(event) => setMapArtStylePrompt(event.target.value)}
+                placeholder="e.g. moody hand-painted watercolor (blank uses the house default)"
+                maxLength={MAX_MAP_ART_STYLE_PROMPT_LENGTH}
+                disabled={mapArtGenerating}
+                data-testid="map-art-style-input"
+              />
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant="teal"
+                  disabled={mapArtGenerating || mapArtAccepting}
+                  onClick={() => void handleGenerateMapArt()}
+                  data-testid="generate-map-art-button"
+                >
+                  {mapArtGenerating ? "Generating…" : mapArt ? "Regenerate" : "Generate"}
+                </Button>
+              </div>
+              {mapArtGenerating ? (
+                <p className={styles.hint}>
+                  Generating with ComfyUI — a real generation can take one to two minutes. Please
+                  wait…
+                </p>
+              ) : null}
+              {mapArtPreview ? (
+                <>
+                  {/* A data: URL from the generate response body — not a
+                      static/optimizable Next.js asset either. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={mapArtPreview.dataUrl}
+                    alt="Generated map art preview"
+                    className={styles.mapArtThumb}
+                    data-testid="map-art-preview"
+                  />
+                  <div className={styles.toolRow}>
+                    <Button
+                      size="sm"
+                      variant="teal"
+                      disabled={mapArtAccepting}
+                      onClick={() => void handleAcceptMapArt()}
+                      data-testid="accept-map-art"
+                    >
+                      {mapArtAccepting ? "Saving…" : "Accept"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={mapArtAccepting}
+                      onClick={handleDiscardMapArt}
+                      data-testid="discard-map-art"
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                  <p className={styles.hint}>
+                    Every player at the table will see this once accepted — nothing changes on the
+                    live table until you accept.
+                  </p>
+                </>
+              ) : null}
+              {mapArtError ? (
+                <p role="alert" className={styles.errorText} data-testid="map-art-error">
+                  {mapArtError}
+                </p>
+              ) : null}
+            </>
           ) : null}
         </div>
       ) : null}

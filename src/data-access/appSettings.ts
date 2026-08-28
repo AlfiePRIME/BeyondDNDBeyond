@@ -200,3 +200,43 @@ export async function isMapArtConfigured(client?: SupabaseClient): Promise<boole
     return false;
   }
 }
+
+/**
+ * Map Art Generation E4 — the RAW comfyui_host_url/comfyui_style_prompt
+ * values for the generate-art Route Handler's actual ComfyUI call, mirroring
+ * getRawAiProviderConfig's access-control reasoning exactly but for the
+ * ComfyUI axis: app_settings' RLS is admin-only, but the DM who triggers a
+ * real generation is very likely NOT the app admin, and there's no
+ * generating anything without the real host URL (isMapArtConfigured only
+ * ever answers yes/no, never the URL itself) or the real style-prompt
+ * default (the DM's own fallback when they leave the prompt blank).
+ *
+ * Unlike getRawAiProviderConfig's openaiApiKey, neither value returned here
+ * is a secret — AppSettings' own doc comment already establishes this for
+ * comfyuiHostUrl/comfyuiStylePrompt ("a host URL and a style-prompt string
+ * aren't credentials"). So, unlike that function's "never let this escape
+ * the caller's own stack frame" restriction, callers of THIS function may
+ * use these values more broadly (e.g. echoing the resolved style prompt back
+ * in a generate response, or naming the host in an error message) — the only
+ * reason this still goes through a service-role read rather than the
+ * caller's own RLS-scoped session is the same admin-only SELECT policy gap,
+ * not secrecy.
+ */
+export interface RawMapArtConfig {
+  hostUrl: string | null;
+  stylePrompt: string | null;
+}
+
+export async function getRawMapArtConfig(client?: SupabaseClient): Promise<RawMapArtConfig | null> {
+  const supabase = client ?? createServiceRoleSupabaseClient();
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("comfyui_host_url, comfyui_style_prompt")
+    .eq("singleton", true)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+
+  return { hostUrl: data.comfyui_host_url, stylePrompt: data.comfyui_style_prompt };
+}

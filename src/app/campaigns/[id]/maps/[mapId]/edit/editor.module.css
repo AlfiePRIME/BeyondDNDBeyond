@@ -282,6 +282,18 @@
   white-space: nowrap;
 }
 
+/* Map Art Generation E4 — the current/preview generated-art thumbnails in
+   the Map drawer's "Map art" section. A flat <img>, unlike the reference
+   image (which renders as a plane under the 3D grid instead). */
+.mapArtThumb {
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface2);
+}
+
 /* Ctrl+click quick-place popover (Map Editor Batch A1). `.quickPlaceOverlay`
    is an invisible, full-viewport click-catcher — Modal.tsx's own dismissal
    shape (a click lands on the overlay only when its target IS the overlay

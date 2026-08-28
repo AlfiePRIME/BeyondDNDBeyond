@@ -2,7 +2,9 @@ import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
   getMap,
+  getMapArt,
   isDM,
+  isMapArtConfigured,
   listAssetsForCampaign,
   listCharactersForCampaign,
   listConcealedPits,
@@ -64,6 +66,8 @@ export default async function MapEditPage({
     tokens,
     lightSources,
     characters,
+    mapArtEnabled,
+    mapArt,
   ] = await Promise.all([
     listMapCells(supabase, mapId),
     listMapObjects(supabase, mapId),
@@ -76,6 +80,14 @@ export default async function MapEditPage({
     // Names for PC-token anchor options in the light-source picker — the
     // DM reads every campaign character under 0008's SELECT policy.
     listCharactersForCampaign(supabase, campaignId),
+    // Map Art Generation E4: isMapArtConfigured() is the same boolean-only,
+    // service-role-backed, ANY-DM-safe check aiEnabled's own isAnthropicConfigured
+    // is for the (Anthropic-only) generate-area tool — see that import's own
+    // comment above for why a plain multi-provider check would be wrong here
+    // too, and appSettings.ts's isMapArtConfigured doc comment for the RLS
+    // gap this closes.
+    isMapArtConfigured(),
+    getMapArt(supabase, mapId),
   ]);
   const paletteAssets = await resolvePaletteAssets(supabase, assets);
 
@@ -88,6 +100,8 @@ export default async function MapEditPage({
       initialObjects={objects}
       assets={paletteAssets}
       aiEnabled={isAnthropicConfigured()}
+      mapArtEnabled={mapArtEnabled}
+      initialMapArt={mapArt}
       campaignMaps={campaignMaps}
       initialTransitions={transitions}
       initialConcealedPits={concealedPits}

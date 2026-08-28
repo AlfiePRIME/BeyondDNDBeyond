@@ -16,6 +16,22 @@ export interface CampaignMap {
   created_at: string;
 }
 
+/**
+ * Map Art Generation E4 (0077) — a map's currently-accepted ComfyUI-
+ * generated art. A separate table, not columns on CampaignMap (unlike
+ * reference_image_*): a later prompt (E6) adds a `stale` column to this same
+ * row, so it's a real, independently-migratable row/column set from the
+ * start rather than an ad-hoc blob. One row per map (map_id is the primary
+ * key) — accepting new art replaces this row, the same "at most one"
+ * cardinality reference_image_ref already has.
+ */
+export interface MapArt {
+  map_id: string;
+  image_ref: string;
+  style_prompt: string;
+  generated_at: string;
+}
+
 export interface MapFolder {
   id: string;
   campaign_id: string;
@@ -367,16 +383,19 @@ export async function listMapsLinkingInto(
  * cascades via its own FK, and campaigns.live_map's "on delete set null"
  * (0014) means a campaign whose live map is this one just loses it rather
  * than blocking the delete — see this file's own migration audit above.
- * Only the thumbnail and reference-image Storage objects need explicit
- * cleanup here: they live in Storage buckets, outside the FK graph a DB-level
- * cascade can reach.
+ * Only the thumbnail, reference-image, and generated-art Storage objects
+ * need explicit cleanup here: they live in Storage buckets, outside the FK
+ * graph a DB-level cascade can reach. (map_art's own ROW is a real FK to
+ * campaign_maps with `on delete cascade` — 0077 — so only its Storage object
+ * needs this explicit step, not the row itself.)
  *
  * The storage cleanup MUST run before the row delete below, not after:
- * both buckets' own delete policies (0024/0026) gate on can_write_map(mapId),
- * which itself looks the map row up by id — once campaign_maps' row is gone,
- * can_write_map can never resolve true again, so a delete attempted
- * afterward would be silently blocked by that bucket's own RLS, leaking the
- * file forever.
+ * every one of these buckets' own delete policies (0024/0026/0077) gates on
+ * can_write_map(mapId), which itself looks the map row up by id — once
+ * campaign_maps' row is gone, can_write_map can never resolve true again, so
+ * a delete attempted afterward would be silently blocked by that bucket's
+ * own RLS, leaking the file forever. Reading map_art BEFORE the map row
+ * disappears is required for the same reason.
  *
  * DM-only, enforced by campaign_maps' DELETE RLS policy (0015) — same
  * zero-rows-affected detection as deleteCampaign/renameCampaign (campaigns.ts)
@@ -390,6 +409,8 @@ export async function deleteMap(supabase: SupabaseClient, mapId: string): Promis
 
   if (map.thumbnail_ref) await deleteMapThumbnailFile(supabase, map.thumbnail_ref);
   if (map.reference_image_ref) await deleteMapReferenceImageFile(supabase, map.reference_image_ref);
+  const art = await getMapArt(supabase, mapId);
+  if (art) await deleteMapArtFile(supabase, art.image_ref);
 
   const { error, count } = await supabase
     .from("campaign_maps")
@@ -692,6 +713,104 @@ export async function clearMapReferenceImage(
       reference_image_scale: null,
     })
     .eq("id", mapId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/** null when no art has been accepted for this map yet — or map_art's own
+ * SELECT RLS (0077, can_read_map-gated, same posture as campaign_maps
+ * itself) hides it, indistinguishably. */
+export async function getMapArt(supabase: SupabaseClient, mapId: string): Promise<MapArt | null> {
+  const { data, error } = await supabase.from("map_art").select().eq("map_id", mapId).maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Uploads an accepted ComfyUI-generated PNG to the map-art bucket (0077) and
+ * returns the object path to store as map_art.image_ref. Same map-scoped
+ * fresh-unique-path-per-upload scheme as thumbnails/references, but this
+ * bucket's SELECT policy uses can_read_map — player-visible once the map is
+ * live, the opposite posture from map-references and a distinct bucket from
+ * map-thumbnails (0077's own migration comment explains why neither existing
+ * bucket fits). Takes a Blob, not a File: the source is the generate-art
+ * Route Handler's own PNG response turned into a Blob client-side, not an
+ * `<input type=file>` — the same "no file input involved" shape
+ * uploadMapThumbnailFile already has for its own canvas-exported Blob.
+ */
+export async function uploadMapArtFile(
+  supabase: SupabaseClient,
+  mapId: string,
+  blob: Blob
+): Promise<string> {
+  const path = `${mapId}/${crypto.randomUUID()}.png`;
+  const { error } = await supabase.storage
+    .from("map-art")
+    .upload(path, blob, { contentType: "image/png" });
+
+  if (error) throw error;
+  return path;
+}
+
+/** Best-effort cleanup when accepted art is replaced by a fresh generation —
+ * each acceptance takes a new path, so stale objects otherwise accumulate
+ * forever. */
+export async function deleteMapArtFile(supabase: SupabaseClient, path: string): Promise<void> {
+  const { error } = await supabase.storage.from("map-art").remove([path]);
+  if (error) throw error;
+}
+
+/**
+ * Signed download URL for a map's accepted art — same private-bucket
+ * signed-URL model (and no-auto-refresh expiry caveat) as
+ * getMapThumbnailSignedUrl. Unlike getMapReferenceImageSignedUrl, this is a
+ * signed URL a PLAYER (any campaign member who can read the map, not only
+ * its DM) can legitimately mint: the map-art bucket's RLS (0077) gates on
+ * can_read_map, mirroring map-thumbnails rather than map-references — the
+ * exact thing accepting map art is supposed to make true.
+ */
+export async function getMapArtSignedUrl(
+  supabase: SupabaseClient,
+  path: string,
+  expiresInSeconds: number
+): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from("map-art")
+    .createSignedUrl(path, expiresInSeconds);
+
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+/**
+ * Records a freshly-generated PNG as the map's current accepted art — an
+ * upsert keyed on map_id (0077's primary key: a map has at most one accepted
+ * art row at a time, the same cardinality reference_image_ref already has).
+ * DM-only via map_art's own INSERT/UPDATE RLS (0077, can_write_map-gated).
+ * Deleting the PREVIOUS art's Storage object (if replacing one) is the
+ * caller's own separate best-effort step, matching setMapReferenceImage's
+ * own division of labor.
+ */
+export async function acceptMapArt(
+  supabase: SupabaseClient,
+  mapId: string,
+  params: { imageRef: string; stylePrompt: string }
+): Promise<MapArt> {
+  const { data, error } = await supabase
+    .from("map_art")
+    .upsert(
+      {
+        map_id: mapId,
+        image_ref: params.imageRef,
+        style_prompt: params.stylePrompt,
+        generated_at: new Date().toISOString(),
+      },
+      { onConflict: "map_id" }
+    )
     .select()
     .single();
 

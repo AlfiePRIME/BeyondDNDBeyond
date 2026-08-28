@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getRawAiProviderConfig, isMapArtConfigured } from "./appSettings";
+import { getRawAiProviderConfig, getRawMapArtConfig, isMapArtConfigured } from "./appSettings";
 
 /** Minimal stub covering exactly the query shape getRawAiProviderConfig
  * issues — same scope/spirit as profiles.test.ts's own stubClient. */
@@ -123,5 +123,53 @@ describe("isMapArtConfigured", () => {
 
   it("fails closed (false) rather than throwing when the underlying read fails — this is the exact case a non-admin DM relies on to safely get a yes/no answer", async () => {
     await expect(isMapArtConfigured(mapArtThrowingClient())).resolves.toBe(false);
+  });
+});
+
+/** Minimal stub covering exactly the query shape getRawMapArtConfig
+ * issues — both ComfyUI columns, never the whole app_settings row. */
+function rawMapArtStubClient(
+  row: { comfyui_host_url: string | null; comfyui_style_prompt: string | null } | null
+): SupabaseClient {
+  return {
+    from: (table: string) => {
+      if (table !== "app_settings") throw new Error(`unexpected table in stub: ${table}`);
+      return {
+        select: (columns: string) => {
+          expect(columns).toBe("comfyui_host_url, comfyui_style_prompt");
+          return {
+            eq: () => ({
+              maybeSingle: async () => ({ data: row, error: null }),
+            }),
+          };
+        },
+      };
+    },
+  } as unknown as SupabaseClient;
+}
+
+describe("getRawMapArtConfig", () => {
+  it("returns the RAW host URL and style prompt — unlike isMapArtConfigured, not just a boolean", async () => {
+    const config = await getRawMapArtConfig(
+      rawMapArtStubClient({
+        comfyui_host_url: "http://10.10.1.10:8188",
+        comfyui_style_prompt: "moody watercolor fantasy art",
+      })
+    );
+    expect(config).toEqual({
+      hostUrl: "http://10.10.1.10:8188",
+      stylePrompt: "moody watercolor fantasy art",
+    });
+  });
+
+  it("returns null values when neither ComfyUI column is set", async () => {
+    const config = await getRawMapArtConfig(
+      rawMapArtStubClient({ comfyui_host_url: null, comfyui_style_prompt: null })
+    );
+    expect(config).toEqual({ hostUrl: null, stylePrompt: null });
+  });
+
+  it("returns null when the singleton row is missing", async () => {
+    await expect(getRawMapArtConfig(rawMapArtStubClient(null))).resolves.toBeNull();
   });
 });
