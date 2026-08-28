@@ -1175,7 +1175,10 @@ const TokenMarker = memo(function TokenMarker({
   onMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
   /** Verification-only: see MapSurfaceProps.onTokenTransformDebug's own doc
    * comment. */
-  onTransformDebug?: (id: string, transform: { topY: number; pitchDeg: number; yawDeg: number }) => void;
+  onTransformDebug?: (
+    id: string,
+    transform: { gridX: number; gridY: number; topY: number; pitchDeg: number; yawDeg: number }
+  ) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   // Pawn Customization P1: colorOverride (a PC token's own owner's account
@@ -1227,6 +1230,8 @@ const TokenMarker = memo(function TokenMarker({
     onSettled: onTransformDebug
       ? (pose) =>
           onTransformDebug(id, {
+            gridX: pose.gridX,
+            gridY: pose.gridY,
             topY: pose.topY,
             pitchDeg: (pose.pitchRad * 180) / Math.PI,
             yawDeg: (pose.yawRad * 180) / Math.PI,
@@ -1489,18 +1494,27 @@ export interface MapSurfaceProps {
    * about how tokens render. */
   onTokenMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
   /** Verification-only: bridges and stairs surface-height + tilt (a
-   * post-roadmap addition). Fires with the token's own ACTUAL rendered
-   * group transform (read straight off the useTokenSlide-driven `<group>`,
-   * not re-derived from props) whenever its slide phase changes — the same
-   * "mirror render state into a callback" precedent as onTokenSlideDebug
-   * above, so a real Playwright check can confirm a token standing on a
-   * bridge/stairs footprint actually renders ABOVE the raw cell floor, and
-   * a token on stairs actually carries the tilt rotation, rather than just
-   * trusting the props that were passed in. `topY` is the group's own
-   * `position.y`; `pitchDeg`/`yawDeg` are its `rotation.x`/`rotation.y`
-   * converted to degrees. Omit it (as every real caller does today) and
-   * nothing changes about how tokens render or move. */
-  onTokenTransformDebug?: (id: string, transform: { topY: number; pitchDeg: number; yawDeg: number }) => void;
+   * post-roadmap addition), extended for the click-select-to-move
+   * pawn-model repro investigation to also report gridX/gridY. Fires with
+   * the token's own ACTUAL rendered group transform (read straight off the
+   * useTokenSlide-driven `<group>`, not re-derived from props) whenever its
+   * slide phase changes — the same "mirror render state into a callback"
+   * precedent as onTokenSlideDebug above, so a real Playwright check can
+   * confirm a token standing on a bridge/stairs footprint actually renders
+   * ABOVE the raw cell floor, a token on stairs actually carries the tilt
+   * rotation, AND (gridX/gridY) a token that just click-select-moved
+   * actually settled its rendered position at the new cell — not just that
+   * its gridX/gridY PROPS changed — rather than just trusting the props
+   * that were passed in. `gridX`/`gridY` are useTokenSlide's own
+   * interpolated route position at settle (always exactly the target once
+   * settled); `topY` is the group's own `position.y`; `pitchDeg`/`yawDeg`
+   * are its `rotation.x`/`rotation.y` converted to degrees. Omit it (as
+   * every real caller does today) and nothing changes about how tokens
+   * render or move. */
+  onTokenTransformDebug?: (
+    id: string,
+    transform: { gridX: number; gridY: number; topY: number; pitchDeg: number; yawDeg: number }
+  ) => void;
 }
 
 /**
