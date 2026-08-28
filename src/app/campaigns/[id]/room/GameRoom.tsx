@@ -920,37 +920,31 @@ export function GameRoom({
    * time — kept fresh alongside combat refreshes below. */
   initialStatBlocks: MonsterStatBlock[];
   /** Weather & Enemies C5: the GLOBAL monster template library (0073) at
-   * load time — loaded only for the DM (empty for players, who never see
-   * the book's Enemies page), the rosterNpcs/initialDmNotes convention
-   * immediately below. Static for the lifetime of this page: no realtime
-   * subscription, since admin-authored template content changing mid-
-   * session is not a live-sync need this prompt's acceptance criteria
-   * asks for (a reload picks up any change, same as any other admin
-   * content table in this codebase).
+   * load time — fetched for EVERY campaign member, DM or not (page.tsx;
+   * 0073's own SELECT policy is open to any authenticated user). Static for
+   * the lifetime of this page: no realtime subscription, since admin-
+   * authored template content changing mid-session is not a live-sync need
+   * this prompt's acceptance criteria asks for (a reload picks up any
+   * change, same as any other admin content table in this codebase).
    *
-   * KNOWN, PRE-EXISTING GAP (not introduced by C7, inherited as-is): C6's
-   * own token-model resolution below (the tableMap memo) reads
-   * monsterTemplateById for EVERY viewer's own render model, but this prop
-   * — the thing that map is built from — is only ever fetched for the DM
-   * (page.tsx). A non-DM viewer's monsterTemplateById is therefore always
-   * empty, so `modelUrl` never resolves for them: today, only the DM
-   * actually SEES a templated monster's distinct model; every player still
-   * sees the flat allegiance disc for the exact same token. Fixing this
-   * (fetching templates — and C7's own overrides below — for every viewer,
-   * not just the DM) is a real, separate follow-up; out of scope here since
-   * it predates this prompt and neither C6's nor this prompt's own
-   * acceptance criteria call for a player-visible fix. */
+   * Consumed by C6's own token-model resolution below (the tableMap memo,
+   * via monsterTemplateById) for EVERY viewer's own render model — fetching
+   * this for every member (not just the DM, as it once was) is exactly what
+   * makes a player's own client actually SEE a templated monster's distinct
+   * model, instead of only the DM's. MonsterPanel's "add from library"
+   * browser itself remains DM-only UI regardless; that's a page-mount
+   * decision, unrelated to this fetch. */
   initialMonsterTemplates: MonsterTemplate[];
   /** Weather & Enemies C7: this campaign's own template-model overrides
-   * (0075) at load time — same DM-only fetch convention as
-   * initialMonsterTemplates immediately above, for the same reason (only
-   * MonsterPanel's DM-only override UI and the token-model resolution it
-   * feeds read this today) — and therefore the SAME pre-existing
-   * player-visibility gap documented on initialMonsterTemplates just above:
-   * an override changes what the DM sees render, not (yet) what a player
-   * does. UNLIKE initialMonsterTemplates, this table IS mutable from inside
-   * this app (a DM can add/remove an override without ever reloading), so
-   * it seeds real state below rather than being read as a static prop. */
+   * (0075) at load time — same "every member, DM or not" fetch as
+   * initialMonsterTemplates immediately above (0075's own SELECT policy is
+   * any campaign member). Feeds the SAME tableMap token-model resolution,
+   * ahead of the template's own default_asset_id, for every viewer — so a
+   * player's own client now renders a campaign's custom override too, not
+   * just the DM's. UNLIKE initialMonsterTemplates, this table IS mutable
+   * from inside this app (a DM can add/remove an override without ever
+   * reloading), so it seeds real state below rather than being read as a
+   * static prop. */
   initialTemplateOverrides: MonsterTemplateOverride[];
   /** The Prompt 33 narrative roster, for the MonsterPanel's name
    * pre-fill; loaded only for the DM (empty for players, who never see
