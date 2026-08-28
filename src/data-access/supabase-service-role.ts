@@ -1,12 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { requireEnv } from "./env";
 
-const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
-const serviceRoleKey = requireEnv(
-  "SUPABASE_SERVICE_ROLE_KEY",
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
 /**
  * A FOURTH, deliberate sub-entry-point into data-access (alongside
  * supabase-server/supabase-browser/supabase-middleware — see the module
@@ -43,8 +37,33 @@ const serviceRoleKey = requireEnv(
  * modules — never import this from a Client Component or let its result
  * cross into a client bundle. Fresh client per call (no shared/singleton
  * instance), matching every other create*Client function in this module.
+ *
+ * The two requireEnv() calls are deliberately INSIDE this function body, not
+ * at module top level (a real bug found and fixed while building Map Art
+ * Generation E4 — see that prompt's own report for the full repro): this
+ * module's exports (via appSettings.ts's isMapArtConfigured/
+ * getRawMapArtConfig/getRawAiProviderConfig) are re-exported from the MAIN
+ * @/data-access barrel, which plenty of legitimate Client Components (e.g.
+ * MapEditor.tsx) import from for entirely unrelated functions. A module-
+ * top-level `requireEnv` throws the instant this file is EVALUATED — which
+ * happens whenever anything imports @/data-access at all, since ES module
+ * linking evaluates every `export ... from` target in a barrel regardless of
+ * which specific bindings the importer actually uses. SUPABASE_SERVICE_ROLE_
+ * KEY is never inlined into a client bundle (it isn't NEXT_PUBLIC_-
+ * prefixed), so that eager check unconditionally crashed EVERY Client
+ * Component's module instantiation the moment it (transitively) imported
+ * @/data-access — not just ones that actually call this function. Moving
+ * the check inside the function body means merely importing/bundling this
+ * file (dead code, in a client bundle that never calls it) is inert; calling
+ * it without the env var still throws immediately and specifically, exactly
+ * as before.
  */
 export function createServiceRoleSupabaseClient(): SupabaseClient {
+  const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const serviceRoleKey = requireEnv(
+    "SUPABASE_SERVICE_ROLE_KEY",
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });

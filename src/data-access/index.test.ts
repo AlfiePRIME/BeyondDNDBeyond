@@ -11,6 +11,12 @@ import {
   deleteMap,
   listMapCells,
   upsertMapCells,
+  getMapArt,
+  uploadMapArtFile,
+  deleteMapArtFile,
+  getMapArtSignedUrl,
+  acceptMapArt,
+  getRawMapArtConfig,
   listMapObjects,
   createMapObject,
   updateMapObject,
@@ -119,6 +125,15 @@ describe("data-access module", () => {
   it("exports the map deletion functions from the main barrel", () => {
     expect(listMapsLinkingInto).toBeTypeOf("function");
     expect(deleteMap).toBeTypeOf("function");
+  });
+
+  it("exports the Map Art Generation E4 functions from the main barrel", () => {
+    expect(getMapArt).toBeTypeOf("function");
+    expect(uploadMapArtFile).toBeTypeOf("function");
+    expect(deleteMapArtFile).toBeTypeOf("function");
+    expect(getMapArtSignedUrl).toBeTypeOf("function");
+    expect(acceptMapArt).toBeTypeOf("function");
+    expect(getRawMapArtConfig).toBeTypeOf("function");
   });
 
   it("exports the map object functions from the main barrel", () => {

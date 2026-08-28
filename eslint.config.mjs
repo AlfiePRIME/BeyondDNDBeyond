@@ -17,6 +17,10 @@ const eslintConfig = defineConfig([
         { type: "realtime", pattern: "src/realtime/**" },
         { type: "data-access", pattern: "src/data-access/**" },
         { type: "ai", pattern: "src/ai/**" },
+        // Map Art Generation E4: ComfyUI/image generation, deliberately its
+        // own element type rather than folded into "ai" — see src/image-ai
+        // /index.ts's own header comment for why.
+        { type: "image-ai", pattern: "src/image-ai/**" },
       ],
       // Element patterns match folders, not individual files — proxy.ts (the
       // Next.js 16 rename of middleware.ts) is a lone top-level file Next.js
@@ -111,6 +115,17 @@ const eslintConfig = defineConfig([
               disallow: { to: { module: { origin: "external", source: "ollama" } } },
               message: "proxy.ts may not import the ollama SDK directly — go through @/ai instead.",
             },
+            // Map Art Generation E4: ComfyUI has no first-party npm SDK to
+            // mirror the @anthropic-ai/sdk-style external-package rules
+            // above with — comfyClient.ts's own real fetch() calls against
+            // the configured ComfyUI host ARE the "SDK" here. The
+            // enforceable half of the same mirror is the no-restricted-
+            // imports "@/image-ai/**" entry below (barrel-only, exactly like
+            // "@/ai/**"): nothing outside src/image-ai may reach
+            // comfyClient.ts directly, so the only way to talk to a ComfyUI
+            // host is through generateMapArt() in @/image-ai's own barrel.
+            // See src/image-ai/index.ts's header comment for the full
+            // reasoning.
             {
               // rules-engine is pure game logic: no UI, DB, realtime, scene, or AI deps.
               from: { element: { type: "rules-engine" } },
@@ -118,7 +133,7 @@ const eslintConfig = defineConfig([
                 to: {
                   element: {
                     types: {
-                      anyOf: ["data-access", "realtime", "scene-3d", "ui-components", "app", "ai"],
+                      anyOf: ["data-access", "realtime", "scene-3d", "ui-components", "app", "ai", "image-ai"],
                     },
                   },
                 },
@@ -146,6 +161,7 @@ const eslintConfig = defineConfig([
                 "@/rules-engine/**",
                 "@/realtime/**",
                 "@/ai/**",
+                "@/image-ai/**",
               ],
               message:
                 "Import from the module's barrel (e.g. \"@/ui-components\") instead of reaching into its internal files.",
