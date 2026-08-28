@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getRawAiProviderConfig } from "./appSettings";
+import { getRawAiProviderConfig, isMapArtConfigured } from "./appSettings";
 
 /** Minimal stub covering exactly the query shape getRawAiProviderConfig
  * issues — same scope/spirit as profiles.test.ts's own stubClient. */
@@ -62,5 +62,66 @@ describe("getRawAiProviderConfig", () => {
       ollamaHostUrl: "http://localhost:11434",
       ollamaModel: "llama3.1:8b",
     });
+  });
+});
+
+/** Minimal stub covering exactly the narrow query isMapArtConfigured
+ * issues — only comfyui_host_url, never the full row. */
+function mapArtStubClient(row: { comfyui_host_url: string | null } | null): SupabaseClient {
+  return {
+    from: (table: string) => {
+      if (table !== "app_settings") throw new Error(`unexpected table in stub: ${table}`);
+      return {
+        select: (columns: string) => {
+          expect(columns).toBe("comfyui_host_url");
+          return {
+            eq: () => ({
+              maybeSingle: async () => ({ data: row, error: null }),
+            }),
+          };
+        },
+      };
+    },
+  } as unknown as SupabaseClient;
+}
+
+function mapArtThrowingClient(): SupabaseClient {
+  return {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => {
+            throw new Error("simulated read failure");
+          },
+        }),
+      }),
+    }),
+  } as unknown as SupabaseClient;
+}
+
+describe("isMapArtConfigured", () => {
+  it("returns a strict boolean — never the row or the host URL itself — when a host URL is set", async () => {
+    const hostUrl = "http://10.10.1.10:8188";
+    const result = await isMapArtConfigured(mapArtStubClient({ comfyui_host_url: hostUrl }));
+
+    expect(result).toBe(true);
+    expect(typeof result).toBe("boolean");
+    // Belt-and-braces, matching isAiConfigured's own test: inspect exactly
+    // what the function returned, not just that some caller renders
+    // correctly around it.
+    expect(JSON.stringify(result)).toBe("true");
+    expect(JSON.stringify(result)).not.toContain(hostUrl);
+  });
+
+  it("returns false when comfyui_host_url is null (not yet configured)", async () => {
+    expect(await isMapArtConfigured(mapArtStubClient({ comfyui_host_url: null }))).toBe(false);
+  });
+
+  it("returns false when the singleton row is missing entirely", async () => {
+    expect(await isMapArtConfigured(mapArtStubClient(null))).toBe(false);
+  });
+
+  it("fails closed (false) rather than throwing when the underlying read fails — this is the exact case a non-admin DM relies on to safely get a yes/no answer", async () => {
+    await expect(isMapArtConfigured(mapArtThrowingClient())).resolves.toBe(false);
   });
 });

@@ -1,0 +1,37 @@
+-- Map Art Generation E2: extend D1's app_settings (0072) with ComfyUI
+-- config. ComfyUI is an independent, always-available-if-configured image
+-- pipeline, NOT one of D1's active_provider choices (0072's three-way
+-- 'anthropic'|'openai'|'ollama' check constraint is untouched) -- a
+-- campaign could use Anthropic for narrative text AND ComfyUI for map art
+-- at the same time, since these are unrelated axes. Purely additive: two
+-- new nullable columns on the same singleton row, no schema/RLS changes to
+-- anything D1/D3 already built.
+--
+-- comfyui_host_url: the ComfyUI instance's own base URL (e.g.
+-- http://10.10.1.10:8188, the real instance E1's research spike validated
+-- against -- see docs/map-art-generation-research.md). Nullable because
+-- "not yet configured" is a completely valid, expected state -- see
+-- isMapArtConfigured() in src/data-access/appSettings.ts for how the rest
+-- of the app answers "is this configured" (a boolean only) without ever
+-- reading this column under a non-admin session.
+--
+-- comfyui_style_prompt: E1's one fixed v1 workflow
+-- (scripts/poc/map-art-generation/workflow.mjs's buildLegendPrompt) takes
+-- an optional `styleNote` string that replaces its own default closing
+-- "render style" instruction line -- this is that value, admin-editable,
+-- so a campaign's visual style (e.g. "moody hand-painted watercolor",
+-- "clean vector art") doesn't require a code change. Nullable: leaving it
+-- unset means the generation client falls back to buildLegendPrompt's own
+-- built-in default wording, exactly like passing `undefined` for
+-- styleNote today. Deliberately just ONE more field, per this plan's
+-- fixed-workflow v1 scope -- no admin-editable workflow JSON, no
+-- model/step/guidance overrides (see the research doc's own "what NOT to
+-- build yet" note).
+--
+-- No new RLS policy: 0072's existing is_app_admin()-gated SELECT/UPDATE
+-- policies already cover every column on this table (a policy is defined
+-- per-table, not per-column), so this migration only ever touches the
+-- row's own SHAPE, never its access control.
+alter table public.app_settings
+  add column if not exists comfyui_host_url text,
+  add column if not exists comfyui_style_prompt text;
