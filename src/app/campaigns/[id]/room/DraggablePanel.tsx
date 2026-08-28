@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent,
   type ReactNode,
 } from "react";
@@ -187,6 +188,70 @@ function clampToViewport(x: number, y: number, width: number, height: number): {
   };
 }
 
+/**
+ * Panel-resize follow-up: every wrapped panel's own root element already
+ * carries a fixed CSS `max-height` (26vh–70vh depending on the panel — see
+ * room.module.css) that this feature turns into a resizable floor/ceiling
+ * pair instead of a single cap. `MIN_HEIGHT` is deliberately per-panel, not
+ * one flat number: it's chosen to still show a genuinely usable amount of
+ * that specific panel's content (its header plus roughly one real row),
+ * within the project owner's own suggested ~120–150px band, denser panels
+ * (a grid, a list with a filter row, a scrollable message log with a
+ * pinned compose row below it) getting a little more so dragging to the
+ * floor doesn't leave the panel showing literally nothing useful. See each
+ * panel's own comment below for the specific reasoning.
+ */
+const MIN_HEIGHT: Record<PanelId, number> = {
+  // The live-map picker plus interactive-object list — needs room for the
+  // current map name and at least one real picker row.
+  map: 160,
+  // A per-character token row per party member.
+  tokens: 150,
+  // A short form (name/file/reveal toggle) — the shortest-content panel
+  // pair with hp/opportunityAttack.
+  handout: 130,
+  // Combat round header plus one combatant row.
+  combat: 150,
+  // The freeform HP self-edit control — a single input plus a button.
+  hp: 120,
+  // A grid of dice-tray thumbnails plus an upload form.
+  diceTray: 160,
+  // The DM's live-object list plus its own asset-placement grid.
+  liveObjects: 160,
+  // The roll history list.
+  diceLog: 150,
+  // A handful of per-turn action rows.
+  quickActions: 140,
+  // A single transient prompt banner — shortest-content panel.
+  opportunityAttack: 120,
+  // A scrollable message list PLUS a compose row that must stay visible
+  // beneath it — the tallest floor of the eleven, since squeezing this one
+  // risks hiding the compose row entirely.
+  chatLog: 160,
+};
+
+/**
+ * Ceiling for a dragged resize, expressed as a fraction of the CURRENT
+ * viewport height (not a fixed pixel number) — so, like `clampToViewport`
+ * above, a panel resized tall on a large monitor can't grow off-screen on a
+ * shorter one. 0.9 (not 1.0): the project owner's own "avoid a panel
+ * growing off-screen" ask, leaving a visible margin above/below rather than
+ * letting a resized panel touch both viewport edges exactly. Also applied
+ * as a live CSS `max-height: 90vh` (DraggablePanel.module.css/room.module.css
+ * var fallback) once a panel has ever been resized, which — being a real
+ * `vh` unit — keeps re-clamping itself on every subsequent window resize
+ * with no extra JS needed, the same way the panels' own original
+ * `max-height: 70vh` etc. always has.
+ */
+const MAX_HEIGHT_VIEWPORT_FRACTION = 0.9;
+
+function clampPanelHeight(panelId: PanelId, height: number): number {
+  const min = MIN_HEIGHT[panelId];
+  if (typeof window === "undefined") return Math.max(height, min);
+  const max = Math.max(min, window.innerHeight * MAX_HEIGHT_VIEWPORT_FRACTION);
+  return Math.min(Math.max(height, min), max);
+}
+
 interface PanelLayoutContextValue {
   /** This panel's saved position/collapsed state, or null if the user has
    * never customized it (a fresh profile, or simply never touched this
@@ -205,6 +270,14 @@ interface PanelLayoutContextValue {
    * entry's x/y (measured by the caller from the rendered element) if the
    * panel has no saved position yet; ignored when one already exists. */
   toggleCollapsed(panelId: PanelId, currentPosition: { x: number; y: number }): void;
+  /** Called during a resize drag (continuously) and once more on release,
+   * with the panel's new height in viewport pixels (already clamped by the
+   * caller — see `clampPanelHeight`). `currentPosition` seeds a fresh
+   * entry's x/y exactly like `toggleCollapsed`'s own parameter, for the
+   * same reason: resizing a panel still sitting on its CSS anchor default
+   * (never dragged/collapsed) creates its FIRST saved entry, which needs an
+   * x/y same as any other. */
+  setHeight(panelId: PanelId, height: number, currentPosition: { x: number; y: number }): void;
   /** This panel's current stacking order (for the `zIndex` style). */
   zIndexOf(panelId: PanelId): number;
   /** Raises a panel above every sibling — called on any pointer-down
@@ -351,6 +424,17 @@ export function PanelLayoutProvider({
     [schedulePersist]
   );
 
+  const setHeight = useCallback(
+    (panelId: PanelId, height: number, currentPosition: { x: number; y: number }) => {
+      setLayout((current) => {
+        const entry = current[panelId] ?? { ...currentPosition, collapsed: false };
+        return { ...current, [panelId]: { ...entry, height } };
+      });
+      schedulePersist();
+    },
+    [schedulePersist]
+  );
+
   const zIndexOf = useCallback(
     (panelId: PanelId) => zIndexes[panelId] ?? DEFAULT_Z_INDEX[panelId] ?? BASE_Z_INDEX,
     [zIndexes]
@@ -363,8 +447,8 @@ export function PanelLayoutProvider({
   }, []);
 
   const value = useMemo<PanelLayoutContextValue>(
-    () => ({ getEntry, setPosition, toggleCollapsed, zIndexOf, bringToFront }),
-    [getEntry, setPosition, toggleCollapsed, zIndexOf, bringToFront]
+    () => ({ getEntry, setPosition, toggleCollapsed, setHeight, zIndexOf, bringToFront }),
+    [getEntry, setPosition, toggleCollapsed, setHeight, zIndexOf, bringToFront]
   );
 
   return <PanelLayoutContext.Provider value={value}>{children}</PanelLayoutContext.Provider>;
@@ -378,6 +462,21 @@ export function usePanelLayout(): PanelLayoutContextValue {
   if (!context) throw new Error("DraggablePanel must be rendered inside a PanelLayoutProvider");
   return context;
 }
+
+/**
+ * csstype's `CSSProperties` (what `@types/react`'s own `style` prop type is
+ * built on) has no index signature for CSS custom properties — a plain
+ * `{ "--panel-height": "500px" }` object doesn't structurally satisfy it.
+ * This is the standard escape hatch: a small local extension naming exactly
+ * the two custom properties this file actually sets, applied at each of the
+ * two spots below that read/write them, rather than a broad `[key: string]:
+ * any` that would silently swallow real typos elsewhere in the same style
+ * object.
+ */
+type PanelCssVars = CSSProperties & {
+  "--panel-height"?: string;
+  "--panel-max-height"?: string;
+};
 
 /**
  * Wraps one Game Room panel to make it draggable, collapsible, and
@@ -412,14 +511,21 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
   const layout = usePanelLayout();
   const entry = layout.getEntry(panelId);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    originX: number;
-    originY: number;
-  } | null>(null);
+  // Discriminated on `mode`: a plain drag-to-reposition gesture (started
+  // from the panel's own header, the pre-existing behavior) or a
+  // drag-to-resize gesture (started from the resize handle, panel-resize
+  // follow-up) — both funnel through the SAME wrapper-level
+  // pointermove/pointerup handlers below (pointer capture, set by whichever
+  // gesture started, redirects every subsequent event there regardless of
+  // where the pointer physically is), so there's exactly one place that
+  // tears a gesture down.
+  const dragRef = useRef<
+    | { mode: "move"; pointerId: number; startX: number; startY: number; originX: number; originY: number }
+    | { mode: "resize"; pointerId: number; startY: number; originHeight: number }
+    | null
+  >(null);
   const [dragging, setDragging] = useState(false);
+  const [resizing, setResizing] = useState(false);
   // Optimistic default (most panels render something most of the time) —
   // corrected before paint by the layout effect below, so there's no
   // visible flash either way.
@@ -439,9 +545,10 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
   useIsomorphicLayoutEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
-    // `children` contributes every element before the trailing collapse
-    // toggle button — exactly one element when children rendered nothing.
-    const recompute = () => setHasContent(wrapper.childElementCount > 1);
+    // `children` contributes every element before the two trailing chrome
+    // elements (the collapse toggle button and the panel-resize follow-up's
+    // resize handle) — exactly two elements when children rendered nothing.
+    const recompute = () => setHasContent(wrapper.childElementCount > 2);
     recompute();
     const observer = new MutationObserver(recompute);
     observer.observe(wrapper, { childList: true });
@@ -510,6 +617,7 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
       // rendered right now, not a guessed number.
       const origin = entry ?? measureCurrentPosition();
       dragRef.current = {
+        mode: "move",
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
@@ -522,10 +630,48 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
     [layout, panelId, entry, measureCurrentPosition]
   );
 
+  // Starts a resize gesture from the resize handle rendered below (a
+  // sibling of `children`, not part of any wrapped panel's own markup — see
+  // that element's own comment). `stopPropagation` keeps this pointerdown
+  // from ALSO reaching `handlePointerDown` above via bubbling (harmless
+  // either way — that handler bails out the moment it sees the event's
+  // target isn't inside the header — but skipping the redundant
+  // bringToFront/querySelector work is simpler than relying on that).
+  const handleResizePointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      layout.bringToFront(panelId);
+      if (event.button !== 0) return;
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      event.preventDefault();
+      event.stopPropagation();
+      // The panel's CURRENT rendered height — not the persisted `entry`
+      // value, which may not exist yet (an untouched panel has no saved
+      // height at all, only a CSS `max-height`) or may be stale relative to
+      // however tall the panel is actually rendering right now.
+      const rect = wrapper.getBoundingClientRect();
+      dragRef.current = {
+        mode: "resize",
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        originHeight: rect.height,
+      };
+      wrapper.setPointerCapture(event.pointerId);
+      setResizing(true);
+    },
+    [layout, panelId]
+  );
+
   const handlePointerMove = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
+      if (drag.mode === "resize") {
+        const dy = event.clientY - drag.startY;
+        const clamped = clampPanelHeight(panelId, drag.originHeight + dy);
+        layout.setHeight(panelId, clamped, measureCurrentPosition());
+        return;
+      }
       const dx = event.clientX - drag.startX;
       const dy = event.clientY - drag.startY;
       // Clamped against this panel's own CURRENT rendered size (not a
@@ -537,13 +683,14 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
       const clamped = rect ? clampToViewport(target.x, target.y, rect.width, rect.height) : target;
       layout.setPosition(panelId, clamped.x, clamped.y);
     },
-    [layout, panelId]
+    [layout, panelId, measureCurrentPosition]
   );
 
   const endDrag = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
     dragRef.current = null;
     setDragging(false);
+    setResizing(false);
   }, []);
 
   const handleToggleCollapsed = useCallback(() => {
@@ -558,9 +705,34 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
     entry ? null : DEFAULT_ANCHOR_CLASS[panelId],
     collapsed ? styles.collapsed : null,
     dragging ? styles.dragging : null,
+    resizing ? styles.resizing : null,
   ]
     .filter(Boolean)
     .join(" ");
+
+  // The persisted height (if any) is applied as CSS custom properties on
+  // THIS wrapper rather than reaching into `children` (React children are
+  // already-built elements — there's no clean way to inject a style prop
+  // into whatever specific element each of the 11 wrapped panels happens to
+  // render as its own root without special-casing every one of them).
+  // Custom properties inherit through the DOM regardless of component/CSS-
+  // module boundaries, so each panel's own root class (room.module.css)
+  // picks these up via a plain `var(--panel-height, <its original
+  // max-height value>)` — falling back to exactly its pre-resize CSS the
+  // instant this isn't set, so an untouched panel is pixel-identical to
+  // today. Deliberately omitted while collapsed: collapsing already relies
+  // on the panel's root shrinking to just its visible header (an `auto`
+  // height, per room.module.css) once every other child is hidden by
+  // `.wrapper.collapsed > * > :not(:first-child) { display: none }` below —
+  // forcing the explicit resized height through here too would instead hold
+  // the collapsed bar open at its full pre-collapse size, breaking that
+  // "small, unobtrusive bar" behavior. The entry's own `height` field is
+  // untouched by collapsing either way (toggleCollapsed only ever flips
+  // `collapsed`), so re-expanding simply re-applies it here.
+  const resizedHeightPx = !collapsed && typeof entry?.height === "number" ? entry.height : null;
+  const heightVars: PanelCssVars = resizedHeightPx
+    ? { "--panel-height": `${resizedHeightPx}px`, "--panel-max-height": "90vh" }
+    : {};
 
   return (
     <div
@@ -571,7 +743,8 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
         top: entry?.y,
         zIndex: layout.zIndexOf(panelId),
         display: hasContent ? undefined : "none",
-      }}
+        ...heightVars,
+      } as PanelCssVars}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={endDrag}
@@ -590,6 +763,19 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
       >
         {collapsed ? "▸" : "▾"}
       </Button>
+      {/* Vertical resize grip along the panel's bottom edge — see this
+          component's own doc comment (heightVars, above) for why this lives
+          here rather than in any of the 11 wrapped panels' own markup.
+          Hidden while collapsed via CSS (DraggablePanel.module.css) — a
+          collapsed panel has nothing visible left to resize. */}
+      <div
+        className={styles.resizeHandle}
+        onPointerDown={handleResizePointerDown}
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize panel"
+        data-testid={`resize-handle-${panelId}`}
+      />
     </div>
   );
 }

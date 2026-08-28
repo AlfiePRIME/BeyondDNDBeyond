@@ -167,3 +167,51 @@
   line-height: 1;
   background: var(--surface2);
 }
+
+/* Panel-resize follow-up: the vertical resize grip along a panel's bottom
+   edge. A plain sibling of `children`/.collapseToggle (DraggablePanel.tsx
+   renders it, not any of the 11 wrapped panels' own markup), absolutely
+   positioned against .wrapper — a plain (non-flex) block container whose
+   own rendered box already exactly matches its single in-flow child (the
+   wrapped panel's own root element, `children`)'s box, since
+   .collapseToggle/.resizeHandle are both taken out of flow themselves. A
+   generously tall (8px) hit target straddling the edge, not just the
+   thin 3px visible bar, so the actual grab target is comfortable without
+   looking oversized. */
+.resizeHandle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+  height: 8px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.resizeHandle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dim) 50%, transparent);
+}
+
+.resizeHandle:hover::after,
+.wrapper.resizing .resizeHandle::after {
+  background: var(--teal);
+}
+
+/* A collapsed panel shrinks to just its own header bar (see
+   `.wrapper.collapsed > * > :not(:first-child)` above) — nothing left to
+   resize until it's expanded again. */
+.wrapper.collapsed .resizeHandle {
+  display: none;
+}
+
+.wrapper.resizing {
+  user-select: none;
+}
