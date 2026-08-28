@@ -41,6 +41,27 @@ import { mostRecentOwnToken } from "./vision";
 import type { CombatState } from "./CombatPanel";
 import { GameRoom, type LiveMapData } from "./GameRoom";
 
+/**
+ * Every one of this page's "initial*" reads is a nice-to-have — a fresh
+ * fallback lets the client's own live subscriptions fill it in a moment
+ * later, exactly like a first-ever visit with an empty campaign already
+ * behaves. Only the campaign row itself and the member list are load-
+ * bearing enough to legitimately fail the whole page. A single flaky
+ * upstream hop (proxy hiccup, transient Supabase blip) on any ONE of these
+ * secondary reads must not take down the entire room for every viewer —
+ * confirmed as a real production incident where a large campaign's bigger
+ * batch of concurrent reads made this exact class of failure far more
+ * likely to actually happen than on a small/empty campaign.
+ */
+async function safe<T>(promise: Promise<T>, fallback: T, label: string): Promise<T> {
+  try {
+    return await promise;
+  } catch (err) {
+    console.error(`room SSR: ${label} failed, falling back to default`, err);
+    return fallback;
+  }
+}
+
 export default async function GameRoomPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
   const supabase = await createServerSupabaseClient();
@@ -62,7 +83,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   const members = await listCampaignMembers(supabase, campaignId);
   const roomMembers: RoomMember[] = await Promise.all(
     members.map(async (member) => {
-      const profile = await getProfile(supabase, member.user_id);
+      const profile = await safe(getProfile(supabase, member.user_id), null, `getProfile(${member.user_id})`);
       const avatar = await resolveAvatarUrl(
         supabase,
         profile?.avatar_source ?? null,
@@ -90,7 +111,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   // the roomMembers loop above (which only keeps each member's avatar_url)
   // since ui_preferences is the CALLER's own, private-enough-to-fetch-once
   // document, not table-public roster data.
-  const currentUserProfile = await getProfile(supabase, user.id);
+  const currentUserProfile = await safe(getProfile(supabase, user.id), null, "getProfile(currentUser)");
 
   // The DB read here (not any broadcast) is what makes fresh joins and
   // reloads land on the currently-live map — a client that wasn't connected
@@ -115,21 +136,23 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     initialCampaignTokens,
     initialInteractionEvents,
   ] = await Promise.all([
-    listAssetsForCampaign(supabase, campaignId),
+    safe(listAssetsForCampaign(supabase, campaignId), [], "listAssetsForCampaign"),
     // Non-DM RLS only exposes the live map (plus, as of 0046, whichever map
     // their own character's token is currently on — but never a whole
     // browsable LIST of every map), and only the DM gets the picker — no
     // point fetching a list for players.
-    currentUserIsDM ? listMapsForCampaign(supabase, campaignId) : Promise.resolve([]),
+    currentUserIsDM
+      ? safe(listMapsForCampaign(supabase, campaignId), [], "listMapsForCampaign")
+      : Promise.resolve([]),
     // Characters RLS trims this per viewer: a player gets only their own,
     // the DM gets every campaign character — exactly who each may place.
-    listCharactersForCampaign(supabase, campaignId),
+    safe(listCharactersForCampaign(supabase, campaignId), [], "listCharactersForCampaign"),
     // Handouts RLS trims per viewer too: every row for the DM, revealed
     // rows only for a player.
-    listHandouts(supabase, campaignId),
+    safe(listHandouts(supabase, campaignId), [], "listHandouts"),
     // Same DB-read reasoning as the live map: fresh joins see recent rolls
     // without having been subscribed when they landed.
-    listRollLog(supabase, campaignId),
+    safe(listRollLog(supabase, campaignId), [], "listRollLog"),
     // Chat & Summary B4: same DB-read-not-broadcast reasoning as
     // listRollLog immediately above — a fresh join or reload sees the
     // campaign's full chat history without having been subscribed to
@@ -137,10 +160,10 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // Every member's own RLS-readable rows (0067's SELECT policy is
     // whole-campaign, matching roll_log), so this is never trimmed per
     // viewer.
-    listChatMessages(supabase, campaignId),
+    safe(listChatMessages(supabase, campaignId), [], "listChatMessages"),
     // Monster stat blocks (Prompt 61), member-readable — AC auto-fill
     // for stat-blocked NPC targets needs them on every client.
-    listMonsterStatBlocks(supabase, campaignId),
+    safe(listMonsterStatBlocks(supabase, campaignId), [], "listMonsterStatBlocks"),
     // Weather & Enemies C5: the GLOBAL monster template library (0073) —
     // fetched for EVERY campaign member, not just the DM (0073's own SELECT
     // policy is open to any authenticated user). MonsterPanel's "add from
@@ -150,44 +173,44 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // browser is exactly the one that has to actually render a templated
     // monster's distinct model during play. See GameRoom.tsx's own
     // initialMonsterTemplates doc comment for the fuller history.
-    listMonsterTemplates(supabase),
+    safe(listMonsterTemplates(supabase), [], "listMonsterTemplates"),
     // Weather & Enemies C7: this campaign's own template-model overrides
     // (0075) — same reasoning as initialMonsterTemplates immediately above:
     // fetched for every member (0075's own SELECT policy is any campaign
     // member), since GameRoom's token-model resolution reads this
     // campaign-scoped override ahead of the template's own default_asset_id
     // for every viewer, not just the DM's.
-    listMonsterTemplateOverridesForCampaign(supabase, campaignId),
+    safe(listMonsterTemplateOverridesForCampaign(supabase, campaignId), [], "listMonsterTemplateOverridesForCampaign"),
     // Pawn Customization P2: every character's own pawn appearance (0080),
     // resolved to a loadable model URL — fetched for EVERY campaign member
     // (0080's SELECT policy is any campaign member, not owner-or-DM), the
     // exact same "every viewer needs this to render every OTHER player's
     // token too" reasoning as initialTemplateOverrides immediately above.
-    resolveCampaignPawnAppearance(supabase, campaignId),
+    safe(resolveCampaignPawnAppearance(supabase, campaignId), [], "resolveCampaignPawnAppearance"),
     // The narrative roster, only for the DM's book's Enemies (MonsterPanel)
     // name pre-fill; players never see the book, so no point fetching.
-    currentUserIsDM ? listNpcs(supabase, campaignId) : Promise.resolve([]),
+    currentUserIsDM ? safe(listNpcs(supabase, campaignId), [], "listNpcs") : Promise.resolve([]),
     // dm_notes' SELECT RLS (0020) has no member-read policy at all — same
     // DM-gated fetch convention as rosterNpcs above, for the book's Notes
     // page (DmNotes.tsx, embedded unmodified).
-    currentUserIsDM ? listDmNotes(supabase, campaignId) : Promise.resolve([]),
+    currentUserIsDM ? safe(listDmNotes(supabase, campaignId), [], "listDmNotes") : Promise.resolve([]),
     // Lore pages/links are member-readable (matching the standalone /lore
     // route's own fetch) — the book's Lore page opens with no loading
     // flash for the DM, same as every other "initial*" prop here.
-    listLorePages(supabase, campaignId),
-    listLorePageLinksForCampaign(supabase, campaignId),
+    safe(listLorePages(supabase, campaignId), [], "listLorePages"),
+    safe(listLorePageLinksForCampaign(supabase, campaignId), [], "listLorePageLinksForCampaign"),
     // Movable chairs: every member's own stored chair offset, same
     // DB-read-not-broadcast reasoning as the live map/roll log above — a
     // fresh join or reload must land on wherever chairs currently ACTUALLY
     // are, not their computed defaults, without having been connected for
     // any of the seat-moved broadcasts that got them there.
-    getSeatOffsetsForCampaign(supabase, campaignId),
+    safe(getSeatOffsetsForCampaign(supabase, campaignId), new Map(), "getSeatOffsetsForCampaign"),
     // Per-member dice-tray-model preference (Prompt 8a/8b) — same DB-read-
     // not-broadcast reasoning as seatOffsetsMap above: a fresh join or
     // reload must render every connected member's own chosen tray model
     // without having been connected for the DICE_TRAY_PREFERENCE_EVENT
     // broadcast that set it.
-    getDiceTrayPreferencesForCampaign(supabase, campaignId),
+    safe(getDiceTrayPreferencesForCampaign(supabase, campaignId), new Map(), "getDiceTrayPreferencesForCampaign"),
     // Per-viewer map transitions (0046): every map_token this viewer's own
     // RLS lets them read, campaign-wide — for a player, always includes
     // wherever their own character's token currently sits (even off the
@@ -195,13 +218,15 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // THIS viewer's own effective starting map; for the DM, every token on
     // every map, used by GameRoom's own map-picker to show which maps
     // currently have an active player token on them.
-    listMapTokensForCampaign(supabase, campaignId),
+    safe(listMapTokensForCampaign(supabase, campaignId), [], "listMapTokensForCampaign"),
     // Chat & Summary B5: interaction_events at load time, DM-only per its
     // RLS (0059) — the same "empty array for a player, GameRoom never
     // fetches for one" convention as rosterNpcs/initialDmNotes above. Feeds
     // the book's new Activity page (DmBookActivityPage), kept live via
     // subscribeToInteractionEvents.
-    currentUserIsDM ? listInteractionEvents(supabase, campaignId) : Promise.resolve([]),
+    currentUserIsDM
+      ? safe(listInteractionEvents(supabase, campaignId), [], "listInteractionEvents")
+      : Promise.resolve([]),
   ]);
   // listDmNotes orders oldest-first (matching every other narrative list);
   // reversed here since the book's Notes page reads better newest-on-top —
@@ -214,17 +239,20 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   const paletteAssets = await resolvePaletteAssets(supabase, assets);
 
   // Same DB-read reasoning as the live map above: a fresh join or reload
-  // lands on the current combat state without having seen any broadcast.
-  const activeEncounter = await getActiveCombatEncounter(supabase, campaignId);
+  // lands on the current combat state without having seen any broadcast. A
+  // failure here degrades to "no active combat" — the client's own
+  // subscription picks up the real state moments later, same as every
+  // other secondary read on this page.
+  const activeEncounter = await safe(getActiveCombatEncounter(supabase, campaignId), null, "getActiveCombatEncounter");
   let initialCombat: CombatState | null = null;
   if (activeEncounter) {
-    const combatants = await listCombatCombatants(supabase, activeEncounter.id);
+    const combatants = await safe(listCombatCombatants(supabase, activeEncounter.id), [], "listCombatCombatants");
     const combatantIds = combatants.map((combatant) => combatant.id);
     // Hidden-from pairs (Prompt 60) load alongside conditions — both are
     // member-readable per-combatant state the room renders from.
     const [conditions, hiddenFrom] = await Promise.all([
-      listCombatantConditions(supabase, combatantIds),
-      listCombatantHiddenFrom(supabase, combatantIds),
+      safe(listCombatantConditions(supabase, combatantIds), [], "listCombatantConditions"),
+      safe(listCombatantHiddenFrom(supabase, combatantIds), [], "listCombatantHiddenFrom"),
     ]);
     initialCombat = { encounter: activeEncounter, combatants, conditions, hiddenFrom };
   }
@@ -250,36 +278,47 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
   const effectiveMapId = ownTokenMapId ?? campaign.live_map;
 
   let initialLiveMap: LiveMapData | null = null;
-  if (effectiveMapId) {
-    const map = await getMap(supabase, effectiveMapId);
-    if (map) {
-      const [cells, objects, tokens, lightSources, whiteboardTiles, mapArt] = await Promise.all([
-        listMapCells(supabase, map.id),
-        listMapObjects(supabase, map.id),
-        listMapTokens(supabase, map.id),
-        // Loaded for the client's per-player vision computation (Prompt 58)
-        // — members read the live map's lights under the 0036 RLS.
-        listLightSources(supabase, map.id),
-        // Whiteboard drawing layer (Prompt 3, docs/design/whiteboard-drawing-layer.md
-        // §5.3) — member-readable (0058), so the initial SSR render already
-        // shows the DM's drawing with no client-side flash-of-blank-board.
-        listWhiteboardTiles(supabase, map.id),
-        // Map Art Generation E5: null for a map with no accepted art —
-        // member-readable (0077, can_read_map-gated, the same posture as
-        // the map row itself), so the initial SSR render already knows
-        // whether to render the live table's transparent-floor/faint-grid
-        // mode with no client-side flash of ordinary opaque floor first.
-        getMapArt(supabase, map.id),
-      ]);
-      // Map Editor Batch A4: which of this map's objects already hold
-      // items — same second-query-after-objects reasoning as GameRoom's
-      // own refreshLiveMap (this bundle's live-reload counterpart).
-      const containerItems = await listItemsForMapObjects(supabase, objects.map((object) => object.id));
-      const containerObjectIds = new Set(
-        containerItems.flatMap((item) => (item.map_object_id ? [item.map_object_id] : []))
-      );
-      initialLiveMap = { map, cells, objects, tokens, lightSources, whiteboardTiles, mapArt, containerObjectIds };
+  // The whole bundle below is one coherent unit — cells/objects/tokens must
+  // land together or not at all, so a failure ANYWHERE in this block falls
+  // back to "no live map" (a real state the room already renders correctly,
+  // e.g. a brand-new campaign) rather than a partially-populated map that
+  // could itself crash client-side rendering. The client's own live
+  // subscriptions/refreshLiveMap fill this in moments later regardless.
+  try {
+    if (effectiveMapId) {
+      const map = await getMap(supabase, effectiveMapId);
+      if (map) {
+        const [cells, objects, tokens, lightSources, whiteboardTiles, mapArt] = await Promise.all([
+          listMapCells(supabase, map.id),
+          listMapObjects(supabase, map.id),
+          listMapTokens(supabase, map.id),
+          // Loaded for the client's per-player vision computation (Prompt 58)
+          // — members read the live map's lights under the 0036 RLS.
+          listLightSources(supabase, map.id),
+          // Whiteboard drawing layer (Prompt 3, docs/design/whiteboard-drawing-layer.md
+          // §5.3) — member-readable (0058), so the initial SSR render already
+          // shows the DM's drawing with no client-side flash-of-blank-board.
+          listWhiteboardTiles(supabase, map.id),
+          // Map Art Generation E5: null for a map with no accepted art —
+          // member-readable (0077, can_read_map-gated, the same posture as
+          // the map row itself), so the initial SSR render already knows
+          // whether to render the live table's transparent-floor/faint-grid
+          // mode with no client-side flash of ordinary opaque floor first.
+          getMapArt(supabase, map.id),
+        ]);
+        // Map Editor Batch A4: which of this map's objects already hold
+        // items — same second-query-after-objects reasoning as GameRoom's
+        // own refreshLiveMap (this bundle's live-reload counterpart).
+        const containerItems = await listItemsForMapObjects(supabase, objects.map((object) => object.id));
+        const containerObjectIds = new Set(
+          containerItems.flatMap((item) => (item.map_object_id ? [item.map_object_id] : []))
+        );
+        initialLiveMap = { map, cells, objects, tokens, lightSources, whiteboardTiles, mapArt, containerObjectIds };
+      }
     }
+  } catch (err) {
+    console.error("room SSR: live map bundle failed, falling back to no live map", err);
+    initialLiveMap = null;
   }
 
   return (
