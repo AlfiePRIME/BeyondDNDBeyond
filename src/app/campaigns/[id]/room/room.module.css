@@ -60,14 +60,26 @@
    default when no saved preference exists (a CSS anchor class, not a
    fixed pixel pair — see that constant's doc comment for why). Everything
    else about these rules (size, translucency, accent border) is
-   unchanged. */
+   unchanged.
+
+   Panel-resize follow-up: every one of these panel roots is itself the
+   scrollable, sized element (`overflow-y: auto` directly here, not on some
+   nested child) — DraggablePanel.tsx sets `--panel-height`/
+   `--panel-max-height` as CSS custom properties on ITS OWN wrapper (a
+   parent of this element) the first time a user drags that panel's resize
+   handle; they inherit down to here with no per-panel wiring needed. Until
+   then (the `var(..., fallback)` case — an untouched panel, or a resized
+   one currently collapsed) `height` is `auto` and `max-height` is this
+   panel's own original literal value, so today's user sees pixel-identical
+   output. */
 .sidePanel {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 16px;
   width: 320px;
-  max-height: 70vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 70vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
@@ -80,7 +92,8 @@
   gap: 10px;
   padding: 16px;
   width: 300px;
-  max-height: 70vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 70vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
@@ -93,7 +106,8 @@
   gap: 10px;
   padding: 16px;
   width: 320px;
-  max-height: 26vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 26vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--pink) 35%, transparent);
@@ -106,7 +120,8 @@
   gap: 10px;
   padding: 16px;
   width: 300px;
-  max-height: 26vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 26vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
@@ -123,7 +138,8 @@
   gap: 10px;
   padding: 16px;
   width: 260px;
-  max-height: 26vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 26vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
@@ -531,7 +547,8 @@
   gap: 10px;
   padding: 16px;
   width: 300px;
-  max-height: 42vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 42vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
@@ -558,7 +575,8 @@
   gap: 10px;
   padding: 16px;
   width: 300px;
-  max-height: 50vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 50vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
@@ -667,7 +685,8 @@
   gap: 10px;
   padding: 16px;
   width: 360px;
-  max-height: 42vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 42vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
@@ -791,7 +810,8 @@
   gap: 8px;
   padding: 16px;
   width: 400px;
-  max-height: 30vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 30vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
@@ -863,7 +883,8 @@
   gap: 8px;
   padding: 12px 16px;
   width: 440px;
-  max-height: 30vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 30vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 88%, transparent);
   border: 1px solid var(--red);
@@ -941,7 +962,8 @@
   gap: 10px;
   padding: 16px;
   width: 360px;
-  max-height: 46vh;
+  height: var(--panel-height, auto);
+  max-height: var(--panel-max-height, 46vh);
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface2) 82%, transparent);
   border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
@@ -952,13 +974,27 @@
    the panel root itself) so auto-scroll-to-bottom (ChatLogPanel.tsx's own
    scrollTop assignment) has a single, stable scroll container regardless of
    whatever else the panel eventually grows above/below it (the input row,
-   an error line). */
+   an error line).
+
+   Panel-resize follow-up: `.chatPanel` is the one wrapped panel with a
+   nested scroll container rather than being the scrollable+sized element
+   itself (see that class's own comment) — its compose row (`.chatInputRow`)
+   needs to stay pinned directly below the message list, not floating in
+   the middle of a resized-taller panel with blank space beneath it. `flex:
+   1` gives this list any extra room a resize grants (`min-height: 0` is
+   what already lets it shrink correctly the other way, below its own
+   content size, once .chatPanel's own explicit height is smaller than that
+   — the standard fix for a flex item's default auto min-size otherwise
+   preventing that). A no-op for every other layout state: with no extra
+   space to distribute (.chatPanel's default `height: auto` case), flex-grow
+   has nothing to do. */
 .chatList {
   display: flex;
   flex-direction: column;
   gap: 8px;
   overflow-y: auto;
   min-height: 0;
+  flex: 1;
 }
 
 /* One message — the .rollEntry shape, reused for visual consistency between

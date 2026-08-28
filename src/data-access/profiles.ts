@@ -5,15 +5,23 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export type AvatarSource = "preset" | "custom";
 
 /**
- * One Game Room panel's persisted layout (Phase B of the UI overhaul) — the
- * only shape stored inside ui_preferences.panelLayout. Position is always
- * the panel's top-left corner in viewport pixels; `collapsed` hides the
- * panel's body while its header/drag-handle stays visible.
+ * One Game Room panel's persisted layout (Phase B of the UI overhaul, `height`
+ * added by the panel-resize follow-up) — the only shape stored inside
+ * ui_preferences.panelLayout. Position is always the panel's top-left corner
+ * in viewport pixels; `collapsed` hides the panel's body while its
+ * header/drag-handle stays visible; `height` is the panel's own resized
+ * height in viewport pixels, set the first time a user drags its resize
+ * handle. Optional and omittable on purpose — an entry created by a plain
+ * drag or collapse-toggle (setPosition/toggleCollapsed in DraggablePanel.tsx)
+ * never touches it, and a panel with no `height` renders via its own CSS
+ * class's default `max-height` (the exact pre-resize visual, no migration of
+ * old rows needed).
  */
 export interface PanelLayoutEntry {
   x: number;
   y: number;
   collapsed: boolean;
+  height?: number;
 }
 
 /**
