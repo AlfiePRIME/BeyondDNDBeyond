@@ -410,5 +410,15 @@ export {
   type Handout,
   type DmNote,
 } from "./narrative";
+// AI Backend & Admin D2's admin settings UI — its own data-access module
+// since app_settings (D1, 0072) doesn't fit any existing file's scope
+// (not profile, campaign, character, asset, or narrative data).
+export {
+  getAppSettings,
+  updateAppSettings,
+  type AiProvider,
+  type AppSettings,
+  type AppSettingsUpdate,
+} from "./appSettings";
 
 export const MODULE_NAME = "data-access" as const;
