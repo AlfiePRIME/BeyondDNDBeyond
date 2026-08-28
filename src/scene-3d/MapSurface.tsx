@@ -6,6 +6,7 @@ import { BufferAttribute, BufferGeometry, CanvasTexture, Color, SRGBColorSpace }
 import type { ThreeEvent } from "@react-three/fiber";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
+import { crossingSurfaceHeight, STAIRS_TILT_PITCH_RADIANS, type CrossingSurfaceType } from "./crossingSurface";
 import { buildGridOverlayPositions } from "./gridOverlay";
 import { useTokenSlide, type TokenSlidePhase } from "./useTokenSlide";
 
@@ -584,6 +585,18 @@ export interface MapSurfaceObject {
    * commitment yet) renders no badge at all — the exact same rendering as
    * before this feature for everything except a real placed building. */
   linkStatus?: "linked" | "unlinked";
+  /** Bridges and stairs surface-height fix (a post-roadmap addition): the
+   * crossing structure OCCUPYING this object's own cell, from a DIFFERENT
+   * map_objects row — never this object's own crossing_type, when this IS
+   * the bridge/stairs object itself (the caller must never set this for a
+   * crossing object's own render; its own model already sits correctly on
+   * the raw cell floor). Renders a plain decorative object sitting ON TOP
+   * of a bridge deck or a stairway's landing instead of embedded at the
+   * bare floor beneath it. null/undefined (every object not sharing a cell
+   * with a crossing structure, and every object before this feature) adds
+   * no height at all — see crossingSurface.ts's crossingSurfaceHeight doc
+   * comment for the real-measured-geometry derivation. */
+  crossingSurface?: CrossingSurfaceType | null;
 }
 
 interface ObjectMarkerProps {
@@ -845,6 +858,21 @@ export interface MapSurfaceToken {
    * unchanged flat allegiance-colored disc — this is a pure addition, never
    * a replacement, for any token this isn't set on. */
   modelUrl?: string | null;
+  /** Bridges and stairs surface-height fix (a post-roadmap addition): see
+   * MapSurfaceObject.crossingSurface's own doc comment — the crossing
+   * structure occupying THIS token's current cell. null/undefined (every
+   * token not standing on one, and every token before this feature) adds
+   * no height at all, riding the raw cell elevation exactly as before. */
+  crossingSurface?: CrossingSurfaceType | null;
+  /** Paired with `crossingSurface` — the SPECIFIC stairs object's own
+   * stored placement `rotation` (degrees, matches map_objects.rotation)
+   * whenever `crossingSurface` is "stairs"; null/undefined for a bridge, no
+   * crossing structure, or every token before this feature applies no
+   * tilt at all (rides the group's default level orientation). Determines
+   * which world direction this cell's flight climbs — see
+   * crossingSurface.ts's STAIRS_TILT_PITCH_RADIANS doc comment for the
+   * pitch this pairs with. */
+  crossingRotationDeg?: number | null;
 }
 
 const HP_BAR_WIDTH = 0.7;
@@ -1087,9 +1115,11 @@ const TokenMarker = memo(function TokenMarker({
   concentrating,
   dimmed,
   modelUrl,
+  crossingRotationDeg,
   onPointerDown,
   onSlideDebug,
   onMeasureDebug,
+  onTransformDebug,
 }: {
   id: string;
   gridX: number;
@@ -1111,12 +1141,19 @@ const TokenMarker = memo(function TokenMarker({
   dimmed: boolean;
   /** Weather & Enemies C6: see MapSurfaceToken.modelUrl's own doc comment. */
   modelUrl: string | null;
+  /** Bridges and stairs tilt: see MapSurfaceToken.crossingRotationDeg's own
+   * doc comment. null for a bridge, no crossing structure, or every token
+   * before this feature. */
+  crossingRotationDeg: number | null;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
   onSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
   /** Verification-only: see MapSurfaceProps.onTokenMeasureDebug's doc
    * comment. Only ever fires for a token actually rendering a model
    * (modelUrl set) — a disc-fallback token has nothing to measure. */
   onMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
+  /** Verification-only: see MapSurfaceProps.onTokenTransformDebug's own doc
+   * comment. */
+  onTransformDebug?: (id: string, transform: { topY: number; pitchDeg: number; yawDeg: number }) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const color = dimmed ? DIMMED_ALLEGIANCE_COLOR[allegiance] : ALLEGIANCE_COLOR[allegiance];
@@ -1138,7 +1175,33 @@ const TokenMarker = memo(function TokenMarker({
   // trying to fold the raise into the imperative write itself, which would
   // require useTokenSlide to know about a concern (selection) that belongs
   // to this component, not the slide hook.
-  const { ref: slideRef, phase } = useTokenSlide({ gridX, gridY, topY, cellSize, offsetX, offsetZ });
+  // Stairs tilt (bridges and stairs, a post-roadmap addition): a FIXED pitch
+  // magnitude (the flight's own real incline, crossingSurface.ts's
+  // STAIRS_TILT_PITCH_RADIANS) whenever this token's cell has a stairs
+  // object under it, yawed to match that SPECIFIC object's own placement
+  // rotation — 0/0 (no tilt at all) whenever it's a bridge, no crossing
+  // structure, or every token before this feature. Blended smoothly into
+  // the move-tween by useTokenSlide itself, not popped on/off here.
+  const tiltPitch = crossingRotationDeg !== null ? STAIRS_TILT_PITCH_RADIANS : 0;
+  const tiltYaw = crossingRotationDeg !== null ? (crossingRotationDeg * Math.PI) / 180 : 0;
+  const { ref: slideRef, phase } = useTokenSlide({
+    gridX,
+    gridY,
+    topY,
+    cellSize,
+    offsetX,
+    offsetZ,
+    tiltPitch,
+    tiltYaw,
+    onSettled: onTransformDebug
+      ? (pose) =>
+          onTransformDebug(id, {
+            topY: pose.topY,
+            pitchDeg: (pose.pitchRad * 180) / Math.PI,
+            yawDeg: (pose.yawRad * 180) / Math.PI,
+          })
+      : undefined,
+  });
   // Verification-only: mirrors this token's slide phase out to whoever asked
   // for it (see MapSurfaceProps.onTokenSlideDebug's doc comment) — a plain
   // effect on the phase transition, not a per-frame subscription, since
@@ -1394,6 +1457,19 @@ export interface MapSurfaceProps {
    * this. Omit it (as every real caller does today) and nothing changes
    * about how tokens render. */
   onTokenMeasureDebug?: (id: string, measurement: { maxDim: number; scale: number }) => void;
+  /** Verification-only: bridges and stairs surface-height + tilt (a
+   * post-roadmap addition). Fires with the token's own ACTUAL rendered
+   * group transform (read straight off the useTokenSlide-driven `<group>`,
+   * not re-derived from props) whenever its slide phase changes — the same
+   * "mirror render state into a callback" precedent as onTokenSlideDebug
+   * above, so a real Playwright check can confirm a token standing on a
+   * bridge/stairs footprint actually renders ABOVE the raw cell floor, and
+   * a token on stairs actually carries the tilt rotation, rather than just
+   * trusting the props that were passed in. `topY` is the group's own
+   * `position.y`; `pitchDeg`/`yawDeg` are its `rotation.x`/`rotation.y`
+   * converted to degrees. Omit it (as every real caller does today) and
+   * nothing changes about how tokens render or move. */
+  onTokenTransformDebug?: (id: string, transform: { topY: number; pitchDeg: number; yawDeg: number }) => void;
 }
 
 /**
@@ -1441,6 +1517,7 @@ export function MapSurface({
   onObjectPoseDebug,
   onObjectMeasureDebug,
   onTokenMeasureDebug,
+  onTokenTransformDebug,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
   const { offsetX, offsetZ } = mapCellOffsets(gridWidth, gridHeight, cellSize);
@@ -1537,7 +1614,17 @@ export function MapSurface({
           id={object.id}
           worldX={(object.x + (object.renderOffsetX ?? 0)) * cellSize - offsetX}
           worldZ={(object.y + (object.renderOffsetZ ?? 0)) * cellSize - offsetZ}
-          topY={baseHeight + object.elevation * elevationStepHeight}
+          // Bridges and stairs surface-height fix: additive on top of the
+          // raw cell elevation (never replacing it) — see
+          // crossingSurface.ts's crossingSurfaceHeight doc comment. 0 for
+          // every object not sharing a cell with a crossing structure
+          // (crossingSurface undefined/null), rendering at exactly today's
+          // height.
+          topY={
+            baseHeight +
+            object.elevation * elevationStepHeight +
+            crossingSurfaceHeight(object.crossingSurface) * cellSize
+          }
           scale={cellSize}
           rotation={object.rotation}
           url={object.url}
@@ -1565,7 +1652,14 @@ export function MapSurface({
           cellSize={cellSize}
           offsetX={offsetX}
           offsetZ={offsetZ}
-          topY={baseHeight + token.elevation * elevationStepHeight}
+          // Bridges and stairs surface-height fix: see the matching
+          // ObjectMarker topY comment just above — additive, 0 for every
+          // token not standing on a crossing structure.
+          topY={
+            baseHeight +
+            token.elevation * elevationStepHeight +
+            crossingSurfaceHeight(token.crossingSurface) * cellSize
+          }
           scale={cellSize}
           allegiance={token.allegiance}
           selected={token.selected ?? false}
@@ -1578,9 +1672,11 @@ export function MapSurface({
           concentrating={token.concentrating ?? false}
           dimmed={token.dimmed ?? false}
           modelUrl={token.modelUrl ?? null}
+          crossingRotationDeg={token.crossingSurface === "stairs" ? (token.crossingRotationDeg ?? null) : null}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
           onSlideDebug={onTokenSlideDebug}
           onMeasureDebug={onTokenMeasureDebug}
+          onTransformDebug={onTokenTransformDebug}
         />
       ))}
 

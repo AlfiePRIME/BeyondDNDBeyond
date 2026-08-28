@@ -92,3 +92,23 @@ export function positionAlongRoute(route: TokenSlideRoute, t: number): GridPoint
   const b = waypoints[index + 1];
   return { x: a.x + (b.x - a.x) * localT, y: a.y + (b.y - a.y) * localT };
 }
+
+/**
+ * Stairs tilt (bridges and stairs, a post-roadmap addition): linear
+ * interpolation between two RADIAN angles that always takes the shorter way
+ * around the circle, rather than a plain `from + (to - from) * t` — a
+ * stairs object's own placement rotation is one of 0/90/180/270 degrees, so
+ * a token stepping off a 270°-rotated flight back to useTokenSlide's
+ * 0-radian "no tilt" rest yaw must visibly turn +90°, not spin the long way
+ * through 180° and back. Used for yaw only — useTokenSlide's pitch blend is
+ * a small, one-directional swing (at most crossingSurface.ts's
+ * STAIRS_SLOPE_RADIANS either way) with no wraparound to worry about, so it
+ * stays a plain lerp like `topY`'s own.
+ */
+export function shortestAngleLerp(from: number, to: number, t: number): number {
+  const twoPi = Math.PI * 2;
+  let delta = (to - from) % twoPi;
+  if (delta > Math.PI) delta -= twoPi;
+  else if (delta < -Math.PI) delta += twoPi;
+  return from + delta * t;
+}

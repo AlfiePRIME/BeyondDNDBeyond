@@ -2258,6 +2258,19 @@ export function MapEditor({
     // host — an unmounted object, or a mounted one whose host was since
     // deleted (mapObjects.ts's own FK already nulled mount_object_id then).
     const objectsById = new Map(objects.map((object) => [object.id, object]));
+    // Bridges and stairs surface-height fix (a post-roadmap addition): the
+    // SAME editor-visual-parity concern as GameRoom.tsx's own
+    // crossingObjectByCell — a decorative object sharing a cell with a
+    // Bridge/Stairs object should render on top of it in the editor too,
+    // not just live in the Game Room. Mount-based placement is the only way
+    // two objects ever share a cell today (handleCellClick's occupant check
+    // prevents ordinary stacking), and a torch only ever mounts onto a wall
+    // segment, never a crossing structure — so this never actually fires
+    // through the real UI yet, but costs nothing to keep correct.
+    const crossingObjectByCell = new Map<string, MapObject>();
+    for (const object of objects) {
+      if (object.crossing_type) crossingObjectByCell.set(cellKey(object.x, object.y), object);
+    }
     const resolveMount = (
       object: MapObject
     ): { x: number; y: number; rotation: number; renderOffsetX: number; renderOffsetZ: number } => {
@@ -2286,6 +2299,9 @@ export function MapEditor({
           forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
           tint: object.tint,
           linkStatus: buildingLinkStatusByObjectId[object.id],
+          crossingSurface: object.crossing_type
+            ? undefined
+            : (crossingObjectByCell.get(cellKey(mount.x, mount.y))?.crossing_type ?? undefined),
         };
       }),
       ...(preview?.objects.map((object) => ({
