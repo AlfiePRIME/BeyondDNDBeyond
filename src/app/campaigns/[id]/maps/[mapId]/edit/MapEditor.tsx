@@ -1001,7 +1001,7 @@ export function MapEditor({
     [inRegion]
   );
 
-  // Bridges and stairs (a post-roadmap addition): the two built-in preset
+  // Bridges and stairs (a post-roadmap addition): the built-in preset
   // assets that carry real movement-rules behavior — see @/data-access's
   // CrossingType doc comment for why this is resolved by matching a KNOWN
   // preset id, looked up by name/source rather than the seed's fixed UUID
@@ -1010,6 +1010,15 @@ export function MapEditor({
   // placement time (a custom upload could otherwise be named "Bridge"
   // without ever granting bridge behavior — see crossingTypeForAsset below,
   // which is what actually decides the behavior, once, at creation).
+  //
+  // Second stairs preset (0082_stairs_half_preset.sql, "Stairs (Half)"): a
+  // second, additive named preset tagged with the SAME 'stairs' crossing
+  // type, alongside — never replacing — the original full-height "Stairs"
+  // preset's own tagging below. Movement rules (the SRD climbing surcharge
+  // suppression) don't care which of the two stairs presets a DM picked,
+  // only that it's some stairs; the two presets' differing real surface
+  // height/tilt angle are resolved separately, by crossingSurface.ts, keyed
+  // by the object's own asset (see MapSurface.tsx's crossingPresetUrl).
   const bridgeAssetId = useMemo(
     () =>
       assets.find((asset) => asset.source_type === "preset" && asset.name === "Bridge")?.id ?? null,
@@ -1020,10 +1029,20 @@ export function MapEditor({
       assets.find((asset) => asset.source_type === "preset" && asset.name === "Stairs")?.id ?? null,
     [assets]
   );
+  const stairsHalfAssetId = useMemo(
+    () =>
+      assets.find((asset) => asset.source_type === "preset" && asset.name === "Stairs (Half)")?.id ??
+      null,
+    [assets]
+  );
   const crossingTypeForAsset = useCallback(
     (assetId: string): CrossingType | null =>
-      assetId === bridgeAssetId ? "bridge" : assetId === stairsAssetId ? "stairs" : null,
-    [bridgeAssetId, stairsAssetId]
+      assetId === bridgeAssetId
+        ? "bridge"
+        : assetId === stairsAssetId || assetId === stairsHalfAssetId
+          ? "stairs"
+          : null,
+    [bridgeAssetId, stairsAssetId, stairsHalfAssetId]
   );
 
   // Map Editor Batch A6: the built-in Pressure Plate preset "works out of

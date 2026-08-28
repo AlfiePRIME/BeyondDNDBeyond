@@ -1,5 +1,6 @@
 import {
   getCharacterPawnSignedUrl,
+  getForwardOffsetsForUrls,
   listCharacterPawnsForCampaign,
   type SupabaseClient,
 } from "@/data-access";
@@ -22,6 +23,19 @@ export interface ResolvedCharacterPawn {
    * resolveAvatarUrl/resolvePaletteAssets: one bad pawn can't take down the
    * room. */
   modelUrl: string | null;
+  /** Pawn-orientation fix (a post-roadmap addition): the SAME
+   * model_orientation correction resolvePaletteAssets already resolves for
+   * every map asset — see @/scene-3d's MapSurfaceToken.forwardOffsetDeg own
+   * doc comment for why a token never applied this at all before. Looked
+   * up by this pawn's own STABLE storage path (`pawn.pawn_model_ref`), NOT
+   * by `modelUrl` above (an ephemeral signed url that would never match a
+   * stored row — model_orientation's own doc comment). 0 for "no custom
+   * model set" and for every pawn with no stored correction — which is
+   * every pawn today, since Pawn Customization P2 has no orientation-picker
+   * UI yet (PawnModelPicker.tsx's own doc comment) — but the lookup is
+   * real, so a future picker (or a direct admin correction) takes effect
+   * immediately. */
+  forwardOffsetDeg: number;
 }
 
 // Same known limitation (deliberate) as the room's avatar/asset signed-url
@@ -45,16 +59,25 @@ export async function resolveCampaignPawnAppearance(
 ): Promise<ResolvedCharacterPawn[]> {
   const pawns = await listCharacterPawnsForCampaign(supabase, campaignId);
 
+  // Batched by STABLE path (resolvePaletteAssets's own precedent) — one
+  // round trip for the whole roster's forward-offset corrections, not one
+  // per pawn.
+  const stableRefs = pawns
+    .map((pawn) => pawn.pawn_model_ref)
+    .filter((ref): ref is string => ref !== null);
+  const forwardOffsetByRef = await getForwardOffsetsForUrls(supabase, stableRefs);
+
   return Promise.all(
     pawns.map(async (pawn) => {
       if (!pawn.pawn_model_ref) {
-        return { characterId: pawn.character_id, ownerId: pawn.owner_id, modelUrl: null };
+        return { characterId: pawn.character_id, ownerId: pawn.owner_id, modelUrl: null, forwardOffsetDeg: 0 };
       }
+      const forwardOffsetDeg = forwardOffsetByRef.get(pawn.pawn_model_ref) ?? 0;
       try {
         const modelUrl = await getCharacterPawnSignedUrl(supabase, pawn.pawn_model_ref, SIGNED_URL_TTL_SECONDS);
-        return { characterId: pawn.character_id, ownerId: pawn.owner_id, modelUrl };
+        return { characterId: pawn.character_id, ownerId: pawn.owner_id, modelUrl, forwardOffsetDeg };
       } catch {
-        return { characterId: pawn.character_id, ownerId: pawn.owner_id, modelUrl: null };
+        return { characterId: pawn.character_id, ownerId: pawn.owner_id, modelUrl: null, forwardOffsetDeg };
       }
     })
   );

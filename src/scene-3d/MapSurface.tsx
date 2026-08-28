@@ -6,7 +6,7 @@ import { BufferAttribute, BufferGeometry, CanvasTexture, Color, SRGBColorSpace }
 import type { ThreeEvent } from "@react-three/fiber";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
-import { crossingSurfaceHeight, STAIRS_TILT_PITCH_RADIANS, type CrossingSurfaceType } from "./crossingSurface";
+import { crossingSurfaceHeight, crossingTiltPitchRadians, isStairsPresetUrl } from "./crossingSurface";
 import { buildGridOverlayPositions } from "./gridOverlay";
 import { useTokenSlide, type TokenSlidePhase } from "./useTokenSlide";
 
@@ -595,8 +595,16 @@ export interface MapSurfaceObject {
    * bare floor beneath it. null/undefined (every object not sharing a cell
    * with a crossing structure, and every object before this feature) adds
    * no height at all — see crossingSurface.ts's crossingSurfaceHeight doc
-   * comment for the real-measured-geometry derivation. */
-  crossingSurface?: CrossingSurfaceType | null;
+   * comment for the real-measured-geometry derivation.
+   *
+   * Preset-aware (a post-roadmap addition, "Stairs (Half)"): this is now
+   * the crossing object's own RESOLVED MODEL URL (e.g.
+   * "/assets/presets/stairs.glb"), not an abstract 'bridge'/'stairs' type —
+   * crossing_type alone can no longer distinguish the two stairs presets'
+   * differing real geometry (see crossingSurface.ts's own top comment), and
+   * this is the exact url MapSurface/GameRoom already resolve for
+   * rendering that object's model, so no new lookup mechanism is needed. */
+  crossingSurface?: string | null;
 }
 
 interface ObjectMarkerProps {
@@ -862,6 +870,27 @@ export interface MapSurfaceToken {
    * is a PC XOR an NPC, 0019's own constraint) and hands back one modelUrl
    * either way; this component never needs to know which chain produced it. */
   modelUrl?: string | null;
+  /** Stored forward-direction correction (degrees, model_orientation —
+   * docs/design/model-orientation-and-posing.md §8) for THIS token's own
+   * `modelUrl` — the pawn-orientation investigation's own fix (a
+   * post-roadmap addition): MapSurfaceObject.forwardOffsetDeg already
+   * applies this correction for a PLACED (decorative) object's model, via
+   * the SAME PlacedObject component this token also renders through, but a
+   * token's OWN model never looked this up at all — a gap, not a
+   * deliberate omission, found while investigating a reported "pawn faces
+   * backward on stairs" bug (crossingSurface.ts's own STAIRS_TILT_PITCH_
+   * RADIANS doc comment covers why that bug was NOT a sign error in the
+   * tilt math itself). A DM-uploaded custom asset used as a monster
+   * template's override (Weather & Enemies C7) already goes through the
+   * SAME orientation-correction upload flow objects use — so its stored
+   * correction now applies here too, exactly as it already does when the
+   * same asset is placed as a decorative object. 0/null/undefined (every
+   * token before this addition, and every model with no stored
+   * model_orientation row — which includes every built-in NPC preset and
+   * every Pawn Customization P2 upload today, since that flow has no
+   * orientation-picker UI yet) renders with no correction at all — today's
+   * exact behavior. */
+  forwardOffsetDeg?: number | null;
   /** Pawn Customization P1: overrides the looked-up ALLEGIANCE_COLOR for
    * this token's disc/plinth — set by GameRoom ONLY for a PC token
    * currently displaying as party-aligned (allegiance === 'party'), to that
@@ -878,13 +907,15 @@ export interface MapSurfaceToken {
   colorOverride?: string | null;
   /** Bridges and stairs surface-height fix (a post-roadmap addition): see
    * MapSurfaceObject.crossingSurface's own doc comment — the crossing
-   * structure occupying THIS token's current cell. null/undefined (every
+   * structure occupying THIS token's current cell (now its resolved model
+   * url, preset-aware — see that same doc comment). null/undefined (every
    * token not standing on one, and every token before this feature) adds
    * no height at all, riding the raw cell elevation exactly as before. */
-  crossingSurface?: CrossingSurfaceType | null;
+  crossingSurface?: string | null;
   /** Paired with `crossingSurface` — the SPECIFIC stairs object's own
    * stored placement `rotation` (degrees, matches map_objects.rotation)
-   * whenever `crossingSurface` is "stairs"; null/undefined for a bridge, no
+   * whenever `crossingSurface` resolves to either stairs preset's own url
+   * (crossingSurface.ts's isStairsPresetUrl); null/undefined for a bridge, no
    * crossing structure, or every token before this feature applies no
    * tilt at all (rides the group's default level orientation). Determines
    * which world direction this cell's flight climbs — see
@@ -1133,8 +1164,10 @@ const TokenMarker = memo(function TokenMarker({
   concentrating,
   dimmed,
   modelUrl,
+  forwardOffsetDeg,
   colorOverride,
   crossingRotationDeg,
+  crossingTiltPitchMagnitude,
   onPointerDown,
   onSlideDebug,
   onMeasureDebug,
@@ -1160,6 +1193,9 @@ const TokenMarker = memo(function TokenMarker({
   dimmed: boolean;
   /** Weather & Enemies C6: see MapSurfaceToken.modelUrl's own doc comment. */
   modelUrl: string | null;
+  /** Pawn-orientation fix: see MapSurfaceToken.forwardOffsetDeg's own doc
+   * comment. 0 for every token before this addition. */
+  forwardOffsetDeg: number;
   /** Pawn Customization P1: see MapSurfaceToken.colorOverride's own doc
    * comment. */
   colorOverride: string | null;
@@ -1167,6 +1203,16 @@ const TokenMarker = memo(function TokenMarker({
    * doc comment. null for a bridge, no crossing structure, or every token
    * before this feature. */
   crossingRotationDeg: number | null;
+  /** Preset-aware stairs tilt (a post-roadmap addition, "Stairs (Half)"):
+   * the SPECIFIC stairs preset's own real, measured tilt-pitch magnitude
+   * (radians, crossingSurface.ts's crossingTiltPitchRadians) for whichever
+   * stairs object is under this token's cell — 0 whenever
+   * `crossingRotationDeg` is null (a bridge, no crossing structure, or
+   * every token before this feature), so it's inert unless a real tilt
+   * also applies. Resolved by the caller (from `crossingSurface`'s own
+   * resolved url), not hardcoded here, so this component never assumes any
+   * one stairs preset's own incline angle. */
+  crossingTiltPitchMagnitude: number;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
   onSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
   /** Verification-only: see MapSurfaceProps.onTokenMeasureDebug's doc
@@ -1209,14 +1255,18 @@ const TokenMarker = memo(function TokenMarker({
   // trying to fold the raise into the imperative write itself, which would
   // require useTokenSlide to know about a concern (selection) that belongs
   // to this component, not the slide hook.
-  // Stairs tilt (bridges and stairs, a post-roadmap addition): a FIXED pitch
-  // magnitude (the flight's own real incline, crossingSurface.ts's
-  // STAIRS_TILT_PITCH_RADIANS) whenever this token's cell has a stairs
-  // object under it, yawed to match that SPECIFIC object's own placement
-  // rotation — 0/0 (no tilt at all) whenever it's a bridge, no crossing
-  // structure, or every token before this feature. Blended smoothly into
-  // the move-tween by useTokenSlide itself, not popped on/off here.
-  const tiltPitch = crossingRotationDeg !== null ? STAIRS_TILT_PITCH_RADIANS : 0;
+  // Stairs tilt (bridges and stairs, a post-roadmap addition): a pitch
+  // magnitude — THIS SPECIFIC stairs preset's own real incline,
+  // crossingTiltPitchMagnitude, resolved by the caller from
+  // crossingSurface.ts's crossingTiltPitchRadians (preset-aware since
+  // "Stairs (Half)": the two stairs presets' real incline angles can
+  // differ, so no single hardcoded constant is used here) — whenever this
+  // token's cell has a stairs object under it, yawed to match that
+  // SPECIFIC object's own placement rotation — 0/0 (no tilt at all)
+  // whenever it's a bridge, no crossing structure, or every token before
+  // this feature. Blended smoothly into the move-tween by useTokenSlide
+  // itself, not popped on/off here.
+  const tiltPitch = crossingRotationDeg !== null ? crossingTiltPitchMagnitude : 0;
   const tiltYaw = crossingRotationDeg !== null ? (crossingRotationDeg * Math.PI) / 180 : 0;
   const { ref: slideRef, phase } = useTokenSlide({
     gridX,
@@ -1268,6 +1318,7 @@ const TokenMarker = memo(function TokenMarker({
             <group position={[0, PLINTH_HEIGHT, 0]}>
               <PlacedObject
                 url={modelUrl}
+                forwardOffsetDeg={forwardOffsetDeg}
                 onMeasureDebug={onMeasureDebug ? (measurement) => onMeasureDebug(id, measurement) : undefined}
               />
             </group>
@@ -1717,8 +1768,12 @@ export function MapSurface({
           concentrating={token.concentrating ?? false}
           dimmed={token.dimmed ?? false}
           modelUrl={token.modelUrl ?? null}
+          forwardOffsetDeg={token.forwardOffsetDeg ?? 0}
           colorOverride={token.colorOverride ?? null}
-          crossingRotationDeg={token.crossingSurface === "stairs" ? (token.crossingRotationDeg ?? null) : null}
+          crossingRotationDeg={
+            isStairsPresetUrl(token.crossingSurface) ? (token.crossingRotationDeg ?? null) : null
+          }
+          crossingTiltPitchMagnitude={crossingTiltPitchRadians(token.crossingSurface)}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
           onSlideDebug={onTokenSlideDebug}
           onMeasureDebug={onTokenMeasureDebug}
