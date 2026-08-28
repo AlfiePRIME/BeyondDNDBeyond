@@ -5,15 +5,17 @@ import { EDITOR_MAP_METRICS, type MapSurfaceMetrics } from "./MapSurface";
 // game board sitting on the table rather than a resurfaced tabletop.
 const TABLE_MAP_MARGIN = 0.3;
 
-// Below this, ten editor-legal steps compress into a smear at miniature
-// scale — the floor trades a little proportionality for readable terracing.
-const MIN_STEP_HEIGHT = 0.09;
-
 /**
  * Fits an arbitrary grid onto the physical table's fixed footprint: uniform
  * cell size from the tighter of the two axes (maps rarely match the
- * tabletop's aspect ratio), editor-proportional slab/step heights, with the
- * step height clamped so elevation terracing stays legible on dense grids.
+ * tabletop's aspect ratio), with slab/step heights kept exactly
+ * editor-proportional (same baseHeight/elevationStepHeight-to-cellSize ratio
+ * the map editor itself renders at) — deliberately NO minimum step-height
+ * floor. An earlier version clamped elevationStepHeight to a minimum so
+ * terracing stayed legible on dense grids, but that traded away the game
+ * table's own visual consistency with the editor (elevation reading up to
+ * ~2x taller than the editor showed on typical/larger maps) — removed per
+ * the project owner's explicit call to prioritize matching the editor.
  */
 export function computeTableMapMetrics(gridWidth: number, gridHeight: number): MapSurfaceMetrics {
   const cellSize = Math.min(
@@ -23,6 +25,6 @@ export function computeTableMapMetrics(gridWidth: number, gridHeight: number): M
   return {
     cellSize,
     baseHeight: EDITOR_MAP_METRICS.baseHeight * cellSize,
-    elevationStepHeight: Math.max(EDITOR_MAP_METRICS.elevationStepHeight * cellSize, MIN_STEP_HEIGHT),
+    elevationStepHeight: EDITOR_MAP_METRICS.elevationStepHeight * cellSize,
   };
 }

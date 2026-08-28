@@ -96,6 +96,17 @@ const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY ?? env.SERVICE_ROLE_KEY;
 
+// mapFit.ts's module graph now reaches MapSurface.tsx -> @/audio ->
+// @/data-access/supabase-browser (the Sound Effects work's SP1/SP3 additions
+// — soundManager.ts's own resolveSoundUrl override check), whose top-level
+// requireEnv() reads process.env directly rather than this script's own
+// local `env` object above. Vite's programmatically-created server below
+// does NOT load .env into process.env itself (that's Next.js's own CLI
+// behavior, not something a bare `createServer()` call gets for free), so
+// without this, vite.ssrLoadModule below throws "Missing
+// NEXT_PUBLIC_SUPABASE_URL" the instant it evaluates MapSurface.tsx.
+Object.assign(process.env, env);
+
 const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
 
 /** Awaits a Supabase query builder and throws loudly on `.error` — a bare

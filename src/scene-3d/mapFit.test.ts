@@ -27,10 +27,9 @@ describe("computeTableMapMetrics", () => {
     expect(square.cellSize * 10).toBeCloseTo(TABLE_TOP.depth - 0.6, 5);
   });
 
-  it("clamps the elevation step so dense grids keep legible terracing", () => {
+  it("keeps editor-proportional step height even on dense grids (no minimum floor)", () => {
     const dense = computeTableMapMetrics(30, 30);
-    expect(dense.elevationStepHeight).toBeGreaterThanOrEqual(0.09);
-    expect(dense.elevationStepHeight).toBeGreaterThan(dense.cellSize * 0.35 - 1e-9);
+    expect(dense.elevationStepHeight).toBeCloseTo(dense.cellSize * 0.35, 5);
   });
 
   it("keeps editor-proportional step height when the map is small enough", () => {

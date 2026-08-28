@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("SOUND_KEYS registry", () => {
-  it("defines exactly the 12 keys this whole Sound Effects plan (SP1-SP9) uses", () => {
+  it("defines exactly the 14 keys this whole Sound Effects plan (SP1-SP9 plus the natural-roll follow-up) uses", () => {
     expect(new Set(ALL_SOUND_KEYS)).toEqual(
       new Set([
         "dice_impact",
@@ -54,9 +54,11 @@ describe("SOUND_KEYS registry", () => {
         "wind_loop",
         "thunder",
         "fire_loop",
+        "nat_20",
+        "nat_1",
       ])
     );
-    expect(ALL_SOUND_KEYS).toHaveLength(12);
+    expect(ALL_SOUND_KEYS).toHaveLength(14);
   });
 
   it("gives every registry key at least one baked file", () => {
