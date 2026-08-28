@@ -418,11 +418,14 @@ export {
 } from "./narrative";
 // AI Backend & Admin D2's admin settings UI — its own data-access module
 // since app_settings (D1, 0072) doesn't fit any existing file's scope
-// (not profile, campaign, character, asset, or narrative data).
+// (not profile, campaign, character, asset, or narrative data). Map Art
+// Generation E2 (0076) extends the same table/module with ComfyUI config
+// and isMapArtConfigured() — see appSettings.ts's own doc comments.
 export {
   getAppSettings,
   updateAppSettings,
   getRawAiProviderConfig,
+  isMapArtConfigured,
   type AiProvider,
   type AppSettings,
   type AppSettingsUpdate,

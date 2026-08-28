@@ -61,3 +61,27 @@
   letter-spacing: 0.08em;
   margin: 0;
 }
+
+/* Map Art Generation E2: a visual divider between the AI text-provider
+   fields above and the independent ComfyUI/map-art fields below — these are
+   two unrelated config axes on the same row, and this heading is what makes
+   that legible in the UI rather than reading as one undifferentiated list
+   of fields. */
+.sectionHeading {
+  color: var(--text);
+  font-family: var(--font-m);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 8px 0 -4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dim2);
+}
+
+.testConnectionRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}

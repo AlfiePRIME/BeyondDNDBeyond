@@ -1,8 +1,13 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useState, useTransition } from "react";
 import { Button, Select, TextInput } from "@/ui-components";
-import { updateAppSettingsAction, type AdminSettingsActionState } from "./actions";
+import {
+  updateAppSettingsAction,
+  testComfyUiConnection,
+  type AdminSettingsActionState,
+  type ComfyUiConnectionTestResult,
+} from "./actions";
 import type { AppSettings } from "@/data-access";
 import styles from "./admin.module.css";
 
@@ -25,6 +30,15 @@ export function AdminSettingsForm({ initialSettings }: AdminSettingsFormProps) {
   const [state, formAction, isPending] = useActionState(updateAppSettingsAction, initialState);
   const [keyInput, setKeyInput] = useState("");
   const [clearKey, setClearKey] = useState(false);
+
+  // Map Art Generation E2: the ComfyUI host URL field is controlled (unlike
+  // ollamaHostUrl above) because "Test connection" needs whatever value is
+  // CURRENTLY TYPED, not just whatever was last saved — testComfyUiConnection
+  // is called directly with this state, not read back out of the <form>'s
+  // own FormData (that only happens on an actual Save submission).
+  const [hostUrlInput, setHostUrlInput] = useState(initialSettings.comfyuiHostUrl ?? "");
+  const [testResult, setTestResult] = useState<ComfyUiConnectionTestResult | null>(null);
+  const [isTestPending, startTestTransition] = useTransition();
 
   // A fresh, successful save always leaves the masked field with nothing
   // more to say about the just-submitted key — reset the transient local
@@ -117,6 +131,72 @@ export function AdminSettingsForm({ initialSettings }: AdminSettingsFormProps) {
         defaultValue={initialSettings.ollamaModel ?? ""}
         disabled={isPending}
         data-testid="admin-ollama-model-input"
+      />
+
+      {/* Map Art Generation E2 — a deliberately separate, independent config
+          axis from the AI text-provider fields above: ComfyUI is its own
+          always-available-if-configured image pipeline, not one of the
+          activeProvider choices, so a campaign can use both at once. */}
+      <div className={styles.sectionHeading} data-testid="admin-comfyui-section">
+        Map Art (ComfyUI)
+      </div>
+      <p className={styles.hint}>
+        Optional — the image-generation backend map art uses. Independent of the AI provider
+        above; a campaign can use both at the same time.
+      </p>
+
+      <TextInput
+        label="ComfyUI host URL"
+        name="comfyuiHostUrl"
+        type="text"
+        autoComplete="off"
+        placeholder="http://10.10.1.10:8188"
+        value={hostUrlInput}
+        onChange={(e) => {
+          setHostUrlInput(e.target.value);
+          setTestResult(null);
+        }}
+        disabled={isPending}
+        data-testid="admin-comfyui-host-input"
+      />
+
+      <div className={styles.testConnectionRow}>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={isPending || isTestPending || !hostUrlInput.trim()}
+          onClick={() => {
+            setTestResult(null);
+            startTestTransition(async () => {
+              const result = await testComfyUiConnection(hostUrlInput);
+              setTestResult(result);
+            });
+          }}
+          data-testid="admin-comfyui-test-button"
+        >
+          {isTestPending ? "Testing…" : "Test connection"}
+        </Button>
+        {testResult ? (
+          <p
+            role={testResult.ok ? undefined : "alert"}
+            className={testResult.ok ? styles.savedText : styles.errorText}
+            data-testid={testResult.ok ? "admin-comfyui-test-success" : "admin-comfyui-test-error"}
+          >
+            {testResult.message}
+          </p>
+        ) : null}
+      </div>
+
+      <TextInput
+        label="Default style prompt"
+        name="comfyuiStylePrompt"
+        type="text"
+        autoComplete="off"
+        placeholder="e.g. moody hand-painted watercolor fantasy map art"
+        defaultValue={initialSettings.comfyuiStylePrompt ?? ""}
+        disabled={isPending}
+        hint="Replaces the default closing render-style instruction in the generation prompt. Leave blank to use the built-in default."
+        data-testid="admin-comfyui-style-input"
       />
 
       {state.error ? (
