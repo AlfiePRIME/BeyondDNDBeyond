@@ -151,6 +151,7 @@ import {
   type VisibilityCellInput,
   type VisibilityTier,
 } from "@/rules-engine";
+import { applyWeatherAudio, resolveWeatherAudio } from "@/audio";
 import {
   Badge,
   Button,
@@ -2044,6 +2045,28 @@ export function GameRoom({
   const handleLightningDebugChange = useCallback((state: LightningFlashState) => {
     setLightningDebugState(state);
   }, []);
+  // Sound Effects SP9 — weather ambience: resolves+applies which of the
+  // three loop-capable channels (rain/wind/fire) should be playing for the
+  // CURRENT weatherKind (src/audio's own resolveWeatherAudio/
+  // applyWeatherAudio — see weatherAudio.ts's own doc comment for the full
+  // per-kind matrix, including the two genuinely dual-channel cases:
+  // thunderstorm's rain+wind, firestorm's wind+fire). A plain effect keyed
+  // on weatherKind alone: applyWeatherAudio re-evaluates and calls
+  // startLoop/stopLoop for every one of the three channels on every call,
+  // and both are idempotent no-ops when a channel's desired state already
+  // matches its current one (soundManager.ts's own doc comments), so this
+  // needs no "which channel actually changed" diffing of its own here —
+  // exactly the same "SP9 calls this once per weather-kind evaluation
+  // without needing to track state itself" idempotency startLoop's own doc
+  // comment already promises. Unlike Droplets' lazy dropletsMounted latch
+  // (deferring a real WebGL context's own creation cost), there is no
+  // similar "first activation" cost worth deferring for a Web Audio loop —
+  // soundManager's own AudioContext is already lazily created on whichever
+  // real playback call happens first — so this runs unconditionally from
+  // the very first render, not gated behind any one-time mount latch.
+  useEffect(() => {
+    applyWeatherAudio(weatherKind);
+  }, [weatherKind]);
   // Chat & Summary B6: pause/resume, live-synced below via the same
   // campaigns postgres_changes feed as economyStrict/dayNightMode.
   // sessionPaused (derived, not its own state) is the "stopped for a break,
@@ -6446,6 +6469,24 @@ export function GameRoom({
           without pixel-diffing a screenshot. */}
       <div data-testid="cloud-state" hidden>
         {JSON.stringify({ kind: weatherKind, preset: resolveCloudPreset(weatherKind) })}
+      </div>
+      {/* Hidden render-state mirror for verify-weather-audio.mjs (Sound
+          Effects SP9) — the Web Audio API has no DOM of its own, same
+          reasoning as sound-manager-debug (SoundControl.tsx). Mirrors
+          resolveWeatherAudio(weatherKind) directly — the exact same pure
+          function the effect above calls (via applyWeatherAudio) to decide
+          which loop channels to start/stop — so a Playwright check can
+          assert the exact expected per-kind channel combination (including
+          the two genuinely dual-channel cases, thunderstorm's rain+wind and
+          firestorm's wind+fire) instantly, without waiting on a real
+          startLoop/stopLoop crossfade to land. That REAL, fade-delayed
+          activation is separately confirmed via SoundControl's own
+          sound-manager-debug mirror (SP1's getDebugSnapshot(), which reports
+          each LOOP_SOUND_KEYS channel's actual live state/gain) — this
+          mirror is the "what SHOULD be active" half of that check, not a
+          replacement for it. */}
+      <div data-testid="weather-audio-state" hidden>
+        {JSON.stringify({ kind: weatherKind, channels: resolveWeatherAudio(weatherKind) })}
       </div>
       {/* Hidden render-state mirror for verify-map-art-rendering.mjs (Map
           Art Generation E5) — GameTableScene's own onMapArtDebug, mirrored

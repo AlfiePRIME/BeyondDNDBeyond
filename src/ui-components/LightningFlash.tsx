@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { playSound, SOUND_KEYS } from "@/audio";
 import { computeLightningFlash, seedFromString, type LightningFlashState } from "./lightning";
 
 /**
@@ -23,6 +24,23 @@ import { computeLightningFlash, seedFromString, type LightningFlashState } from 
  * identical answer from, which is the whole cross-client synchronization
  * mechanism (see lightning.ts's own top-of-file doc comment for why that
  * was chosen over broadcasting each flash as a realtime event).
+ *
+ * Sound Effects SP9 — the `thunder` one-shot (SOUND_KEYS.THUNDER) rides this
+ * exact SAME per-frame computeLightningFlash evaluation, not a second,
+ * independent trigger: the tick() loop below already calls it every rAF
+ * frame for the visual opacity, so watching for THAT SAME call's own
+ * `state.active` flipping false->true (a new flash beginning) and firing
+ * playSound right there gets a synced thunder sound for free — every
+ * connected client independently reaches the identical false->true instant
+ * from the identical deterministic schedule, with no new broadcast/sync
+ * mechanism of its own, the same zero-cross-client-skew property the visual
+ * flash already has. Deliberately NOT hooked off the throttled
+ * `onDebugChange` callback below (~25Hz, DEBUG_TICK_MS) — that callback
+ * exists only to feed a hidden Playwright mirror at a coarse, "good enough
+ * to observe a >=160ms window" rate, and polling it for a transition would
+ * both lag the real flash instant and risk missing a short flash between two
+ * throttled ticks; tick()'s own per-frame `state` is the frame-accurate
+ * source both effects should read from.
  *
  * Deliberately follows Droplets' own "don't drive a 60fps animation through
  * React state" discipline: the visible opacity is written straight onto the
@@ -68,9 +86,18 @@ export function LightningFlash({ active, campaignId, onDebugChange }: LightningF
     const seed = seedFromString(campaignId);
     let raf = 0;
     let lastDebugAt = 0;
+    // Local to this effect run (fresh false on every mount/campaignId
+    // change) — see this file's own top-of-file doc comment for why the
+    // thunder one-shot fires on THIS flag's false->true transition rather
+    // than off the throttled onDebugChange callback.
+    let wasActive = false;
     function tick(now: number) {
       const state = computeLightningFlash(seed, Date.now());
       if (elRef.current) elRef.current.style.opacity = String(state.opacity);
+      if (state.active && !wasActive) {
+        void playSound(SOUND_KEYS.THUNDER);
+      }
+      wasActive = state.active;
       if (onDebugChange && now - lastDebugAt >= DEBUG_TICK_MS) {
         lastDebugAt = now;
         onDebugChange(state);
