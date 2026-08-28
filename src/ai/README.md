@@ -25,8 +25,9 @@ one `generateText()` actually calls, with no redeploy. `generateNarrativeDraft` 
 first real consumer.
 
 - **Anthropic** (`providers/anthropic.ts`) — the pre-D3 behavior, refactored to fit the
-  interface: same model (`claude-haiku-4-5-20251001`), same request/response shape. Its own
-  SDK's native fetch-injection is the testing seam.
+  interface: same request/response shape, model upgraded to `claude-sonnet-5` per the project
+  owner's request (was `claude-haiku-4-5-20251001`). Its own SDK's native fetch-injection is
+  the testing seam.
 - **OpenAI** (`providers/openai.ts`) — plain `fetch` to `/v1/chat/completions` (`gpt-4o-mini`),
   deliberately not the `openai` npm package: this module needs exactly one REST round trip,
   and staying on `fetch` means every provider shares one testing seam instead of Anthropic

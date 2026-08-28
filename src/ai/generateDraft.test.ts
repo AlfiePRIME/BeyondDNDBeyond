@@ -42,7 +42,7 @@ function fakeMessage(content: Anthropic.ContentBlock[]): Anthropic.Message {
     id: "msg_test",
     type: "message",
     role: "assistant",
-    model: "claude-haiku-4-5-20251001",
+    model: "claude-sonnet-5",
     content,
     stop_reason: "end_turn",
     stop_sequence: null,

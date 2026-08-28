@@ -195,7 +195,7 @@ function startFakeAnthropicTextServer() {
             id: `msg_fake_area_${areaRequestCount}`,
             type: "message",
             role: "assistant",
-            model: body?.model ?? "claude-haiku-4-5-20251001",
+            model: body?.model ?? "claude-sonnet-5",
             content: [
               {
                 type: "tool_use",
@@ -222,7 +222,7 @@ function startFakeAnthropicTextServer() {
           id: `msg_fake_${requestCount}`,
           type: "message",
           role: "assistant",
-          model: body?.model ?? "claude-haiku-4-5-20251001",
+          model: body?.model ?? "claude-sonnet-5",
           content: [
             {
               type: "text",
@@ -427,8 +427,8 @@ try {
     fakeAnthropic.getRequestCount() === beforeAnthropicCount + 1
   );
   check(
-    "the request used ANTHROPIC_TEXT_MODEL (claude-haiku-4-5-20251001)",
-    fakeAnthropic.getLastRequestBody()?.model === "claude-haiku-4-5-20251001",
+    "the request used ANTHROPIC_TEXT_MODEL (claude-sonnet-5)",
+    fakeAnthropic.getLastRequestBody()?.model === "claude-sonnet-5",
     fakeAnthropic.getLastRequestBody()
   );
   check(
@@ -468,8 +468,8 @@ try {
     fakeAnthropic.getLastAreaRequestBody()?.tool_choice
   );
   check(
-    "the request used the same MODEL as generate-draft (claude-haiku-4-5-20251001)",
-    fakeAnthropic.getLastAreaRequestBody()?.model === "claude-haiku-4-5-20251001",
+    "the request used the same MODEL as generate-draft (claude-sonnet-5)",
+    fakeAnthropic.getLastAreaRequestBody()?.model === "claude-sonnet-5",
     fakeAnthropic.getLastAreaRequestBody()?.model
   );
   check(

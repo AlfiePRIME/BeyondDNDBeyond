@@ -1,14 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { GenerateTextParams, GenerateTextTransport } from "./types";
 
-// Haiku 4.5: a short creative-text draft doesn't need Sonnet/Opus-tier
-// reasoning, and the DM is waiting on the response in a modal. This is the
-// same model generateDraft.ts used before D3 — re-exported from there as
-// `MODEL` for generateMapArea.ts/generateSessionSummary.ts's own direct
-// (structured, forced-tool-use) Anthropic calls, which are out of scope for
-// the provider-switching this file's generateTextAnthropic implements. See
-// this directory's README for why those two stay Anthropic-only for now.
-export const ANTHROPIC_TEXT_MODEL = "claude-haiku-4-5-20251001";
+// Sonnet 5: upgraded from Haiku 4.5 per the project owner's request, for
+// better narrative-generation quality — re-exported from here as `MODEL` for
+// generateMapArea.ts's own direct (structured, forced-tool-use) Anthropic
+// call, which is out of scope for the provider-switching this file's
+// generateTextAnthropic implements. See this directory's README for why
+// that one stays Anthropic-only for now.
+export const ANTHROPIC_TEXT_MODEL = "claude-sonnet-5";
 
 /** Exported for unit tests — the exact request body sent to the Messages
  * API. Behavior unchanged from generateDraft.ts's pre-D3 buildDraftRequest:

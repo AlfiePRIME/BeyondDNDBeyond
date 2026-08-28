@@ -30,7 +30,7 @@ function toolUseMessage(input: unknown): Anthropic.Message {
     id: "msg_test",
     type: "message",
     role: "assistant",
-    model: "claude-haiku-4-5-20251001",
+    model: "claude-sonnet-5",
     content: [
       { type: "tool_use", id: "toolu_test", name: "propose_map_area", input },
     ],
@@ -52,9 +52,9 @@ const VALID_DRAFT = {
 };
 
 describe("buildAreaRequest", () => {
-  it("forces the structured tool with a strict schema on the Haiku model", () => {
+  it("forces the structured tool with a strict schema on the Sonnet model", () => {
     const request = buildAreaRequest("a ruined library", REGION, ASSETS);
-    expect(request.model).toBe("claude-haiku-4-5-20251001");
+    expect(request.model).toBe("claude-sonnet-5");
     expect(request.tool_choice).toEqual({ type: "tool", name: "propose_map_area" });
     const tool = request.tools?.[0] as Anthropic.Tool;
     expect(tool.name).toBe("propose_map_area");
