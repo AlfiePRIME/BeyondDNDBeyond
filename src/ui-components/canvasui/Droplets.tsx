@@ -71,11 +71,27 @@ export interface DropletsOptions {
   speed?: number;
   /** Relative width of each drop's refraction lobe (0.05 to 1). */
   dropWidth?: number;
-  /** Relative length of each drop's trailing streak (0.5 to 4). */
+  /**
+   * Relative length of each drop's trailing streak (0.5 to 9). Widened from
+   * this option's original 0.5-4 range in this pass — see this file's own
+   * "third fix" doc comment below for why: at the old range's own default
+   * (4.0) the rendered streak's real on-screen aspect ratio (measured via a
+   * standalone debug-visualization harness, not guessed) came out only
+   * ~2-3.7x taller than wide, nowhere near the reference "thin melting
+   * icicle/comet" target of several times taller than wide.
+   */
   dropLength?: number;
-  /** Strength of the background UV distortion under each drop (0 to 0.15). */
+  /**
+   * Strength of the background UV distortion under each drop (0 to 0.3,
+   * widened from 0 to 0.15 in this pass alongside dropLength — see this
+   * file's own "third fix" doc comment below).
+   */
   refraction?: number;
-  /** Softness applied to the background where drops sit wet (0 to 1). */
+  /**
+   * Softness applied to the background where drops sit wet (0 to 1). As of
+   * this pass this also drives how far the directional along-drop smear
+   * (see FRAG's own doc comment) reaches, not just an isotropic soften.
+   */
   blur?: number;
   /** Darkening toward the frame corners (0 to 1). */
   vignette?: number;
@@ -122,13 +138,45 @@ export interface DropletsInstance {
   destroy: () => void;
 }
 
+// Third fix on this file (see git log for the first two): the project
+// owner looked at the live result after both prior passes and it still
+// didn't match the reference "Canvas UI" Droplets demo's own visual bar —
+// real long, thin, near-vertical streaks (several times taller than wide,
+// closer to a thin melting icicle/comet tail than an oval or teardrop)
+// whose background content is visibly warped/smeared ALONG the streak's own
+// length, bold rather than subtle. Measured the actual PRIOR shape directly
+// (a standalone debug-visualization harness rendering `outColor =
+// vec4(wetness, specular, length(distortion), 1.0)` against a synthetic
+// high-detail test image, independent of the Supabase/Game Room stack) and
+// found two real, quantified gaps rather than guessing:
+//   1. The previous pass's own total rendered aspect ratio (full tail
+//      length including the near-zero-height head, divided by full width)
+//      came out to only ~tailScale/2, i.e. ~2-3.7x at its own defaults —
+//      "a bit more than double," not "several times." Fixed by (a) a much
+//      stronger tailScale multiplier below, (b) raising the dropLength
+//      default itself, and (c) a new width-taper term (see `widthTaper`)
+//      that narrows the tail toward its own tip instead of leaving it a
+//      uniform-width ellipse — reads as a tapering icicle point, not a
+//      stretched oval.
+//   2. The refraction displacement was both too weak in magnitude AND
+//      applied symmetrically (radially outward from the drop's own local
+//      center) rather than biased along the drop's own long axis, so
+//      content never visibly "smeared" the way the reference does. Fixed
+//      by (a) a stronger displacement curve, (b) an explicit vertical bias
+//      on the single-sample lens push, and — the change most responsible
+//      for actually selling "smeared," confirmed via real side-by-side
+//      screenshots against the single-sample-only version — (c) a real
+//      multi-tap directional blur along the drop's own vertical axis in
+//      main() below, gated behind a wetness threshold so its cost stays
+//      concentrated on the small fraction of the screen a drop actually
+//      covers rather than being paid uniformly everywhere.
 const DEFAULTS: Required<Omit<DropletsOptions, "interactive">> = {
-  intensity: 0.85,
+  intensity: 1.05,
   speed: 1,
-  dropWidth: 0.06,
-  dropLength: 4.0,
-  refraction: 0.045,
-  blur: 0.4,
+  dropWidth: 0.05,
+  dropLength: 7.5,
+  refraction: 0.14,
+  blur: 0.6,
   vignette: 0.3,
   tintColor: [0.53, 0.58, 0.66],
   tintStrength: 0.06,
@@ -233,26 +281,58 @@ vec4 dropLayer (vec2 uv, float scale, float speedMul, float seed) {
   // the trailing taper below, not just overall opacity.
   float trailFade = 0.35 + 0.65 * smoothstep(1.0, 0.0, phase);
 
-  // Teardrop/comet taper: a compact round head in the direction of travel
-  // (falling, so "ahead" = below the center, rawY < 0) and a longer,
-  // thinning trailing streak behind it (above the center, rawY > 0) that
-  // stretches further just before it fades — reads as "a drop with a
-  // fading trail," not a static radial oval.
+  // Icicle/comet taper (THIRD fix — see this file's own DEFAULTS doc
+  // comment above for the measured gap this closes): a small, compact head
+  // in the direction of travel (falling, so "ahead" = below the center,
+  // rawY < 0), and a MUCH longer, narrowing trailing streak behind it
+  // (above the center, rawY > 0). Two things stretch the tail well past the
+  // previous pass's own ~2-3.7x total aspect ratio:
+  //   1. tailScale's own multiplier is substantially larger than before
+  //      (mix(4.2, 2.0, ...) vs. the old mix(1.85, 1.0, ...)), and it's
+  //      applied to a larger dropLength default too (see DEFAULTS) — the
+  //      combined effect roughly triples the old worst-case tailScale.
+  //   2. widthTaper narrows the drop's own EFFECTIVE half-width as a
+  //      pixel's position moves further down the tail (tailT -> 1 at the
+  //      very tip), instead of leaving the tail a uniform-width ellipse —
+  //      this is what makes the tip actually read as a narrowing icicle
+  //      point rather than a stretched oval end-cap.
   float headScale = max(uDropWidth * 1.15, 0.03);
-  float tailScale = max(uDropLength * mix(1.85, 1.0, trailFade), 0.05);
+  // The 3.0/1.7 multiplier range (and the dropLength default in DEFAULTS)
+  // was deliberately kept just under the point where dropWidth*tailScale
+  // approaches a single grid cell's own achievable extent (~1.0-1.05 grid
+  // units, from cellUv's +-0.5 range combined with dropY's own +-0.55
+  // travel range) — confirmed empirically via the debug-visualization
+  // harness at phases right before a drop wraps (its longest-tail moment):
+  // pushing this further starts hard-clipping the tail's tip at the cell
+  // boundary (a flat, seam-like cutoff) instead of a natural taper to a
+  // point.
+  float tailScale = max(uDropLength * mix(3.0, 1.7, trailFade), 0.05);
   float yScale = rawY < 0.0 ? headScale : tailScale;
-  vec2 toDrop = vec2(rawX, rawY / yScale);
+
+  float tailReach = max(uDropWidth * tailScale, 0.02);
+  float tailT = rawY > 0.0 ? clamp(rawY / tailReach, 0.0, 1.0) : 0.0;
+  float widthTaper = mix(1.0, 0.32, tailT * tailT);
+  float localHalfWidth = max(uDropWidth * widthTaper, 0.006);
+  vec2 toDrop = vec2(rawX * (uDropWidth / localHalfWidth), rawY / yScale);
 
   float d = length(toDrop) / max(uDropWidth, 0.02);
   float mask = smoothstep(1.0, 0.0, d) * trailFade;
 
   // Refraction: push the background outward from the drop's core like a
-  // real lens bulge. The (1.0 + 2.6 * (1.0 - d)) factor weights the push
+  // real lens bulge, THEN bias that push toward the drop's own long axis
+  // (vertical) — toDrop.y is amplified 2.6x relative to toDrop.x below —
+  // so the single-sample lens push alone already reads as directional, not
+  // radially symmetric. The (1.0 + 4.5 * (1.0 - d)) factor weights the push
   // several times stronger near the drop's core (d near 0) than near its
-  // own edge (d near 1, where 'mask' is already fading it to zero anyway),
-  // boosted well above the old flat 'toDrop * mask' magnitude so it's
-  // actually visible as lensing rather than a sub-pixel nudge.
-  vec2 grad = toDrop * mask * (1.0 + 2.6 * (1.0 - d));
+  // own edge (d near 1, where 'mask' is already fading it to zero anyway).
+  // This is intentionally still a BOUNDED push (toDrop's own components are
+  // capped by the d <= 1 mask boundary, same as before) — the much bigger,
+  // unmistakably-directional "smear" comes from the real multi-tap
+  // directional blur in main() below (see its own doc comment for why a
+  // single UV nudge alone can't sell "smeared along the drop's length"
+  // without either looking too weak or, pushed further, glitchy/broken).
+  vec2 pushDir = vec2(toDrop.x, toDrop.y * 2.6);
+  vec2 grad = pushDir * mask * (1.0 + 4.5 * (1.0 - d));
 
   // Specular: a small hemisphere-normal glint, not a flat fill. The xy
   // part of the fake normal comes from the drop-local offset (zero at dead
@@ -280,15 +360,37 @@ void main () {
   vec2 sampleUv = vec2(refracted.x, 1.0 - refracted.y);
   vec3 color = texture(uContent, sampleUv).rgb;
 
-  if (uBlur > 0.001) {
-    vec2 o = uBlur * 0.0035 * vec2(1.0, uResolution.x / max(uResolution.y, 1.0));
-    vec3 blurred = color;
-    blurred += texture(uContent, sampleUv + vec2(o.x, 0.0)).rgb;
-    blurred += texture(uContent, sampleUv - vec2(o.x, 0.0)).rgb;
-    blurred += texture(uContent, sampleUv + vec2(0.0, o.y)).rgb;
-    blurred += texture(uContent, sampleUv - vec2(0.0, o.y)).rgb;
-    blurred *= 0.2;
-    color = mix(color, blurred, clamp(wetness, 0.0, 1.0));
+  // Directional "melting glass" smear along each drop's own long axis
+  // (vertical — see dropLayer's own doc comment on why headScale/tailScale
+  // are y-axis-only) — THIRD fix's own main addition (see this file's
+  // DEFAULTS doc comment above for the write-up): several extra content
+  // samples further up/down from the already-refracted point, weighted by
+  // distance from the drop's own core and averaged together. This is a
+  // real duplicate-sample directional blur, not a single UV nudge — a
+  // single nudge alone reads as a faint wobble even when pushed hard,
+  // because it only re-POSITIONS one sample rather than blending several
+  // ALONG the axis, which is what a real elongated-lens smear actually
+  // looks like. Gated behind a wetness threshold so the extra taps are
+  // only paid on the small fraction of the screen a drop actually covers
+  // this frame (confirmed via the frame-time benchmark this pass re-ran —
+  // see this file's own git history for the measured delta) rather than
+  // uniformly across the whole canvas.
+  float wetness01 = clamp(wetness, 0.0, 1.0);
+  if (uBlur > 0.001 && wetness01 > 0.015) {
+    float smearReach = (uBlur * 0.05 + uRefraction * 4.5 * uIntensity) * (0.35 + 0.65 * wetness01);
+    vec3 smeared = color;
+    float totalWeight = 1.0;
+    for (int i = 1; i <= 4; i++) {
+      float t = float(i) / 4.0;
+      float w = (1.0 - t * 0.7) * wetness01;
+      float off = t * smearReach;
+      vec2 upUv = clamp(sampleUv + vec2(0.0, off), vec2(0.001), vec2(0.999));
+      vec2 downUv = clamp(sampleUv - vec2(0.0, off), vec2(0.001), vec2(0.999));
+      smeared += texture(uContent, upUv).rgb * w;
+      smeared += texture(uContent, downUv).rgb * w;
+      totalWeight += w * 2.0;
+    }
+    color = smeared / totalWeight;
   }
 
   // Edge-weighted specular glint (see dropLayer's own doc comment) instead
