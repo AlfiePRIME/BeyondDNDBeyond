@@ -6,7 +6,8 @@ export type AvatarSource = "preset" | "custom";
 
 /**
  * One Game Room panel's persisted layout (Phase B of the UI overhaul, `height`
- * added by the panel-resize follow-up) — the only shape stored inside
+ * added by the panel-resize follow-up, `docked` added by the dock/close +
+ * push-aside follow-up) — the only shape stored inside
  * ui_preferences.panelLayout. Position is always the panel's top-left corner
  * in viewport pixels; `collapsed` hides the panel's body while its
  * header/drag-handle stays visible; `height` is the panel's own resized
@@ -16,12 +17,24 @@ export type AvatarSource = "preset" | "custom";
  * never touches it, and a panel with no `height` renders via its own CSS
  * class's default `max-height` (the exact pre-resize visual, no migration of
  * old rows needed).
+ *
+ * `docked` is a DIFFERENT state from `collapsed`, not a replacement for it:
+ * collapsed still floats in place, shrunk to its header bar; docked removes
+ * the floating panel entirely and surfaces a glyph button for it in the Game
+ * Room's top bar instead (see DraggablePanel.tsx's `PanelDockBar`). Docking
+ * never touches `x`/`y`/`height` — un-docking simply flips the flag back,
+ * restoring the panel at exactly the position/size it already had, the same
+ * "the persisted fields ARE the restore state, no separate snapshot needed"
+ * shape `collapsed` already established. Optional/omittable for the same
+ * reason `height` is: an entry created before this follow-up shipped simply
+ * has no opinion on it, and `docked` is treated as `false` when absent.
  */
 export interface PanelLayoutEntry {
   x: number;
   y: number;
   collapsed: boolean;
   height?: number;
+  docked?: boolean;
 }
 
 /**

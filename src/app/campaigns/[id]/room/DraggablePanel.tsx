@@ -22,6 +22,7 @@ import {
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { Button } from "@/ui-components";
 import styles from "./DraggablePanel.module.css";
+import { resolveOverlaps, type Rect } from "./panelCollision";
 
 /**
  * Stable identity for every Game Room panel mounted through DraggablePanel.
@@ -112,6 +113,68 @@ const DEFAULT_ANCHOR_CLASS: Record<PanelId, string> = {
   // like every other panel here, drag-to-reposition remains the escape
   // hatch for a layout this doesn't suit.
   chatLog: styles.anchorMidRight,
+};
+
+/**
+ * Canonical, stable ordering of every panel id — used wherever a
+ * deterministic iteration/render order matters more than object-key
+ * insertion order (Object.keys on the layout map would reorder itself as
+ * panels get touched in different sessions). Currently just `PanelDockBar`'s
+ * own button order below, so a user sees their docked panels' buttons in
+ * the same left-to-right order every time rather than "whichever order
+ * they happened to close them in."
+ */
+const ALL_PANEL_IDS: PanelId[] = [
+  "map",
+  "tokens",
+  "combat",
+  "opportunityAttack",
+  "quickActions",
+  "diceLog",
+  "handout",
+  "diceTray",
+  "hp",
+  "liveObjects",
+  "chatLog",
+];
+
+/** Dock/close follow-up: each panel's real, human display name — shown as
+ * the top-bar dock button's hover tooltip/title (the project owner's own
+ * "state exactly what it is" ask) and its accessible label. */
+const PANEL_DISPLAY_NAME: Record<PanelId, string> = {
+  map: "Map",
+  tokens: "Tokens",
+  combat: "Combat",
+  opportunityAttack: "Opportunity Attack",
+  quickActions: "Quick Actions",
+  diceLog: "Dice Log",
+  handout: "Handouts",
+  diceTray: "Dice Tray",
+  hp: "HP",
+  liveObjects: "Live Objects",
+  chatLog: "Chat",
+};
+
+/** Dock/close follow-up: one distinct, recognizable glyph per panel for its
+ * top-bar dock button — plain Unicode, not an SVG/icon-library dependency
+ * (this project already reaches for emoji glyphs elsewhere in this exact
+ * header, e.g. the firestorm/acid-storm badges in GameRoom.tsx, so this
+ * isn't a new convention). Chosen for a quick, at-a-glance match to what
+ * each panel actually is, and kept visually distinct from its siblings
+ * (combat's crossed swords vs. opportunityAttack's shield, diceLog's die vs.
+ * diceTray's palette) rather than reusing a close look-alike. */
+const PANEL_ICON: Record<PanelId, string> = {
+  map: "🗺️",
+  tokens: "♟️",
+  combat: "⚔️",
+  opportunityAttack: "🛡️",
+  quickActions: "⚡",
+  diceLog: "🎲",
+  handout: "📜",
+  diceTray: "🎨",
+  hp: "❤️",
+  liveObjects: "📦",
+  chatLog: "💬",
 };
 
 /**
@@ -278,12 +341,45 @@ interface PanelLayoutContextValue {
    * (never dragged/collapsed) creates its FIRST saved entry, which needs an
    * x/y same as any other. */
   setHeight(panelId: PanelId, height: number, currentPosition: { x: number; y: number }): void;
+  /** Flips a panel's docked (closed-to-top-bar) state — see
+   * PanelLayoutEntry.docked's own doc comment (profiles.ts) for how this
+   * differs from `collapsed`. `currentPosition` seeds a fresh entry exactly
+   * like `toggleCollapsed`'s own parameter; optional because the top bar's
+   * own un-dock button (PanelDockBar below) never needs it — a panel can
+   * only ever BE docked once it already has a real saved entry (docking
+   * always seeds one first), so undocking never hits the fresh-entry
+   * branch. */
+  toggleDocked(panelId: PanelId, currentPosition?: { x: number; y: number }): void;
   /** This panel's current stacking order (for the `zIndex` style). */
   zIndexOf(panelId: PanelId): number;
   /** Raises a panel above every sibling — called on any pointer-down
    * inside a DraggablePanel, so the most recently touched panel is always
    * on top. */
   bringToFront(panelId: PanelId): void;
+  /** Push-aside follow-up: this panel's CURRENT transient visual
+   * displacement (applied via the CSS `translate` property, see
+   * DraggablePanel's own render below), or null if it isn't being pushed
+   * right now. Deliberately NOT part of `PanelLayoutEntry`/persisted
+   * state — see the PanelLayoutProvider doc comment's "pushedOffsets"
+   * section for why a push must never be mistaken for (or overwrite) a
+   * panel's real saved position. */
+  pushOffsetOf(panelId: PanelId): { dx: number; dy: number } | null;
+  /** Immediately clears a panel's transient push offset with no animation
+   * and no effect on its real saved position — used only when the panel is
+   * about to be given a brand new authoritative position anyway (grabbing
+   * it to drag it manually while it's mid-push; see DraggablePanel's
+   * `handlePointerDown`), so the old offset can't linger and get
+   * double-applied on top of the new one. */
+  clearPushOffset(panelId: PanelId): void;
+  /** Registers (or, passing `element: null`, unregisters) the DOM element
+   * backing one panel's DraggablePanel wrapper, plus whether that panel is
+   * currently rendering real content — the collision system's only way to
+   * know a panel's actual on-screen rectangle and whether it's eligible to
+   * participate in overlap resolution at all (a panel with nothing
+   * rendered, per DraggablePanel's own `hasContent` — see its doc comment
+   * — is already fully hidden and must never be treated as an obstacle or
+   * as something to push). */
+  registerPanelPresence(panelId: PanelId, element: HTMLElement | null, hasContent: boolean): void;
 }
 
 const PanelLayoutContext = createContext<PanelLayoutContextValue | null>(null);
@@ -358,6 +454,48 @@ export function PanelLayoutProvider({
     layoutRef.current = layout;
   }, [layout]);
 
+  // ── Push-aside follow-up state ──────────────────────────────────────
+  //
+  // `pushedOffsets` is a TRANSIENT visual overlay, deliberately never
+  // merged into `layout`/persisted: a push is "this panel is temporarily
+  // nudged out of another one's way," not a real repositioning the user
+  // asked for. Keeping it as its own piece of state (rather than e.g. a
+  // `pushedX`/`pushedY` field on PanelLayoutEntry) is what makes the two
+  // reload-safety requirements fall out for free: a reload never restores
+  // `pushedOffsets` (it isn't in ui_preferences at all), so a panel that
+  // was mid-push at the moment of reload simply renders at its own real
+  // saved position — never a stale pushed one — and a pushed panel's real
+  // `x`/`y` in the database is never at risk of being overwritten by the
+  // push in the first place, because nothing here ever calls
+  // setPosition/setLayout to apply one.
+  const [pushedOffsets, setPushedOffsets] = useState<Partial<Record<PanelId, { dx: number; dy: number }>>>({});
+  const pushedOffsetsRef = useRef(pushedOffsets);
+  useEffect(() => {
+    pushedOffsetsRef.current = pushedOffsets;
+  }, [pushedOffsets]);
+
+  // The single panel treated as the fixed "anchor" for overlap resolution
+  // — the panel that most recently opened (undocked), expanded
+  // (uncollapsed), or resized. Deliberately NOT updated by plain
+  // drag-to-reposition (setPosition) — see panelCollision.ts's own doc
+  // comment for why drag must never itself introduce a NEW push, even
+  // though the anchor's CURRENT position (read fresh every recompute,
+  // including while it's being dragged) is exactly what lets an anchor
+  // being dragged away correctly release whatever it was pushing.
+  const lastMovedPanelRef = useRef<PanelId | null>(null);
+
+  // Registry of every currently-mounted panel's own wrapper element plus
+  // whether it's presently rendering real content — populated by each
+  // DraggablePanel instance (registerPanelPresence below), read by the
+  // recompute effect to measure real on-screen rectangles. Plain refs
+  // (not state) because updating them must never itself be what triggers a
+  // re-render of THIS provider — `registryTick` (below) is the one
+  // reactive signal that something in the registry changed and a
+  // recompute pass is worth running.
+  const panelElementsRef = useRef<Partial<Record<PanelId, HTMLElement>>>({});
+  const panelHasContentRef = useRef<Partial<Record<PanelId, boolean>>>({});
+  const [registryTick, setRegistryTick] = useState(0);
+
   const [zIndexes, setZIndexes] = useState<Record<string, number>>({});
   // Starts at the highest DEFAULT_Z_INDEX (not BASE_Z_INDEX) so the very
   // first bringToFront of ANY panel — including one whose baseline is
@@ -415,6 +553,13 @@ export function PanelLayoutProvider({
 
   const toggleCollapsed = useCallback(
     (panelId: PanelId, currentPosition: { x: number; y: number }) => {
+      // Expanding (collapsed → not-collapsed) is one of the three push-aside
+      // triggers ("opens/reopens/resizes") — read the PRE-toggle value off
+      // layoutRef (not the `layout` closure, which toggleCollapsed's own
+      // stable identity never recaptures) so this only fires on the actual
+      // expand direction, never on collapsing.
+      const wasCollapsed = layoutRef.current[panelId]?.collapsed ?? false;
+      if (wasCollapsed) lastMovedPanelRef.current = panelId;
       setLayout((current) => {
         const entry = current[panelId] ?? { ...currentPosition, collapsed: false };
         return { ...current, [panelId]: { ...entry, collapsed: !entry.collapsed } };
@@ -426,6 +571,12 @@ export function PanelLayoutProvider({
 
   const setHeight = useCallback(
     (panelId: PanelId, height: number, currentPosition: { x: number; y: number }) => {
+      // Resizing is always a push-aside trigger, including every
+      // intermediate call during a live resize drag — see this file's own
+      // recompute effect for why re-running on every one of those is
+      // cheap and, for this specific gesture, exactly the "push follows the
+      // resize live" behavior wanted.
+      lastMovedPanelRef.current = panelId;
       setLayout((current) => {
         const entry = current[panelId] ?? { ...currentPosition, collapsed: false };
         return { ...current, [panelId]: { ...entry, height } };
@@ -434,6 +585,52 @@ export function PanelLayoutProvider({
     },
     [schedulePersist]
   );
+
+  const toggleDocked = useCallback(
+    (panelId: PanelId, currentPosition?: { x: number; y: number }) => {
+      // Un-docking (docked → not-docked, i.e. reopening from the top bar)
+      // is the third push-aside trigger; docking (closing) deliberately
+      // does NOT set the anchor — see the recompute effect below, which
+      // already treats "the current anchor is no longer open" (docked,
+      // collapsed, or gone) as "release everything it was pushing," so
+      // docking the anchor needs no special-casing here at all.
+      const wasDocked = layoutRef.current[panelId]?.docked ?? false;
+      if (wasDocked) lastMovedPanelRef.current = panelId;
+      setLayout((current) => {
+        const entry =
+          current[panelId] ?? {
+            x: currentPosition?.x ?? VIEWPORT_MARGIN,
+            y: currentPosition?.y ?? VIEWPORT_MARGIN,
+            collapsed: false,
+          };
+        return { ...current, [panelId]: { ...entry, docked: !entry.docked } };
+      });
+      schedulePersist();
+    },
+    [schedulePersist]
+  );
+
+  const pushOffsetOf = useCallback((panelId: PanelId) => pushedOffsets[panelId] ?? null, [pushedOffsets]);
+
+  const clearPushOffset = useCallback((panelId: PanelId) => {
+    setPushedOffsets((current) => {
+      if (!(panelId in current)) return current;
+      const next = { ...current };
+      delete next[panelId];
+      return next;
+    });
+  }, []);
+
+  const registerPanelPresence = useCallback((panelId: PanelId, element: HTMLElement | null, hasContent: boolean) => {
+    const previousElement = panelElementsRef.current[panelId] ?? null;
+    const previousHasContent = panelHasContentRef.current[panelId] ?? false;
+    if (element) panelElementsRef.current[panelId] = element;
+    else delete panelElementsRef.current[panelId];
+    panelHasContentRef.current[panelId] = hasContent;
+    if (previousElement !== element || previousHasContent !== hasContent) {
+      setRegistryTick((tick) => tick + 1);
+    }
+  }, []);
 
   const zIndexOf = useCallback(
     (panelId: PanelId) => zIndexes[panelId] ?? DEFAULT_Z_INDEX[panelId] ?? BASE_Z_INDEX,
@@ -446,9 +643,146 @@ export function PanelLayoutProvider({
     setZIndexes((current) => (current[panelId] === next ? current : { ...current, [panelId]: next }));
   }, []);
 
+  // ── Push-aside recompute ─────────────────────────────────────────────
+  // Runs after every layout change (any panel's x/y/collapsed/height/docked)
+  // and after every registry change (a panel mounting/unmounting, or
+  // flipping hasContent) — see `registryTick`'s own doc comment. A
+  // useLayoutEffect, not a plain effect: it reads real DOM rects via
+  // getBoundingClientRect, which must reflect THIS render's committed DOM,
+  // not a stale one from before whatever change just happened.
+  useIsomorphicLayoutEffect(() => {
+    const anchorId = lastMovedPanelRef.current;
+    const elements = panelElementsRef.current;
+    const hasContentMap = panelHasContentRef.current;
+    // The closed-over `layout` value (this effect's own dependency),
+    // NOT `layoutRef.current` — a real, reproduced ordering bug: this is a
+    // LAYOUT effect, which React runs synchronously during the commit
+    // phase, BEFORE the passive `useEffect` that keeps `layoutRef.current`
+    // in sync gets a chance to run. Reading the ref here saw the PREVIOUS
+    // render's layout on this effect's very first pass after a layout
+    // change — e.g. undocking a panel would run this recompute seeing the
+    // panel as still docked, computing zero overlap and silently skipping
+    // the push it should have applied. `layout` itself has no such lag —
+    // it's the exact value this render committed with.
+    const currentLayout = layout;
+
+    const isOpen = (id: PanelId): boolean => {
+      const entry = currentLayout[id];
+      if (entry?.docked) return false;
+      if (entry?.collapsed) return false;
+      if (hasContentMap[id] === false) return false;
+      return Boolean(elements[id]);
+    };
+
+    const openIds = (Object.keys(elements) as PanelId[]).filter(isOpen);
+
+    // No active anchor, or the anchor is no longer open (it was just
+    // docked, collapsed, or unmounted) — nothing should stay pushed.
+    // Replacing wholesale (not merging) is what lets every previously
+    // pushed panel animate smoothly back to its own real saved position
+    // (PanelLayoutEntry.x/y, untouched this whole time) via the `translate`
+    // transition in DraggablePanel.module.css.
+    if (!anchorId || !openIds.includes(anchorId)) {
+      setPushedOffsets((current) => (Object.keys(current).length === 0 ? current : {}));
+      return;
+    }
+
+    const baseRects = new Map<PanelId, Rect>();
+    for (const id of openIds) {
+      const element = elements[id];
+      if (!element) continue;
+      const measured = element.getBoundingClientRect();
+      const entryForId = currentLayout[id];
+      if (entryForId) {
+        // The persisted entry's x/y IS the base position, by definition —
+        // a push never writes to it (PanelLayoutEntry.docked's own doc
+        // comment). Reading it directly here — rather than reverse-
+        // engineering it as "measured rect minus the currently-applied
+        // offset" — sidesteps a real, reproduced timing bug that approach
+        // had: getBoundingClientRect() reflects whatever a still-in-flight
+        // `translate` CSS transition currently interpolates to, NOT
+        // necessarily the full previously-applied offset, so subtracting
+        // the FULL stored offset from a PARTIALLY-animated measurement
+        // silently corrupted the base rect whenever this effect happened
+        // to re-run mid-transition — caught by this feature's own verify
+        // script computing a push roughly 1/16th the size it should have
+        // been. Width/height are never animated by anything here, so
+        // measuring those from the DOM is always accurate.
+        baseRects.set(id, { left: entryForId.x, top: entryForId.y, width: measured.width, height: measured.height });
+      } else {
+        // No saved entry at all (still sitting on its default CSS anchor)
+        // — there's no authoritative x/y to read, so fall back to the
+        // measured position minus any currently-applied push offset. This
+        // can only be a NON-anchor panel: every action that sets
+        // `lastMovedPanelRef` seeds an entry first, so the anchor itself
+        // always has one by the time this runs.
+        const offset = pushedOffsetsRef.current[id] ?? null;
+        baseRects.set(id, {
+          left: measured.left - (offset?.dx ?? 0),
+          top: measured.top - (offset?.dy ?? 0),
+          width: measured.width,
+          height: measured.height,
+        });
+      }
+    }
+    if (!baseRects.has(anchorId)) return;
+
+    const { offsets, docks } = resolveOverlaps<PanelId>({
+      anchorId,
+      panels: openIds.map((id) => ({ id, rect: baseRects.get(id)! })),
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      margin: VIEWPORT_MARGIN,
+    });
+
+    setPushedOffsets(offsets);
+
+    if (docks.length > 0) {
+      setLayout((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const id of docks) {
+          const entry = next[id];
+          if (entry && !entry.docked) {
+            next[id] = { ...entry, docked: true };
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+      schedulePersist();
+    }
+    // Deliberately keyed on `layout`/`registryTick` only — `pushedOffsets`
+    // is this effect's own OUTPUT (read via the ref, not the dependency
+    // array), so depending on it too would re-run this effect purely
+    // because of its own previous write, which buys nothing and risks a
+    // feedback loop.
+  }, [layout, registryTick, schedulePersist]);
+
   const value = useMemo<PanelLayoutContextValue>(
-    () => ({ getEntry, setPosition, toggleCollapsed, setHeight, zIndexOf, bringToFront }),
-    [getEntry, setPosition, toggleCollapsed, setHeight, zIndexOf, bringToFront]
+    () => ({
+      getEntry,
+      setPosition,
+      toggleCollapsed,
+      setHeight,
+      toggleDocked,
+      zIndexOf,
+      bringToFront,
+      pushOffsetOf,
+      clearPushOffset,
+      registerPanelPresence,
+    }),
+    [
+      getEntry,
+      setPosition,
+      toggleCollapsed,
+      setHeight,
+      toggleDocked,
+      zIndexOf,
+      bringToFront,
+      pushOffsetOf,
+      clearPushOffset,
+      registerPanelPresence,
+    ]
   );
 
   return <PanelLayoutContext.Provider value={value}>{children}</PanelLayoutContext.Provider>;
@@ -546,14 +880,40 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
     // `children` contributes every element before the two trailing chrome
-    // elements (the collapse toggle button and the panel-resize follow-up's
-    // resize handle) — exactly two elements when children rendered nothing.
+    // elements (the panelChrome row — collapse + close/dock buttons — and
+    // the panel-resize follow-up's resize handle) — exactly two elements
+    // when children rendered nothing.
     const recompute = () => setHasContent(wrapper.childElementCount > 2);
     recompute();
     const observer = new MutationObserver(recompute);
     observer.observe(wrapper, { childList: true });
     return () => observer.disconnect();
   }, []);
+
+  // Dock/close + push-aside follow-up: reports this panel's wrapper element
+  // and current hasContent to the layout provider, which is the collision
+  // system's only way to measure real on-screen rectangles (see
+  // PanelLayoutProvider's own recompute effect). Unregisters on unmount so
+  // a panel that stops rendering entirely (e.g. `tokens` when `liveMap`
+  // goes away) can never linger as a stale obstacle.
+  //
+  // Deliberately depends on `registerPanelPresence` itself (destructured
+  // out, stable across every render — see its own `useCallback([])`),
+  // NOT the whole `layout` context value. `layout` is a fresh object
+  // every time ANY of its members changes identity — including
+  // `pushOffsetOf`, which changes on every push-aside recompute — and
+  // React re-renders every context consumer whenever the provided value's
+  // reference changes. Depending on the whole object here would re-run
+  // this effect (tearing down and re-registering, each of which flips
+  // `registryTick`) on every one of THOSE unrelated churns too — a real,
+  // reproduced bug: two layout writes landing close together (no yield in
+  // between) compounded this into a "Maximum update depth exceeded" crash,
+  // caught by this feature's own verify script before this fix.
+  const { registerPanelPresence } = layout;
+  useEffect(() => {
+    registerPanelPresence(panelId, wrapperRef.current, hasContent);
+    return () => registerPanelPresence(panelId, null, false);
+  }, [registerPanelPresence, panelId, hasContent]);
 
   // Re-clamps an EXPLICIT saved position (a real drag, or even just one
   // click of the collapse toggle below — toggleCollapsed seeds x/y from
@@ -572,22 +932,34 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
   // Deliberately skipped for anchor-class-positioned panels (no saved
   // `entry` at all): bottom/right-anchored + max-height already keeps
   // those self-adjusting without ever needing an explicit position.
+  // Depends on the specific stable-ish methods it needs (`getEntry` legitimately
+  // changes identity on a real layout content change; `setPosition` never
+  // changes at all), not the whole `layout` context value — the same reasoning
+  // as the registerPanelPresence effect above: avoids tearing down and
+  // reconnecting this ResizeObserver on every unrelated context-value churn
+  // (e.g. a push-aside recompute on some OTHER panel).
+  const { getEntry, setPosition } = layout;
   useIsomorphicLayoutEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
     const recheck = () => {
-      const current = layout.getEntry(panelId);
+      const current = getEntry(panelId);
       if (!current) return;
+      // A docked panel's wrapper is `display: none` (0×0) — its rect is
+      // meaningless and must never be used to "correct" the real saved
+      // x/y, which is exactly what it needs to be restored to once
+      // un-docked.
+      if (current.docked) return;
       const rect = wrapper.getBoundingClientRect();
       const clamped = clampToViewport(current.x, current.y, rect.width, rect.height);
       if (clamped.x !== current.x || clamped.y !== current.y) {
-        layout.setPosition(panelId, clamped.x, clamped.y);
+        setPosition(panelId, clamped.x, clamped.y);
       }
     };
     const observer = new ResizeObserver(recheck);
     observer.observe(wrapper);
     return () => observer.disconnect();
-  }, [layout, panelId]);
+  }, [getEntry, setPosition, panelId]);
 
   // The panel's CURRENT on-screen top-left corner, used to seed a fresh
   // saved position the first time this panel is dragged or collapsed
@@ -615,7 +987,22 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
       // A never-customized panel has no stored x/y (it's positioned by a
       // CSS anchor) — the drag's origin is wherever it's actually
       // rendered right now, not a guessed number.
-      const origin = entry ?? measureCurrentPosition();
+      let origin = entry ?? measureCurrentPosition();
+      const pushOffset = layout.pushOffsetOf(panelId);
+      if (pushOffset && (pushOffset.dx !== 0 || pushOffset.dy !== 0)) {
+        // Push-aside follow-up: grabbing a panel while it's still visually
+        // displaced by a push bakes that displacement into its real saved
+        // position FIRST — a push is only ever a transient overlay (see
+        // PanelLayoutProvider's own `pushedOffsets` doc comment), but the
+        // instant the user manually takes hold of the panel they're
+        // asserting a real position of their own choosing. Leaving the old
+        // translate active on top of a freshly-written entry.x/y would
+        // double-count the shift and make the panel visibly drift away
+        // from the pointer as the drag continues.
+        origin = { x: origin.x + pushOffset.dx, y: origin.y + pushOffset.dy };
+        layout.setPosition(panelId, origin.x, origin.y);
+        layout.clearPushOffset(panelId);
+      }
       dragRef.current = {
         mode: "move",
         pointerId: event.pointerId,
@@ -697,7 +1084,20 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
     layout.toggleCollapsed(panelId, measureCurrentPosition());
   }, [layout, panelId, measureCurrentPosition]);
 
+  // Dock/close follow-up: removes the floating panel entirely and surfaces
+  // a glyph button for it in the Game Room's top bar (PanelDockBar) —
+  // completely independent of collapse (see PanelLayoutEntry.docked's own
+  // doc comment). `measureCurrentPosition` seeds a fresh entry's x/y the
+  // exact same way toggleCollapsed/setHeight already do, so a panel
+  // that's NEVER been touched still docks/undocks at exactly the spot it
+  // was actually sitting when closed.
+  const handleClose = useCallback(() => {
+    layout.toggleDocked(panelId, measureCurrentPosition());
+  }, [layout, panelId, measureCurrentPosition]);
+
   const collapsed = entry?.collapsed ?? false;
+  const docked = entry?.docked ?? false;
+  const pushOffset = layout.pushOffsetOf(panelId);
   const classes = [
     styles.wrapper,
     // Only while there's no saved position — once one exists, the inline
@@ -734,6 +1134,21 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
     ? { "--panel-height": `${resizedHeightPx}px`, "--panel-max-height": "90vh" }
     : {};
 
+  // Push-aside follow-up: a transient nudge applied via the standalone CSS
+  // `translate` property (NOT the `transform` property) specifically
+  // because several DEFAULT_ANCHOR_CLASS rules already use `transform:
+  // translateX(-50%)`/`translateY(-50%)` for centering — `translate` and
+  // `transform` are independent CSS properties that both apply (per the
+  // CSS Transforms Level 2 spec), so this composes cleanly with an
+  // untouched, still-anchor-positioned panel's own centering AND with an
+  // explicitly-positioned panel's plain left/top, with no need to know
+  // which case a given panel is in. `.wrapper`'s own `transition:
+  // translate` (DraggablePanel.module.css) is what makes applying/clearing
+  // this smooth — reduced-motion visitors get tokens.css's own global
+  // transition-duration collapse for free, no separate media query needed
+  // here.
+  const pushVars: PanelCssVars = pushOffset ? { translate: `${pushOffset.dx}px ${pushOffset.dy}px` } : {};
+
   return (
     <div
       ref={wrapperRef}
@@ -742,8 +1157,14 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
         left: entry?.x,
         top: entry?.y,
         zIndex: layout.zIndexOf(panelId),
-        display: hasContent ? undefined : "none",
+        // Docked (closed to the top bar) hides the floating panel
+        // entirely, same mechanism as the pre-existing "renders nothing"
+        // hasContent case — see PanelLayoutEntry.docked's own doc comment
+        // for why this is a DIFFERENT state from collapsed (which keeps
+        // the header bar floating and visible).
+        display: hasContent && !docked ? undefined : "none",
         ...heightVars,
+        ...pushVars,
       } as PanelCssVars}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -751,18 +1172,42 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
       onPointerCancel={endDrag}
       data-panel-id={panelId}
       data-testid={`draggable-panel-${panelId}`}
+      data-pushed={pushOffset ? "true" : undefined}
     >
       {children}
-      <Button
-        size="sm"
-        variant="ghost"
-        className={styles.collapseToggle}
-        onClick={handleToggleCollapsed}
-        aria-label={collapsed ? "Expand panel" : "Collapse panel"}
-        data-testid={`collapse-toggle-${panelId}`}
-      >
-        {collapsed ? "▸" : "▾"}
-      </Button>
+      {/* The collapse toggle and the dock/close button share one small
+          chip row peeking off the panel's top-right corner (DraggablePanel.
+          module.css's `.panelChrome`) — two distinct controls (collapse
+          shrinks to a header bar and stays floating; close/dock removes
+          the floating panel and surfaces a top-bar button instead), not
+          one replacing the other. Still exactly ONE extra element at this
+          level (plus the resize handle below) — the hasContent
+          MutationObserver above still only ever sees two trailing
+          elements regardless of how many buttons live inside this one. */}
+      <div className={styles.panelChrome}>
+        <Button
+          size="sm"
+          variant="ghost"
+          className={styles.chromeButton}
+          onClick={handleToggleCollapsed}
+          aria-label={collapsed ? "Expand panel" : "Collapse panel"}
+          title={collapsed ? "Expand panel" : "Collapse panel"}
+          data-testid={`collapse-toggle-${panelId}`}
+        >
+          {collapsed ? "▸" : "▾"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className={styles.chromeButton}
+          onClick={handleClose}
+          aria-label={`Close ${PANEL_DISPLAY_NAME[panelId]} panel`}
+          title={`Close ${PANEL_DISPLAY_NAME[panelId]} panel`}
+          data-testid={`close-toggle-${panelId}`}
+        >
+          ✕
+        </Button>
+      </div>
       {/* Vertical resize grip along the panel's bottom edge — see this
           component's own doc comment (heightVars, above) for why this lives
           here rather than in any of the 11 wrapped panels' own markup.
@@ -776,6 +1221,44 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
         aria-label="Resize panel"
         data-testid={`resize-handle-${panelId}`}
       />
+    </div>
+  );
+}
+
+/**
+ * Dock/close follow-up: one small glyph button per currently-docked panel,
+ * rendered inside GameRoom's existing top bar (`.overlayControls` in
+ * room.module.css) alongside PAUSE SESSION / MEASURE DISTANCE / etc.
+ * Clicking a button un-docks that panel, restoring it at exactly the x/y
+ * and height it had when closed (PanelLayoutEntry never loses those fields
+ * while docked — see toggleDocked above). Reads `usePanelLayout()` itself
+ * rather than taking props, so GameRoom only needs to mount
+ * `<PanelDockBar />` once, anywhere inside `<PanelLayoutProvider>` — the
+ * `usePanelLayout` extension-point pattern this file's own doc comment
+ * already documents.
+ */
+export function PanelDockBar() {
+  const layout = usePanelLayout();
+  const dockedIds = ALL_PANEL_IDS.filter((id) => layout.getEntry(id)?.docked);
+
+  if (dockedIds.length === 0) return null;
+
+  return (
+    <div className={styles.dockBar} data-testid="panel-dock-bar">
+      {dockedIds.map((id) => (
+        <Button
+          key={id}
+          size="sm"
+          variant="ghost"
+          className={styles.dockButton}
+          onClick={() => layout.toggleDocked(id)}
+          aria-label={`Reopen ${PANEL_DISPLAY_NAME[id]} panel`}
+          title={PANEL_DISPLAY_NAME[id]}
+          data-testid={`dock-button-${id}`}
+        >
+          <span aria-hidden="true">{PANEL_ICON[id]}</span>
+        </Button>
+      ))}
     </div>
   );
 }
