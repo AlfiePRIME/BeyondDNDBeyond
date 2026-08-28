@@ -382,6 +382,74 @@ generate("thunder.mp3", [
   "-map", "[out]",
 ]);
 
+// ─────────────────────────────────────────────────────────────────────────
+// nat_20 — a natural 20 on any non-attack d20 roll (checks/saves/skills/
+// death saves/etc — attack rolls already get hit_critical). A bright,
+// triumphant 3-note ascending major arpeggio (C5-E5-G5), each note a plain
+// sine faded in fast and out clean, staggered via adelay — reads as a
+// mini fanfare, deliberately distinct from hit_critical's single punchy
+// crack (this fires for far more than just combat, so it needed its own
+// character rather than reusing that one).
+//
+// Equivalent shell command:
+//   ffmpeg -f lavfi -i "sine=f=523.25:d=0.3" \
+//          -f lavfi -i "sine=f=659.25:d=0.3" \
+//          -f lavfi -i "sine=f=783.99:d=0.45" \
+//          -filter_complex "
+//            [0:a]volume=0.55,afade=t=in:st=0:d=0.01,
+//              afade=t=out:st=0.15:d=0.15,adelay=0|0[n1];
+//            [1:a]volume=0.55,afade=t=in:st=0:d=0.01,
+//              afade=t=out:st=0.15:d=0.15,adelay=110|110[n2];
+//            [2:a]volume=0.65,afade=t=in:st=0:d=0.01,
+//              afade=t=out:st=0.3:d=0.3,adelay=220|220[n3];
+//            [n1][n2][n3]amix=inputs=3:duration=longest:dropout_transition=0,
+//              volume=2.4[out]" \
+//          -map "[out]" nat_20.mp3
+// ─────────────────────────────────────────────────────────────────────────
+generate("nat_20.mp3", [
+  "-f", "lavfi", "-i", "sine=f=523.25:d=0.3",
+  "-f", "lavfi", "-i", "sine=f=659.25:d=0.3",
+  "-f", "lavfi", "-i", "sine=f=783.99:d=0.45",
+  "-filter_complex",
+  "[0:a]volume=0.55,afade=t=in:st=0:d=0.01,afade=t=out:st=0.15:d=0.15,adelay=0|0[n1];" +
+    "[1:a]volume=0.55,afade=t=in:st=0:d=0.01,afade=t=out:st=0.15:d=0.15,adelay=110|110[n2];" +
+    "[2:a]volume=0.65,afade=t=in:st=0:d=0.01,afade=t=out:st=0.3:d=0.3,adelay=220|220[n3];" +
+    "[n1][n2][n3]amix=inputs=3:duration=longest:dropout_transition=0,volume=2.4[out]",
+  "-map", "[out]",
+]);
+
+// ─────────────────────────────────────────────────────────────────────────
+// nat_1 — a natural 1 on any non-attack d20 roll (attack rolls already get
+// hit_miss). A classic comedic "sad trombone": two descending sine sweeps
+// (aevalsrc frequency ramps, the same FM-expression technique as
+// door_transition's creak above) staggered via adelay into a "womp...
+// womp" double-note cadence — deliberately distinct from hit_miss's single
+// dull thud, and from pit_fall's whoosh+thud shape.
+//
+// Equivalent shell command:
+//   ffmpeg -f lavfi -i \
+//     "aevalsrc=exprs='0.5*sin(2*PI*(300-200*min(t/0.4\,1))*t)':d=0.45:s=44100" \
+//          -f lavfi -i \
+//     "aevalsrc=exprs='0.5*sin(2*PI*(260-200*min(t/0.4\,1))*t)':d=0.45:s=44100" \
+//          -filter_complex "
+//            [0:a]afade=t=in:st=0:d=0.02,afade=t=out:st=0.3:d=0.15,
+//              adelay=0|0[womp1];
+//            [1:a]afade=t=in:st=0:d=0.02,afade=t=out:st=0.3:d=0.15,
+//              volume=0.9,adelay=400|400[womp2];
+//            [womp1][womp2]amix=inputs=2:duration=longest:dropout_transition=0,
+//              volume=2[out]" \
+//          -map "[out]" nat_1.mp3
+// ─────────────────────────────────────────────────────────────────────────
+generate("nat_1.mp3", [
+  "-f", "lavfi", "-i", "aevalsrc=exprs='0.5*sin(2*PI*(300-200*min(t/0.4\\,1))*t)':d=0.45:s=44100",
+  "-f", "lavfi", "-i", "aevalsrc=exprs='0.5*sin(2*PI*(260-200*min(t/0.4\\,1))*t)':d=0.45:s=44100",
+  "-filter_complex",
+  "[0:a]afade=t=in:st=0:d=0.02,afade=t=out:st=0.3:d=0.15,adelay=0|0[womp1];" +
+    "[1:a]afade=t=in:st=0:d=0.02,afade=t=out:st=0.3:d=0.15,volume=0.9,adelay=400|400[womp2];" +
+    "[womp1][womp2]amix=inputs=2:duration=longest:dropout_transition=0,volume=2[out]",
+  "-map", "[out]",
+]);
+
 // Sanity check this task's own "every registry key has a real file" bar
 // against the actual generated set, not just by eye — mirrors generate-
 // monster-presets.mjs's own post-generation self-check convention.
@@ -402,6 +470,8 @@ const EXPECTED_FILES = [
   "wind_loop.mp3",
   "fire_loop.mp3",
   "thunder.mp3",
+  "nat_20.mp3",
+  "nat_1.mp3",
 ];
 const generatedNames = new Set(results.map((r) => r.name));
 for (const expected of EXPECTED_FILES) {

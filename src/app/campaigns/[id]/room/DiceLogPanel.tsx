@@ -63,6 +63,25 @@ function attackRollSoundKey(roll: RollLogEntry): SoundKey | null {
   return roll.breakdown.attack.hit ? SOUND_KEYS.HIT_NORMAL : SOUND_KEYS.HIT_MISS;
 }
 
+/**
+ * Which sound (if any) a natural 20/1 on a non-attack d20 roll should play —
+ * checks, saves, skills, initiative, hide, death saves, concentration
+ * saves, all of which funnel through the same rollD20() primitive and carry
+ * an already-resolved `d20Result` (the counted die under advantage/
+ * disadvantage, before modifiers — rules-engine/dice.ts). Attack rolls are
+ * deliberately excluded: attackRollSoundKey above already covers a natural
+ * 20 (always HIT_CRITICAL) and a natural 1 (always HIT_MISS) for those, so
+ * this returning non-null for an attack would double-fire. The `type ===
+ * "d20"` gate also excludes a freeform "1d20" roll (damage/flavor), which
+ * carries no d20Result at all.
+ */
+function naturalRollSoundKey(roll: RollLogEntry): SoundKey | null {
+  if (roll.kind === "attack" || roll.breakdown.type !== "d20") return null;
+  if (roll.breakdown.d20Result === 20) return SOUND_KEYS.NAT_20;
+  if (roll.breakdown.d20Result === 1) return SOUND_KEYS.NAT_1;
+  return null;
+}
+
 /** The six standard polyhedral dice, as quick-roll shortcuts alongside (not
  * instead of) the free-form notation box below — each one posts the exact
  * same "1dN" notation a player could type by hand, through the identical
@@ -263,7 +282,7 @@ export function DiceLogPanel({
       // — that page mounts/unmounts with the DM's book-tab selection, so a
       // DM with the Activity tab open at the same time would otherwise
       // hear every hit/miss/crit twice.
-      const soundKey = attackRollSoundKey(roll);
+      const soundKey = attackRollSoundKey(roll) ?? naturalRollSoundKey(roll);
       if (soundKey) void playSound(soundKey);
     });
   }, [campaignId]);

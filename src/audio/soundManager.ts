@@ -7,7 +7,8 @@
  *      plan will ever use. Every trigger prompt (SP3 token_move, SP4
  *      door_transition, SP5 hit_normal/hit_critical/hit_miss, SP6 death,
  *      SP7 pit_fall, SP8 dice_impact, SP9 rain_loop/wind_loop/thunder/
- *      fire_loop) must import its key from here — never invent an ad-hoc
+ *      fire_loop, nat_20/nat_1 for a natural roll on any non-attack d20)
+ *      must import its key from here — never invent an ad-hoc
  *      string. SP2's admin override system also keys its override table off
  *      these exact values (a CHECK constraint against this list, not a
  *      foreign key, since this registry is a code-level constant).
@@ -81,6 +82,13 @@ export const SOUND_KEYS = {
   THUNDER: "thunder",
   /** SP9 — ambient loop, active while weather_kind is 'firestorm'. */
   FIRE_LOOP: "fire_loop",
+  /** A natural 20 on any non-attack d20 roll (check/save/skill/initiative/
+   * hide/death_save/concentration_save) — attack rolls are excluded since a
+   * natural 20 there always resolves to HIT_CRITICAL already. */
+  NAT_20: "nat_20",
+  /** A natural 1 on any non-attack d20 roll — same attack exclusion as
+   * NAT_20 above (always resolves to HIT_MISS there already). */
+  NAT_1: "nat_1",
 } as const;
 
 /** Every valid sound key — the type every playSound/startLoop/stopLoop
@@ -132,6 +140,8 @@ const SOUND_FILES: Record<SoundKey, string[]> = {
   wind_loop: ["/sounds/wind_loop.mp3"],
   thunder: ["/sounds/thunder.mp3"],
   fire_loop: ["/sounds/fire_loop.mp3"],
+  nat_20: ["/sounds/nat_20.mp3"],
+  nat_1: ["/sounds/nat_1.mp3"],
 };
 
 /** How many distinct files a key's pool has — exposed mainly so a
