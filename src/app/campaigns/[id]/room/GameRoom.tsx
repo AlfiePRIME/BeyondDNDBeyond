@@ -202,6 +202,7 @@ import {
   type WhiteboardTool,
 } from "@/scene-3d";
 import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
+import { playSound, SOUND_KEYS } from "@/audio";
 import {
   buildDenseCells,
   cellKey,
@@ -1824,6 +1825,36 @@ export function GameRoom({
     setPrevCharacters(characters);
     setCharacterRows(characters);
   }
+  // Sound Effects SP6 — plays SOUND_KEYS.DEATH the moment a character's
+  // is_dead genuinely flips false -> true, live, for every client connected
+  // to this room. characterRows already carries is_dead updates live (every
+  // HP/death-save change reaches it via the room's existing combat-changed
+  // poke -> refreshCombat -> listCharactersForCampaign re-fetch above, the
+  // same path the HP bars/death-save labels already render from) — no new
+  // subscription/channel is needed here, only a diff against what was
+  // PREVIOUSLY observed for that same character id. Comparing to the bare
+  // current value alone would replay the sound for every already-dead
+  // character on every reload/re-render, which is exactly what this guards
+  // against: previousIsDeadRef starts empty on mount, so the very first
+  // pass over a freshly loaded (or reloaded) room's characters — dead or
+  // not — only ever records their current state, never fires. Only a row
+  // whose id was previously recorded here as `false` and is now `true`
+  // counts as a genuine live death. is_dead is write-once (see Character's
+  // own doc comment: never cleared once true), so once recorded true a
+  // given id can never legitimately transition again — but every row is
+  // still written into the map on every pass (not short-circuited once one
+  // fires) so a second, different character dying afterward is judged
+  // entirely on its OWN id's history, never suppressed by the first.
+  const previousIsDeadRef = useRef<Map<string, boolean>>(new Map());
+  useEffect(() => {
+    for (const character of characterRows) {
+      const previouslyDead = previousIsDeadRef.current.get(character.id);
+      if (previouslyDead === false && character.is_dead) {
+        void playSound(SOUND_KEYS.DEATH);
+      }
+      previousIsDeadRef.current.set(character.id, character.is_dead);
+    }
+  }, [characterRows]);
   // Every character THIS viewer owns in this campaign.
   const ownCharacterIds = useMemo(
     () =>
