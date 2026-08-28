@@ -1,0 +1,63 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+.main {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 40px;
+}
+
+.backLink {
+  color: var(--muted);
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.backLink:hover {
+  color: var(--teal);
+}
+
+.hint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 16px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.checkboxRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+.errorText {
+  color: var(--red);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.savedText {
+  color: var(--teal);
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
