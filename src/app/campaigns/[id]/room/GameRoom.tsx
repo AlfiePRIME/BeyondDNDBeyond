@@ -5525,6 +5525,15 @@ export function GameRoom({
     for (const object of liveMap.objects) {
       if (object.crossing_type) crossingObjectByCell.set(cellKey(object.x, object.y), object);
     }
+    // Preset-aware crossing-surface resolution (a post-roadmap addition,
+    // "Stairs (Half)"): MapSurface's crossingSurface prop now needs the
+    // crossing object's own resolved model URL, not its crossing_type —
+    // see crossingSurface.ts's own top comment for why crossing_type alone
+    // (shared by both stairs presets) can no longer answer "which preset's
+    // real geometry is this." assetUrlById is the SAME map already used to
+    // resolve every object/token's own render url — no new lookup.
+    const crossingPresetUrlFor = (object: MapObject | undefined): string | null | undefined =>
+      object ? assetUrlById.get(object.asset_id) : undefined;
     return {
       id: liveMap.map.id,
       gridWidth: liveMap.map.grid_width,
@@ -5632,10 +5641,15 @@ export function GameRoom({
             // at the bare floor beneath — but the crossing object's OWN row
             // never looks up itself here (it already renders correctly at
             // its own base; only something else sitting on the SAME cell
-            // needs the extra height).
+            // needs the extra height). Preset-aware ("Stairs (Half)"): this
+            // is the crossing object's own resolved model url (assetUrlById,
+            // the SAME lookup already used to render every object's model),
+            // not its crossing_type — crossingSurface.ts's own top comment
+            // explains why crossing_type alone can no longer distinguish
+            // the two stairs presets' differing real geometry.
             crossingSurface: object.crossing_type
               ? undefined
-              : (crossingObjectByCell.get(cellKey(object.x, object.y))?.crossing_type ?? undefined),
+              : (crossingPresetUrlFor(crossingObjectByCell.get(cellKey(object.x, object.y))) ?? undefined),
           },
         ];
       }),
@@ -5688,6 +5702,21 @@ export function GameRoom({
           template?.default_asset_id ??
           null;
         const npcModelUrl = resolvedAssetId ? (assetUrlById.get(resolvedAssetId) ?? null) : null;
+        // Pawn-orientation fix (a post-roadmap addition): the SAME
+        // model_orientation correction ObjectMarker's forwardOffsetDeg
+        // already applies for a placed decorative object using this exact
+        // asset — assetForwardOffsetById is already computed for the
+        // objects loop above, keyed by asset_id, which resolvedAssetId
+        // already is, so this is a plain reuse, not a new lookup. Concrete,
+        // reproducible case this fixes: a DM overrides a monster template
+        // with a campaign-specific custom-uploaded asset (Weather &
+        // Enemies C7) that went through the SAME orientation-correction
+        // upload flow as any other custom asset — that correction used to
+        // be silently dropped for the token's own render (while still
+        // applying correctly if the identical asset were instead placed as
+        // a decorative object), invisible on flat ground (a token never
+        // yaws there) but very visible once tilted on stairs.
+        const npcForwardOffsetDeg = resolvedAssetId ? (assetForwardOffsetById.get(resolvedAssetId) ?? 0) : 0;
         // Pawn Customization P2: a PC token's own custom pawn model
         // (character_pawns.pawn_model_ref, 0080) — the SAME "live pointer,
         // re-read fresh every render" reasoning as the NPC chain immediately
@@ -5698,6 +5727,15 @@ export function GameRoom({
         // decision between the two chains.
         const pawnAppearance = token.character_id ? characterPawnByCharacterId.get(token.character_id) : undefined;
         const modelUrl = pawnAppearance?.modelUrl ?? npcModelUrl;
+        // Pairs with `modelUrl` above the SAME way — character_pawns has no
+        // orientation-picker UI yet (PawnModelPicker.tsx's own doc comment),
+        // so this is 0 for every pawn today, but the lookup is real and
+        // wired up (resolveCampaignPawnAppearance's own forwardOffsetDeg,
+        // keyed by the pawn's STABLE storage path — model_orientation's own
+        // required key, never the ephemeral signed url) so a future
+        // orientation picker (or a direct admin correction) takes effect
+        // immediately, exactly like every other model_orientation consumer.
+        const forwardOffsetDeg = pawnAppearance?.forwardOffsetDeg ?? npcForwardOffsetDeg;
         // Pawn Customization P1: this token's owning user's own account
         // color (0079), looked up via character_pawns' broadly-readable
         // owner_id — NOT via `character` above, which is undefined for a
@@ -5730,13 +5768,18 @@ export function GameRoom({
           elevation: (overlay.get(cellKey(token.x, token.y)) ?? DEFAULT_CELL).elevation,
           allegiance: token.allegiance,
           modelUrl,
+          forwardOffsetDeg,
           colorOverride,
-          crossingSurface: crossingHere?.crossing_type ?? undefined,
-          // Tilt only ever applies for "stairs" — see MapSurfaceToken's own
-          // doc comment; a bridge crossingHere still sets crossingSurface
-          // above (for the height fix) but leaves this null, so
-          // MapSurface's own bridge-never-tilts guard is belt-and-suspenders
-          // rather than the only thing preventing it.
+          // Preset-aware ("Stairs (Half)"): crossingHere's own resolved
+          // model url (assetUrlById), not its crossing_type — see
+          // crossingPresetUrlFor's own doc comment above.
+          crossingSurface: crossingPresetUrlFor(crossingHere) ?? undefined,
+          // Tilt only ever applies for a STAIRS preset's own url — see
+          // MapSurfaceToken's own doc comment; a bridge crossingHere still
+          // sets crossingSurface above (for the height fix) but leaves this
+          // null, so MapSurface's own bridge-never-tilts guard
+          // (isStairsPresetUrl) is belt-and-suspenders rather than the only
+          // thing preventing it.
           crossingRotationDeg: crossingHere?.crossing_type === "stairs" ? crossingHere.rotation : undefined,
           // The pre-existing, visible-to-everyone ring for TokenPanel's
           // separate armed "move" mechanism (DM free repositioning — see
@@ -5903,7 +5946,16 @@ export function GameRoom({
     for (const member of roster) {
       avatars[member.user_id] = member.avatar_forward_offset_deg ?? 0;
     }
-    return JSON.stringify({ objects, avatars });
+    // Pawn-orientation fix (a post-roadmap addition): a THIRD rendering
+    // site this same model_orientation correction now reaches — a token's
+    // own model (NPC template-linked or a Pawn Customization P2 custom
+    // upload), which never applied it at all before. See MapSurfaceToken.
+    // forwardOffsetDeg's own doc comment for the full reasoning.
+    const tokens: Record<string, number> = {};
+    for (const token of tableMap?.tokens ?? []) {
+      tokens[token.id] = token.forwardOffsetDeg ?? 0;
+    }
+    return JSON.stringify({ objects, avatars, tokens });
   }, [tableMap, roster]);
 
   // Hidden render-state mirror for verify-token-click-select.mjs — WebGL

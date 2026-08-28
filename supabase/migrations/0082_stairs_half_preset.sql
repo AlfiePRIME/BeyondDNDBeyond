@@ -1,0 +1,35 @@
+-- Second, additive stairs preset — "the current stairs preset goes up 2
+-- terrain levels, I would like another one that goes up 1 terrain step."
+-- Purely additive: the existing "Stairs" preset (0016) and "Bridge" preset
+-- (0053) are both completely unchanged by this — a DM already using either
+-- sees no difference at all.
+--
+-- The built-in "Stairs (Half)" preset asset
+-- (scripts/assets/generate-stairs-half-preset.mjs generated
+-- public/assets/presets/stairs-half.glb) — seeded via migration as
+-- postgres, bypassing RLS, the identical 0016_asset_library_presets.sql /
+-- 0053_crossing_structures.sql (Bridge) reasoning: 0015's insert policy
+-- forbids preset rows (campaign_id null) through the app path, so presets
+-- are seeded data by design. This dev environment runs many concurrent
+-- worktrees against the SAME shared local Supabase stack — a live check of
+-- asset_library immediately before writing this migration found rows
+-- already using a55e7030 through a55e7034 (a sibling, not-yet-merged
+-- branch's own tavern-furniture preset batch, applied straight to the
+-- shared DB, not yet present as a migration file in THIS branch's own
+-- history) — so this uses a55e7035, one past the highest ACTUALLY-USED id
+-- at migration-write time, not just the highest id present in this
+-- branch's own migration files (which would have collided).
+--
+-- No schema change needed here: map_objects.crossing_type (0053) already
+-- allows 'stairs', and this second stairs preset is tagged with that SAME
+-- value (MapEditor.tsx's crossingTypeForAsset now recognizes a SECOND
+-- known stairs preset id, alongside — not replacing — the existing one) —
+-- movement rules (the SRD climbing surcharge suppression) don't need to
+-- know WHICH stairs preset a DM picked, only that it's some stairs. Surface
+-- height and tilt angle, which DO differ between the two stairs presets'
+-- own real geometry, are resolved separately by src/scene-3d/
+-- crossingSurface.ts, keyed by this asset's own model url — see that
+-- file's own updated doc comment.
+insert into public.asset_library (id, name, source_type, model_ref) values
+  ('a55e7035-0000-4000-8000-000000000035', 'Stairs (Half)', 'preset', '/assets/presets/stairs-half.glb')
+on conflict (id) do nothing;
