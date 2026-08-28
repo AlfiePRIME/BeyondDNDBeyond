@@ -85,3 +85,43 @@
   gap: 12px;
   flex-wrap: wrap;
 }
+
+/* Sound Effects SP2 — one row per sound key inside the "Sound Effects"
+   admin panel (a plain list, not the AI-settings <form> above: each row's
+   play/upload/reset actions apply immediately rather than needing a
+   separate "Save settings" submission). */
+.soundOverrideList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.soundOverrideRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--dim2);
+  border-radius: 6px;
+}
+
+.soundOverrideKey {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  min-width: 130px;
+}
+
+.soundOverrideStatus {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 110px;
+}
+
+.soundOverrideFileInput {
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 220px;
+}

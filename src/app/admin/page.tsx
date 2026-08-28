@@ -2,8 +2,9 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Panel } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
-import { getProfile, getAppSettings } from "@/data-access";
+import { getProfile, getAppSettings, listSoundOverrides } from "@/data-access";
 import { AdminSettingsForm } from "./AdminSettingsForm";
+import { SoundEffectsSection } from "./SoundEffectsSection";
 import styles from "./admin.module.css";
 
 /**
@@ -37,6 +38,12 @@ export default async function AdminSettingsPage() {
   if (!profile?.is_admin) redirect("/");
 
   const settings = await getAppSettings(supabase);
+  // Sound Effects SP2: sound_overrides' own SELECT policy (0084) is open to
+  // any authenticated user, not admin-gated — this page's own
+  // `redirect("/")` above is what actually keeps a non-admin from ever
+  // reaching this fetch, same defense-in-depth split as app_settings'
+  // stricter, admin-only-read RLS above.
+  const soundOverrides = await listSoundOverrides(supabase);
 
   return (
     <div className={styles.page}>
@@ -56,6 +63,10 @@ export default async function AdminSettingsPage() {
               Settings could not be loaded.
             </p>
           )}
+        </Panel>
+
+        <Panel title="Sound Effects" tone="teal" glow>
+          <SoundEffectsSection initialOverrides={soundOverrides} />
         </Panel>
       </main>
     </div>
