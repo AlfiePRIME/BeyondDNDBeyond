@@ -11,6 +11,7 @@ import {
   SKILLS,
   SPELLS,
   abilityModifier,
+  levelUpHitPointGain,
   parseDiceNotation,
   proficiencyBonus,
   resolveRaceOption,
@@ -152,6 +153,10 @@ export function CharacterSheet({
   const [weaponRangeDraft, setWeaponRangeDraft] = useState("");
   const [spellToAdd, setSpellToAdd] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  // The "Level up" action's own confirmation — separate from saveError so a
+  // successful level-up's HP-gain summary doesn't read as an error, and
+  // separate from the raw level input (which has no feedback of its own).
+  const [levelUpNotice, setLevelUpNotice] = useState<string | null>(null);
   const [rollMode, setRollMode] = useState<AdvantageMode>("normal");
   const [lastRoll, setLastRoll] = useState<RollLogEntry | null>(null);
   const [rolling, setRolling] = useState(false);
@@ -319,6 +324,40 @@ export function CharacterSheet({
     // level-1 assertions are manually maintained thereafter too).
     const ok = await persist({ level: value });
     if (!ok) setLevelDraft(String(character.level));
+  }
+
+  /** The real "gain a level" action — distinct from the raw level number
+   * input above, which stays the "manually correct a mistake" tool and
+   * never touches HP. This always advances by exactly one level (capped at
+   * the SRD max of 20) and grants the SRD's deterministic "average" hit
+   * points for the new level (half the class hit die rounded down, plus
+   * one, plus the Constitution modifier) to BOTH current_hp and max_hp —
+   * a level-up raises your current HP, not just your ceiling. Level and
+   * both HP fields are persisted together in one updateCharacter call.
+   * Same restraint as commitLevel: deliberately does NOT touch
+   * character_resources, spell slots, or the spells list. A character
+   * whose stored class isn't in the CLASSES catalog (homebrew/unrecognized)
+   * has no known hit die, so the action is disabled for them — the raw
+   * level field plus a manual HP edit remains their path. */
+  async function levelUp() {
+    if (character.level >= 20 || !klass) return;
+    const nextLevel = character.level + 1;
+    const hpGain = levelUpHitPointGain(klass.hitDie, character.constitution);
+    const nextCurrentHp = character.current_hp + hpGain;
+    const nextMaxHp = character.max_hp + hpGain;
+    setLevelUpNotice(null);
+    const ok = await persist({
+      level: nextLevel,
+      current_hp: nextCurrentHp,
+      max_hp: nextMaxHp,
+    });
+    if (ok) {
+      setLevelDraft(String(nextLevel));
+      setHpDraft(String(nextCurrentHp));
+      setLevelUpNotice(
+        `Leveled up to ${nextLevel} — hit points +${hpGain} (now ${nextCurrentHp} / ${nextMaxHp}).`
+      );
+    }
   }
 
   async function commitSpeed() {
@@ -670,6 +709,27 @@ export function CharacterSheet({
                     aria-label="Level"
                     data-testid="sheet-level-input"
                   />
+                  <Button
+                    variant="accent"
+                    size="sm"
+                    disabled={character.level >= 20 || !klass}
+                    onClick={() => void levelUp()}
+                    title={
+                      character.level >= 20
+                        ? "Already at the SRD max level (20)."
+                        : !klass
+                          ? "Unknown class — can't compute an average HP gain. Use the level field above and edit HP manually instead."
+                          : undefined
+                    }
+                    data-testid="sheet-level-up-button"
+                  >
+                    Level up
+                  </Button>
+                  {levelUpNotice ? (
+                    <p className={styles.overrideNotice} data-testid="sheet-levelup-notice">
+                      {levelUpNotice}
+                    </p>
+                  ) : null}
                 </div>
               </>
             ) : null}

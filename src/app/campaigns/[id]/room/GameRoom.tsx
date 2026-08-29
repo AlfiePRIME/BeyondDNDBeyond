@@ -7454,6 +7454,7 @@ export function GameRoom({
       {liveMap ? (
         <DraggablePanel panelId="tokens">
           <TokenPanel
+            campaignId={campaignId}
             isDM={currentUserIsDM}
             currentUserId={currentUserId}
             characters={characterRows}
