@@ -24,6 +24,15 @@ export interface MapToken {
   y: number;
   elevation: number;
   allegiance: TokenAllegiance;
+  /** Click-to-attack follow-up (migration 0089): an NPC token's own
+   * persistent HP, independent of whether combat is active — the
+   * characters.current_hp parity NPCs never had before. null means "at
+   * full health, derive the ceiling from its linked stat block" (or "not
+   * applicable" for a PC token, whose HP lives on its own character row
+   * instead). Kept in sync with an active encounter's own combat_
+   * combatants.npc_current_hp from both directions — see
+   * resolve_pc_attack_on_npc_damage and apply_npc_hp_delta. */
+  current_hp: number | null;
   created_at: string;
 }
 
@@ -84,6 +93,7 @@ export async function listMapTokensForCampaign(
     y: row.y,
     elevation: row.elevation,
     allegiance: row.allegiance,
+    current_hp: row.current_hp,
     created_at: row.created_at,
   }));
 }

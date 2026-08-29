@@ -148,6 +148,7 @@ import {
   pathMovementCost,
   straightCellPath,
   type AdvantageMode,
+  type AttackKind,
   type ConditionKey,
   type GridPoint,
   type MovementCellInput,
@@ -163,6 +164,8 @@ import {
   LightningFlash,
   type LightningFlashState,
   Modal,
+  Select,
+  TextInput,
 } from "@/ui-components";
 import {
   applySeatOffset,
@@ -238,7 +241,7 @@ import { ChatLogPanel } from "./ChatLogPanel";
 import { ContainerPanel } from "./ContainerPanel";
 import { DraggablePanel, PanelDockBar, PanelLayoutProvider } from "./DraggablePanel";
 import { SoundControl } from "./SoundControl";
-import { DiceLogPanel } from "./DiceLogPanel";
+import { AdvantageToggle, DiceLogPanel } from "./DiceLogPanel";
 import { DiceTrayPicker } from "./DiceTrayPicker";
 import { DmBook } from "./DmBook";
 import { EndSessionSummaryModal } from "./EndSessionSummaryModal";
@@ -2378,6 +2381,23 @@ export function GameRoom({
   const [armedToken, setArmedToken] = useState<TokenArm | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  // Click-to-attack: moving a PC's token onto a non-party-occupied cell
+  // offers this instead of the move (see handleSelectedTokenCellClick's own
+  // occupant check below) — a Roll!/Cancel prompt, never an actual move
+  // (the attacker's token stays put whether the roll hits or misses, the
+  // real 5e rule that attacking an adjacent target never swaps positions
+  // with it). `attackerCharacterId` is always the mover's OWN character
+  // (token.character_id) — a DM repositioning a bare NPC token never
+  // triggers this, by construction (see the interception's own guard).
+  const [pendingAttack, setPendingAttack] = useState<{
+    attackerCharacterId: string;
+    targetToken: MapToken;
+  } | null>(null);
+  const [attackKind, setAttackKind] = useState<AttackKind>("melee");
+  const [attackDamageNotation, setAttackDamageNotation] = useState("1d6");
+  const [attackMode, setAttackMode] = useState<AdvantageMode>("normal");
+  const [attackBusy, setAttackBusy] = useState(false);
+  const [attackError, setAttackError] = useState<string | null>(null);
   // Click-select-to-move (replaces the old click-hold-drag gesture): the
   // token THIS client has picked up, if any. Purely local — never broadcast
   // directly (publishTokenSelection below sends the poke), and the only
@@ -3903,7 +3923,7 @@ export function GameRoom({
   const handleTokenSelect = useCallback(
     (tokenId: string) => {
       const current = liveMapRef.current;
-      if (!current || tokenBusy) return;
+      if (!current || tokenBusy || pendingAttack) return;
       if (selectedTokenId === tokenId) {
         // Clicking the already-selected token again: the primary
         // documented cancel gesture. Escape, and clicking a cell that
@@ -3913,7 +3933,30 @@ export function GameRoom({
         void publishTokenSelection(null);
         return;
       }
-      if (!current.tokens.some((candidate) => candidate.id === tokenId)) return;
+      const clicked = current.tokens.find((candidate) => candidate.id === tokenId);
+      if (!clicked) return;
+      // Click-to-attack: "moving onto an enemy" naturally lands the click
+      // ON that token's own mesh, not just its bare cell — this handler
+      // (GameTableScene's onTokenClick), not handleSelectedTokenCellClick's
+      // cell-click path, is where that click actually arrives. Clicking a
+      // DIFFERENT, non-party token while a PC's own token is already
+      // selected offers the Roll!/Cancel prompt instead of switching the
+      // selection to it; every other case (nothing selected yet, or
+      // switching between two friendly selections, or a DM's non-PC
+      // selection) keeps today's exact behavior below.
+      if (selectedTokenId) {
+        const selected = current.tokens.find((candidate) => candidate.id === selectedTokenId);
+        if (selected?.character_id && clicked.allegiance !== "party") {
+          setSelectedTokenId(null);
+          void publishTokenSelection(null);
+          setAttackKind("melee");
+          setAttackDamageNotation("1d6");
+          setAttackMode("normal");
+          setAttackError(null);
+          setPendingAttack({ attackerCharacterId: selected.character_id, targetToken: clicked });
+          return;
+        }
+      }
       // A new selection supersedes any DM placement/reposition arming in
       // progress — the two gestures share the same cell-click target (the
       // onCellClick prop below) and would otherwise fight over what a
@@ -3922,7 +3965,7 @@ export function GameRoom({
       setSelectedTokenId(tokenId);
       void publishTokenSelection(tokenId);
     },
-    [tokenBusy, selectedTokenId, publishTokenSelection]
+    [tokenBusy, selectedTokenId, pendingAttack, publishTokenSelection]
   );
 
   // TokenPanel's own arm gesture (place-character/place-npc/place-monster,
@@ -4172,7 +4215,7 @@ export function GameRoom({
     (x: number, y: number) => {
       const current = liveMapRef.current;
       const tokenId = selectedTokenId;
-      if (!tokenId || !current || tokenBusy) return;
+      if (!tokenId || !current || tokenBusy || pendingAttack) return;
       const token = current.tokens.find((candidate) => candidate.id === tokenId);
       if (!token) {
         // The selected token vanished from under the selection (removed by
@@ -4185,6 +4228,27 @@ export function GameRoom({
       if (x === origin.x && y === origin.y) {
         setSelectedTokenId(null);
         void publishTokenSelection(null);
+        return;
+      }
+      // Click-to-attack: a PC's token clicked onto a cell occupied by a
+      // non-party token offers the Roll!/Cancel prompt INSTEAD of moving —
+      // takes priority over the void/reachable checks below since there's
+      // plainly a floor there (a token stands on it) and this isn't really
+      // a move attempt at all. A DM repositioning a bare NPC token
+      // (token.character_id null) never triggers this — only a player's
+      // own PC walking into something offers to fight it. Whether combat
+      // is formally active is irrelevant here (resolvePcAttackOnNpcDamage
+      // tracks NPC HP independent of it) — "whether in combat or not", per
+      // the feature's own ask.
+      const occupant = current.tokens.find((candidate) => candidate.x === x && candidate.y === y);
+      if (occupant && token.character_id && occupant.allegiance !== "party") {
+        setSelectedTokenId(null);
+        void publishTokenSelection(null);
+        setAttackKind("melee");
+        setAttackDamageNotation("1d6");
+        setAttackMode("normal");
+        setAttackError(null);
+        setPendingAttack({ attackerCharacterId: token.character_id, targetToken: occupant });
         return;
       }
       if (cellIsVoid(current.cells, x, y)) {
@@ -4200,7 +4264,14 @@ export function GameRoom({
       void publishTokenSelection(null);
       void commitTokenMove(tokenId, origin, { x, y });
     },
-    [selectedTokenId, tokenBusy, reachableSetForSelection, publishTokenSelection, commitTokenMove]
+    [
+      selectedTokenId,
+      tokenBusy,
+      pendingAttack,
+      reachableSetForSelection,
+      publishTokenSelection,
+      commitTokenMove,
+    ]
   );
 
   // The ruler trio never touches Supabase or any token — start records two
@@ -5164,6 +5235,81 @@ export function GameRoom({
     () => new Map(statBlocks.map((statBlock) => [statBlock.id, statBlock])),
     [statBlocks]
   );
+
+  // Click-to-attack: the target's AC, auto-filled from whatever's readable
+  // (an NPC's linked stat block, or — the rarer case, e.g. a manually
+  // reallegianced PC token — a readable character's own armor_class) —
+  // the exact same DiceLogPanel.selectTarget auto-fill sources, just
+  // resolved eagerly here since this prompt never asks the player to type
+  // an AC by hand at all. Null only for a genuinely bare, unstatted NPC
+  // token — handleRollAttack below rejects that case with a clear message
+  // instead of silently sending a bogus AC.
+  const pendingAttackTargetAc = pendingAttack
+    ? (pendingAttack.targetToken.monster_stat_block_id
+        ? (statBlockById.get(pendingAttack.targetToken.monster_stat_block_id)?.armor_class ?? null)
+        : (characterRows.find((row) => row.id === pendingAttack.targetToken.character_id)
+            ?.armor_class ?? null))
+    : null;
+
+  const pendingAttackTargetName = pendingAttack
+    ? (pendingAttack.targetToken.npc_name ??
+      characterRows.find((row) => row.id === pendingAttack.targetToken.character_id)?.name ??
+      "the target")
+    : "";
+
+  const handleCancelAttack = useCallback(() => {
+    if (attackBusy) return;
+    setPendingAttack(null);
+    setAttackError(null);
+  }, [attackBusy]);
+
+  const handleRollAttack = useCallback(async () => {
+    if (!pendingAttack || attackBusy) return;
+    if (pendingAttackTargetAc === null) {
+      setAttackError("This target has no stat block, so it has no AC to roll against.");
+      return;
+    }
+    const notation = attackDamageNotation.trim();
+    if (!notation) {
+      setAttackError("Enter the damage dice for this attack (e.g. \"1d8+3\").");
+      return;
+    }
+    setAttackBusy(true);
+    setAttackError(null);
+    try {
+      const target = pendingAttack.targetToken;
+      await postRoll(campaignId, {
+        kind: "attack",
+        characterId: pendingAttack.attackerCharacterId,
+        attackKind,
+        damageNotation: notation,
+        targetAc: pendingAttackTargetAc,
+        targetCharacterId: target.character_id,
+        targetTokenId: target.id,
+        targetName: target.npc_name ?? null,
+        mode: attackMode,
+      });
+      // The roll lands in every connected client's dice log (including
+      // this one) via DiceLogPanel's own roll_log subscription — same
+      // "the DB write is the only source of truth this needs" reasoning
+      // every other direct postRoll call in this file already relies on
+      // (initiative, hide, death save, ...). Nothing further to apply here.
+      setPendingAttack(null);
+    } catch (err) {
+      setAttackError(errorMessage(err) ?? "Could not resolve that attack.");
+    } finally {
+      setAttackBusy(false);
+    }
+  }, [
+    pendingAttack,
+    attackBusy,
+    pendingAttackTargetAc,
+    attackDamageNotation,
+    attackKind,
+    attackMode,
+    campaignId,
+  ]);
+
   const monsterTemplateById = useMemo(
     () => new Map(initialMonsterTemplates.map((template) => [template.id, template])),
     [initialMonsterTemplates]
@@ -7492,6 +7638,86 @@ export function GameRoom({
             {transitionError ? (
               <p role="alert" className={styles.errorText} data-testid="transition-offer-error">
                 {transitionError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
+      {/* Click-to-attack: moving a PC's token onto a hostile/neutral
+          token's cell offers this instead of the move (handleSelectedTo-
+          kenCellClick's own occupant check) — Roll!/Cancel, whether or not
+          combat is formally active. Roll! posts an ordinary "attack" roll
+          (the same roll route every other attack goes through); the target
+          AC is always auto-filled, never typed in here. */}
+      <Modal
+        open={pendingAttack !== null}
+        onClose={handleCancelAttack}
+        title={`Attack ${pendingAttackTargetName}?`}
+        footer={
+          pendingAttack ? (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={attackBusy}
+                onClick={handleCancelAttack}
+                data-testid="attack-prompt-cancel"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={attackBusy || pendingAttackTargetAc === null}
+                onClick={() => void handleRollAttack()}
+                data-testid="attack-prompt-roll"
+              >
+                {attackBusy ? "Rolling…" : "Roll!"}
+              </Button>
+            </>
+          ) : null
+        }
+      >
+        {pendingAttack ? (
+          <div data-testid="attack-prompt-modal">
+            {pendingAttackTargetAc !== null ? (
+              <p className={styles.hint}>
+                Target AC <span className={styles.objectName}>{pendingAttackTargetAc}</span>
+              </p>
+            ) : (
+              <p role="alert" className={styles.errorText} data-testid="attack-prompt-no-ac">
+                This target has no stat block, so it has no AC to roll against — give it one from the
+                Enemies book first.
+              </p>
+            )}
+            <Select
+              label="Attack kind"
+              value={attackKind}
+              onChange={(event) => setAttackKind(event.target.value as AttackKind)}
+              disabled={attackBusy}
+              data-testid="attack-prompt-kind"
+            >
+              <option value="melee">Melee</option>
+              <option value="ranged">Ranged</option>
+              <option value="finesse">Finesse</option>
+              <option value="spell">Spell</option>
+            </Select>
+            <TextInput
+              label="Damage dice"
+              value={attackDamageNotation}
+              onChange={(event) => setAttackDamageNotation(event.target.value)}
+              disabled={attackBusy}
+              data-testid="attack-prompt-damage"
+            />
+            <AdvantageToggle
+              mode={attackMode}
+              onChange={setAttackMode}
+              disabled={attackBusy}
+              testIdPrefix="attack-prompt"
+            />
+            {attackError ? (
+              <p role="alert" className={styles.errorText} data-testid="attack-prompt-error">
+                {attackError}
               </p>
             ) : null}
           </div>

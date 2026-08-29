@@ -20,6 +20,7 @@ import {
   replaceHiddenAsHider,
   resolveAttackDamage,
   resolveNpcAttackDamage,
+  resolvePcAttackOnNpcDamage,
   rollConcentrationSave,
   rollDeathSave,
   setCombatantEconomyFlag,
@@ -1314,6 +1315,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
     const targetCharacterId =
       typeof roll.targetCharacterId === "string" ? roll.targetCharacterId : null;
+    // Click-to-attack follow-up: captured alongside targetCharacterId so
+    // the branch below can auto-apply damage to an NPC target too (see
+    // resolvePcAttackOnNpcDamage) — absent (undefined) rather than null so
+    // a pre-existing caller that never sent this field stays byte-
+    // identical, matching every other optional AttackResolution field's
+    // own convention.
+    const targetTokenId =
+      typeof roll.targetTokenId === "string" ? roll.targetTokenId : null;
     const targetName =
       typeof roll.targetName === "string" && roll.targetName.trim() !== ""
         ? roll.targetName.trim().slice(0, 80)
@@ -1340,6 +1349,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           targetAc: roll.targetAc,
           targetName,
           targetCharacterId,
+          targetTokenId,
           ...outcome,
           damage,
           applied: null,
@@ -1404,6 +1414,63 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
               : "Could not apply the damage.";
           return NextResponse.json({ ok: false, message }, { status: 403 });
         }
+      } else if (targetTokenId && damage.total > 0) {
+        // Click-to-attack follow-up: the NPC-target counterpart of the
+        // branch above — closes the gap where a PC's hit on an NPC token
+        // never auto-applied (the DM previously had to reach for
+        // apply_npc_hp_delta by hand every time, in AND out of combat
+        // alike). Same shape as the PC-target branch: build the breakdown
+        // with a null placeholder, let the RPC splice in the real
+        // `applied`, return directly on success so nothing double-logs.
+        attack = {
+          attackKind: attackContext.attackKind,
+          targetAc: roll.targetAc,
+          targetName,
+          targetCharacterId: null,
+          targetTokenId,
+          ...outcome,
+          damage,
+          applied: null,
+          instantDeath: false,
+          deathSaveFailureAdded: 0,
+          advantageSources,
+          disadvantageSources,
+        };
+        const breakdown: D20RollBreakdown = {
+          type: "d20",
+          label,
+          mode: rolledMode,
+          d20Rolls: d20.rolls,
+          d20Result: d20.result,
+          modifiers,
+          attack,
+        };
+        try {
+          const entry = await resolvePcAttackOnNpcDamage(
+            supabase,
+            campaignId,
+            user.id,
+            character.id,
+            targetTokenId,
+            damage.total,
+            outcome.critical,
+            breakdown,
+            total
+          );
+          if (economyCombatantId) {
+            await setCombatantEconomyFlag(supabase, economyCombatantId, "action_used", true);
+          }
+          if (hiddenAttackerCombatantId) {
+            await clearHiddenAsHider(supabase, hiddenAttackerCombatantId);
+          }
+          return NextResponse.json({ ok: true, roll: entry });
+        } catch (err) {
+          const message =
+            err && typeof err === "object" && "message" in err && typeof err.message === "string"
+              ? err.message
+              : "Could not apply the damage.";
+          return NextResponse.json({ ok: false, message }, { status: 403 });
+        }
       }
     }
 
@@ -1412,6 +1479,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       targetAc: roll.targetAc,
       targetName,
       targetCharacterId,
+      targetTokenId,
       ...outcome,
       damage,
       applied,

@@ -350,6 +350,7 @@ export {
   subscribeToRollLog,
   resolveAttackDamage,
   resolveNpcAttackDamage,
+  resolvePcAttackOnNpcDamage,
   rollDeathSave,
   rollConcentrationSave,
   type RollKind,

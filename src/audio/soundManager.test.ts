@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("SOUND_KEYS registry", () => {
-  it("defines exactly the 17 keys this whole Sound Effects plan (SP1-SP9 plus the natural-roll and game-music follow-ups) uses", () => {
+  it("defines exactly the 20 keys this whole Sound Effects plan (SP1-SP9 plus the natural-roll, game-music, and allegiance-hit-sound follow-ups) uses", () => {
     expect(new Set(ALL_SOUND_KEYS)).toEqual(
       new Set([
         "dice_impact",
@@ -47,6 +47,9 @@ describe("SOUND_KEYS registry", () => {
         "hit_normal",
         "hit_critical",
         "hit_miss",
+        "hit_player",
+        "hit_enemy",
+        "hit_npc",
         "token_move",
         "door_transition",
         "death",
@@ -61,7 +64,7 @@ describe("SOUND_KEYS registry", () => {
         "combat_music",
       ])
     );
-    expect(ALL_SOUND_KEYS).toHaveLength(17);
+    expect(ALL_SOUND_KEYS).toHaveLength(20);
   });
 
   it("gives every registry key at least one baked file", () => {

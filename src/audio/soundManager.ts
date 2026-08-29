@@ -5,7 +5,8 @@
  *
  *   1. SOUND_KEYS — the ONE central registry of every sound key this whole
  *      plan will ever use. Every trigger prompt (SP3 token_move, SP4
- *      door_transition, SP5 hit_normal/hit_critical/hit_miss, SP6 death,
+ *      door_transition, SP5 hit_normal/hit_critical/hit_miss/hit_player/
+ *      hit_enemy/hit_npc, SP6 death,
  *      SP7 pit_fall, SP8 dice_impact, SP9 rain_loop/wind_loop/thunder/
  *      fire_loop, nat_20/nat_1 for a natural roll on any non-attack d20,
  *      lobby_music/calm_music/combat_music for the Lobby and Game Room
@@ -69,6 +70,18 @@ export const SOUND_KEYS = {
   HIT_CRITICAL: "hit_critical",
   /** SP5 — a missed attack roll. */
   HIT_MISS: "hit_miss",
+  /** Click-to-attack follow-up: an ordinary hit landing on a PARTY member's
+   * token — takes priority over HIT_NORMAL whenever the target's
+   * TokenAllegiance is resolvable (see DiceLogPanel.tsx's
+   * attackRollSoundKey); HIT_CRITICAL/HIT_MISS are unaffected, still fired
+   * regardless of who was hit. */
+  HIT_PLAYER: "hit_player",
+  /** Click-to-attack follow-up: an ordinary hit landing on a HOSTILE
+   * token's — same priority/fallback rules as HIT_PLAYER above. */
+  HIT_ENEMY: "hit_enemy",
+  /** Click-to-attack follow-up: an ordinary hit landing on a NEUTRAL NPC's
+   * token — same priority/fallback rules as HIT_PLAYER above. */
+  HIT_NPC: "hit_npc",
   /** SP3 — a token's slide phase starting a real move. */
   TOKEN_MOVE: "token_move",
   /** SP4 — a pawn's cross-map transition being executed/confirmed. */
@@ -150,6 +163,9 @@ const SOUND_FILES: Record<SoundKey, string[]> = {
   hit_normal: ["/sounds/hit_normal_1.mp3", "/sounds/hit_normal_2.mp3", "/sounds/hit_normal_3.mp3"],
   hit_critical: ["/sounds/hit_critical.mp3"],
   hit_miss: ["/sounds/hit_miss.mp3"],
+  hit_player: ["/sounds/hit_player.mp3"],
+  hit_enemy: ["/sounds/hit_enemy.mp3"],
+  hit_npc: ["/sounds/hit_npc.mp3"],
   token_move: ["/sounds/token_move.mp3"],
   door_transition: ["/sounds/door_transition.mp3"],
   death: ["/sounds/death.mp3"],

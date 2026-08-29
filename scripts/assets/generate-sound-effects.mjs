@@ -233,6 +233,75 @@ generate("hit_miss.mp3", [
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────
+// hit_player / hit_enemy / hit_npc — click-to-attack follow-up: the same
+// noise+tone STRUCTURE hit_normal's own pool already established, but each
+// one distinctly voiced by WHO got hit rather than varied for repeat-hit
+// variety (that's still hit_normal's own job, unaffected):
+//   - hit_player: a weightier, lower-pitched thud (110Hz tone, a narrower
+//     lower bandpass) — reads as "one of ours took that", not celebratory.
+//   - hit_enemy: a brighter, punchier crack (380Hz tone, a wider higher
+//     bandpass, the hottest mix of the three) — reads as a satisfying,
+//     rewarding hit on a foe.
+//   - hit_npc: a duller, quieter thud (170Hz tone, heavily lowpassed,
+//     softer mix) — a neutral, unremarkable landed blow.
+//
+// Equivalent shell commands:
+//   ffmpeg -f lavfi -i "anoisesrc=d=0.2:c=white:a=1:seed=200" \
+//          -f lavfi -i "sine=f=110:d=0.2" \
+//          -filter_complex "
+//            [0:a]bandpass=f=900:width_type=h:w=1400,
+//              afade=t=out:st=0.03:d=0.17[whoosh];
+//            [1:a]afade=t=out:st=0.02:d=0.18,volume=0.6[tone];
+//            [whoosh][tone]amix=inputs=2:duration=first:dropout_transition=0,
+//              volume=2.6[out]" \
+//          -map "[out]" hit_player.mp3
+//   ffmpeg -f lavfi -i "anoisesrc=d=0.2:c=white:a=1:seed=201" \
+//          -f lavfi -i "sine=f=380:d=0.2" \
+//          -filter_complex "
+//            [0:a]highpass=f=1200,bandpass=f=2800:width_type=h:w=2800,
+//              afade=t=out:st=0.02:d=0.17[whoosh];
+//            [1:a]afade=t=out:st=0.01:d=0.16,volume=0.65[tone];
+//            [whoosh][tone]amix=inputs=2:duration=first:dropout_transition=0,
+//              volume=2.9[out]" \
+//          -map "[out]" hit_enemy.mp3
+//   ffmpeg -f lavfi -i "anoisesrc=d=0.2:c=pink:a=1:seed=202" \
+//          -f lavfi -i "sine=f=170:d=0.2" \
+//          -filter_complex "
+//            [0:a]lowpass=f=1100,afade=t=out:st=0.03:d=0.16[whoosh];
+//            [1:a]afade=t=out:st=0.02:d=0.17,volume=0.4[tone];
+//            [whoosh][tone]amix=inputs=2:duration=first:dropout_transition=0,
+//              volume=1.9[out]" \
+//          -map "[out]" hit_npc.mp3
+// ─────────────────────────────────────────────────────────────────────────
+generate("hit_player.mp3", [
+  "-f", "lavfi", "-i", "anoisesrc=d=0.2:c=white:a=1:seed=200",
+  "-f", "lavfi", "-i", "sine=f=110:d=0.2",
+  "-filter_complex",
+  "[0:a]bandpass=f=900:width_type=h:w=1400,afade=t=out:st=0.03:d=0.17[whoosh];" +
+    "[1:a]afade=t=out:st=0.02:d=0.18,volume=0.6[tone];" +
+    "[whoosh][tone]amix=inputs=2:duration=first:dropout_transition=0,volume=2.6[out]",
+  "-map", "[out]",
+]);
+generate("hit_enemy.mp3", [
+  "-f", "lavfi", "-i", "anoisesrc=d=0.2:c=white:a=1:seed=201",
+  "-f", "lavfi", "-i", "sine=f=380:d=0.2",
+  "-filter_complex",
+  "[0:a]highpass=f=1200,bandpass=f=2800:width_type=h:w=2800,afade=t=out:st=0.02:d=0.17[whoosh];" +
+    "[1:a]afade=t=out:st=0.01:d=0.16,volume=0.65[tone];" +
+    "[whoosh][tone]amix=inputs=2:duration=first:dropout_transition=0,volume=2.9[out]",
+  "-map", "[out]",
+]);
+generate("hit_npc.mp3", [
+  "-f", "lavfi", "-i", "anoisesrc=d=0.2:c=pink:a=1:seed=202",
+  "-f", "lavfi", "-i", "sine=f=170:d=0.2",
+  "-filter_complex",
+  "[0:a]lowpass=f=1100,afade=t=out:st=0.03:d=0.16[whoosh];" +
+    "[1:a]afade=t=out:st=0.02:d=0.17,volume=0.4[tone];" +
+    "[whoosh][tone]amix=inputs=2:duration=first:dropout_transition=0,volume=1.9[out]",
+  "-map", "[out]",
+]);
+
+// ─────────────────────────────────────────────────────────────────────────
 // token_move — a soft footstep/scrape: brown noise (naturally weighted
 // toward low frequencies, softer than white/pink) bandpassed to a narrow
 // mid-low window and quickly faded, short and unobtrusive since this fires
@@ -571,6 +640,9 @@ const EXPECTED_FILES = [
   "hit_normal_3.mp3",
   "hit_critical.mp3",
   "hit_miss.mp3",
+  "hit_player.mp3",
+  "hit_enemy.mp3",
+  "hit_npc.mp3",
   "token_move.mp3",
   "door_transition.mp3",
   "death.mp3",

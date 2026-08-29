@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { playSound, SOUND_KEYS, type SoundKey } from "@/audio";
 import { Button } from "@/ui-components";
 import {
@@ -45,22 +45,47 @@ const MODES: AdvantageMode[] = ["normal", "advantage", "disadvantage"];
 const LOG_CAP = 50;
 
 /**
- * Sound Effects SP5: which sound category (if any) a freshly-inserted
- * roll_log row should trigger — an ordinary hit (a random hit_normal
- * variant — playSound's own Math.random() pick, unbiased below), a
- * critical hit, or a miss. Read directly off the breakdown's own
- * `hit`/`critical` flags, which resolveAttackDamage, resolveNpcAttackDamage,
- * AND the plain miss/untargeted insertRoll path (rolls.ts/route.ts) all
- * populate on every attack roll — unlike `damage`/`applied`, which are
- * null both for a genuine miss AND for a hit against an untracked target,
- * so neither is a reliable hit/miss signal on its own. Returns null for
- * every non-attack roll kind (checks, saves, freeform, etc.), which the
- * caller below simply doesn't play a sound for.
+ * Sound Effects SP5, extended by the click-to-attack follow-up: which sound
+ * category (if any) a freshly-inserted roll_log row should trigger — a
+ * critical hit and a miss are unaffected by who was hit (SP5's original
+ * behavior, unchanged); an ORDINARY hit now branches by the TARGET's
+ * TokenAllegiance instead of always playing the single flat hit_normal:
+ * hit_player for a party member, hit_enemy for a hostile, hit_npc for a
+ * neutral — "player-hits-enemy vs enemy-hits-player", from the target's own
+ * side, covers both directions for free. `hit`/`critical` are still read
+ * directly off the breakdown (resolveAttackDamage/resolveNpcAttackDamage/
+ * resolvePcAttackOnNpcDamage and the plain miss/untargeted insertRoll path
+ * all populate them on every attack roll) — unlike `damage`/`applied`,
+ * which are null both for a genuine miss AND for a hit against an
+ * untracked target, so neither is a reliable hit/miss signal on its own.
+ *
+ * Allegiance resolution: `targetCharacterId` set means the target is a PC —
+ * every PC token is always 'party' allegiance by construction
+ * (placeCharacterToken), so no token lookup is even needed there. Otherwise
+ * `targetTokenId` (present on every attack roll logged since the click-to-
+ * attack follow-up; absent on anything logged before it) is matched
+ * against the live `tokens` list for its real allegiance. Any of these
+ * failing to resolve (an old stored roll with neither field, or a token
+ * that's since been removed) falls back to the original flat hit_normal —
+ * SP2's own "a resolution failure must never block ordinary playback"
+ * discipline, applied here instead of to an admin override lookup.
+ * Returns null for every non-attack roll kind (checks, saves, freeform,
+ * etc.), which the caller below simply doesn't play a sound for.
  */
-function attackRollSoundKey(roll: RollLogEntry): SoundKey | null {
+function attackRollSoundKey(roll: RollLogEntry, tokens: readonly MapToken[]): SoundKey | null {
   if (roll.kind !== "attack" || roll.breakdown.type !== "d20" || !roll.breakdown.attack) return null;
-  if (roll.breakdown.attack.critical) return SOUND_KEYS.HIT_CRITICAL;
-  return roll.breakdown.attack.hit ? SOUND_KEYS.HIT_NORMAL : SOUND_KEYS.HIT_MISS;
+  const attack = roll.breakdown.attack;
+  if (attack.critical) return SOUND_KEYS.HIT_CRITICAL;
+  if (!attack.hit) return SOUND_KEYS.HIT_MISS;
+
+  if (attack.targetCharacterId) return SOUND_KEYS.HIT_PLAYER;
+  const targetToken = attack.targetTokenId
+    ? tokens.find((candidate) => candidate.id === attack.targetTokenId)
+    : undefined;
+  if (targetToken?.allegiance === "party") return SOUND_KEYS.HIT_PLAYER;
+  if (targetToken?.allegiance === "hostile") return SOUND_KEYS.HIT_ENEMY;
+  if (targetToken?.allegiance === "neutral") return SOUND_KEYS.HIT_NPC;
+  return SOUND_KEYS.HIT_NORMAL;
 }
 
 /**
@@ -187,6 +212,17 @@ export function DiceLogPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Allegiance-based hit sounds: the roll_log subscription below is set up
+  // ONCE per campaignId (its own effect deps), so its closure would
+  // otherwise see whatever `tokens` looked like at mount forever — a ref,
+  // kept fresh independently, lets attackRollSoundKey always read the
+  // CURRENT roster without re-subscribing the whole channel on every token
+  // move/placement.
+  const tokensRef = useRef(tokens);
+  useEffect(() => {
+    tokensRef.current = tokens;
+  }, [tokens]);
+
   const [notation, setNotation] = useState("");
 
   // Phase 3: the DM's private-roll toggle — a persistent two-state flag
@@ -282,7 +318,7 @@ export function DiceLogPanel({
       // — that page mounts/unmounts with the DM's book-tab selection, so a
       // DM with the Activity tab open at the same time would otherwise
       // hear every hit/miss/crit twice.
-      const soundKey = attackRollSoundKey(roll) ?? naturalRollSoundKey(roll);
+      const soundKey = attackRollSoundKey(roll, tokensRef.current) ?? naturalRollSoundKey(roll);
       if (soundKey) void playSound(soundKey);
     });
   }, [campaignId]);

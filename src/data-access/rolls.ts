@@ -27,6 +27,13 @@ export interface AttackResolution {
   targetAc: number;
   targetName: string | null;
   targetCharacterId: string | null;
+  /** Click-to-attack follow-up: the map_tokens id targeted, when the
+   * client sent one — set for both PC and NPC targets (whichever the
+   * attack form/click-to-attack flow resolved), used client-side to look
+   * up the target's TokenAllegiance for the allegiance-keyed hit sound
+   * (see DiceLogPanel.tsx's attackRollSoundKey). Optional, like
+   * attackerCombatantId below — absent on every pre-existing stored roll. */
+  targetTokenId?: string | null;
   natural20: boolean;
   natural1: boolean;
   hit: boolean;
@@ -39,8 +46,13 @@ export interface AttackResolution {
     modifier: number;
     total: number;
   } | null;
-  /** Set when the damage actually landed on a tracked PC's HP. */
-  applied: { characterId: string; newHp: number } | null;
+  /** Set when the damage actually landed on a tracked target's HP — a PC's
+   * (via resolve_attack_damage/resolve_npc_attack_damage) or, as of the
+   * click-to-attack follow-up, a stat-blocked NPC token's own current_hp
+   * (via resolve_pc_attack_on_npc_damage). Exactly one shape is ever
+   * present at once — never both keys together — so a reader distinguishes
+   * by which key exists rather than a separate discriminant field. */
+  applied: { characterId: string; newHp: number } | { tokenId: string; newHp: number } | null;
   /** The attacking combatant and stored attack name for a stat-block
    * attack (Prompt 61) — the NPC attacker has no character_id, so the
    * breakdown itself carries who swung. Absent on PC attacks and every
@@ -429,6 +441,72 @@ export async function resolveNpcAttackDamage(
     total,
     // Same reasoning as resolveAttackDamage's own visibility field above —
     // resolve_npc_attack_damage's insert also never sets this column.
+    visibility: "public",
+    created_at: row.out_roll_created_at,
+  };
+}
+
+/**
+ * Click-to-attack follow-up: the PC-attacks-NPC counterpart of
+ * resolveAttackDamage/resolveNpcAttackDamage — closes the long-standing gap
+ * where a PC's hit on an NPC target never automatically moved its HP (the
+ * DM had to call apply_npc_hp_delta by hand). Authorization is
+ * attacker-based, identical to resolveAttackDamage (the caller owns the
+ * attacking character, or is that character's campaign DM); the target is
+ * a map_tokens row rather than a characters row — no death-save/instant-
+ * death/concentration bookkeeping exists for monsters (0038's own
+ * established rule), so unlike the two functions above there is nothing to
+ * splice back into `instantDeath`/`deathSaveFailureAdded` beyond their
+ * already-false/0 defaults. `applied` gets the `{ tokenId, newHp }` shape
+ * per AttackResolution's own doc comment.
+ */
+export async function resolvePcAttackOnNpcDamage(
+  supabase: SupabaseClient,
+  campaignId: string,
+  rollerUserId: string,
+  attackerCharacterId: string,
+  targetTokenId: string,
+  damage: number,
+  critical: boolean,
+  breakdown: D20RollBreakdown,
+  total: number
+): Promise<RollLogEntry> {
+  const { data, error } = await supabase
+    .rpc("resolve_pc_attack_on_npc_damage", {
+      p_attacker_character_id: attackerCharacterId,
+      p_target_token_id: targetTokenId,
+      p_damage: damage,
+      p_critical: critical,
+      p_breakdown: breakdown,
+      p_total: total,
+    })
+    .single();
+
+  if (error) throw error;
+  const row = data as {
+    out_target_token_id: string;
+    out_target_current_hp: number;
+    out_roll_id: string;
+    out_roll_created_at: string;
+  };
+
+  const breakdownWithApplied: D20RollBreakdown = {
+    ...breakdown,
+    attack: breakdown.attack && {
+      ...breakdown.attack,
+      applied: { tokenId: row.out_target_token_id, newHp: row.out_target_current_hp },
+    },
+  };
+
+  return {
+    id: row.out_roll_id,
+    campaign_id: campaignId,
+    roller_user_id: rollerUserId,
+    character_id: attackerCharacterId,
+    kind: "attack",
+    breakdown: breakdownWithApplied,
+    total,
+    // Same reasoning as resolveAttackDamage's own visibility field above.
     visibility: "public",
     created_at: row.out_roll_created_at,
   };
