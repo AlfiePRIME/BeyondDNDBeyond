@@ -2261,6 +2261,45 @@ export function GameRoom({
   const [weatherKind, setWeatherKindState] = useState<WeatherKind>(initialWeatherKind);
   const [weatherMechanical, setWeatherMechanicalState] = useState(initialWeatherMechanical);
   const [weatherBusy, setWeatherBusy] = useState(false);
+  // Bug fix (weather-audio-stop-race): the REAL concurrency gate for
+  // handleSetWeather below — chairMoveBusyRef/dmBookMoveBusyRef's own
+  // established "a ref is the real gate, a sibling state is only for
+  // disabling the UI" split, applied here for the identical reason those
+  // two already needed it. `weatherBusy` (the STATE above) is read by
+  // DmBook purely to grey out the weather buttons while a write is in
+  // flight — it is NOT a safe concurrency guard on its own, because two
+  // clicks landing in the same browser task (a real, reproduced case: a
+  // heavy R3F frame can delay React's commit long enough for two genuinely
+  // separate, humanly-paced clicks to both be dispatched before this
+  // component re-renders, and a scripted/assistive-tech/synthetic double
+  // click can do the same with zero gap at all) both close over the SAME
+  // pre-render `weatherBusy=false`, so both pass `if (weatherBusy) return`
+  // and both proceed to call setWeather concurrently — confirmed via a
+  // real Playwright repro (scripts/db/verify-weather-audio-rapid-
+  // transitions.mjs) that the SECOND call in that window either races the
+  // first at the DB layer or (see DmBook's own weather-select onClick doc
+  // comment) never even reaches handleSetWeather at all. A ref sidesteps
+  // this entirely: `.current` is mutated in place and read fresh on every
+  // call regardless of which render's closure is doing the reading, so a
+  // second call arriving before this component has re-rendered still sees
+  // the TRUE current busy state, not a stale snapshot from before the
+  // first call started.
+  const weatherBusyRef = useRef(false);
+  // Bug fix (weather-audio-stop-race), part 2: merely REJECTING a call that
+  // arrives while weatherBusyRef is true closes the data-race hole (see
+  // above) but reopens the exact user-visible symptom from a different
+  // angle — a click that lands in the (short but real, and stress-testing
+  // shows genuinely reachable) window while a PREVIOUS weather write is
+  // still in flight would otherwise vanish with zero effect and zero
+  // feedback: the DM clicks 'clear', nothing happens, and the previous
+  // kind's audio keeps playing until they happen to notice and click
+  // again. This ref remembers only the MOST RECENT such superseded
+  // request (a single slot, not a queue — exactly seatOffsets/dmBookOffset's
+  // own "only the latest matters" shape) and handleSetWeather replays it
+  // automatically the moment the in-flight call settles, so the DM's true
+  // final intent always eventually lands with no manual retry needed,
+  // however many clicks arrived during the busy window.
+  const pendingWeatherRequestRef = useRef<{ kind: WeatherKind; mechanical: boolean } | null>(null);
   const [weatherError, setWeatherError] = useState<string | null>(null);
   // Weather & Enemies C2: the Game Room's own live R3F canvas element,
   // captured via <Canvas onCreated> below so Droplets can read it directly
@@ -5360,22 +5399,57 @@ export function GameRoom({
   // than two separate setters) so the book's single control never has to
   // sequence two writes — see setWeather's own doc comment on why
   // `mechanical` always travels with `kind`.
+  //
+  // Bug fix (weather-audio-stop-race): gates on weatherBusyRef, not the
+  // weatherBusy STATE — see that ref's own doc comment above for exactly
+  // why the state alone let two near-simultaneous calls both slip past
+  // this guard. Checking-and-setting the ref is synchronous and has no
+  // dependency on a re-render having happened, so it's a genuine atomic
+  // test-and-set against a second call arriving before this one's `await
+  // setWeather` has even started, however that second call happens to
+  // arrive. `weatherBusy` (the state) is still set/cleared alongside it,
+  // unchanged, purely to keep driving DmBook's `disabled={weatherBusy}`
+  // visual feedback — it's no longer in this callback's own dependency
+  // array since the ref removes the only reason it needed to be read here.
+  //
+  // A call that arrives while busy doesn't just bail — it stashes itself in
+  // pendingWeatherRequestRef (see that ref's own doc comment) and the
+  // `while` loop below drains whatever's there, if anything, once the
+  // in-flight write has fully settled (success or failure — the DM's most
+  // recent click should still be attempted even if an earlier one in the
+  // same burst failed), rather than the caller silently self-recursing —
+  // ESLint's own react-hooks rule correctly flags a useCallback referencing
+  // its own not-yet-assigned binding as unsafe, and a loop sidesteps that
+  // entirely while keeping the exact same "always converge on the latest
+  // request" behavior (pendingWeatherRequestRef is a single slot, not a
+  // real queue, so any further clicks that land mid-loop only ever
+  // overwrite it — at most one extra round trip is ever needed to catch up
+  // to the DM's true final intent, no matter how many clicks arrived).
   const handleSetWeather = useCallback(
     async (kind: WeatherKind, mechanical: boolean) => {
-      if (weatherBusy) return;
-      setWeatherBusy(true);
-      setWeatherError(null);
-      try {
-        await setWeather(createBrowserSupabaseClient(), campaignId, kind, mechanical);
-        setWeatherKindState(kind);
-        setWeatherMechanicalState(mechanical);
-      } catch (err) {
-        setWeatherError(errorMessage(err) ?? "Could not change the weather.");
-      } finally {
-        setWeatherBusy(false);
+      if (weatherBusyRef.current) {
+        pendingWeatherRequestRef.current = { kind, mechanical };
+        return;
       }
+      weatherBusyRef.current = true;
+      setWeatherBusy(true);
+      let next: { kind: WeatherKind; mechanical: boolean } | null = { kind, mechanical };
+      while (next) {
+        setWeatherError(null);
+        try {
+          await setWeather(createBrowserSupabaseClient(), campaignId, next.kind, next.mechanical);
+          setWeatherKindState(next.kind);
+          setWeatherMechanicalState(next.mechanical);
+        } catch (err) {
+          setWeatherError(errorMessage(err) ?? "Could not change the weather.");
+        }
+        next = pendingWeatherRequestRef.current;
+        pendingWeatherRequestRef.current = null;
+      }
+      weatherBusyRef.current = false;
+      setWeatherBusy(false);
     },
-    [campaignId, weatherBusy]
+    [campaignId]
   );
 
   // Weather & Enemies C4: the periodic firestorm/acid-storm damage timer.
