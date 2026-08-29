@@ -149,6 +149,13 @@ export function DmBook({
   dayNightBusy,
   dayNightError,
   onToggleDayNight,
+  // Music (Game Room ambient/combat music toggles)
+  calmMusicEnabled,
+  combatMusicEnabled,
+  musicSettingsBusy,
+  musicSettingsError,
+  onToggleCalmMusicEnabled,
+  onToggleCombatMusicEnabled,
   // Weather (Weather & Enemies C1, mechanical toggle added by C4)
   weatherKind,
   weatherMechanical,
@@ -215,6 +222,15 @@ export function DmBook({
   dayNightBusy: boolean;
   dayNightError: string | null;
   onToggleDayNight: () => void;
+  /** campaigns.calm_music_enabled/combat_music_enabled, live-synced — the
+   * two toggles are independent, not one music on/off switch (see
+   * gameMusic.ts's own top-of-file doc comment). */
+  calmMusicEnabled: boolean;
+  combatMusicEnabled: boolean;
+  musicSettingsBusy: boolean;
+  musicSettingsError: string | null;
+  onToggleCalmMusicEnabled: () => void;
+  onToggleCombatMusicEnabled: () => void;
   /** campaigns.weather_kind, live-synced (Weather & Enemies C1). */
   weatherKind: WeatherKind;
   /** campaigns.weather_mechanical, live-synced (Weather & Enemies C4) —
@@ -416,6 +432,43 @@ export function DmBook({
             {weatherError ? (
               <p role="alert" className={roomStyles.errorText} data-testid="weather-error">
                 {weatherError}
+              </p>
+            ) : null}
+            <span className={roomStyles.panelLabel}>Music</span>
+            <p className={styles.dayNightHint}>
+              Independent toggles — turning one off doesn&apos;t bring the other in as a
+              replacement, so it&apos;s possible for the table to have no music at all (e.g. both
+              off) or music only during combat (calm off, combat on).
+            </p>
+            <div className={roomStyles.modeToggle} role="group" aria-label="Ambient music">
+              <button
+                type="button"
+                className={[roomStyles.modeButton, calmMusicEnabled ? roomStyles.modeButtonActive : ""]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-pressed={calmMusicEnabled}
+                disabled={musicSettingsBusy}
+                onClick={onToggleCalmMusicEnabled}
+                data-testid="calm-music-toggle"
+              >
+                {calmMusicEnabled ? "🎵 Ambient music on" : "Ambient music off"}
+              </button>
+              <button
+                type="button"
+                className={[roomStyles.modeButton, combatMusicEnabled ? roomStyles.modeButtonActive : ""]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-pressed={combatMusicEnabled}
+                disabled={musicSettingsBusy}
+                onClick={onToggleCombatMusicEnabled}
+                data-testid="combat-music-toggle"
+              >
+                {combatMusicEnabled ? "⚔️ Combat music on" : "Combat music off"}
+              </button>
+            </div>
+            {musicSettingsError ? (
+              <p role="alert" className={roomStyles.errorText} data-testid="music-settings-error">
+                {musicSettingsError}
               </p>
             ) : null}
           </div>

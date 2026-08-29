@@ -1,10 +1,13 @@
 #!/usr/bin/env node
-// Game music verification: Lobby menu music (lobby_music) plays for the
-// whole time a user is on the Lobby page and stops when they navigate away;
-// the Game Room plays calm_music by default and switches to combat_music
-// while combat is active (src/audio/gameMusic.ts's resolveGameMusic/
-// applyGameMusic, wired into GameRoom.tsx via `combat !== null` — the same
-// truth signal the room's own action-economy gating already reads).
+// Game music verification: lobby_music (GlobalMusic.tsx, mounted once in
+// the root layout) plays on every route EXCEPT the Game Room and the map
+// editor — not just the literal Lobby page; the Game Room plays calm_music
+// by default and switches to combat_music while combat is active
+// (src/audio/gameMusic.ts's resolveGameMusic/applyGameMusic, wired into
+// GameRoom.tsx via `combat !== null` — the same truth signal the room's own
+// action-economy gating already reads), and both of those are further
+// gated by the DM's own independent enable toggles (campaigns.
+// calm_music_enabled/combat_music_enabled, DmBook.tsx's Day/Night page).
 //
 // Shape follows this project's own established weather-audio verify
 // precedent (verify-weather-audio.mjs): a service-role client for setup,
@@ -161,6 +164,53 @@ function lobbyMusicActive(activeLoops) {
   return !!entry && entry.state === "active" && entry.gainValue > 0.9;
 }
 
+// verify-rain.mjs/verify-thunderstorm.mjs's own 3D-book-prop click
+// precedent — the DM's book has no 2D DOM control to open it, only a real
+// clickable 3D prop, projected to screen coordinates via the dm-book-state
+// debug mirror.
+async function readDmBookState(page) {
+  const el = await page.$('[data-testid="dm-book-state"]');
+  if (!el) return null;
+  return JSON.parse(await el.textContent());
+}
+
+async function waitForBookScreenPosition(page, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readDmBookState(page);
+    if (last?.screen) return last;
+    await sleep(100);
+  }
+  throw new Error(`dm-book-state never reported a screen projection — last: ${JSON.stringify(last)}`);
+}
+
+async function clickBookScreenPoint(page) {
+  const box = await page.locator("canvas:not([aria-hidden])").boundingBox();
+  if (!box) throw new Error("no canvas on the page");
+  const state = await waitForBookScreenPosition(page);
+  const [sx, sy] = state.screen;
+  return { x: box.x + sx, y: box.y + sy };
+}
+
+async function openDmBook(page) {
+  const isOpen = async () => (await page.$('[data-testid="dm-book-panel"]')) !== null;
+  if (await isOpen()) return;
+  const point = await clickBookScreenPoint(page);
+  const offsets = [
+    [0, 0],
+    [20, 0], [-20, 0], [0, 20], [0, -20],
+    [40, 0], [-40, 0], [0, 40], [0, -40],
+    [30, 30], [-30, 30], [30, -30], [-30, -30],
+  ];
+  for (const [dx, dy] of offsets) {
+    await page.mouse.click(point.x + dx, point.y + dy);
+    await sleep(200);
+    if (await isOpen()) return;
+  }
+  throw new Error(`could not click the 3D book open (tried screen point=${JSON.stringify(point)})`);
+}
+
 const VIEWPORT = { width: 1440, height: 900 };
 const AUDIO_THROTTLE_WORKAROUND_ARGS = [
   "--disable-background-timer-throttling",
@@ -178,44 +228,11 @@ try {
   const pageErrors = [];
 
   // ===========================================================================
-  // Part 1 — Lobby menu music: active while on the Lobby page, stops once
-  // navigated away.
-  // ===========================================================================
-  const dmLobbyContext = await browser.newContext({ viewport: VIEWPORT });
-  await dmLobbyContext.addCookies(sessionCookies(dm.session));
-  const dmLobbyPage = await dmLobbyContext.newPage();
-  dmLobbyPage.on("pageerror", (err) => pageErrors.push(`[dm-lobby] ${err.message}`));
-
-  await dmLobbyPage.goto(`${APP_URL}/`);
-  // The Lobby page has no visible sound-control slider (no
-  // PanelLayoutProvider to back one — see LobbyPresence.tsx's own doc
-  // comment) — only the hidden sound-manager-debug mirror, so this waits
-  // for it to be ATTACHED (present in the DOM), not the default "visible"
-  // (which a `hidden` div can never satisfy).
-  await dmLobbyPage.waitForSelector('[data-testid="sound-manager-debug"]', { state: "attached", timeout: 60000 });
-
-  const lobbyLoops = await waitForSoundDebug(dmLobbyPage, (d) => lobbyMusicActive(d.activeLoops));
-  check(
-    "lobby_music becomes active while on the Lobby page",
-    lobbyMusicActive(lobbyLoops?.activeLoops ?? {}),
-    JSON.stringify(lobbyLoops?.activeLoops)
-  );
-
-  await dmLobbyPage.goto(`${APP_URL}/account`);
-  const afterNavAway = await waitForSoundDebug(dmLobbyPage, (d) => d.activeLoops.lobby_music === undefined);
-  check(
-    "lobby_music fully stops (absent from activeLoops, not just fading) after navigating away from the Lobby",
-    afterNavAway?.activeLoops.lobby_music === undefined,
-    JSON.stringify(afterNavAway?.activeLoops)
-  );
-
-  await dmLobbyContext.close();
-
-  // ===========================================================================
-  // Part 2 — Game Room: calm_music by default, switches to combat_music
-  // while combat is active, reverts to calm_music once combat ends — on
-  // BOTH the DM's own client (who drives Start/End Combat) and a second,
-  // already-connected player (Alice), who never clicks anything.
+  // Shared setup: a real campaign with a live map + one token, needed both
+  // for the Part 1 Lobby<->Game-Room route check below AND Part 2's real
+  // Start Combat button (start_combat's own RPC requires a live map with at
+  // least one token — "Set a live map before starting combat" / "There are
+  // no tokens on the live map to fight").
   // ===========================================================================
   const campaignId = crypto.randomUUID();
   await admin.from("campaigns").insert({ id: campaignId, name: "Game music test", creator: dm.id });
@@ -274,6 +291,78 @@ try {
 
   const roomUrl = `${APP_URL}/campaigns/${campaignId}/room`;
 
+  // ===========================================================================
+  // Part 1 — lobby_music plays on every route EXCEPT the Game Room (per the
+  // project owner's own brief: "play all the time unless editing a
+  // campaign or in the game room") — checked end-to-end in ONE continuous
+  // client-side session (Lobby -> /account -> Game Room -> back to Lobby)
+  // so this genuinely exercises GlobalMusic.tsx's usePathname()-driven
+  // effect on real client-side navigations, not just a single page load.
+  // ===========================================================================
+  const dmLobbyContext = await browser.newContext({ viewport: VIEWPORT });
+  await dmLobbyContext.addCookies(sessionCookies(dm.session));
+  const dmLobbyPage = await dmLobbyContext.newPage();
+  dmLobbyPage.on("pageerror", (err) => pageErrors.push(`[dm-lobby] ${err.message}`));
+
+  await dmLobbyPage.goto(`${APP_URL}/`);
+  // The Lobby page has no visible sound-control slider (no
+  // PanelLayoutProvider to back one — see LobbyPresence.tsx's own doc
+  // comment) — only the hidden sound-manager-debug mirror (GlobalMusic.tsx),
+  // so this waits for it to be ATTACHED (present in the DOM), not the
+  // default "visible" (which a `hidden` div can never satisfy).
+  await dmLobbyPage.waitForSelector('[data-testid="sound-manager-debug"]', { state: "attached", timeout: 60000 });
+
+  const lobbyLoops = await waitForSoundDebug(dmLobbyPage, (d) => lobbyMusicActive(d.activeLoops));
+  check(
+    "lobby_music becomes active while on the Lobby page",
+    lobbyMusicActive(lobbyLoops?.activeLoops ?? {}),
+    JSON.stringify(lobbyLoops?.activeLoops)
+  );
+
+  await dmLobbyPage.goto(`${APP_URL}/account`);
+  const stillOnAccount = await waitForSoundDebug(dmLobbyPage, (d) => lobbyMusicActive(d.activeLoops));
+  check(
+    "lobby_music KEEPS playing on /account — not suppressed outside the Game Room/map editor",
+    lobbyMusicActive(stillOnAccount?.activeLoops ?? {}),
+    JSON.stringify(stillOnAccount?.activeLoops)
+  );
+
+  await dmLobbyPage.goto(roomUrl);
+  await dmLobbyPage.waitForSelector('[data-testid="combat-panel"]', { timeout: 30000 });
+  const inRoom = await waitForSoundDebug(
+    dmLobbyPage,
+    (d) => d.activeLoops.lobby_music === undefined && musicLoopsMatch(d.activeLoops, { calm: true, combat: false })
+  );
+  check(
+    "lobby_music fully stops (absent, not just fading) once navigated into the Game Room",
+    inRoom?.activeLoops.lobby_music === undefined,
+    JSON.stringify(inRoom?.activeLoops)
+  );
+  check(
+    "the Game Room's OWN calm_music takes over in the same navigation",
+    musicLoopsMatch(inRoom?.activeLoops ?? {}, { calm: true, combat: false }),
+    JSON.stringify(inRoom?.activeLoops)
+  );
+
+  await dmLobbyPage.goto(`${APP_URL}/`);
+  const backOnLobby = await waitForSoundDebug(
+    dmLobbyPage,
+    (d) => lobbyMusicActive(d.activeLoops) && d.activeLoops.calm_music === undefined
+  );
+  check(
+    "lobby_music resumes and calm_music fully stops after navigating back out of the Game Room to the Lobby",
+    lobbyMusicActive(backOnLobby?.activeLoops ?? {}) && backOnLobby?.activeLoops.calm_music === undefined,
+    JSON.stringify(backOnLobby?.activeLoops)
+  );
+
+  await dmLobbyContext.close();
+
+  // ===========================================================================
+  // Part 2 — Game Room: calm_music by default, switches to combat_music
+  // while combat is active, reverts to calm_music once combat ends — on
+  // BOTH the DM's own client (who drives Start/End Combat) and a second,
+  // already-connected player (Alice), who never clicks anything.
+  // ===========================================================================
   const dmContext = await browser.newContext({ viewport: VIEWPORT });
   await dmContext.addCookies(sessionCookies(dm.session));
   const dmPage = await dmContext.newPage();
@@ -361,6 +450,87 @@ try {
     musicLoopsMatch(aliceRevertedLoops?.activeLoops ?? {}, { calm: true, combat: false }),
     JSON.stringify(aliceRevertedLoops?.activeLoops)
   );
+
+  // ===========================================================================
+  // Part 3 — the DM's own independent calm/combat music enable toggles
+  // (DmBook.tsx's Day/Night page): turning a channel off means SILENCE for
+  // that state, never a fallback to the other channel — checked via the
+  // real DM Book UI, on both the DM's own client and Alice's.
+  // ===========================================================================
+  await openDmBook(dmPage);
+  await dmPage.click('[data-testid="dm-book-tab-dayNight"]');
+  await dmPage.waitForSelector('[data-testid="calm-music-toggle"]', { timeout: 15000 });
+
+  // Combat is not active right now (Part 2 ended it) — disabling calm_music
+  // should produce silence, NOT a fallback to combat_music.
+  await dmPage.click('[data-testid="calm-music-toggle"]');
+  const dmCalmDisabledMirror = await gameMusicState(dmPage);
+  check(
+    "game-music-state reports calmMusicEnabled:false after the DM disables the ambient-music toggle",
+    dmCalmDisabledMirror?.calmMusicEnabled === false,
+    JSON.stringify(dmCalmDisabledMirror)
+  );
+  const dmSilentLoops = await waitForSoundDebug(
+    dmPage,
+    (d) => d.activeLoops.calm_music === undefined && d.activeLoops.combat_music === undefined
+  );
+  check(
+    "disabling ambient music produces SILENCE outside combat — no fallback to combat_music",
+    dmSilentLoops?.activeLoops.calm_music === undefined && dmSilentLoops?.activeLoops.combat_music === undefined,
+    JSON.stringify(dmSilentLoops?.activeLoops)
+  );
+  const aliceSilentLoops = await waitForSoundDebug(
+    alicePage,
+    (d) => d.activeLoops.calm_music === undefined && d.activeLoops.combat_music === undefined
+  );
+  check(
+    "Alice's client — who never touched the toggle — ALSO goes silent via the real campaign settings sync",
+    aliceSilentLoops?.activeLoops.calm_music === undefined && aliceSilentLoops?.activeLoops.combat_music === undefined,
+    JSON.stringify(aliceSilentLoops?.activeLoops)
+  );
+
+  // Re-enable ambient music before testing the combat toggle, so the two
+  // toggles' effects don't get conflated.
+  await dmPage.click('[data-testid="calm-music-toggle"]');
+  await waitForSoundDebug(dmPage, (d) => musicLoopsMatch(d.activeLoops, { calm: true, combat: false }));
+
+  // Now disable combat_music, start combat, and confirm silence there too
+  // (not a fallback to calm_music).
+  await dmPage.click('[data-testid="combat-music-toggle"]');
+  const dmCombatDisabledMirror = await gameMusicState(dmPage);
+  check(
+    "game-music-state reports combatMusicEnabled:false after the DM disables the combat-music toggle",
+    dmCombatDisabledMirror?.combatMusicEnabled === false,
+    JSON.stringify(dmCombatDisabledMirror)
+  );
+
+  await dmPage.click('[data-testid="start-combat-button"]');
+  await dmPage.waitForSelector('[data-testid="end-combat-button"]', { timeout: 15000 });
+  const dmSilentDuringCombat = await waitForSoundDebug(
+    dmPage,
+    (d) => d.activeLoops.calm_music === undefined && d.activeLoops.combat_music === undefined
+  );
+  check(
+    "disabling combat music produces SILENCE during combat — no fallback to calm_music",
+    dmSilentDuringCombat?.activeLoops.calm_music === undefined && dmSilentDuringCombat?.activeLoops.combat_music === undefined,
+    JSON.stringify(dmSilentDuringCombat?.activeLoops)
+  );
+  const aliceSilentDuringCombat = await waitForSoundDebug(
+    alicePage,
+    (d) => d.activeLoops.calm_music === undefined && d.activeLoops.combat_music === undefined
+  );
+  check(
+    "Alice's client ALSO stays silent during combat with combat_music disabled",
+    aliceSilentDuringCombat?.activeLoops.calm_music === undefined && aliceSilentDuringCombat?.activeLoops.combat_music === undefined,
+    JSON.stringify(aliceSilentDuringCombat?.activeLoops)
+  );
+
+  // Clean up: re-enable combat music and end combat, so this run leaves the
+  // campaign in the same default-enabled state it started in.
+  await dmPage.click('[data-testid="combat-music-toggle"]');
+  await waitForSoundDebug(dmPage, (d) => musicLoopsMatch(d.activeLoops, { calm: false, combat: true }));
+  await dmPage.click('[data-testid="end-combat-button"]');
+  await dmPage.waitForSelector('[data-testid="start-combat-button"]', { timeout: 15000 });
 
   check("no uncaught page error occurred on any client during this run", pageErrors.length === 0, pageErrors.join("; "));
 

@@ -352,6 +352,8 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialChatMessages={initialChatMessages}
       initialActionEconomyStrict={campaign.action_economy_strict}
       initialDayNightMode={campaign.day_night_mode}
+      initialCalmMusicEnabled={campaign.calm_music_enabled}
+      initialCombatMusicEnabled={campaign.combat_music_enabled}
       initialWeatherKind={campaign.weather_kind}
       initialWeatherMechanical={campaign.weather_mechanical}
       initialSessionActive={campaign.session_active}

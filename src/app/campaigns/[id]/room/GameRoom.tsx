@@ -70,6 +70,8 @@ import {
   removeCondition,
   revealAllPendingMapObjects,
   setActionEconomyStrict,
+  setCalmMusicEnabled,
+  setCombatMusicEnabled,
   setCombatantEconomyFlag,
   setCombatantInitiative,
   setDayNightMode,
@@ -918,6 +920,8 @@ export function GameRoom({
   initialChatMessages,
   initialActionEconomyStrict,
   initialDayNightMode,
+  initialCalmMusicEnabled,
+  initialCombatMusicEnabled,
   initialWeatherKind,
   initialWeatherMechanical,
   initialSessionActive,
@@ -1029,6 +1033,14 @@ export function GameRoom({
    * 3D-table lighting; unrelated to the per-cell vision/light-level
    * system. */
   initialDayNightMode: DayNightMode;
+  /** campaigns.calm_music_enabled at load time — DM-controlled toggle for
+   * whether calm_music should play at all outside combat, independent of
+   * initialCombatMusicEnabled below. Kept live via the same campaigns
+   * postgres_changes feed as initialActionEconomyStrict/initialDayNightMode. */
+  initialCalmMusicEnabled: boolean;
+  /** campaigns.combat_music_enabled at load time — the initialCalmMusicEnabled
+   * sibling, for combat_music during combat. */
+  initialCombatMusicEnabled: boolean;
   /** campaigns.weather_kind at load time (Weather & Enemies C1) — kept live
    * below via the same campaigns postgres_changes feed as
    * initialActionEconomyStrict/initialDayNightMode. Only 'clear'/'fog'
@@ -2006,6 +2018,14 @@ export function GameRoom({
   const [dayNightMode, setDayNightModeState] = useState<DayNightMode>(initialDayNightMode);
   const [dayNightBusy, setDayNightBusy] = useState(false);
   const [dayNightError, setDayNightError] = useState<string | null>(null);
+  // The DM's ambient/combat music toggles, live-synced below via the same
+  // campaigns postgres_changes feed as dayNightMode/economyStrict —
+  // gates src/audio's own applyGameMusic below (see that effect's own
+  // comment for why the two toggles are independent, not one switch).
+  const [calmMusicEnabled, setCalmMusicEnabledState] = useState(initialCalmMusicEnabled);
+  const [combatMusicEnabled, setCombatMusicEnabledState] = useState(initialCombatMusicEnabled);
+  const [musicSettingsBusy, setMusicSettingsBusy] = useState(false);
+  const [musicSettingsError, setMusicSettingsError] = useState<string | null>(null);
   // The DM's weather control (Weather & Enemies C1), live-synced below via
   // the same campaigns postgres_changes feed as dayNightMode/economyStrict.
   // 'clear'/'fog' change the scene's own fog (GameTableScene's
@@ -2126,15 +2146,15 @@ export function GameRoom({
   // Game Room music: resolves+applies which of the two mutually-exclusive
   // music channels (calm_music/combat_music — src/audio's own
   // resolveGameMusic/applyGameMusic, gameMusic.ts) should be playing given
-  // whether combat is currently active. `combat !== null` is this
-  // component's own already-established truth signal for "combat is live"
-  // (set inside refreshCombat above, the same boolean action-economy gating
-  // elsewhere in this file already reads) — same idempotent-every-call
-  // reasoning as the weather-audio effect just above, no transition ref
-  // needed.
+  // whether combat is currently active AND the DM's own per-channel enable
+  // toggles. `combat !== null` is this component's own already-established
+  // truth signal for "combat is live" (set inside refreshCombat above, the
+  // same boolean action-economy gating elsewhere in this file already
+  // reads) — same idempotent-every-call reasoning as the weather-audio
+  // effect just above, no transition ref needed.
   useEffect(() => {
-    applyGameMusic(combat !== null);
-  }, [combat]);
+    applyGameMusic(combat !== null, { calmEnabled: calmMusicEnabled, combatEnabled: combatMusicEnabled });
+  }, [combat, calmMusicEnabled, combatMusicEnabled]);
   // Chat & Summary B6: pause/resume, live-synced below via the same
   // campaigns postgres_changes feed as economyStrict/dayNightMode.
   // sessionPaused (derived, not its own state) is the "stopped for a break,
@@ -2948,6 +2968,8 @@ export function GameRoom({
     return subscribeToCampaignChanges(supabase, campaignId, (campaign) => {
       setEconomyStrict(campaign.action_economy_strict);
       setDayNightModeState(campaign.day_night_mode);
+      setCalmMusicEnabledState(campaign.calm_music_enabled);
+      setCombatMusicEnabledState(campaign.combat_music_enabled);
       setWeatherKindState(campaign.weather_kind);
       setWeatherMechanicalState(campaign.weather_mechanical);
       setSessionActive(campaign.session_active);
@@ -4757,6 +4779,40 @@ export function GameRoom({
     }
   }, [campaignId, dayNightBusy, dayNightMode]);
 
+  // The DM's ambient/combat music toggle handlers — handleToggleDayNight's
+  // shape exactly, two independent handlers since the toggles themselves
+  // are independent (turning off calm music doesn't imply anything about
+  // combat music, and vice versa).
+  const handleToggleCalmMusicEnabled = useCallback(async () => {
+    if (musicSettingsBusy) return;
+    const next = !calmMusicEnabled;
+    setMusicSettingsBusy(true);
+    setMusicSettingsError(null);
+    try {
+      await setCalmMusicEnabled(createBrowserSupabaseClient(), campaignId, next);
+      setCalmMusicEnabledState(next);
+    } catch (err) {
+      setMusicSettingsError(errorMessage(err) ?? "Could not change the ambient music setting.");
+    } finally {
+      setMusicSettingsBusy(false);
+    }
+  }, [campaignId, musicSettingsBusy, calmMusicEnabled]);
+
+  const handleToggleCombatMusicEnabled = useCallback(async () => {
+    if (musicSettingsBusy) return;
+    const next = !combatMusicEnabled;
+    setMusicSettingsBusy(true);
+    setMusicSettingsError(null);
+    try {
+      await setCombatMusicEnabled(createBrowserSupabaseClient(), campaignId, next);
+      setCombatMusicEnabledState(next);
+    } catch (err) {
+      setMusicSettingsError(errorMessage(err) ?? "Could not change the combat music setting.");
+    } finally {
+      setMusicSettingsBusy(false);
+    }
+  }, [campaignId, musicSettingsBusy, combatMusicEnabled]);
+
   // The DM's weather control handler (Weather & Enemies C1) — the
   // handleToggleDayNight/handleSetEconomyStrict shape exactly: persist
   // first, then reflect locally; other clients (and this one's own
@@ -6412,6 +6468,12 @@ export function GameRoom({
               dayNightBusy={dayNightBusy}
               dayNightError={dayNightError}
               onToggleDayNight={() => void handleToggleDayNight()}
+              calmMusicEnabled={calmMusicEnabled}
+              combatMusicEnabled={combatMusicEnabled}
+              musicSettingsBusy={musicSettingsBusy}
+              musicSettingsError={musicSettingsError}
+              onToggleCalmMusicEnabled={() => void handleToggleCalmMusicEnabled()}
+              onToggleCombatMusicEnabled={() => void handleToggleCombatMusicEnabled()}
               weatherKind={weatherKind}
               weatherMechanical={weatherMechanical}
               weatherBusy={weatherBusy}
@@ -6609,7 +6671,15 @@ export function GameRoom({
           activation is separately confirmed via SoundControl's own
           sound-manager-debug mirror. */}
       <div data-testid="game-music-state" hidden>
-        {JSON.stringify({ combatActive: combat !== null, channels: resolveGameMusic(combat !== null) })}
+        {JSON.stringify({
+          combatActive: combat !== null,
+          calmMusicEnabled,
+          combatMusicEnabled,
+          channels: resolveGameMusic(combat !== null, {
+            calmEnabled: calmMusicEnabled,
+            combatEnabled: combatMusicEnabled,
+          }),
+        })}
       </div>
       {/* Hidden render-state mirror for verify-map-art-rendering.mjs (Map
           Art Generation E5) — GameTableScene's own onMapArtDebug, mirrored

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import { GlobalMusic } from "./GlobalMusic";
 import "./globals.css";
 
 // Backs --font-b (body copy) in tokens.css. A body font can safely go
@@ -42,6 +43,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400..700&family=Share+Tech&display=swap"
         />
+        <GlobalMusic />
         {children}
       </body>
     </html>

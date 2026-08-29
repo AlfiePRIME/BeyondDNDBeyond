@@ -48,6 +48,13 @@ export interface Campaign {
    * tick's own dedup bookkeeping (see migration 0071's comment for the
    * full design), included here since campaigns.* is one shared row shape. */
   weather_last_tick_at: string | null;
+  /** DM-controlled toggle for whether calm_music should play at all in the
+   * Game Room outside combat (src/audio/gameMusic.ts) — independent of
+   * combat_music_enabled below, the day_night_mode shape exactly. */
+  calm_music_enabled: boolean;
+  /** DM-controlled toggle for whether combat_music should play at all
+   * during combat — independent of calm_music_enabled above. */
+  combat_music_enabled: boolean;
   created_at: string;
 }
 
@@ -361,6 +368,47 @@ export async function setDayNightMode(
 
   if (error) throw error;
   if (count === 0) throw new Error("Only the campaign's DM can change the table's lighting.");
+}
+
+/**
+ * DM-controlled toggle for whether calm_music should play at all in the
+ * Game Room (src/audio/gameMusic.ts's resolveGameMusic — turning this off
+ * means silence outside combat regardless of combat_music_enabled).
+ * setDayNightMode's exact shape: DM-only at both layers, live sync rides
+ * subscribeToCampaignChanges below.
+ */
+export async function setCalmMusicEnabled(
+  supabase: SupabaseClient,
+  campaignId: string,
+  enabled: boolean
+): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaigns")
+    .update({ calm_music_enabled: enabled }, { count: "exact" })
+    .eq("id", campaignId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can change the ambient music setting.");
+}
+
+/**
+ * DM-controlled toggle for whether combat_music should play at all in the
+ * Game Room — the setCalmMusicEnabled sibling. Turning this off means
+ * silence during combat regardless of calm_music_enabled (the two toggles
+ * are independent, not a single music-on/off switch).
+ */
+export async function setCombatMusicEnabled(
+  supabase: SupabaseClient,
+  campaignId: string,
+  enabled: boolean
+): Promise<void> {
+  const { error, count } = await supabase
+    .from("campaigns")
+    .update({ combat_music_enabled: enabled }, { count: "exact" })
+    .eq("id", campaignId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the campaign's DM can change the combat music setting.");
 }
 
 /**

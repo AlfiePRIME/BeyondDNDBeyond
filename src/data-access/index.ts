@@ -70,6 +70,8 @@ export {
   setHouseRules,
   setActionEconomyStrict,
   setDayNightMode,
+  setCalmMusicEnabled,
+  setCombatMusicEnabled,
   setWeather,
   applyWeatherTick,
   subscribeToCampaignChanges,
