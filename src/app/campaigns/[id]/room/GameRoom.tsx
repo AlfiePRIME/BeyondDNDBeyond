@@ -7375,8 +7375,18 @@ export function GameRoom({
           {/* Sound Effects SP1: master volume slider + mute toggle — see
               SoundControl.tsx's own doc comment for why it lives here
               (alongside every other always-visible top-bar control) rather
-              than inside any one draggable panel. */}
-          <SoundControl />
+              than inside any one draggable panel. Also carries the DM-only
+              quick calm/combat music toggles, a second surface for the
+              exact same state/handlers DmBook's Day/Night page already
+              uses — see SoundControl.tsx's doc comment. */}
+          <SoundControl
+            isDM={currentUserIsDM}
+            calmMusicEnabled={calmMusicEnabled}
+            combatMusicEnabled={combatMusicEnabled}
+            musicSettingsBusy={musicSettingsBusy}
+            onToggleCalmMusicEnabled={() => void handleToggleCalmMusicEnabled()}
+            onToggleCombatMusicEnabled={() => void handleToggleCombatMusicEnabled()}
+          />
           <span className={styles.roomLabel}>Game Room</span>
         </div>
       </header>

@@ -16,14 +16,53 @@ import { Button } from "@/ui-components";
 import { useSoundSettings } from "./DraggablePanel";
 import styles from "./SoundControl.module.css";
 
+interface SoundControlProps {
+  /** True for the campaign's DM only — gates the two quick music toggles
+   * below, which mirror DmBook.tsx's Day/Night-page controls
+   * (calm-music-toggle/combat-music-toggle). Players never see these: the
+   * underlying campaigns.calm_music_enabled/combat_music_enabled columns
+   * are DM-only settings, same as the book's own copy. */
+  isDM: boolean;
+  /** GameRoom's own calmMusicEnabled/combatMusicEnabled state — the SAME
+   * state DmBook.tsx's toggles already read, passed through here so this
+   * is a second UI surface for it, not a second source of truth. */
+  calmMusicEnabled: boolean;
+  combatMusicEnabled: boolean;
+  /** GameRoom's musicSettingsBusy — shared across both toggles (and the
+   * book's own pair) since they persist through the same campaigns row. */
+  musicSettingsBusy: boolean;
+  /** GameRoom's handleToggleCalmMusicEnabled/handleToggleCombatMusicEnabled
+   * — the EXACT SAME handlers DmBook.tsx's toggles call, so clicking here
+   * or in the book hits the identical read/write path. */
+  onToggleCalmMusicEnabled: () => void;
+  onToggleCombatMusicEnabled: () => void;
+}
+
 /**
  * Sound Effects SP1 — the real, reachable home for the master volume
  * slider + mute toggle: mounted once in GameRoom's top bar
  * (`.overlayControls`, alongside PanelDockBar/the ruler toggle/the camera
  * toggle). Also owns two things every future Sound Effects prompt (SP2-
  * SP9) benefits from, both explained below.
+ *
+ * Also hosts the DM-only "quick" calm/combat music toggles: the book's own
+ * Day/Night-page controls are the only way to reach
+ * calm_music_enabled/combat_music_enabled, buried three clicks deep behind
+ * opening the 3D book and switching tabs. These are a second, redundant
+ * access point for the SAME state/handlers (threaded in as props from
+ * GameRoom, which owns them) — small icon-style buttons matching the mute
+ * button next to them, not full-width controls, since this is an already
+ * fairly busy top bar. The book's own toggles are left completely
+ * untouched.
  */
-export function SoundControl() {
+export function SoundControl({
+  isDM,
+  calmMusicEnabled,
+  combatMusicEnabled,
+  musicSettingsBusy,
+  onToggleCalmMusicEnabled,
+  onToggleCombatMusicEnabled,
+}: SoundControlProps) {
   const { settings, setVolume, setMuted: setMutedPreference } = useSoundSettings();
 
   // Hidden render-state mirror for verify-sound-infra.mjs (and every later
@@ -107,6 +146,39 @@ export function SoundControl() {
         title="Master sound volume"
         data-testid="sound-volume-slider"
       />
+      {/* DM-only quick music toggles — see this component's own doc comment
+          above. Same small icon-button treatment as the mute toggle right
+          before them (size="sm", no label text beyond the emoji), so this
+          pair reads as "part of the sound control cluster" rather than a
+          new full-width control competing for top-bar space. */}
+      {isDM ? (
+        <>
+          <Button
+            size="sm"
+            variant={calmMusicEnabled ? "teal" : "ghost"}
+            onClick={onToggleCalmMusicEnabled}
+            disabled={musicSettingsBusy}
+            aria-label={calmMusicEnabled ? "Turn off ambient music" : "Turn on ambient music"}
+            title={calmMusicEnabled ? "Ambient music: on" : "Ambient music: off"}
+            aria-pressed={calmMusicEnabled}
+            data-testid="quick-calm-music-toggle"
+          >
+            <span aria-hidden="true">🎵</span>
+          </Button>
+          <Button
+            size="sm"
+            variant={combatMusicEnabled ? "teal" : "ghost"}
+            onClick={onToggleCombatMusicEnabled}
+            disabled={musicSettingsBusy}
+            aria-label={combatMusicEnabled ? "Turn off combat music" : "Turn on combat music"}
+            title={combatMusicEnabled ? "Combat music: on" : "Combat music: off"}
+            aria-pressed={combatMusicEnabled}
+            data-testid="quick-combat-music-toggle"
+          >
+            <span aria-hidden="true">⚔️</span>
+          </Button>
+        </>
+      ) : null}
       <div data-testid="sound-manager-debug" hidden>
         {JSON.stringify(debugSnapshot)}
       </div>
