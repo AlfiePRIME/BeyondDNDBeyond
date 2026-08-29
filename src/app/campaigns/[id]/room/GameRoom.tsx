@@ -2159,6 +2159,22 @@ export function GameRoom({
   useEffect(() => {
     applyGameMusic(combat !== null, { calmEnabled: calmMusicEnabled, combatEnabled: combatMusicEnabled });
   }, [combat, calmMusicEnabled, combatMusicEnabled]);
+  // Bug fix: neither the weather-audio nor the game-music effect above ever
+  // stopped its loops on unmount, so navigating away from the Game Room
+  // (an in-app client-side route change — the component unmounts but the
+  // page's shared AudioContext/soundManager module state does not) left
+  // whichever channel was active still looping indefinitely. A mount-once
+  // cleanup that resolves both modules' own "nothing playing" input —
+  // exactly the existing resolveGameMusic/resolveWeatherAudio idempotent
+  // calls above, just with everything disabled — stops every channel this
+  // component could have started, with no new stop-all export needed in
+  // either audio module.
+  useEffect(() => {
+    return () => {
+      applyGameMusic(false, { calmEnabled: false, combatEnabled: false });
+      applyWeatherAudio("clear");
+    };
+  }, []);
   // Chat & Summary B6: pause/resume, live-synced below via the same
   // campaigns postgres_changes feed as economyStrict/dayNightMode.
   // sessionPaused (derived, not its own state) is the "stopped for a break,
@@ -7204,7 +7220,7 @@ export function GameRoom({
         </div>
       ) : null}
       <header className={styles.overlay}>
-        <Link href={`/campaigns/${campaignId}`} className={styles.backLink}>
+        <Link href={`/campaigns/${campaignId}`} className={styles.backLink} data-testid="game-room-back-link">
           ← {campaignName}
         </Link>
         <div className={styles.overlayControls}>

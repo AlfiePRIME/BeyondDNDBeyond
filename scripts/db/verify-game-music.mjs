@@ -532,6 +532,50 @@ try {
   await dmPage.click('[data-testid="end-combat-button"]');
   await dmPage.waitForSelector('[data-testid="start-combat-button"]', { timeout: 15000 });
 
+  // ===========================================================================
+  // Part 4 — bug fix regression: leaving the Game Room via a real in-app
+  // navigation (clicking the "<- campaignName" Link, client-side routing —
+  // NOT page.goto(), which always forces a full page reload and would
+  // trivially "fix" this by resetting every module's state including
+  // soundManager's own activeLoops, masking the exact bug being guarded
+  // against here) must stop whatever Game Room music loop was playing, not
+  // leave it looping forever in the background. Part 1's own lobby<->room
+  // round trip uses page.goto() throughout, so it never actually exercised
+  // this path.
+  // ===========================================================================
+  const leaveContext = await browser.newContext({ viewport: VIEWPORT });
+  await leaveContext.addCookies(sessionCookies(dm.session));
+  const leavePage = await leaveContext.newPage();
+  leavePage.on("pageerror", (err) => pageErrors.push(`[leave] ${err.message}`));
+
+  await leavePage.goto(roomUrl);
+  await leavePage.waitForSelector('[data-testid="game-room-back-link"]', { timeout: 60000 });
+  const beforeLeaving = await waitForSoundDebug(leavePage, (d) => musicLoopsMatch(d.activeLoops, { calm: true, combat: false }));
+  check(
+    "setup: calm_music is genuinely playing before leaving the Game Room",
+    musicLoopsMatch(beforeLeaving?.activeLoops ?? {}, { calm: true, combat: false }),
+    JSON.stringify(beforeLeaving?.activeLoops)
+  );
+
+  await leavePage.click('[data-testid="game-room-back-link"]');
+  await leavePage.waitForURL(`${APP_URL}/campaigns/${campaignId}`, { timeout: 15000 });
+  const afterLeaving = await waitForSoundDebug(
+    leavePage,
+    (d) => d.activeLoops.calm_music === undefined && d.activeLoops.combat_music === undefined
+  );
+  check(
+    "leaving the Game Room via a real client-side navigation stops calm_music (it does not keep looping forever)",
+    afterLeaving?.activeLoops.calm_music === undefined,
+    JSON.stringify(afterLeaving?.activeLoops)
+  );
+  check(
+    "combat_music is also fully absent after leaving (not just calm_music)",
+    afterLeaving?.activeLoops.combat_music === undefined,
+    JSON.stringify(afterLeaving?.activeLoops)
+  );
+
+  await leaveContext.close();
+
   check("no uncaught page error occurred on any client during this run", pageErrors.length === 0, pageErrors.join("; "));
 
   console.log(failures === 0 ? "\nAll game music checks passed." : `\n${failures} check(s) FAILED.`);
