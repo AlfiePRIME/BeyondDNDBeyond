@@ -1,11 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Billboard, Html } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
-import { CanvasTexture, Group, SRGBColorSpace, Vector3 } from "three";
+import { CanvasTexture, Group, Plane, Raycaster, SRGBColorSpace, Vector2, Vector3 } from "three";
+import type { Camera } from "three";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
 // and Chair.tsx's own re-mirroring precedent — scene-3d can't import CSS
@@ -195,6 +196,59 @@ const cameraPos = new Vector3();
 const delta = new Vector3();
 const forward = new Vector3();
 
+// Drag-to-move (DM book move): the book's cover doubles as BOTH a plain
+// click target (open/close, the pre-existing behavior) AND a drag handle
+// (reposition it on the table) — telling the two gestures apart needs a
+// minimum on-screen pointer movement before a press-and-move commits to
+// "this is a drag, not a click". GameTableScene's own chair-drag session has
+// no equivalent threshold because a chair has no competing click behavior to
+// disambiguate from (dragging is its ONLY gesture); this book needs one
+// because dragging is a NEW gesture layered on top of an existing click one.
+// No existing precedent for the exact pixel value in this codebase — a
+// considered choice, not a re-derived one: big enough to absorb ordinary
+// mouse jitter during a deliberate click, small enough that a genuine drag
+// commits almost immediately.
+const BOOK_DRAG_CLICK_THRESHOLD_PX = 8;
+
+// GameTableScene.tsx's own floorPointFromClientXY technique (a raycast from
+// the pointer through an invisible horizontal plane, since drei's `<Html>`
+// panel sits on top of everything and there's no real mesh at the drag
+// plane's own height to hit-test against directly) — reproduced here rather
+// than imported, because this file's own plane needs to sit at the BOOK's
+// height (`planeY`, always this prop's own `position[1]`, i.e. table-surface
+// height), not GameTableScene's fixed floor (y=0) a chair drags along.
+// Module-level scratch objects, the objectPos/cameraPos/delta/forward
+// precedent immediately above, reused across calls rather than reallocated.
+const dragPlane = new Plane(new Vector3(0, 1, 0), 0);
+const dragRaycaster = new Raycaster();
+const dragNdc = new Vector2();
+const dragHit = new Vector3();
+
+/** Projects a raw pointer event's canvas-relative client coordinates onto a
+ * horizontal plane at world height `planeY` — null only if the ray is
+ * parallel to that plane (looking exactly along the horizon), in which case
+ * callers simply skip that update and keep whatever position they already
+ * had (GameTableScene's floorPointFromClientXY's own contract). */
+function floorPointAtHeight(
+  camera: Camera,
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+  planeY: number
+): { x: number; z: number } | null {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  dragNdc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  dragRaycaster.setFromCamera(dragNdc, camera);
+  // Plane: normal·point + constant = 0, normal = (0,1,0) ⇒ point.y =
+  // -constant — set fresh per call since `planeY` (the book's own current
+  // height) is effectively constant in practice but this stays correct even
+  // if it weren't.
+  dragPlane.constant = -planeY;
+  const hit = dragRaycaster.ray.intersectPlane(dragPlane, dragHit);
+  return hit ? { x: dragHit.x, z: dragHit.z } : null;
+}
+
 export interface DmBookPropProps {
   /** World position for the book's base, at table-surface height — see
    * GameRoom.tsx's dmBookPosition, derived the same way as the private dice
@@ -227,6 +281,38 @@ export interface DmBookPropProps {
    * PerspectiveCamera), so in practice this fires once on mount and again
    * only on resize or a camera-mode switch. */
   onProjectedPosition?: (point: [number, number] | null) => void;
+  /**
+   * Drag-to-move (DM book move): fires continuously (on every "pointermove"
+   * tick, after BOOK_DRAG_CLICK_THRESHOLD_PX has been exceeded) with the
+   * world-space (x, z) delta from wherever the drag started — NOT an
+   * absolute position, and NOT an offset from any computed default; just
+   * "how far has the pointer dragged the book so far". GameRoom.tsx adds
+   * this to whatever offset was already in effect before the drag started
+   * to get this client's own live, optimistic book position — the
+   * GameTableScene onLiveChairOffset precedent, generalized from "the
+   * chair's own live SeatOffset" to a plain (dx, dz) since the book has no
+   * rotation of its own to carry along. Never fires for a plain click (a
+   * press-and-release that never exceeded the threshold) — see onDragEnd's
+   * own doc comment for why that still calls `onToggleOpen` instead.
+   */
+  onDragMove?: (delta: { dx: number; dz: number }) => void;
+  /**
+   * Fires once, on release, with the FINAL world-space (x, z) delta from
+   * drag start — but ONLY if the gesture actually exceeded
+   * BOOK_DRAG_CLICK_THRESHOLD_PX at some point (a real drag). A plain click
+   * (press-and-release with no meaningful movement in between) instead
+   * calls `onToggleOpen()` directly, preserving today's open/close behavior
+   * exactly — the GameTableScene ChairDragSession.moved precedent: "false
+   * for a plain click-and-release with no real movement in between", except
+   * here the click case has a real alternative action to fall back to
+   * (there, it simply does nothing). GameRoom.tsx's own onBookDragEnd is
+   * where this delta actually gets persisted (setDmBookOffset) and
+   * broadcast — the handleChairDragEnd precedent, just without that
+   * function's own obstacle-avoidance nudge (the project owner's own "this
+   * is simpler than the chair case" framing: only one book, one DM, no
+   * per-viewer obstacle list to build).
+   */
+  onDragEnd?: (delta: { dx: number; dz: number }) => void;
 }
 
 /**
@@ -248,6 +334,21 @@ export interface DmBookPropProps {
  * footprint, matching the old collapsed-tab behavior's "nothing to find in
  * the DOM" property for a non-DM client (this whole component still only
  * ever mounts for the DM at all).
+ *
+ * DM book move: the SAME hit box also doubles as a drag-to-move handle —
+ * pressing and dragging it (past BOOK_DRAG_CLICK_THRESHOLD_PX) repositions
+ * the book instead of toggling it, disambiguated via a GameTableScene-style
+ * window-level "pointermove"/"pointerup" session (raw window listeners, not
+ * per-mesh R3F handlers, for the identical reason GameTableScene's own chair
+ * drag uses them: a fast drag can easily move the cursor off this book's own
+ * comparatively small hit box mid-gesture, and per-mesh pointer capture
+ * would otherwise silently end the drag the moment that happens). Only
+ * wired up at all when the caller actually supplies `onDragEnd` — GameRoom
+ * only ever does this for the DM's own client (the only one that ever
+ * mounts this component in the first place), but keeping the click-only
+ * fallback here too means this component never silently loses its own
+ * pre-existing click behavior for some future caller that doesn't wire
+ * dragging up.
  */
 export function DmBookProp({
   position,
@@ -256,11 +357,54 @@ export function DmBookProp({
   onToggleOpen,
   children,
   onProjectedPosition,
+  onDragMove,
+  onDragEnd,
 }: DmBookPropProps) {
   const [hovered, setHovered] = useState(false);
   const groupRef = useRef<Group>(null);
-  const { camera, size } = useThree();
+  const { camera, size, gl } = useThree();
   const lastReported = useRef<[number, number] | null>(null);
+
+  // Ref-mirrored callbacks — the GameTableScene onChairDragEndRef precedent:
+  // the window "pointermove"/"pointerup" listeners below are registered once
+  // per drag session, not re-subscribed every render, so they need a way to
+  // see the LATEST callbacks without going stale mid-drag.
+  const onDragMoveRef = useRef(onDragMove);
+  useEffect(() => {
+    onDragMoveRef.current = onDragMove;
+  }, [onDragMove]);
+  const onDragEndRef = useRef(onDragEnd);
+  useEffect(() => {
+    onDragEndRef.current = onDragEnd;
+  }, [onDragEnd]);
+  const onToggleOpenRef = useRef(onToggleOpen);
+  useEffect(() => {
+    onToggleOpenRef.current = onToggleOpen;
+  }, [onToggleOpen]);
+
+  /** One in-progress drag's own fixed, per-session parameters — captured
+   * once at "pointerdown" and read (never re-derived) by the window
+   * "pointermove"/"pointerup" listeners for the rest of that same drag —
+   * the ChairDragSession precedent (GameTableScene.tsx), minus the
+   * grab-offset/rotation/userId fields a chair needs and this book doesn't
+   * (the book is dragged by its world-space DELTA from press to release,
+   * never "where under the cursor was it grabbed", and there's only ever
+   * one book to drag). No pointerId tracking either, the same
+   * ChairDragSession precedent: exactly one drag session can be active at
+   * once (the window listeners below are only ever attached while one is),
+   * so there's nothing to disambiguate against. */
+  const dragSessionRef = useRef<{
+    startClientX: number;
+    startClientY: number;
+    startFloorX: number;
+    startFloorZ: number;
+    planeY: number;
+    /** False for a plain click-and-release with no real movement in
+     * between — see DmBookPropProps.onDragEnd's own doc comment. */
+    moved: boolean;
+    lastDelta: { dx: number; dz: number };
+  } | null>(null);
+  const [dragActive, setDragActive] = useState(false);
 
   useFrame(() => {
     if (!onProjectedPosition) return;
@@ -293,8 +437,77 @@ export function DmBookProp({
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (event.button !== 0) return;
     event.stopPropagation();
-    onToggleOpen();
+    // No drag wiring supplied at all — preserve the exact pre-existing
+    // click-only behavior (see this component's own doc comment on why the
+    // fallback exists).
+    if (!onDragEnd) {
+      onToggleOpen();
+      return;
+    }
+    const floorPoint = floorPointAtHeight(camera, gl.domElement, event.clientX, event.clientY, position[1]);
+    dragSessionRef.current = {
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      // A degenerate ray (looking exactly along the horizon — vanishingly
+      // unlikely for this scene's own seated/orbit cameras) falls back to
+      // the book's own current world (x, z) rather than leaving this
+      // session without a start point at all; every subsequent delta is
+      // then measured against that same fallback, so the drag still tracks
+      // internally consistently even in that edge case.
+      startFloorX: floorPoint?.x ?? position[0],
+      startFloorZ: floorPoint?.z ?? position[2],
+      planeY: position[1],
+      moved: false,
+      lastDelta: { dx: 0, dz: 0 },
+    };
+    setDragActive(true);
   };
+
+  // The drag's own continuation — GameTableScene's own window-"pointermove"/
+  // "pointerup" precedent (that file's own doc comment: "the release can
+  // land anywhere... so the pointerup listener lives on window", and a fast
+  // drag needs the pointer's live position between press and release, not
+  // just its final one). Registered only while a drag is actually in
+  // progress, so an idle book costs nothing extra.
+  useEffect(() => {
+    if (!dragActive) return;
+    const canvas = gl.domElement;
+    function handleMove(event: PointerEvent) {
+      const session = dragSessionRef.current;
+      if (!session) return;
+      if (!session.moved) {
+        const screenDistance = Math.hypot(
+          event.clientX - session.startClientX,
+          event.clientY - session.startClientY
+        );
+        if (screenDistance < BOOK_DRAG_CLICK_THRESHOLD_PX) return; // still within click jitter
+        session.moved = true;
+      }
+      const floorPoint = floorPointAtHeight(camera, canvas, event.clientX, event.clientY, session.planeY);
+      if (!floorPoint) return;
+      const moveDelta = { dx: floorPoint.x - session.startFloorX, dz: floorPoint.z - session.startFloorZ };
+      session.lastDelta = moveDelta;
+      onDragMoveRef.current?.(moveDelta);
+    }
+    function handleUp() {
+      const session = dragSessionRef.current;
+      dragSessionRef.current = null;
+      setDragActive(false);
+      if (session?.moved) {
+        onDragEndRef.current?.(session.lastDelta);
+      } else {
+        // A plain click (never exceeded the threshold) — the exact
+        // pre-existing open/close toggle, preserved unchanged.
+        onToggleOpenRef.current();
+      }
+    }
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+  }, [dragActive, camera, gl]);
 
   return (
     <group ref={groupRef} position={position as [number, number, number]} rotation={[0, rotationY, 0]}>
@@ -314,7 +527,19 @@ export function DmBookProp({
             (MapSurface's ObjectMarker precedent). */}
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
-      {hovered ? <HoverLabel text={open ? "Close the DM's book" : "Open the DM's book"} /> : null}
+      {hovered ? (
+        <HoverLabel
+          text={
+            onDragEnd
+              ? open
+                ? "Close the DM's book (drag to move)"
+                : "Open the DM's book (drag to move)"
+              : open
+                ? "Close the DM's book"
+                : "Open the DM's book"
+          }
+        />
+      ) : null}
       {open ? (
         <Html
           position={[0, HTML_ANCHOR_Y, 0]}

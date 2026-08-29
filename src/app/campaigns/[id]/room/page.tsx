@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
   getActiveCombatEncounter,
   getDiceTrayPreferencesForCampaign,
+  getDmBookOffset,
   getMap,
   getMapArt,
   getProfile,
@@ -132,6 +133,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     initialLorePages,
     initialLorePageLinks,
     seatOffsetsMap,
+    initialDmBookOffset,
     diceTrayPreferencesMap,
     initialCampaignTokens,
     initialInteractionEvents,
@@ -205,6 +207,14 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // are, not their computed defaults, without having been connected for
     // any of the seat-moved broadcasts that got them there.
     safe(getSeatOffsetsForCampaign(supabase, campaignId), new Map(), "getSeatOffsetsForCampaign"),
+    // DM book move: the DM's own stored dm_book_offset, same DB-read-not-
+    // broadcast reasoning as seatOffsetsMap immediately above — a fresh join
+    // or reload must land on wherever the book currently ACTUALLY is,
+    // without having been connected for the DM_BOOK_MOVED_EVENT broadcast
+    // that got it there. Fetched for every viewer (DM and player alike),
+    // not gated by currentUserIsDM — see GameRoom's own initialDmBookOffset
+    // doc comment for why every client needs this, not just the DM's.
+    safe(getDmBookOffset(supabase, campaignId), null, "getDmBookOffset"),
     // Per-member dice-tray-model preference (Prompt 8a/8b) — same DB-read-
     // not-broadcast reasoning as seatOffsetsMap above: a fresh join or
     // reload must render every connected member's own chosen tray model
@@ -367,6 +377,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       // GameRoom's own initialSeatOffsets doc comment for why this crosses
       // as a plain array of pairs instead, reconstructed into a Map there.
       initialSeatOffsets={[...seatOffsetsMap.entries()]}
+      initialDmBookOffset={initialDmBookOffset}
       initialDiceTrayPreferences={[...diceTrayPreferencesMap.entries()]}
     />
   );

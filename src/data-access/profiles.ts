@@ -92,6 +92,26 @@ export const DEFAULT_SOUND_SETTINGS: SoundSettings = { volume: 1, muted: false }
 export interface UiPreferences {
   panelLayout: Record<string, PanelLayoutEntry>;
   soundSettings?: SoundSettings;
+  dmBookSize?: DmBookSize;
+}
+
+/**
+ * DM book resize follow-up: the DM's own persisted on-screen window size for
+ * the 3D-anchored DM's book panel (src/app/campaigns/[id]/room/DmBook.tsx),
+ * in CSS pixels — optional/omittable for the exact same reason
+ * `soundSettings` is: absent until the DM has ever dragged its resize
+ * handle, in which case DmBook.module.css's own default (`min(480px, 64vw)
+ * x min(400px, 50vh)`) covers it exactly like an absent
+ * PanelLayoutEntry.height already does for a never-resized DraggablePanel.
+ * Persisted through the SAME PanelLayoutProvider (DraggablePanel.tsx,
+ * `useDmBookSize`) that already owns `panelLayout`/`soundSettings` — see
+ * setUiPreferences' own doc comment on why every debounced writer of this
+ * jsonb document must always send every sub-key together, never just the
+ * one it changed.
+ */
+export interface DmBookSize {
+  width: number;
+  height: number;
 }
 
 export interface Profile {

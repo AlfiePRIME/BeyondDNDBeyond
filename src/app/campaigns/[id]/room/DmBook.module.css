@@ -22,10 +22,19 @@
    the same 500 the old screen-fixed `.root` used) — kept comfortably below
    Modal's 10000 (ui.module.css) for the same reason as before: an urgent
    modal (handout reveal, transition offer) must still be able to cover an
-   open book. */
+   open book.
+
+   Resize follow-up: `width`/`height` here are now the FALLBACK — DmBook.tsx
+   applies a resized size as an inline style the instant the DM has ever
+   dragged the resize handle (profiles.ui_preferences.dmBookSize), the same
+   "untouched panel is pixel-identical to today" convention
+   PanelLayoutEntry.height already established for DraggablePanel.
+   `position: relative` is new too, purely so `.resizeHandle` below (an
+   absolutely-positioned child) anchors against this box specifically. */
 .book {
   width: min(480px, 64vw);
   height: min(400px, 50vh);
+  position: relative;
   display: flex;
   flex-direction: column;
   background: color-mix(in srgb, var(--surface2) 94%, transparent);
@@ -33,6 +42,49 @@
   border-radius: 12px;
   box-shadow: var(--ga);
   overflow: hidden;
+}
+
+/* Resize follow-up: a corner grip in the book's bottom-right corner —
+   `right: 0; bottom: 0` (not DraggablePanel's own negative-offset
+   `.resizeHandle`) because `.book` above keeps `overflow: hidden` for its
+   own unrelated reasons (clipping `.pageContent`'s crossfade), which would
+   silently clip a handle placed partly outside this box's own edge. A
+   diagonal (nwse) resize cursor, not DraggablePanel's vertical-only
+   ns-resize, since this handle drives both width AND height at once.
+   z-index lifts it above `.pageContent`'s own scrollbar (if any) at that
+   same corner, so the grab target is never accidentally shadowed by it. */
+.resizeHandle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  z-index: 2;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.resizeHandle::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid color-mix(in srgb, var(--dim) 50%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--dim) 50%, transparent);
+  border-radius: 0 0 3px 0;
+}
+
+.resizeHandle:hover::after,
+.resizeHandle.resizing::after {
+  border-color: var(--teal);
+}
+
+/* A live resize must not let the browser start selecting text underneath
+   the pointer as it moves — the DraggablePanel.wrapper.resizing precedent. */
+.book.resizing {
+  user-select: none;
 }
 
 .tabs {

@@ -1,0 +1,46 @@
+-- Movable DM book (the seat_offset/0044 precedent, adapted for the book):
+-- stores the DM's own persisted override for where their book actually
+-- sits, as an OFFSET from GameRoom.tsx's own computed default position for
+-- it (dmSeat's position plus DM_BOOK_FORWARD_OFFSET/DM_BOOK_LATERAL_OFFSET)
+-- — never an absolute world coordinate, for the identical reason
+-- 0044_seat_offsets.sql gives for the chair: that computed default reshapes
+-- as party size/table arrangement changes (seating.ts's own seat-angle
+-- recompute), so a stored absolute coordinate would silently go stale the
+-- moment that happens — a book left floating over empty space, or now
+-- overlapping a newly-appended table.
+--
+-- A plain column on campaign_members, the seat_offset precedent exactly —
+-- keyed by the DM's OWN (campaign_id, user_id) row, even though there is
+-- only ever one DM per campaign and therefore only ever one row that will
+-- ever have this column non-null. Simpler than seat_offset in exactly the
+-- way the project owner's own brief called out: only the DM's single row
+-- matters, so there's no "which member" ambiguity seat_offset has to
+-- handle for every player simultaneously — but the column still lives on
+-- campaign_members rather than campaigns (which would need no per-member
+-- keying at all) because RLS ownership (the self-only UPDATE policy below)
+-- and dm-transfer semantics (a former DM losing this override, a promoted
+-- DM starting without one, exactly like seat_offset already behaves for a
+-- chair) both fall out for free by keeping it exactly where seat_offset
+-- already lives, one column over.
+--
+-- jsonb, not two separate numeric columns — the seat_offset precedent
+-- again: "no override" is a single NULL check either way, and one nullable
+-- jsonb blob keeps "has an override" and "the override's own shape"
+-- governed by one column. { dx, dz } only, no dRotationY — the book
+-- (unlike a chair) has no independent facing to preserve; it always
+-- renders at GameRoom's own dmSeat-derived rotationY regardless of where
+-- it's been dragged to. data-access/dmBookOffset.ts's DmBookOffset
+-- interface is the real schema, the same "app layer owns the shape"
+-- convention as seat_offset/ui_preferences.
+--
+-- No new RLS: campaign_members' existing "a member can update their own
+-- membership row" policy (0004) already covers this new column on the
+-- DM's own row with no column-level restriction, the exact seat_offset
+-- precedent. The existing "members can read their campaign's roster"
+-- SELECT policy already covers every OTHER member reading the DM's
+-- current book position back too — shared, visible table state (every
+-- player at the table sees where the DM's book actually sits, and every
+-- client's own chair-drag obstacle avoidance needs it), not private data,
+-- matching seat_offset's own reasoning exactly.
+alter table public.campaign_members
+  add column if not exists dm_book_offset jsonb null default null;
