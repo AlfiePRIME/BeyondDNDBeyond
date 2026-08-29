@@ -7338,11 +7338,6 @@ export function GameRoom({
           >
             {cameraMode === "seat" ? "Free camera" : "Return to seat"}
           </Button>
-          {/* Dock/close follow-up: one glyph button per currently-docked
-              panel — see DraggablePanel.tsx's own PanelDockBar doc comment.
-              Renders nothing (null) while no panel is docked, so this is a
-              pure no-op for anyone who's never used the new close button. */}
-          <PanelDockBar />
           {/* Sound Effects SP1: master volume slider + mute toggle — see
               SoundControl.tsx's own doc comment for why it lives here
               (alongside every other always-visible top-bar control) rather
@@ -7351,6 +7346,13 @@ export function GameRoom({
           <span className={styles.roomLabel}>Game Room</span>
         </div>
       </header>
+      {/* Panel UI rework: docked-panel icons moved off the crowded top bar
+          into their own fixed lane down the left edge — see PanelDockBar's
+          own doc comment (DraggablePanel.tsx) and .dockBar
+          (DraggablePanel.module.css). Renders nothing (null) while no panel
+          is docked, so this is a pure no-op for anyone who's never used the
+          close button. */}
+      <PanelDockBar />
       <DraggablePanel panelId="map">
         <MapPanel
           isDM={currentUserIsDM}

@@ -32,9 +32,11 @@
    saved/dragged position (DraggablePanel.tsx picks exactly one of these
    per panelId via DEFAULT_ANCHOR_CLASS). */
 .anchorTopLeft {
-  /* .combatPanel's old position */
+  /* .combatPanel's old position. left offset widened from 24px to 64px
+     (Game Room UI rework) to leave clearance for the left-edge vertical
+     dock bar now occupying that 24-54px lane — see .dockBar below. */
   top: 64px;
-  left: 24px;
+  left: 64px;
 }
 
 .anchorTopRight {
@@ -54,9 +56,10 @@
 }
 
 .anchorBottomLeft {
-  /* .tokenPanel's old position */
+  /* .tokenPanel's old position. left offset widened to 64px for the same
+     dock-bar-clearance reason as .anchorTopLeft above. */
   bottom: 24px;
-  left: 24px;
+  left: 64px;
 }
 
 .anchorBottomRight {
@@ -81,7 +84,9 @@
    leaves comfortable headroom below on any realistic viewport height. */
 .anchorTopLeftLow {
   top: calc(64px + 26vh + 12px);
-  left: 24px;
+  /* left offset widened to 64px for the same dock-bar-clearance reason as
+     .anchorTopLeft above. */
+  left: 64px;
 }
 
 .anchorTopCenter {
@@ -153,8 +158,14 @@
 /* Collapsed: hide every child of the panel's root element AFTER its first
    (the header stays visible) — a small, unobtrusive bar rather than the
    panel vanishing outright. Pure CSS, no changes to any panel component's
-   own markup. */
-.wrapper.collapsed > * > :not(:first-child) {
+   own markup.
+   `.collapsedVisible` is an opt-in escape hatch: a panel marks one of its
+   own direct children (must be a direct child of its root element — this
+   selector is exactly one level deep, it does not reach grandchildren)
+   with this class to keep that one row visible even while collapsed — e.g.
+   DiceLogPanel's quick-roll row, CombatPanel's advance-turn row. Has no
+   effect while expanded (that content is already visible either way). */
+.wrapper.collapsed > * > :not(:first-child):not(.collapsedVisible) {
   display: none;
 }
 
@@ -238,17 +249,30 @@
   user-select: none;
 }
 
-/* Dock/close follow-up: PanelDockBar's own row, mounted once inside
-   GameRoom's existing top bar (room.module.css's `.overlayControls`)
-   alongside PAUSE SESSION / MEASURE DISTANCE / etc. `flex-wrap` so a table
-   with many panels closed at once wraps to a second line instead of
-   overflowing the header on a narrower viewport, rather than the fixed
-   `.overlayControls` row silently growing past the screen edge. */
+/* Panel UI rework: PanelDockBar's own strip, moved off the crowded top bar
+   (room.module.css's `.overlayControls`, especially cluttered on the DM's
+   side) into its own fixed lane down the left edge — `top: 18px; left:
+   24px` reuses .overlay's own `padding: 18px 24px` inset verbatim, just
+   applied directly to this element's position instead of via the header's
+   flex layout. `flex-direction: column` (was: row) plus `flex-wrap` so a
+   table with many panels closed at once wraps into a second column rather
+   than running off the bottom of a short viewport — the same overflow
+   safety net the old horizontal bar had wrapping to a second row. A z-index
+   comfortably above BASE_Z_INDEX/ELEVATED_Z_INDEX (DraggablePanel.tsx, 10
+   and 15) keeps it clickable above a floating panel dragged over the left
+   edge. */
 .dockBar {
+  position: fixed;
+  top: 18px;
+  left: 24px;
+  z-index: 30;
   display: flex;
+  flex-direction: column;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  max-height: calc(100vh - 36px);
+  pointer-events: auto;
 }
 
 .dockButton {

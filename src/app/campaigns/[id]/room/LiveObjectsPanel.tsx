@@ -9,6 +9,7 @@ import { ObjectTagEditor } from "../maps/[mapId]/edit/ObjectTagEditor";
 import type { PaletteAsset } from "../maps/[mapId]/edit/lib/assetUrl";
 import editorStyles from "../maps/[mapId]/edit/editor.module.css";
 import styles from "./room.module.css";
+import panelStyles from "./DraggablePanel.module.css";
 
 /**
  * Map Editor Batch A10: the Game Room's own DM-only "add an object to the
@@ -136,19 +137,29 @@ export function LiveObjectsPanel({
       ) : null}
 
       {pendingObjects.length > 0 ? (
+        // Panel UI rework: hoisted out of .interactiveList (below) into its
+        // own direct-child row so it can be marked collapsedVisible — the
+        // per-object rows stay hidden while collapsed (that would be
+        // clutter, the opposite of what collapsing is for), but the DM's
+        // single most useful one-click action here doesn't.
+        <div
+          className={`${styles.objectHeader} ${panelStyles.collapsedVisible}`}
+          data-testid="live-object-pending-header"
+        >
+          <span className={styles.panelLabel}>Pending reveal ({pendingObjects.length})</span>
+          <Button
+            size="sm"
+            variant="teal"
+            disabled={busy}
+            onClick={onRevealAll}
+            data-testid="live-object-reveal-all"
+          >
+            Reveal all
+          </Button>
+        </div>
+      ) : null}
+      {pendingObjects.length > 0 ? (
         <div className={styles.interactiveList} data-testid="live-object-pending-list">
-          <div className={styles.objectHeader}>
-            <span className={styles.panelLabel}>Pending reveal ({pendingObjects.length})</span>
-            <Button
-              size="sm"
-              variant="teal"
-              disabled={busy}
-              onClick={onRevealAll}
-              data-testid="live-object-reveal-all"
-            >
-              Reveal all
-            </Button>
-          </div>
           {pendingObjects.map((object) => (
             <div key={object.id} className={styles.objectRow} data-testid={`live-object-pending-${object.id}`}>
               <div className={styles.objectHeader}>

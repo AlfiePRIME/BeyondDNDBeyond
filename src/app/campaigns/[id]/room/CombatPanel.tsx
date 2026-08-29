@@ -21,6 +21,7 @@ import {
 } from "@/rules-engine";
 import { AdvantageToggle } from "./DiceLogPanel";
 import styles from "./room.module.css";
+import panelStyles from "./DraggablePanel.module.css";
 
 /** The active encounter plus its combatants, already in turn order (see
  * listCombatCombatants) so current_turn_index indexes straight into the
@@ -833,7 +834,10 @@ export function CombatPanel({
         })}
       </div>
 
-      <div className={styles.objectHeader}>
+      {/* Panel UI rework: marked collapsedVisible so Advance turn stays
+          reachable even while the panel is collapsed — the DM's own
+          most-repeated combat click. */}
+      <div className={`${styles.objectHeader} ${panelStyles.collapsedVisible}`}>
         {canAdvance ? (
           <Button size="sm" variant="teal" disabled={busy} onClick={onAdvance} data-testid="advance-turn-button">
             Advance turn

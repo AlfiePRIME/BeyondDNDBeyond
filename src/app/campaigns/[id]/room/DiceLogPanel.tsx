@@ -26,6 +26,7 @@ import {
 } from "../roll/format";
 import type { RoomMember } from "./avatar-url";
 import styles from "./room.module.css";
+import panelStyles from "./DraggablePanel.module.css";
 
 const ATTACK_KIND_LABEL: Record<AttackKind, string> = {
   melee: "Melee",
@@ -480,7 +481,16 @@ export function DiceLogPanel({
         </Button>
       ) : null}
 
-      <div className={styles.quickRollRow} role="group" aria-label="Quick roll" data-testid="quick-roll-row">
+      {/* Panel UI rework: marked collapsedVisible so these stay clickable
+          even while the panel is collapsed — the concrete example the
+          request itself was framed around ("like the dice roller when
+          collapsed you can still see the buttons for the dice's"). */}
+      <div
+        className={`${styles.quickRollRow} ${panelStyles.collapsedVisible}`}
+        role="group"
+        aria-label="Quick roll"
+        data-testid="quick-roll-row"
+      >
         {QUICK_ROLL_DICE.map((sides) => (
           <Button
             key={sides}

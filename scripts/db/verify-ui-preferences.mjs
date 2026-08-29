@@ -172,7 +172,10 @@ function expectedDefaultPosition(panelId, viewport, measuredHeight) {
   const width = PANEL_WIDTH[panelId];
   switch (PANEL_ANCHOR[panelId]) {
     case "topLeft":
-      return { x: 24, y: 64 };
+      // Panel UI rework: left offset widened 24 -> 64 to leave clearance
+      // for the new left-edge vertical dock bar (DraggablePanel.module.css's
+      // .anchorTopLeft).
+      return { x: 64, y: 64 };
     case "topRight":
       return { x: viewport.width - width - 24, y: 64 };
     case "topCenter":
@@ -182,7 +185,9 @@ function expectedDefaultPosition(panelId, viewport, measuredHeight) {
     case "bottomRight":
       return { x: viewport.width - width - 24, y: viewport.height - measuredHeight - 24 };
     case "bottomLeft":
-      return { x: 24, y: viewport.height - measuredHeight - 24 };
+      // Panel UI rework: same left-offset widening as topLeft above
+      // (DraggablePanel.module.css's .anchorBottomLeft).
+      return { x: 64, y: viewport.height - measuredHeight - 24 };
     case "bottomCenter":
       return { x: (viewport.width - width) / 2, y: viewport.height - measuredHeight - 24 };
     default:
@@ -514,7 +519,7 @@ try {
 
   // -- 2c. Drag the combat panel to a new spot; confirm it persists to the
   //    database (after the debounce) and survives a reload. --
-  // combat is topLeft-anchored (a fixed 24, 64 regardless of content or
+  // combat is topLeft-anchored (a fixed 64, 64 regardless of content or
   // viewport), so its default needs no height measurement.
   const combatDefault = expectedDefaultPosition("combat", viewport900, 0);
   await dragPanelBy(page, "combat-panel", 260, 180);

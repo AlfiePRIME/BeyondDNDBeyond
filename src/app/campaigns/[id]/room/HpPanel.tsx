@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/ui-components";
 import type { Character } from "@/data-access";
 import styles from "./room.module.css";
+import panelStyles from "./DraggablePanel.module.css";
 
 /**
  * Freeform combat mode's direct "edit my current HP" control: a player
@@ -77,7 +78,9 @@ export function HpPanel({
         return (
           <form
             key={character.id}
-            className={styles.objectHeader}
+            // Panel UI rework: marked collapsedVisible so a player can still
+            // self-edit HP without expanding the panel first.
+            className={`${styles.objectHeader} ${panelStyles.collapsedVisible}`}
             data-testid={`hp-panel-row-${character.id}`}
             onSubmit={(event) => {
               event.preventDefault();

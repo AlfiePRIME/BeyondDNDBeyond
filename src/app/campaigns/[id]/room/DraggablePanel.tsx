@@ -1329,16 +1329,18 @@ export function DraggablePanel({ panelId, children }: { panelId: PanelId; childr
 }
 
 /**
- * Dock/close follow-up: one small glyph button per currently-docked panel,
- * rendered inside GameRoom's existing top bar (`.overlayControls` in
- * room.module.css) alongside PAUSE SESSION / MEASURE DISTANCE / etc.
- * Clicking a button un-docks that panel, restoring it at exactly the x/y
- * and height it had when closed (PanelLayoutEntry never loses those fields
- * while docked — see toggleDocked above). Reads `usePanelLayout()` itself
- * rather than taking props, so GameRoom only needs to mount
- * `<PanelDockBar />` once, anywhere inside `<PanelLayoutProvider>` — the
- * `usePanelLayout` extension-point pattern this file's own doc comment
- * already documents.
+ * Dock/close follow-up: one small glyph button per currently-docked panel.
+ * Panel UI rework: moved off GameRoom's top bar (it lived in
+ * `.overlayControls`, room.module.css, alongside PAUSE SESSION / MEASURE
+ * DISTANCE / etc — that row was especially cluttered on the DM's side) into
+ * its own fixed vertical strip down the left edge (`.dockBar`,
+ * DraggablePanel.module.css, now `position: fixed`). Clicking a button
+ * un-docks that panel, restoring it at exactly the x/y and height it had
+ * when closed (PanelLayoutEntry never loses those fields while docked —
+ * see toggleDocked above). Reads `usePanelLayout()` itself rather than
+ * taking props, so GameRoom only needs to mount `<PanelDockBar />` once,
+ * anywhere inside `<PanelLayoutProvider>` — the `usePanelLayout`
+ * extension-point pattern this file's own doc comment already documents.
  */
 export function PanelDockBar() {
   const layout = usePanelLayout();
