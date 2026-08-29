@@ -17,6 +17,7 @@ import {
   DEFAULT_SOUND_SETTINGS,
   setUiPreferences,
   subscribeToUiPreferencesChanges,
+  type DmBookSize,
   type PanelLayoutEntry,
   type SoundSettings,
   type UiPreferences,
@@ -397,6 +398,22 @@ interface PanelLayoutContextValue {
   getSoundSettings(): SoundSettings;
   setSoundVolume(volume: number): void;
   setSoundMuted(muted: boolean): void;
+  /**
+   * DM book resize follow-up — the DM's own persisted DM book window size
+   * (profiles.ui_preferences.dmBookSize), persisted through this SAME
+   * provider for the identical reason getSoundSettings/setSoundVolume/
+   * setSoundMuted already are (see that trio's own doc comment): a second,
+   * independently-debounced writer of this same jsonb column would silently
+   * clobber whichever OTHER field (panelLayout, soundSettings) it doesn't
+   * know about on its own next write. null until the DM has ever dragged
+   * the book's own resize handle — DmBook.module.css's own CSS default
+   * covers that case exactly like an absent PanelLayoutEntry.height already
+   * does for every other panel. Prefer `useDmBookSize()` (exported below)
+   * over reaching for these two members directly, the same
+   * useSoundSettings() precedent.
+   */
+  getDmBookSize(): DmBookSize | null;
+  setDmBookSize(size: DmBookSize): void;
 }
 
 const PanelLayoutContext = createContext<PanelLayoutContextValue | null>(null);
@@ -485,6 +502,21 @@ export function PanelLayoutProvider({
     soundSettingsRef.current = soundSettings;
   }, [soundSettings]);
 
+  // DM book resize follow-up — the SAME "own state, ref synced in an
+  // effect, merged into the debounced write" shape as soundSettings above,
+  // for the identical reason: a THIRD independently-edited slice of this
+  // same ui_preferences document. null (never customized) rather than a
+  // DEFAULT_DM_BOOK_SIZE constant like soundSettings' own DEFAULT_SOUND_
+  // SETTINGS — DmBook.module.css's own CSS default already covers "never
+  // resized" with no equivalent numeric constant needed on this side.
+  const [dmBookSize, setDmBookSizeState] = useState<DmBookSize | null>(
+    initialPreferences.dmBookSize ?? null
+  );
+  const dmBookSizeRef = useRef(dmBookSize);
+  useEffect(() => {
+    dmBookSizeRef.current = dmBookSize;
+  }, [dmBookSize]);
+
   // ── Push-aside follow-up state ──────────────────────────────────────
   //
   // `pushedOffsets` is a TRANSIENT visual overlay, deliberately never
@@ -539,15 +571,22 @@ export function PanelLayoutProvider({
   const persist = useCallback(() => {
     persistTimerRef.current = null;
     // Whole-document write (setUiPreferences' own contract) — includes
-    // BOTH fields every time, sourced from each one's own up-to-date ref,
+    // EVERY field every time, sourced from each one's own up-to-date ref,
     // regardless of which one actually changed just now. This is what
-    // makes a single shared debounce/persist path safe for two
+    // makes a single shared debounce/persist path safe for three
     // independently-edited slices of the same jsonb column: neither a
-    // panel drag nor a volume-slider change can ever land a write that
-    // omits (and thereby erases) the other.
+    // panel drag, a volume-slider change, nor a DM-book resize can ever
+    // land a write that omits (and thereby erases) either of the other two.
+    // dmBookSizeRef.current ?? undefined (not `null`): DmBookSize is an
+    // omittable field (UiPreferences.dmBookSize's own doc comment), so a
+    // profile that's never resized the book keeps no key at all, the same
+    // "absent, not explicitly null" convention soundSettings' own optional
+    // field would follow if it weren't given a concrete DEFAULT_SOUND_
+    // SETTINGS to send instead.
     setUiPreferences(supabase, userId, {
       panelLayout: layoutRef.current,
       soundSettings: soundSettingsRef.current,
+      dmBookSize: dmBookSizeRef.current ?? undefined,
     }).catch(() => undefined);
   }, [supabase, userId]);
 
@@ -584,6 +623,12 @@ export function PanelLayoutProvider({
         // drag, moments later), it re-sends the latest known soundSettings
         // rather than a stale in-memory copy.
         setSoundSettingsState(preferences.soundSettings ?? DEFAULT_SOUND_SETTINGS);
+        // DM book resize follow-up: the same cross-tab echo reasoning as
+        // soundSettings immediately above, kept current for the identical
+        // reason — so the next debounced persist() this provider fires (for
+        // ANY of its three slices) re-sends the latest known dmBookSize
+        // rather than a stale in-memory copy.
+        setDmBookSizeState(preferences.dmBookSize ?? null);
       }),
     [supabase, userId]
   );
@@ -679,6 +724,22 @@ export function PanelLayoutProvider({
   const setSoundMuted = useCallback(
     (muted: boolean) => {
       setSoundSettingsState((current) => (current.muted === muted ? current : { ...current, muted }));
+      schedulePersist();
+    },
+    [schedulePersist]
+  );
+
+  // DM book resize follow-up's own get/set pair — the same immediate-local-
+  // update-plus-scheduled-persist shape as setSoundVolume/setSoundMuted
+  // above, and as DraggablePanel's own setHeight (called continuously
+  // during a live resize drag): every intermediate call during a drag
+  // updates the rendered size immediately while debouncing the actual
+  // write, so a whole resize gesture collapses into one DB write.
+  const getDmBookSize = useCallback(() => dmBookSize, [dmBookSize]);
+
+  const setDmBookSize = useCallback(
+    (size: DmBookSize) => {
+      setDmBookSizeState(size);
       schedulePersist();
     },
     [schedulePersist]
@@ -847,6 +908,8 @@ export function PanelLayoutProvider({
       getSoundSettings,
       setSoundVolume,
       setSoundMuted,
+      getDmBookSize,
+      setDmBookSize,
     }),
     [
       getEntry,
@@ -862,6 +925,8 @@ export function PanelLayoutProvider({
       getSoundSettings,
       setSoundVolume,
       setSoundMuted,
+      getDmBookSize,
+      setDmBookSize,
     ]
   );
 
@@ -897,6 +962,26 @@ export function useSoundSettings(): {
     settings: layout.getSoundSettings(),
     setVolume: layout.setSoundVolume,
     setMuted: layout.setSoundMuted,
+  };
+}
+
+/**
+ * DM book resize follow-up — the DM's own persisted DM book window size,
+ * plus a setter. A thin, purpose-named wrapper over `usePanelLayout()`, the
+ * exact `useSoundSettings()` precedent immediately above (see that hook's
+ * own doc comment, and PanelLayoutContextValue.getDmBookSize's, for why this
+ * piggybacks on the panel-layout provider's plumbing rather than standing up
+ * a second ui_preferences writer): src/app/campaigns/[id]/room/DmBook.tsx is
+ * this hook's one real consumer.
+ */
+export function useDmBookSize(): {
+  size: DmBookSize | null;
+  setSize: (size: DmBookSize) => void;
+} {
+  const layout = usePanelLayout();
+  return {
+    size: layout.getDmBookSize(),
+    setSize: layout.setDmBookSize,
   };
 }
 

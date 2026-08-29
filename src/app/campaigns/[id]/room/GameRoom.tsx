@@ -40,6 +40,7 @@ import {
   getActiveCombatEncounter,
   getCharacter,
   getDiceTrayPreferencesForCampaign,
+  getDmBookOffset,
   getMap,
   getMapArt,
   getMapArtSignedUrl,
@@ -77,6 +78,7 @@ import {
   setCombatantInitiative,
   setDayNightMode,
   setDiceTrayPreference,
+  setDmBookOffset,
   setHandoutRevealed,
   setLiveMap,
   setMapObjectBehavior,
@@ -110,6 +112,7 @@ import {
   type CrossingType,
   type DayNightMode,
   type DiceTrayModelPreference,
+  type DmBookOffset,
   type DmNote,
   type Handout,
   type InteractionEvent,
@@ -174,6 +177,7 @@ import {
 import {
   applySeatOffset,
   ChatBubble,
+  clampToTableArrangement,
   computeCampaignSeatLayout,
   computeMemberTrayPosition,
   computeTableMapMetrics,
@@ -360,6 +364,17 @@ const SEAT_MOVED_EVENT = "seat-moved";
 // client updates immediately), with the same onReconnect-refetch pairing
 // for a dropped broadcast.
 const DICE_TRAY_PREFERENCE_EVENT = "dice-tray-preference-changed";
+// DM book move: the exact SEAT_MOVED_EVENT shape/reasoning above, reused for
+// campaign_members.dm_book_offset instead of seat_offset — genuinely
+// persisted state (setDmBookOffset writes the DB first), broadcast so every
+// already-connected client's own dmBookPosition (and therefore every
+// player's own chair-drag obstacle list, which includes the book) updates
+// immediately without an extra read, with the same onReconnect-refetch
+// pairing for a dropped broadcast. Simpler than SEAT_MOVED_EVENT in the
+// identical way the underlying data layer already is (dmBookOffset.ts's own
+// doc comment): there's only ever one DM's one offset, not a per-member map,
+// so the payload/state below are a single value, never keyed by userId.
+const DM_BOOK_MOVED_EVENT = "dm-book-moved";
 
 // Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md §5,
 // Prompt 3) — the two-tier sync design §3 concluded this feature needs
@@ -651,6 +666,14 @@ interface WhiteboardClearedPayload {
 interface SeatMovedPayload {
   userId: string;
   offset: SeatOffset;
+}
+
+/** DM_BOOK_MOVED_EVENT's payload — the exact already-persisted offset
+ * (handleBookDragEnd's own result), the SeatMovedPayload shape minus the
+ * userId key (there's only ever one DM's one offset to carry — see that
+ * event const's own doc comment). */
+interface DmBookMovedPayload {
+  offset: DmBookOffset;
 }
 
 /** The live map plus everything needed to render/interact with it. */
@@ -968,6 +991,7 @@ export function GameRoom({
   initialLorePages,
   initialLorePageLinks,
   initialSeatOffsets,
+  initialDmBookOffset,
   initialDiceTrayPreferences,
   initialInteractionEvents,
 }: {
@@ -1126,6 +1150,16 @@ export function GameRoom({
    * once below, the same shape getSeatOffsetsForCampaign itself returns. A
    * member absent from this list has never moved their chair. */
   initialSeatOffsets: readonly (readonly [string, SeatOffset])[];
+  /** DM book move: the DM's own stored dm_book_offset at load time
+   * (data-access's getDmBookOffset), or null if it's never been dragged —
+   * the seat_offset DB-read-not-broadcast reasoning above, just a single
+   * value rather than a per-member Map, since there's only ever one DM's
+   * one offset (dmBookOffset.ts's own doc comment). Read (and needed) by
+   * EVERY viewer, not just the DM's own client — every member's own
+   * chair-drag obstacle list includes the book's CURRENT position
+   * (handleChairDragEnd below), so a player who joins/reloads after the DM
+   * has moved the book must still avoid dropping their chair on top of it. */
+  initialDmBookOffset: DmBookOffset | null;
   /** Per-member dice-tray-model preference (diceTrayPreference.ts) at load
    * time — the same serializable-array-of-pairs shape as
    * initialSeatOffsets, and for the identical reason (a Map can't cross the
@@ -1155,6 +1189,14 @@ export function GameRoom({
   );
   const [chairMoveError, setChairMoveError] = useState<string | null>(null);
   const chairMoveBusyRef = useRef(false);
+  // DM book move: the DM's own persisted book offset — the seatOffsets
+  // precedent immediately above, just a single value (not a per-member Map)
+  // since there's only ever one DM's one offset. Kept live via
+  // DM_BOOK_MOVED_EVENT below, the exact same "broadcast carries the full
+  // new already-persisted state" shape.
+  const [dmBookOffset, setDmBookOffsetState] = useState<DmBookOffset | null>(initialDmBookOffset);
+  const [dmBookMoveError, setDmBookMoveError] = useState<string | null>(null);
+  const dmBookMoveBusyRef = useRef(false);
   const channelRef = useRef<PresenceChannel | null>(null);
   const campaignChannelRef = useRef<PresenceChannel | null>(null);
   // One connected member per personal dice tray (replacing the old single
@@ -1242,6 +1284,17 @@ export function GameRoom({
     next.set(liveChairOverride.userId, liveChairOverride.offset);
     return next;
   }, [seatOffsets, liveChairOverride]);
+  // DM book move: this client's own LIVE (mid-drag, pre-persist) book
+  // offset — the liveChairOverride precedent immediately above, generalized
+  // down to a single value since there's only ever one DM's one book to
+  // drag. DmBookProp's own onDragMove fires with the world-space delta
+  // since drag start (not an absolute offset — see that prop's own doc
+  // comment), so this is computed relative to `dmBookOffset` (the last
+  // PERSISTED offset) each time, the same way handleBookDragMove below
+  // derives it. null whenever nothing is actively being dragged, in which
+  // case dmBookPosition below falls back to the already-persisted
+  // dmBookOffset exactly as before this feature existed.
+  const [liveDmBookOffset, setLiveDmBookOffset] = useState<DmBookOffset | null>(null);
   // Per-member dice-tray-model preference (diceTrayPreference.ts), keyed by
   // user_id — the exact seatOffsets shape/reasoning above, reconstructed
   // from page.tsx's serializable array prop, kept live via
@@ -1508,7 +1561,7 @@ export function GameRoom({
   // (PERSONAL_TRAY_RADIUS in DiceTumble.tsx) and the book's own (visible
   // geometry well under half a meter across — DmBookProp.tsx) regardless of
   // party size or which side of the ellipse the DM's seat lands on.
-  const dmBookPosition = useMemo<[number, number, number]>(() => {
+  const dmBookDefaultPosition = useMemo<[number, number, number]>(() => {
     if (!dmSeat) return [DM_BOOK_LATERAL_OFFSET, TABLE_SURFACE_Y, 0];
     const [outX, outZ] = outwardFromOrigin(dmSeat.position);
     const lateralX = -outZ;
@@ -1519,6 +1572,26 @@ export function GameRoom({
       outZ * DM_BOOK_FORWARD_OFFSET + lateralZ * DM_BOOK_LATERAL_OFFSET,
     ];
   }, [dmSeat]);
+  // DM book move: the book's ACTUAL current position — dmBookDefaultPosition
+  // above, translated by whichever offset is currently in effect (this
+  // client's own in-progress drag if any, else the last persisted one) —
+  // the applySeatOffset/liveSeatOffsets precedent, generalized to a plain
+  // (dx, dz) translation since the book has no rotation to carry along.
+  // Every OTHER reader of "where is the book right now" in this file
+  // (DmBookProp's own `position` prop below, and handleChairDragEnd's own
+  // obstacle list) reads THIS, never dmBookDefaultPosition directly, for the
+  // identical "never a computed value in some call sites and an overridden
+  // one in others" reason seating.ts's own applySeatOffset doc comment
+  // gives.
+  const dmBookPosition = useMemo<[number, number, number]>(() => {
+    const offset = liveDmBookOffset ?? dmBookOffset;
+    if (!offset) return dmBookDefaultPosition;
+    return [
+      dmBookDefaultPosition[0] + offset.dx,
+      dmBookDefaultPosition[1],
+      dmBookDefaultPosition[2] + offset.dz,
+    ];
+  }, [dmBookDefaultPosition, dmBookOffset, liveDmBookOffset]);
   const [bookOpen, setBookOpen] = useState(false);
   // Debug mirror only (see DmBookPropProps.onProjectedPosition's doc
   // comment) — verify-dm-book.mjs has no other way to find a WebGL mesh's
@@ -1648,6 +1721,70 @@ export function GameRoom({
       })();
     },
     [currentUserId, layout.seats, seats, appendedTables, campaignId, memberTrayPositions, dmBookPosition]
+  );
+
+  // DM book move: DmBookProp's own onDragMove fires with the world-space
+  // delta since drag START (not an absolute offset) — see that prop's own
+  // doc comment — so the LIVE offset this client should render is whatever
+  // was already persisted (`dmBookOffset`) plus that delta. Purely a local,
+  // optimistic visual update (the liveChairOverride precedent): nothing is
+  // written to the database or broadcast until the drag actually ends
+  // (handleBookDragEnd below).
+  const handleBookDragMove = useCallback(
+    (delta: { dx: number; dz: number }) => {
+      const base = dmBookOffset ?? { dx: 0, dz: 0 };
+      setLiveDmBookOffset({ dx: base.dx + delta.dx, dz: base.dz + delta.dz });
+    },
+    [dmBookOffset]
+  );
+
+  // DM book move: the one place a dragged book's position actually gets
+  // persisted — the handleChairDragEnd precedent immediately above, minus
+  // that function's own obstacle-avoidance nudge (resolveChairDrop): the
+  // project owner's own explicit "this is simpler than the per-member chair
+  // case" call — there's only one book and one DM, so there's no other
+  // member's chair/tray this drop could ever need to avoid. Still clamped to
+  // the table arrangement (clampToTableArrangement, the same bound a
+  // dragged CHAIR is held to live during its own drag) as a plain safety
+  // net against dragging the book off into empty space — not
+  // obstacle-avoidance, just "stay on some real table". Persist-then-
+  // broadcast, the same ordering every other mutation in this file uses.
+  const handleBookDragEnd = useCallback(
+    (delta: { dx: number; dz: number }) => {
+      if (dmBookMoveBusyRef.current) return;
+      dmBookMoveBusyRef.current = true;
+      setDmBookMoveError(null);
+      void (async () => {
+        try {
+          const supabase = createBrowserSupabaseClient();
+          const base = dmBookOffset ?? { dx: 0, dz: 0 };
+          const candidateX = dmBookDefaultPosition[0] + base.dx + delta.dx;
+          const candidateZ = dmBookDefaultPosition[2] + base.dz + delta.dz;
+          const clamped = clampToTableArrangement(candidateX, candidateZ, appendedTables);
+          const finalOffset: DmBookOffset = {
+            dx: clamped.x - dmBookDefaultPosition[0],
+            dz: clamped.z - dmBookDefaultPosition[2],
+          };
+          await setDmBookOffset(supabase, campaignId, currentUserId, finalOffset);
+          setDmBookOffsetState(finalOffset);
+          await campaignChannelRef.current?.publish<DmBookMovedPayload>(DM_BOOK_MOVED_EVENT, {
+            offset: finalOffset,
+          });
+        } catch (err) {
+          setDmBookMoveError(errorMessage(err) ?? "Could not save the DM book's new position.");
+        } finally {
+          // Clears the local optimistic override regardless of success or
+          // failure — on success, `dmBookOffset` itself now already holds
+          // this exact value (set just above), so dmBookPosition's own memo
+          // renders identically either way; on failure, this correctly
+          // snaps the book back to its last known-good persisted spot
+          // rather than leaving it stuck wherever the failed drag left it.
+          setLiveDmBookOffset(null);
+          dmBookMoveBusyRef.current = false;
+        }
+      })();
+    },
+    [dmBookOffset, dmBookDefaultPosition, appendedTables, campaignId, currentUserId]
   );
 
   // A member's own dice-tray-model choice (DiceTrayPicker, embedded in
@@ -3535,6 +3672,20 @@ export function GameRoom({
       const fresh = await getSeatOffsetsForCampaign(supabase, campaignId).catch(() => null);
       if (fresh) setSeatOffsets(fresh);
     });
+    // DM book move: DM_BOOK_MOVED_EVENT's own doc comment — the payload IS
+    // the already-persisted value, so a receiver applies it directly, the
+    // exact SEAT_MOVED_EVENT shape (every client, DM or player, since every
+    // client's own chair-drag obstacle list reads dmBookPosition).
+    const unsubscribeDmBookMoved = channel.subscribe<DmBookMovedPayload>(DM_BOOK_MOVED_EVENT, (payload) => {
+      setDmBookOffsetState(payload.offset);
+    });
+    // Same dropped-broadcast reasoning as SEAT_MOVED_EVENT's own reconnect
+    // immediately above — a book moved while disconnected is gone from the
+    // wire, so re-read the current offset from the DB.
+    const unsubscribeDmBookMovedReconnect = channel.onReconnect(async () => {
+      const fresh = await getDmBookOffset(supabase, campaignId).catch(() => undefined);
+      if (fresh !== undefined) setDmBookOffsetState(fresh);
+    });
     // A member's own dice-tray-model choice — the exact SEAT_MOVED_EVENT
     // shape/reasoning above, reused for diceTrayPreferences instead of
     // seatOffsets.
@@ -3635,6 +3786,8 @@ export function GameRoom({
       unsubscribeTokenSelectedReconnect();
       unsubscribeSeatMoved();
       unsubscribeSeatMovedReconnect();
+      unsubscribeDmBookMoved();
+      unsubscribeDmBookMovedReconnect();
       unsubscribeDiceTrayPreference();
       unsubscribeDiceTrayPreferenceReconnect();
       unsubscribeWhiteboardStrokeStart();
@@ -7008,6 +7161,8 @@ export function GameRoom({
             open={bookOpen}
             onToggleOpen={() => setBookOpen((current) => !current)}
             onProjectedPosition={setBookScreenPosition}
+            onDragMove={handleBookDragMove}
+            onDragEnd={handleBookDragEnd}
           >
             <DmBook
               onClose={() => setBookOpen(false)}
@@ -7436,6 +7591,23 @@ export function GameRoom({
       {currentUserIsDM ? (
         <div data-testid="dm-book-state" hidden>
           {JSON.stringify({ open: bookOpen, position: dmBookPosition, screen: bookScreenPosition })}
+        </div>
+      ) : null}
+      {/* DM book move: unlike dm-book-state above, this mirror is NOT gated
+          on currentUserIsDM — dmBookOffset/dmBookPosition are tracked (and
+          matter) for EVERY client regardless of role, since every member's
+          own chair-drag obstacle list includes the book's current position
+          (handleChairDragEnd), and a player's client is the only way to
+          confirm the DM_BOOK_MOVED_EVENT broadcast actually reaches someone
+          other than the dragging DM (the book prop itself is DM-only
+          rendered, so there is no other DOM a player-side test could read
+          this from). */}
+      <div data-testid="dm-book-offset-state" hidden>
+        {JSON.stringify({ offset: dmBookOffset, position: dmBookPosition })}
+      </div>
+      {dmBookMoveError ? (
+        <div data-testid="dm-book-move-error" hidden>
+          {dmBookMoveError}
         </div>
       ) : null}
       {/* Hidden render-state mirror of the DM's own personal dice tray's

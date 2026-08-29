@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Button } from "@/ui-components";
 import type {
   Character,
@@ -23,8 +23,48 @@ import { MonsterPanel } from "./MonsterPanel";
 import { DmOverridesPanel } from "./DmOverridesPanel";
 import { DmBookLorePage } from "./DmBookLorePage";
 import { DmBookActivityPage } from "./DmBookActivityPage";
+import { useDmBookSize } from "./DraggablePanel";
 import roomStyles from "./room.module.css";
 import styles from "./DmBook.module.css";
+
+// Resize follow-up — the DraggablePanel.tsx MIN_HEIGHT/clampPanelHeight
+// pattern (that file's own doc comments), adapted to a single corner handle
+// that resizes BOTH dimensions at once rather than DraggablePanel's
+// height-only bottom-edge grip: the book's default is already notably
+// bigger than any single DraggablePanel (`min(480px, 64vw) x min(400px,
+// 50vh)` vs. those panels' own 300-440px widths), so a floor comfortably
+// below that default — but still well above any DraggablePanel's own
+// MIN_HEIGHT — keeps the shrunk book "still genuinely usable" (tabs wrap
+// via .tabs' own flex-wrap, so a narrower width is never a hard content cap)
+// without letting a DM shrink it to something unreadable. No exact
+// precedent for these two numbers in this codebase — a considered choice,
+// not a re-derived one.
+const DM_BOOK_MIN_WIDTH = 360;
+const DM_BOOK_MIN_HEIGHT = 280;
+// Slightly tighter than DraggablePanel's own MAX_HEIGHT_VIEWPORT_FRACTION
+// (0.9) — the book is screen-CENTERED on its 3D anchor (DmBookProp.tsx's
+// `<Html center>`) rather than edge-anchored like every DraggablePanel, so
+// growing it leaves less natural margin on every side at once; 0.85 keeps a
+// visible gap on every edge even at the book's own largest allowed size.
+const DM_BOOK_MAX_VIEWPORT_FRACTION = 0.85;
+
+/** Clamps a candidate (width, height) to [MIN, viewport-fraction MAX] on
+ * each axis independently — clampPanelHeight's own shape, generalized from
+ * one dimension to two. `typeof window === "undefined"` never actually
+ * happens in practice (only ever called from a pointer-event handler, which
+ * is client-only by construction) but mirrors clampPanelHeight/
+ * clampToViewport's own defensive guard for consistency. */
+function clampDmBookSize(width: number, height: number): { width: number; height: number } {
+  if (typeof window === "undefined") {
+    return { width: Math.max(width, DM_BOOK_MIN_WIDTH), height: Math.max(height, DM_BOOK_MIN_HEIGHT) };
+  }
+  const maxWidth = Math.max(DM_BOOK_MIN_WIDTH, window.innerWidth * DM_BOOK_MAX_VIEWPORT_FRACTION);
+  const maxHeight = Math.max(DM_BOOK_MIN_HEIGHT, window.innerHeight * DM_BOOK_MAX_VIEWPORT_FRACTION);
+  return {
+    width: Math.min(Math.max(width, DM_BOOK_MIN_WIDTH), maxWidth),
+    height: Math.min(Math.max(height, DM_BOOK_MIN_HEIGHT), maxHeight),
+  };
+}
 
 type BookPage = "enemies" | "dmControls" | "notes" | "lore" | "dayNight" | "activity";
 
@@ -256,8 +296,73 @@ export function DmBook({
   // the prompt's own wording) for clear/fog/rain/thunderstorm.
   const weatherMechanicalEligible = weatherKind === "firestorm" || weatherKind === "acid_storm";
 
+  // Resize follow-up — DraggablePanel.tsx's own resize-handle pointer-drag
+  // mechanics (pointerdown seeds a session with the CURRENT rendered size,
+  // pointermove computes a delta and clamps, pointerup tears the session
+  // down), adapted to this component's own plain `<div>` structure: unlike
+  // DraggablePanel's shared wrapper (which has to route BOTH a header-drag
+  // AND a resize-drag through one set of handlers), this book has only the
+  // one gesture, so pointer capture and the move/up listeners all live
+  // directly on the handle element itself rather than a shared ancestor.
+  const { size: dmBookSize, setSize: setDmBookSize } = useDmBookSize();
+  const bookRef = useRef<HTMLDivElement>(null);
+  const resizeSessionRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+  } | null>(null);
+  const [resizing, setResizing] = useState(false);
+
+  const handleResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const book = bookRef.current;
+    if (!book) return;
+    // The book's CURRENT rendered size — not `dmBookSize`, which may not
+    // exist yet (a never-resized book has no saved size at all, only its
+    // CSS default) or may be stale relative to however it's actually
+    // rendering right now — the handleResizePointerDown/rect precedent in
+    // DraggablePanel.tsx.
+    const rect = book.getBoundingClientRect();
+    resizeSessionRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth: rect.width,
+      startHeight: rect.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setResizing(true);
+  }, []);
+
+  const handleResizePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const session = resizeSessionRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      const dx = event.clientX - session.startX;
+      const dy = event.clientY - session.startY;
+      setDmBookSize(clampDmBookSize(session.startWidth + dx, session.startHeight + dy));
+    },
+    [setDmBookSize]
+  );
+
+  const endResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const session = resizeSessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    resizeSessionRef.current = null;
+    setResizing(false);
+  }, []);
+
   return (
-    <div className={styles.book} data-testid="dm-book-panel">
+    <div
+      ref={bookRef}
+      className={[styles.book, resizing ? styles.resizing : null].filter(Boolean).join(" ")}
+      data-testid="dm-book-panel"
+      style={dmBookSize ? { width: `${dmBookSize.width}px`, height: `${dmBookSize.height}px` } : undefined}
+    >
       <div className={styles.tabs}>
         {PAGES.map((entry) => (
           <Button
@@ -482,6 +587,27 @@ export function DmBook({
           />
         ) : null}
       </div>
+      {/* Resize follow-up — a corner grip sibling of `.tabs`/`.pageContent`
+          (DraggablePanel.tsx's own resizeHandle-as-a-sibling-of-children
+          precedent), positioned via CSS against `.book`'s own
+          `position: relative` rather than any wrapping element. Resizes
+          BOTH width and height from one diagonal drag — unlike
+          DraggablePanel's height-only bottom-edge grip, this book has no
+          separate "position" of its own to leave alone (it's 3D-anchored
+          and centered by DmBookProp.tsx's `<Html center>`, not
+          screen-positioned by DraggablePanel), so there's no reason to
+          split resizing into two separate handles. */}
+      <div
+        className={[styles.resizeHandle, resizing ? styles.resizing : null].filter(Boolean).join(" ")}
+        onPointerDown={handleResizePointerDown}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize the DM's book"
+        data-testid="dm-book-resize-handle"
+      />
     </div>
   );
 }

@@ -44,6 +44,7 @@ export {
   type UiPreferences,
   type PanelLayoutEntry,
   type SoundSettings,
+  type DmBookSize,
 } from "./profiles";
 export {
   listCharacterPawnsForCampaign,
@@ -120,6 +121,11 @@ export {
   setSeatOffset,
   type SeatOffset,
 } from "./seatOffsets";
+export {
+  getDmBookOffset,
+  setDmBookOffset,
+  type DmBookOffset,
+} from "./dmBookOffset";
 export {
   getDiceTrayPreference,
   getDiceTrayPreferencesForCampaign,
