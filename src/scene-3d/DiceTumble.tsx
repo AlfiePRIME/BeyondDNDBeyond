@@ -74,6 +74,19 @@ export interface DiceFaceSettledInfo {
   result: number;
   label: string;
   usedPhysics: boolean;
+  /** This die's own settled `<group>` local Y — i.e. the SAME tray-local
+   * coordinate space diceAnimator.ts's physics floor sits in (that floor's
+   * own real position is exactly local Y=0, see buildTrayBoundary), not a
+   * world-space Y. `ResultBadge`'s own floating badge always renders at
+   * this exact value plus a fixed +0.22 offset (its own hard-coded
+   * `<Billboard position={[0, 0.22, 0]}>`), so this one number is also the
+   * complete story for the badge's own render height — no separate field
+   * needed for it. Purely an observability field for
+   * scripts/db/verify-dice-tunneling-fix.mjs to confirm a real settled die
+   * (and by construction its ResultBadge) never renders below the tray's
+   * own floor — the same "mirror it into a hidden DOM node for Playwright"
+   * precedent usedPhysics above already follows. */
+  positionY: number;
 }
 
 export interface DiceTumbleProps {
@@ -491,7 +504,7 @@ function Die({
 }: {
   spec: DiceTumbleDieSpec;
   animator: DiceAnimator;
-  onSettled: (id: string) => void;
+  onSettled: (id: string, positionY: number) => void;
 }) {
   // Per-die, per-mount rate-limit state — a fresh -Infinity every time this
   // component (re)mounts, matching every other piece of this die's own
@@ -531,8 +544,17 @@ function Die({
   const label = labelFor(spec);
 
   useEffect(() => {
-    if (phase === "settled") onSettled(spec.id);
-  }, [phase, spec.id, onSettled]);
+    // ref.current.position is up to date the instant `phase` flips to
+    // "settled": useDiceTumble's own useFrame callback writes the group's
+    // position BEFORE checking pose.settled and flipping phase (see its own
+    // doc comment), so this effect (which only runs after that state commit)
+    // always reads the exact just-settled pose, never a stale one.
+    if (phase === "settled") onSettled(spec.id, ref.current?.position.y ?? 0);
+    // `ref` itself is the stable object useDiceTumble's own useRef returns
+    // (never a new identity across renders), so including it here changes
+    // nothing about when this effect actually re-runs — it just satisfies
+    // exhaustive-deps for the `ref.current` read above.
+  }, [phase, spec.id, onSettled, ref]);
 
   return (
     <group ref={ref}>
@@ -584,7 +606,7 @@ function ActiveTumble({
   // own identity stable across re-renders too, same as `dice.length` alone
   // already did for the settled-count tracking below.
   const handleSettled = useCallback(
-    (id: string) => {
+    (id: string, positionY: number) => {
       settledIdsRef.current.add(id);
       if (settledIdsRef.current.size >= dice.length) setAllSettled(true);
       if (onDieSettled) {
@@ -598,6 +620,7 @@ function ActiveTumble({
             result: die.result,
             label: labelFor(die),
             usedPhysics: usingPhysics,
+            positionY,
           });
         }
       }

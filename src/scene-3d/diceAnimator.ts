@@ -1,5 +1,5 @@
 import { Euler, Quaternion, Vector3, type BufferGeometry } from "three";
-import { DIE_SIZE, buildDieGeometry, dieKindForSides, faceNormalForResult, type DieKind } from "./diceGeometry";
+import { DIE_SIZE, buildDieGeometry, dieKindForSides, facePlaneDistance, faceNormalForResult, type DieKind } from "./diceGeometry";
 
 /** One physical die's roll input, already flattened out of whatever
  * roll_log breakdown shape produced it (the app layer's job — see
@@ -446,6 +446,64 @@ function restingOriginHeight(kind: DieKind | null, quaternion: Quaternion): numb
   return -minY;
 }
 
+// ---- Defensive floor clamp (tunneling safety net, alongside CCD below) ----
+
+// The MINIMUM a die's local origin can ever legitimately sit above the
+// floor, for ANY orientation whatsoever — not just the one resting
+// orientation restingOriginHeight computes for. `facePlaneDistance` is the
+// perpendicular distance from a die's origin to its own nearest face plane,
+// which diceGeometry.ts's own doc comment establishes is IDENTICAL for
+// every face of all six kinds (an isohedral/centrally-symmetric
+// construction) — i.e. it is this shape's real inscribed-sphere radius: the
+// largest sphere centered on the origin that stays fully inside the solid.
+// By definition of an insphere, every point on the die's own surface (every
+// face, edge, AND vertex — not just face centers) lies at or beyond that
+// radius from the origin, in every direction. So regardless of which face,
+// edge, or vertex the die's real physics happens to be touching the floor
+// with at any instant (a live tumble is NOT always resting flush on a
+// face), the origin can never legitimately be closer to the floor than this
+// value without the die's own geometry already clipping through the floor
+// — a mathematically tight, not just empirically-tuned, lower bound. Cached
+// per kind (the same "computed once, reused" shape as
+// dieGeometryForPhysics/minOriginHeightCache's sibling caches in this file),
+// since facePlaneDistance itself rebuilds a fresh BufferGeometry per call.
+const minOriginHeightCache = new Map<DieKind, number>();
+function minOriginHeightFor(kind: DieKind | null): number {
+  const resolvedKind = kind ?? "d20"; // same fallback shape as restingOriginHeight/colliderDescFor.
+  let height = minOriginHeightCache.get(resolvedKind);
+  if (height === undefined) {
+    height = facePlaneDistance(resolvedKind, DIE_SIZE);
+    minOriginHeightCache.set(resolvedKind, height);
+  }
+  return height;
+}
+
+// A small safety margin subtracted from the mathematically-exact
+// minOriginHeightFor bound above, so this clamp can never visibly fight a
+// real, correctly-behaving physics contact: Rapier's own contact solver
+// (like essentially every real-time rigid-body engine) allows a small,
+// intentional amount of interpenetration slop at rest for stability, well
+// under a centimeter at this scene's real-world-meter scale. 0.02 is a
+// generous multiple of that (headroom against solver jitter/settling
+// wobble genuinely nudging a resting die a few mm below its exact
+// geometric minimum) while staying utterly negligible next to how far a
+// die that actually tunneled through the floor will have fallen under
+// unopposed gravity by the time this clamp is even consulted — CCD
+// (createDieBody's own setCcdEnabled(true) call) should make that case
+// essentially never happen at all; this is the rare defensive fallback for
+// whatever edge case might still slip past it, not a routine correction.
+export const FLOOR_CLAMP_SLOP = 0.02;
+
+/** Clamps a die's raw physics-read Y so it can never render below the
+ * tray's own floor (or, transitively, below whatever the die's floating
+ * ResultBadge sits above it) — see this section's own doc comments for the
+ * exact bound and why it's safe against ordinary resting/settling jitter.
+ * Exported for diceAnimator.test.ts's own direct unit coverage of the clamp
+ * math, independent of a real (slower, WASM-backed) physics run. */
+export function clampDieOriginY(rawY: number, minOriginHeight: number): number {
+  return Math.max(rawY, minOriginHeight - FLOOR_CLAMP_SLOP);
+}
+
 // ---- Reconciliation timing (§7) ----
 
 // Same neighborhood as the scripted animator's own TUMBLE_SECONDS/
@@ -496,6 +554,11 @@ interface DiePhysicsRecord {
    * uses). */
   targetQuaternion: Quaternion;
   targetHeight: number;
+  /** This die's own real geometric floor-clamp bound — see
+   * minOriginHeightFor's own doc comment. Computed once at body-creation
+   * time (this die's shape never changes), same lifecycle as
+   * targetHeight/targetQuaternion above. */
+  minOriginHeight: number;
   /** Non-null once this die has transitioned from "live physics" to
    * "blending into the guaranteed target" — set exactly once, at the first
    * frame that trips MIN_PHYSICS_SECONDS+quiet or MAX_PHYSICS_SECONDS. */
@@ -582,6 +645,7 @@ function createDieBody(Rapier: RapierNamespace, roll: RollPhysicsWorld, spec: Di
   // world +Y.
   const targetQuaternion = new Quaternion().setFromUnitVectors(new Vector3(...targetNormal), new Vector3(0, 1, 0));
   const targetHeight = restingOriginHeight(kind, targetQuaternion);
+  const minOriginHeight = minOriginHeightFor(kind);
 
   // Spread multiple dice in the same roll around the tray via a golden-angle
   // spiral keyed on each die's own index (ActiveTumble's `${rollId}:${index}`
@@ -630,6 +694,29 @@ function createDieBody(Rapier: RapierNamespace, roll: RollPhysicsWorld, spec: Di
     })
     .setLinearDamping(0.25)
     .setAngularDamping(0.35)
+    // Continuous Collision Detection — the root-cause tunneling guard, not
+    // just this file's own defensive floor clamp (below/minOriginHeightFor's
+    // own doc comment) belt-and-braces backstop. buildTrayBoundary's own
+    // floor/wall colliders are deliberately thin analytic shapes (a 0.02-
+    // unit-thick floor cylinder, 0.03-unit-thick wall segments), and a
+    // freshly-thrown die can carry real linear speed up to ~1.5 (upSpeed
+    // above) plus up to THROW_MAX_SPIN rad/s of spin — fast enough, at a
+    // high enough physics framerate hiccup, to move farther in one discrete
+    // substep than that floor is thick, which is exactly the textbook
+    // tunneling failure mode for thin static colliders paired with fast
+    // dynamic bodies under ordinary discrete collision detection. Enabling
+    // CCD per-body (RigidBodyDesc.setCcdEnabled, not a world-level setting —
+    // Rapier's own API scopes it per-body) makes Rapier sweep this body's
+    // motion for the floor/wall/other-dice contacts it would otherwise skip
+    // past, catching a fast throw BEFORE it tunnels rather than after.
+    // Purely a safety net: CCD only ever engages when a body's own motion
+    // this substep would otherwise miss a thin collider entirely, so it
+    // changes nothing about an ordinary, non-tunneling throw's real
+    // trajectory, tumble feel, or settle timing (confirmed directly —
+    // diceAnimator.test.ts's existing settle-orientation assertions, which
+    // predate this comment, already exercise real physics-driven throws at
+    // these exact same velocity ranges end to end and continue to pass
+    // unchanged).
     .setCcdEnabled(true);
   const body = roll.world.createRigidBody(bodyDesc);
   // SP8: COLLISION_EVENTS makes this specific die's contacts (against the
@@ -647,6 +734,7 @@ function createDieBody(Rapier: RapierNamespace, roll: RollPhysicsWorld, spec: Di
     body,
     targetQuaternion,
     targetHeight,
+    minOriginHeight,
     transitionElapsed: null,
     snapshotPosition: null,
     snapshotQuaternion: null,
@@ -818,8 +906,12 @@ export const physicsDiceAnimator: DiceAnimator = {
         // unlucky simultaneous multi-body collision) snapshots to the
         // guaranteed-correct target directly rather than ever risking a
         // NaN/garbage frame reaching the screen.
+        // clampDieOriginY (defensive floor clamp, alongside CCD above) never
+        // fires for ordinary physics here — only for the rare edge case
+        // (ideally none, with CCD enabled) where the body's own natural
+        // resting/timeout position ended up genuinely below the floor.
         record.snapshotPosition = isFinitePose
-          ? [translation.x, translation.y, translation.z]
+          ? [translation.x, clampDieOriginY(translation.y, record.minOriginHeight), translation.z]
           : [0, record.targetHeight, 0];
         record.snapshotQuaternion = isFinitePose
           ? new Quaternion(rotation.x, rotation.y, rotation.z, rotation.w)
@@ -829,7 +921,7 @@ export const physicsDiceAnimator: DiceAnimator = {
       } else {
         eulerScratch.setFromQuaternion(quaternionScratch.set(rotation.x, rotation.y, rotation.z, rotation.w));
         return {
-          position: [translation.x, translation.y, translation.z],
+          position: [translation.x, clampDieOriginY(translation.y, record.minOriginHeight), translation.z],
           rotation: [eulerScratch.x, eulerScratch.y, eulerScratch.z],
           settled: false,
           impacted,
@@ -845,7 +937,12 @@ export const physicsDiceAnimator: DiceAnimator = {
     // targetHeight, the exact resting height THIS orientation demands — a
     // die that settled face-down on the "wrong" side needs a small
     // lift-and-settle to end up flush on the corrected face, which reads as
-    // a real die's own last damped wobble, not a snap.
+    // a real die's own last damped wobble, not a snap. No separate clamp
+    // needed on `y` below: snapshotY was already floor-clamped at the
+    // transition instant above, targetHeight is always a real, safe,
+    // on-the-floor value by construction (restingOriginHeight), and a
+    // convex ease between two values that are both >= the floor can never
+    // dip below it.
     const [snapshotX, snapshotY, snapshotZ] = record.snapshotPosition!;
     const blendT = Math.min((elapsedSeconds - record.transitionElapsed!) / SETTLE_BLEND_SECONDS, 1);
     const eased = easeOutCubic(blendT);
