@@ -256,6 +256,17 @@ function clamp01(value: number): number {
 let audioContext: AudioContext | null = null;
 let masterGain: GainNode | null = null;
 let unlockListenersAttached = false;
+/** A real, non-destructive tap on the master output — parallel to
+ * `masterGain -> destination`, never in series with it, so reading from it
+ * can never itself affect what's actually audible. Added specifically to
+ * close a real gap: `recordPlay` (below) fires unconditionally the instant
+ * `.start()` is CALLED, which only proves the JS scheduling call succeeded,
+ * never that the render graph actually produced non-silent samples (a
+ * scheduled source on a muted/zero-gain graph, or one whose buffer decoded
+ * to silence, still "starts" successfully with no thrown error). See
+ * `getDebugSnapshot`'s `masterOutputPeak` for the real, live reading this
+ * powers. */
+let masterAnalyser: AnalyserNode | null = null;
 
 /** Real, non-experimental Web Audio API feature-detection — mirrors
  * Droplets.tsx's own supportsDroplets() shape (a plain boolean probe,
@@ -313,8 +324,36 @@ function ensureContext(): AudioContext {
   masterGain = audioContext.createGain();
   applyMasterGain();
   masterGain.connect(audioContext.destination);
+  // A parallel (not in-series) tap for real audible-output verification —
+  // see masterAnalyser's own doc comment above.
+  masterAnalyser = audioContext.createAnalyser();
+  masterAnalyser.fftSize = 512;
+  masterGain.connect(masterAnalyser);
   attachUnlockListeners();
   return audioContext;
+}
+
+/** Reads the master tap's CURRENT instantaneous peak level (0 = digital
+ * silence, 1 = full-scale) — a genuine sample of whatever is actually
+ * flowing through the real audio graph at this instant, post-gain
+ * (correctly reads ~0 while muted or at zero volume, exactly matching what
+ * a listener would actually hear), not a cached/optimistic value. A single
+ * read can miss a brief one-shot entirely (it only sees this instant, not
+ * the whole clip) — a caller verifying "did this specific playback actually
+ * produce sound" should poll this repeatedly across the expected play
+ * window (scripts/db/verify-natural-roll-sounds.mjs's own convention for
+ * polling `playLog`, applied here), same as SoundControl.tsx's own 200ms
+ * debug-mirror poll already does for gain-ramp progress. */
+function readMasterOutputPeak(): number {
+  if (!masterAnalyser) return 0;
+  const data = new Uint8Array(masterAnalyser.fftSize);
+  masterAnalyser.getByteTimeDomainData(data);
+  let peak = 0;
+  for (const sample of data) {
+    const centered = Math.abs(sample - 128) / 128;
+    if (centered > peak) peak = centered;
+  }
+  return peak;
 }
 
 const bufferCache = new Map<string, Promise<AudioBuffer>>();
@@ -362,6 +401,44 @@ const playLog: PlayLogEntry[] = [];
 function recordPlay(key: SoundKey, url: string): void {
   playLog.push({ key, url, at: typeof performance !== "undefined" ? performance.now() : Date.now() });
   if (playLog.length > PLAY_LOG_MAX_ENTRIES) playLog.splice(0, playLog.length - PLAY_LOG_MAX_ENTRIES);
+}
+
+interface PlayErrorEntry {
+  key: SoundKey;
+  /** Where the failure happened — playSound's own body is a straight-line
+   * sequence (resolve URL -> fetch+decode -> schedule+start), so the stage
+   * name alone is almost always enough to tell "the override lookup itself
+   * failed" apart from "the chosen URL failed to fetch/decode" apart from
+   * "scheduling the source node itself threw" without needing to parse the
+   * message text. */
+  stage: "load" | "start";
+  message: string;
+  at: number;
+}
+
+const PLAY_ERROR_LOG_MAX_ENTRIES = 50;
+const playErrorLog: PlayErrorEntry[] = [];
+
+/** Records a real playback failure that would otherwise be a completely
+ * silent, unhandled promise rejection (every real call site — DiceLogPanel's
+ * `void playSound(soundKey)`, the admin preview's `void playSound(key)`, the
+ * test harness's `void playSound(key)` — fires and forgets, awaiting
+ * nothing, catching nothing). This is precisely the gap that let an
+ * overridden sound's real fetch/decode/scheduling failure look identical to
+ * "nothing happened" from every angle recordPlay's own play log can see:
+ * `.start()` simply never gets called, so no playLog entry is added either,
+ * and nothing else in the app ever surfaces the exception. See this file's
+ * own `playSound` for where this is caught. */
+function recordError(key: SoundKey, stage: PlayErrorEntry["stage"], err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  playErrorLog.push({ key, stage, message, at: typeof performance !== "undefined" ? performance.now() : Date.now() });
+  if (playErrorLog.length > PLAY_ERROR_LOG_MAX_ENTRIES) playErrorLog.splice(0, playErrorLog.length - PLAY_ERROR_LOG_MAX_ENTRIES);
+}
+
+/** Clears the play-error log — the clearPlayLog precedent immediately below,
+ * applied to playErrorLog instead. */
+export function clearPlayErrorLog(): void {
+  playErrorLog.length = 0;
 }
 
 /** Clears the play-call log without touching any other state — lets a
@@ -415,6 +492,20 @@ export interface SoundManagerDebugSnapshot {
   masterGainValue: number;
   activeLoops: Partial<Record<LoopSoundKey, { state: LoopState; gainValue: number }>>;
   playLog: PlayLogEntry[];
+  /** Real fetch/decode/scheduling failures from playSound/startLoop that
+   * would otherwise be entirely invisible (a bare, unhandled promise
+   * rejection every real fire-and-forget call site never observes) — see
+   * `recordError`'s own doc comment for exactly why this exists. Empty in
+   * the overwhelmingly common case. */
+  playErrorLog: PlayErrorEntry[];
+  /** A REAL, live, this-instant sample of the master output tap — see
+   * `readMasterOutputPeak`'s own doc comment. Unlike every other field here,
+   * a single read of this one is NOT proof of anything by itself (it can
+   * easily land between two one-shots and read 0 even though playback is
+   * healthy) — a caller must poll it across the expected play window to draw
+   * any conclusion, the same way playLog itself must be polled rather than
+   * read once. */
+  masterOutputPeak: number;
 }
 
 /** A live, read-fresh-every-call snapshot of the manager's real state —
@@ -433,6 +524,8 @@ export function getDebugSnapshot(): SoundManagerDebugSnapshot {
     masterGainValue: masterGain?.gain.value ?? (state.muted ? 0 : state.volume),
     activeLoops,
     playLog: [...playLog],
+    playErrorLog: [...playErrorLog],
+    masterOutputPeak: readMasterOutputPeak(),
   };
 }
 
@@ -447,18 +540,44 @@ export function getDebugSnapshot(): SoundManagerDebugSnapshot {
  * know the sound actually started, but every planned SP3-SP8 call site
  * simply calls this without awaiting). A no-op (resolves immediately) when
  * Web Audio isn't available (SSR, or an environment with no AudioContext).
+ *
+ * Every real call site (DiceLogPanel's roll_log subscription handler,
+ * admin's/the test harness's preview buttons) calls this as `void
+ * playSound(key)` — fire-and-forget, nothing ever awaits or catches the
+ * returned promise. Before this try/catch, ANY failure past this point
+ * (resolveSoundUrl's own override lookup already falls back safely on its
+ * own — see that function's doc comment — but a chosen URL's actual
+ * fetch/decode failing, or scheduling the source node itself throwing) was a
+ * completely silent, unhandled promise rejection: no playLog entry (since
+ * recordPlay never runs), no visible error anywhere, indistinguishable from
+ * "there was never any sound to play" from every angle the app's own debug
+ * surfaces could see. Caught here and recorded into playErrorLog instead —
+ * still never blocks/throws for the caller (matching every other
+ * resolution-failure posture in this module), but now genuinely
+ * diagnosable. See getDebugSnapshot's own playErrorLog field.
  */
 export async function playSound(key: SoundKey, options: { variantIndex?: number } = {}): Promise<void> {
   if (typeof window === "undefined" || !supportsSoundManager()) return;
   const ctx = ensureContext();
   const url = await resolveSoundUrl(key, options.variantIndex);
-  const buffer = await loadBuffer(ctx, url);
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(masterGain!);
-  source.addEventListener("ended", () => source.disconnect());
-  source.start(0);
-  recordPlay(key, url);
+  let buffer: AudioBuffer;
+  try {
+    buffer = await loadBuffer(ctx, url);
+  } catch (err) {
+    recordError(key, "load", err);
+    notifyDebugListeners();
+    return;
+  }
+  try {
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(masterGain!);
+    source.addEventListener("ended", () => source.disconnect());
+    source.start(0);
+    recordPlay(key, url);
+  } catch (err) {
+    recordError(key, "start", err);
+  }
   notifyDebugListeners();
 }
 
@@ -515,7 +634,22 @@ export async function startLoop(key: LoopSoundKey, options: { fadeMs?: number } 
   notifyDebugListeners();
 
   const url = await resolveSoundUrl(key);
-  const buffer = await loadBuffer(ctx, url);
+  let buffer: AudioBuffer;
+  try {
+    buffer = await loadBuffer(ctx, url);
+  } catch (err) {
+    // playSound's own doc comment on recordError explains why this is
+    // caught at all. Also clean up the "starting" placeholder set above —
+    // left in place, it would permanently wedge this channel: every future
+    // startLoop call for this key would see `existing.state !== "stopping"`
+    // and silently no-op forever, and stopLoop only bumps the generation
+    // (see stopLoop's own "still loading" branch) rather than restoring a
+    // clean not-running state.
+    recordError(key, "load", err);
+    if (loopGenerations.get(key) === generation) loops.delete(key);
+    notifyDebugListeners();
+    return;
+  }
   if (loopGenerations.get(key) !== generation) return; // superseded by a stopLoop/startLoop while loading
 
   const source = ctx.createBufferSource();
