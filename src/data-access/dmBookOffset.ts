@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * The DM's own persisted override for where their book actually sits on the
  * table, relative to GameRoom.tsx's own computed default position for it
  * (dmSeat's position plus DM_BOOK_FORWARD_OFFSET/DM_BOOK_LATERAL_OFFSET) —
- * never an absolute world coordinate. See 0088_dm_book_offset.sql for why:
+ * never an absolute world coordinate. See 0094_dm_book_offset.sql for why:
  * that computed default reshapes as party size/table arrangement changes,
  * the exact seat_offset/SeatOffset reasoning (seatOffsets.ts) — just
  * without a dRotationY field, since the book (unlike a chair) has no
