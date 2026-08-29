@@ -1,0 +1,37 @@
+/* A DM-authored reveal_text/reveal_image behavior's own triggered content,
+   floating above the object's real spot on the table (ObjectRevealCard.tsx)
+   — replacing room.module.css's old .revealedText/.revealedImage, which
+   this reuses the same teal "revealed content" accent from (this app's
+   established convention for anything a trigger has just uncovered), so the
+   content reads identically regardless of which surface renders it. Its own
+   module, ChatBubble.module.css's own precedent: scene-3d owns its own
+   chrome for anything mounted directly inside GameRoom's per-object loop
+   rather than composed by the app layer per instance. */
+
+.card {
+  width: max-content;
+  max-width: 260px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-family: var(--font-b);
+  background: color-mix(in srgb, var(--surface2) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
+  box-shadow: var(--gt);
+  text-align: center;
+}
+
+.text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--teal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.image {
+  display: block;
+  max-width: 240px;
+  max-height: 180px;
+  border-radius: 6px;
+}

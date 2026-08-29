@@ -172,6 +172,7 @@ import {
   ChatBubble,
   computeCampaignSeatLayout,
   computeMemberTrayPosition,
+  computeTableMapMetrics,
   DEFAULT_WHITEBOARD_BRUSH_SIZE,
   DEFAULT_WHITEBOARD_COLOR,
   DEFAULT_WHITEBOARD_HEIGHT,
@@ -183,6 +184,8 @@ import {
   getEffectiveSeat,
   isSurfaceHostUrl,
   isSurfacePropUrl,
+  mapCellOffsets,
+  ObjectRevealCard,
   pawnBodyTypeForRace,
   PERSONAL_TRAY_RADIUS,
   PERSONAL_TRAY_SCALE,
@@ -6442,6 +6445,21 @@ export function GameRoom({
     [liveMap, currentUserIsDM]
   );
 
+  // Object Reveal Cards: the same worldX/worldZ/topY formula MapSurface.tsx's
+  // own ObjectMarker uses for this exact object (see its own doc comment) —
+  // recomputed here via the identical pure functions GameTableScene's own
+  // mapMetrics/MapSurface's own mapCellOffsets already use internally, so a
+  // floating reveal card always lands at the SAME spot the object itself
+  // renders at, never an independently-drifting guess. null while there's no
+  // live map to derive a grid size from (interactiveEntries is empty in that
+  // case too, so nothing would try to use this anyway).
+  const revealCardMetrics = useMemo(() => {
+    if (!tableMap) return null;
+    const metrics = computeTableMapMetrics(tableMap.gridWidth, tableMap.gridHeight);
+    const { offsetX, offsetZ } = mapCellOffsets(tableMap.gridWidth, tableMap.gridHeight, metrics.cellSize);
+    return { ...metrics, offsetX, offsetZ };
+  }, [tableMap]);
+
   // Map Editor Batch A4: every object on the current live map worth
   // showing an Open action for — see LiveMapData.containerObjectIds' own
   // comment for what populates the id set this filters against.
@@ -6699,6 +6717,47 @@ export function GameRoom({
             />
           );
         })}
+        {/* Replaces MapPanel.tsx's old flat inline reveal_text/reveal_image
+            paragraph/image: floats a triggered object's own revealed content
+            above its real spot on the table instead (ObjectRevealCard.tsx),
+            a Canvas sibling exactly like ChatBubble above.
+            interactiveEntries is already the per-viewer-appropriate list (a
+            non-DM viewer never receives an entry for an object they can't
+            legitimately see — see interactiveEntries' own doc comment
+            above), so nothing extra needs to be gated here: an object this
+            viewer shouldn't see never reaches this flatMap at all, meaning
+            it also never gets a floating card, exactly matching (never
+            leaking beyond) what MapPanel's own list already shows this same
+            viewer. */}
+        {revealCardMetrics
+          ? interactiveEntries.flatMap(({ object, behavior }) => {
+              if (!behavior.triggered) return [];
+              const content = behavior.content;
+              if (!content) return [];
+              if (behavior.action !== "reveal_text" && behavior.action !== "reveal_image") return [];
+              const { cellSize, baseHeight, elevationStepHeight, offsetX, offsetZ } = revealCardMetrics;
+              const worldX = object.x * cellSize - offsetX;
+              const worldZ = object.y * cellSize - offsetZ;
+              const topY = baseHeight + object.elevation * elevationStepHeight;
+              // How far above the object's own base this card floats, in
+              // units of this map's own cellSize — clear of most placed
+              // props' modeled height (PLACED_OBJECT_SIZE normalizes every
+              // model to roughly fit within one cell's footprint) without
+              // needing real per-asset height data, the same "generous, not
+              // exact" reasoning ObjectMarker's own oversized hit box
+              // already accepts.
+              const anchorY = topY + cellSize * 1.15;
+              return [
+                <ObjectRevealCard
+                  key={object.id}
+                  objectId={object.id}
+                  position={[worldX, anchorY, worldZ]}
+                  kind={behavior.action === "reveal_text" ? "text" : "image"}
+                  content={content}
+                />,
+              ];
+            })
+          : null}
       </Canvas>
       {/* Weather & Enemies C2/C3: a rain-on-glass overlay, lazily mounted
           the first time this session's weather becomes 'rain' or

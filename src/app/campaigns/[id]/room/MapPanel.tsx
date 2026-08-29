@@ -335,6 +335,14 @@ export function MapPanel({
       {liveMapId ? (
         <div className={styles.interactiveList} data-testid="interactive-panel">
           <span className={styles.panelLabel}>Interactive objects</span>
+          {/* Name, state badge, and trigger button only — a triggered
+              reveal_text/reveal_image behavior's own CONTENT no longer
+              renders inline here (this list is deliberately position-blind,
+              so a paragraph/image here has no way to convey WHERE on the
+              table it belongs). It now floats above the object's own real
+              spot instead — GameRoom.tsx mounts an ObjectRevealCard
+              (@/scene-3d) per currently-revealed entry, reading this exact
+              same `entries` list. */}
           {entries.length === 0 ? (
             <p className={styles.hint}>Nothing to interact with here — yet.</p>
           ) : (
@@ -359,22 +367,6 @@ export function MapPanel({
                       </Button>
                     ) : null}
                   </div>
-                  {behavior.action === "reveal_text" && behavior.triggered && behavior.content ? (
-                    <p className={styles.revealedText} data-testid={`revealed-text-${object.id}`}>
-                      {behavior.content}
-                    </p>
-                  ) : null}
-                  {behavior.action === "reveal_image" && behavior.triggered && behavior.content ? (
-                    // A DM-entered arbitrary URL — next/image's optimizer needs
-                    // an allowlisted host, which can't exist for free-form input.
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={behavior.content}
-                      alt={object.asset.name}
-                      className={styles.revealedImage}
-                      data-testid={`revealed-image-${object.id}`}
-                    />
-                  ) : null}
                 </div>
               );
             })
