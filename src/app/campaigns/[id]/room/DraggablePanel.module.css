@@ -251,19 +251,25 @@
 
 /* Panel UI rework: PanelDockBar's own strip, moved off the crowded top bar
    (room.module.css's `.overlayControls`, especially cluttered on the DM's
-   side) into its own fixed lane down the left edge — `top: 18px; left:
-   24px` reuses .overlay's own `padding: 18px 24px` inset verbatim, just
-   applied directly to this element's position instead of via the header's
-   flex layout. `flex-direction: column` (was: row) plus `flex-wrap` so a
-   table with many panels closed at once wraps into a second column rather
-   than running off the bottom of a short viewport — the same overflow
-   safety net the old horizontal bar had wrapping to a second row. A z-index
-   comfortably above BASE_Z_INDEX/ELEVATED_Z_INDEX (DraggablePanel.tsx, 10
-   and 15) keeps it clickable above a floating panel dragged over the left
-   edge. */
+   side) into its own fixed lane down the left edge. `top: 64px` is the SAME
+   header-clearance value every top-anchored panel already reserves
+   (DraggablePanel.tsx's DEFAULT_ANCHOR_CLASS, e.g. .anchorTopLeft/
+   .anchorTopRight below) — a real, reported bug: the first pass used
+   `top: 18px` (.overlay's own top padding) directly, which put the dock
+   bar's first icon squarely on top of the "<- campaignName" back link that
+   already lives at that exact position in the header's top-left corner.
+   `left: 24px` matches .overlay's own left padding, unaffected by that bug.
+   `flex-direction: column` (was: row) plus `flex-wrap` so a table with many
+   panels closed at once wraps into a second column rather than running off
+   the bottom of a short viewport — the same overflow safety net the old
+   horizontal bar had wrapping to a second row; `max-height` shortened by
+   the same 64px header clearance plus a matching 24px bottom margin. A
+   z-index comfortably above BASE_Z_INDEX/ELEVATED_Z_INDEX (DraggablePanel.
+   tsx, 10 and 15) keeps it clickable above a floating panel dragged over
+   the left edge. */
 .dockBar {
   position: fixed;
-  top: 18px;
+  top: 64px;
   left: 24px;
   z-index: 30;
   display: flex;
@@ -271,7 +277,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  max-height: calc(100vh - 36px);
+  max-height: calc(100vh - 64px - 24px);
   pointer-events: auto;
 }
 

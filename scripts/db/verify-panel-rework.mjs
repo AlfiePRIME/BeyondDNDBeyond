@@ -281,6 +281,18 @@ try {
     dockBarBox
   );
 
+  // Regression: the first pass anchored the dock bar at top:18px — the
+  // SAME position as the "<- campaignName" back link already occupies in
+  // the header's top-left corner — so the two visually overlapped. The
+  // dock bar must clear the header's own real bottom edge, not just share
+  // its top inset.
+  const backLinkBox = await room.getByTestId("game-room-back-link").boundingBox();
+  check(
+    "the dock bar does NOT overlap the back link (previously both anchored at top:18px)",
+    dockBarBox !== null && backLinkBox !== null && dockBarBox.y >= backLinkBox.y + backLinkBox.height,
+    { dockBarBox, backLinkBox }
+  );
+
   const dockBarFlexDirection = await dockBar.evaluate((el) => getComputedStyle(el).flexDirection);
   check(
     "the dock bar stacks its icons VERTICALLY (flex-direction: column, not the old row)",
