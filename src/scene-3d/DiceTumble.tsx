@@ -540,7 +540,7 @@ function Die({
     void playSound(SOUND_KEYS.DICE_IMPACT);
   }, []);
 
-  const { ref, phase } = useDiceTumble(spec, animator, handleImpact);
+  const { ref, rotationRef, phase } = useDiceTumble(spec, animator, handleImpact);
   const label = labelFor(spec);
 
   useEffect(() => {
@@ -558,7 +558,16 @@ function Die({
 
   return (
     <group ref={ref}>
-      <DieMesh sides={spec.sides} labelSet={spec.labelSet} />
+      {/* Rotation lives on this INNER group, wrapping only the die's own
+          mesh — ResultBadge below is a SIBLING of this group, not a child
+          of it, so it tracks the die's translation (the outer `ref` group
+          above) without also inheriting its rotation. See rotationRef's
+          own doc comment (useDiceTumble.ts) for the real bug this fixes: a
+          badge nested inside the same rotating group used to visibly swing
+          along with the settle-blend's own final corrective slerp. */}
+      <group ref={rotationRef}>
+        <DieMesh sides={spec.sides} labelSet={spec.labelSet} />
+      </group>
       {phase === "settled" ? <ResultBadge label={label} /> : null}
     </group>
   );
