@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Canvas } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
-import { Badge, Button, Select, TextInput } from "@/ui-components";
+import { Badge, Button, ChoiceCard, Select, TextInput } from "@/ui-components";
 import {
   acceptMapArt,
   clearMapReferenceImage,
@@ -12,16 +12,19 @@ import {
   createLightSource,
   createMapObject,
   createMapTransition,
+  createMonsterStatBlockFromTemplate,
   deleteConcealedPit,
   deleteLightSource,
   deleteMapArtFile,
   deleteMapObject,
   deleteMapReferenceImageFile,
   deleteMapTransition,
+  deleteMapToken,
   getMapArtSignedUrl,
   getMapReferenceImageSignedUrl,
   growMapGrid,
   MAP_GROWTH_EDGES,
+  placeNpcToken,
   restoreMapObject,
   setMapObjectBehavior,
   setMapReferenceImage,
@@ -47,6 +50,8 @@ import {
   type MapObjectBehavior,
   type MapToken,
   type MapTransition,
+  type MonsterStatBlock,
+  type MonsterTemplate,
   type SupabaseClient,
   type WaterFlowDirection,
 } from "@/data-access";
@@ -134,6 +139,7 @@ const VOID_TRANSITION_MESSAGE =
 const VOID_LIGHT_MESSAGE = "A light can't be anchored to a void cell — there's no floor there.";
 const VOID_CONCEALED_PIT_MESSAGE =
   "A concealed pit can't hide under a void cell — there's no floor to disguise it as.";
+const VOID_NPC_MESSAGE = "There's no floor there — an NPC can't be placed on a void cell.";
 
 // Display labels for the ground brush's buttons — GROUND_TYPES itself stays
 // the plain snake_case DB vocabulary (matches the stored column values one
@@ -198,11 +204,11 @@ type EditorMode = "sculpt" | "paint" | "place" | "link" | "region";
 // §5.1's mode table exactly (Sculpt: elevation/pit/terrain; Paint: ground/
 // light — Eyedropper is a 3rd Paint-mode hotkey slot but isn't an
 // EditorTool, so it's handled separately, not listed here; Place: object/
-// light-source; Link: transition/concealed-pit; Region: fill/generate).
+// light-source/npc; Link: transition/concealed-pit; Region: fill/generate).
 const MODE_TOOLS: Record<EditorMode, readonly EditorTool[]> = {
   sculpt: ["elevation", "pit", "terrain"],
   paint: ["ground", "light"],
-  place: ["object", "light-source"],
+  place: ["object", "light-source", "npc"],
   link: ["transition", "concealed-pit"],
   region: ["fill", "generate"],
 };
@@ -241,6 +247,8 @@ export function MapEditor({
   initialTokens,
   initialLightSources,
   characterNameById,
+  monsterTemplates,
+  initialMonsterStatBlocks,
 }: {
   campaignId: string;
   campaignName: string;
@@ -261,11 +269,20 @@ export function MapEditor({
   initialTransitions: MapTransition[];
   initialConcealedPits: ConcealedPit[];
   /** Tokens currently placed on this map — anchor options for token-carried
-   * light sources; the editor never moves or creates tokens. */
+   * light sources, AND (NPC placement) the occupancy check + live list for
+   * the "npc" Place-mode tool below, which is now the one thing besides RLS
+   * itself that can add to this array client-side. */
   initialTokens: MapToken[];
   initialLightSources: LightSource[];
   /** PC token labels for the anchor picker (tokens store only character_id). */
   characterNameById: Record<string, string>;
+  /** NPC placement: the global, admin-authored template library the "npc"
+   * Place-mode tool picks from — read-only here, exactly like `assets`. */
+  monsterTemplates: MonsterTemplate[];
+  /** This campaign's own already-created stat blocks — picking a template
+   * that's already been added here (by template_id) reuses that same row
+   * instead of creating a duplicate; see handleNpcCellClick. */
+  initialMonsterStatBlocks: MonsterStatBlock[];
 }) {
   const [overlay, setOverlay] = useState(() => overlayFromRows(initialCells));
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
@@ -386,6 +403,25 @@ export function MapEditor({
   // selected-object panel's own single-container-at-a-time authoring UI.
   const [expandedPitId, setExpandedPitId] = useState<string | null>(null);
 
+  // NPC placement: `tokens` promotes initialTokens from a load-time-only
+  // snapshot (the doc comment this replaces) into real local state, since
+  // this is now the one place besides the Game Room that can add a row —
+  // placing an NPC template appends here immediately, the same
+  // create-then-append-locally shape `objects`/addObjectLocal already uses.
+  // `monsterStatBlocks` mirrors `objects` the same way: this campaign's own
+  // stat-block rows, appended to the moment a template is first placed so
+  // every later click of the SAME template reuses that one row instead of
+  // creating a duplicate (handleNpcCellClick's find-by-template_id check).
+  const [tokens, setTokens] = useState<MapToken[]>(initialTokens);
+  const [monsterStatBlocks, setMonsterStatBlocks] = useState<MonsterStatBlock[]>(
+    initialMonsterStatBlocks
+  );
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(
+    monsterTemplates[0]?.id ?? null
+  );
+  const [npcBusy, setNpcBusy] = useState(false);
+  const [npcError, setNpcError] = useState<string | null>(null);
+
   // Light-source authoring (Prompt 55) — the transition tool's form-based
   // shape: pick an anchor, fill in radius/brightness, create; each existing
   // light lists with Edit (radius/brightness only) and Remove.
@@ -466,6 +502,9 @@ export function MapEditor({
   const eyedropperArmedRef = useRef(eyedropperArmed);
   const fillAxisRef = useRef(fillAxis);
   const fillElevationDirectionRef = useRef(fillElevationDirection);
+  const tokensRef = useRef(tokens);
+  const monsterStatBlocksRef = useRef(monsterStatBlocks);
+  const selectedTemplateIdRef = useRef(selectedTemplateId);
   // switchTool is a plain function declaration (recreated every render, but
   // behaviorally invariant — it only ever closes over stable useState
   // setters and refs), mirrored into a ref like the rest of this block so
@@ -485,6 +524,9 @@ export function MapEditor({
     eyedropperArmedRef.current = eyedropperArmed;
     fillAxisRef.current = fillAxis;
     fillElevationDirectionRef.current = fillElevationDirection;
+    tokensRef.current = tokens;
+    monsterStatBlocksRef.current = monsterStatBlocks;
+    selectedTemplateIdRef.current = selectedTemplateId;
   }, [
     tool,
     brush,
@@ -498,6 +540,9 @@ export function MapEditor({
     eyedropperArmed,
     fillAxis,
     fillElevationDirection,
+    tokens,
+    monsterStatBlocks,
+    selectedTemplateId,
   ]);
 
   // The last PERSISTED cell state: initialCells at mount, advanced whenever
@@ -623,7 +668,8 @@ export function MapEditor({
         tool === "object" ||
         tool === "transition" ||
         tool === "light-source" ||
-        tool === "concealed-pit"
+        tool === "concealed-pit" ||
+        tool === "npc"
       )
         return;
       if (historyBusyRef.current) return;
@@ -919,6 +965,7 @@ export function MapEditor({
         case "place":
           if (event.key === "1") switchTool("object");
           else if (event.key === "2") switchTool("light-source");
+          else if (event.key === "3") switchTool("npc");
           else return;
           break;
         case "link":
@@ -1139,6 +1186,94 @@ export function MapEditor({
     ]
   );
 
+  // NPC placement: the "npc" Place-mode tool's own onCellClick — a single-
+  // step "pick a template, click a cell" gesture (no preview/undo-history
+  // parity with placeAssetAtCell above; a deliberately simpler first pass,
+  // matching this feature's own plan). Finds this campaign's existing stat
+  // block for the picked template if one was already added (by
+  // template_id, so repeat placements of the SAME template never create
+  // duplicate rows), otherwise creates one from the template's own copied
+  // stats — then places a real map_tokens row linked to it, exactly the
+  // Game Room's own handleQuickAddMonster/placeNpcToken path, just reached
+  // from the map editor instead of a live 3D scene.
+  const handleNpcCellClick = useCallback(
+    (x: number, y: number) => {
+      const templateId = selectedTemplateIdRef.current;
+      if (!templateId) return;
+      const template = monsterTemplates.find((candidate) => candidate.id === templateId);
+      if (!template) return;
+
+      const occupant = tokensRef.current.find((token) => token.x === x && token.y === y);
+      if (occupant) {
+        const occupantLabel =
+          occupant.npc_name ?? characterNameById[occupant.character_id ?? ""] ?? "Unnamed token";
+        setNpcError(`${occupantLabel} is already there — remove it before placing another.`);
+        return;
+      }
+      if (displayedTerrainAt(x, y) === "void") {
+        setNpcError(VOID_NPC_MESSAGE);
+        return;
+      }
+
+      const elevation = (overlayRef.current.get(cellKey(x, y)) ?? DEFAULT_CELL).elevation;
+      setNpcBusy(true);
+      setNpcError(null);
+      void (async () => {
+        try {
+          const supabase = createBrowserSupabaseClient();
+          let statBlock = monsterStatBlocksRef.current.find(
+            (block) => block.template_id === template.id
+          );
+          if (!statBlock) {
+            statBlock = await createMonsterStatBlockFromTemplate(supabase, {
+              campaignId,
+              templateId: template.id,
+              name: template.name,
+              maxHp: template.max_hp,
+              armorClass: template.armor_class,
+              passivePerception: template.passive_perception,
+              attacks: template.attacks,
+              defaultAllegiance: template.default_allegiance,
+              hitDie: template.hit_die,
+              spells: template.spells,
+            });
+            setMonsterStatBlocks((prev) => [...prev, statBlock!]);
+          }
+          const token = await placeNpcToken(supabase, {
+            mapId: map.id,
+            npcName: statBlock.name,
+            x,
+            y,
+            elevation,
+            monsterStatBlockId: statBlock.id,
+            allegiance: statBlock.default_allegiance,
+          });
+          setTokens((prev) => [...prev, token]);
+        } catch (err) {
+          setNpcError(errorMessage(err) ?? "Couldn't place that NPC — try again.");
+        } finally {
+          setNpcBusy(false);
+        }
+      })();
+    },
+    [monsterTemplates, campaignId, map.id, displayedTerrainAt, characterNameById]
+  );
+
+  const handleRemoveNpcToken = useCallback((tokenId: string) => {
+    setNpcBusy(true);
+    setNpcError(null);
+    void (async () => {
+      try {
+        await deleteMapToken(createBrowserSupabaseClient(), tokenId);
+        setTokens((prev) => prev.filter((token) => token.id !== tokenId));
+      } catch (err) {
+        setNpcError(errorMessage(err) ?? "Couldn't remove that NPC — try again.");
+      } finally {
+        setNpcBusy(false);
+      }
+    })();
+  }, []);
+
   // Map Editor Batch A7 (wall-mounted torches): WallMountFacePicker's own
   // onPick — places the torch flush to `host`'s chosen face (position and
   // rotation derived from the host wall's own transform, see wallMount.ts)
@@ -1335,6 +1470,79 @@ export function MapEditor({
     : null;
 
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
+
+  // NPC placement, "convert decorative enemy objects": a monster_templates
+  // row's own default_asset_id is a LIVE, fixed-UUID pointer into
+  // asset_library (0074's seed migration) — matching a selected object's
+  // asset_id against this map straight up (no fuzzy name matching needed)
+  // catches every decorative object placed from the SAME preset a real NPC
+  // template renders as (e.g. the Goblin object model), regardless of when
+  // or why it was placed.
+  const templateByAssetId = useMemo(
+    () =>
+      new Map(
+        monsterTemplates
+          .filter((template) => template.default_asset_id !== null)
+          .map((template) => [template.default_asset_id, template])
+      ),
+    [monsterTemplates]
+  );
+  const matchingNpcTemplate = selectedLiveObject
+    ? (templateByAssetId.get(selectedLiveObject.asset_id) ?? null)
+    : null;
+
+  // Replaces a purely decorative object with a real stat-blocked token at
+  // the same cell — the find-or-create-a-stat-block logic is identical to
+  // handleNpcCellClick's (same campaign, same template, same reuse-by-
+  // template_id rule), just triggered from the object panel instead of a
+  // fresh cell click, and followed by deleting the object it replaces.
+  const handleConvertObjectToNpc = useCallback(
+    (object: MapObject, template: MonsterTemplate) => {
+      setNpcBusy(true);
+      setNpcError(null);
+      void (async () => {
+        try {
+          const supabase = createBrowserSupabaseClient();
+          let statBlock = monsterStatBlocksRef.current.find(
+            (block) => block.template_id === template.id
+          );
+          if (!statBlock) {
+            statBlock = await createMonsterStatBlockFromTemplate(supabase, {
+              campaignId,
+              templateId: template.id,
+              name: template.name,
+              maxHp: template.max_hp,
+              armorClass: template.armor_class,
+              passivePerception: template.passive_perception,
+              attacks: template.attacks,
+              defaultAllegiance: template.default_allegiance,
+              hitDie: template.hit_die,
+              spells: template.spells,
+            });
+            setMonsterStatBlocks((prev) => [...prev, statBlock!]);
+          }
+          const token = await placeNpcToken(supabase, {
+            mapId: map.id,
+            npcName: statBlock.name,
+            x: object.x,
+            y: object.y,
+            elevation: object.elevation,
+            monsterStatBlockId: statBlock.id,
+            allegiance: statBlock.default_allegiance,
+          });
+          setTokens((prev) => [...prev, token]);
+          await deleteMapObject(supabase, object.id);
+          removeObjectLocal(object.id);
+          setSelectedObjectIds(new Set());
+        } catch (err) {
+          setNpcError(errorMessage(err) ?? "Couldn't convert that object to an NPC — try again.");
+        } finally {
+          setNpcBusy(false);
+        }
+      })();
+    },
+    [campaignId, map.id, removeObjectLocal]
+  );
 
   function handleRotate() {
     if (selectedPreviewObject && preview) {
@@ -1918,6 +2126,7 @@ export function MapEditor({
       setConcealedPitError(null);
     }
     if (next !== "light-source") resetLightForm();
+    if (next !== "npc") setNpcError(null);
     // The selection rectangle outlives a mode switch only while an active
     // draft needs it (the preview branch), or while staying inside Region
     // mode's own two tools (Fill and Generate share one region-drag
@@ -2408,14 +2617,15 @@ export function MapEditor({
 
   // Human-readable anchor for the light list. Anchors cascade-delete their
   // lights, so the "removed" fallbacks only cover a token moved off this
-  // map mid-session (initialTokens is a load-time snapshot).
+  // map mid-session (or, now that `tokens` is real state, one removed via
+  // the "npc" tool's own Remove button below).
   const describeLightAnchor = (light: LightSource): string => {
     if (light.x !== null && light.y !== null) return `cell (${light.x},${light.y})`;
     if (light.object_id !== null) {
       const object = objects.find((candidate) => candidate.id === light.object_id);
       return object ? `${object.asset.name} (${object.x},${object.y})` : "a removed object";
     }
-    const token = initialTokens.find((candidate) => candidate.id === light.token_id);
+    const token = tokens.find((candidate) => candidate.id === light.token_id);
     return token ? `${tokenLabel(token)} (${token.x},${token.y})` : "a removed token";
   };
 
@@ -2589,7 +2799,9 @@ export function MapEditor({
                     ? handleConcealedPitCellClick
                     : tool === "light-source" && lightAnchorKind === "cell" && !editingLightId
                       ? handleLightSourceCellClick
-                      : undefined
+                      : tool === "npc"
+                        ? handleNpcCellClick
+                        : undefined
           }
           region={
             tool === "transition"
@@ -3261,6 +3473,33 @@ export function MapEditor({
                 </div>
                 {selectedLiveObject ? (
                   <>
+                    {matchingNpcTemplate ? (
+                      <>
+                        <div className={styles.toolRow}>
+                          <Button
+                            size="sm"
+                            variant="teal"
+                            disabled={npcBusy}
+                            onClick={() =>
+                              handleConvertObjectToNpc(selectedLiveObject, matchingNpcTemplate)
+                            }
+                            data-testid="object-convert-to-npc"
+                          >
+                            {npcBusy ? "Converting…" : `Convert to NPC (${matchingNpcTemplate.name})`}
+                          </Button>
+                        </div>
+                        <p className={styles.hint}>
+                          This object&apos;s model matches the &quot;{matchingNpcTemplate.name}&quot;
+                          NPC template — convert it into a real stat-blocked token at the same cell,
+                          removing the decorative object.
+                        </p>
+                        {npcError ? (
+                          <p role="alert" className={styles.errorText} data-testid="npc-error">
+                            {npcError}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
                     {/* Authoring-only toggle for the (inert) LOS flag —
                         persisted like move/rotate, read by nothing yet; a
                         future full-line-of-sight prompt consumes it. */}
@@ -3382,9 +3621,10 @@ export function MapEditor({
                             </option>
                           ))}
                         </Select>
-                      ) : initialTokens.length === 0 ? (
+                      ) : tokens.length === 0 ? (
                         <p className={styles.hint}>
-                          No tokens are placed on this map yet — place one from the Game Room first.
+                          No tokens are placed on this map yet — place one from the Game Room, or
+                          place an NPC below.
                         </p>
                       ) : (
                         <Select
@@ -3395,7 +3635,7 @@ export function MapEditor({
                           data-testid="light-anchor-token"
                         >
                           <option value="">Choose a token…</option>
-                          {initialTokens.map((token) => (
+                          {tokens.map((token) => (
                             <option key={token.id} value={token.id}>
                               {tokenLabel(token)} · ({token.x},{token.y})
                             </option>
@@ -3512,6 +3752,78 @@ export function MapEditor({
                   {lightError ? (
                     <p role="alert" className={styles.errorText} data-testid="light-source-error">
                       {lightError}
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+              <span className={styles.toolbarLabel}>NPCs</span>
+              <div className={styles.toolRow}>
+                <Button
+                  size="sm"
+                  variant={tool === "npc" ? "primary" : "ghost"}
+                  onClick={() => switchTool("npc")}
+                  data-testid="tool-npc"
+                >
+                  Place NPCs <Badge>3</Badge>
+                </Button>
+              </div>
+              {tool === "npc" ? (
+                <>
+                  {monsterTemplates.length === 0 ? (
+                    <p className={styles.hint}>
+                      No monster templates exist yet — an app admin adds these to the shared
+                      library first.
+                    </p>
+                  ) : (
+                    <div className={styles.assetGrid} data-testid="npc-template-palette">
+                      {monsterTemplates.map((template) => (
+                        <ChoiceCard
+                          key={template.id}
+                          className={styles.assetCard}
+                          selected={template.id === selectedTemplateId}
+                          onClick={() => setSelectedTemplateId(template.id)}
+                          title={template.name}
+                          meta={`AC ${template.armor_class} · HP ${template.max_hp}${
+                            template.hit_die ? ` · ${template.hit_die}` : ""
+                          }`}
+                          data-testid={`npc-template-${template.id}`}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  <p className={styles.hint}>
+                    Click a cell to place the selected monster — it becomes a real stat-blocked
+                    token, the same one the Game Room&apos;s Monsters panel already understands.
+                  </p>
+                  {tokens.some((token) => token.npc_name) ? (
+                    <div data-testid="npc-token-list">
+                      {tokens
+                        .filter((token) => token.npc_name)
+                        .map((token) => (
+                          <div
+                            key={token.id}
+                            className={styles.toolRow}
+                            data-testid={`npc-token-${token.id}`}
+                          >
+                            <span className={styles.selectedMeta}>
+                              {token.npc_name} · ({token.x},{token.y})
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              disabled={npcBusy}
+                              onClick={() => handleRemoveNpcToken(token.id)}
+                              data-testid={`remove-npc-token-${token.id}`}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        ))}
+                    </div>
+                  ) : null}
+                  {npcError ? (
+                    <p role="alert" className={styles.errorText} data-testid="npc-error">
+                      {npcError}
                     </p>
                   ) : null}
                 </>

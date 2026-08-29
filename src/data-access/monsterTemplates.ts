@@ -29,6 +29,17 @@ export interface MonsterTemplate {
   armor_class: number;
   passive_perception: number;
   attacks: MonsterAttack[];
+  /** Enemy/NPC placement follow-up: a rollable hit-die formula (e.g.
+   * "2d6") matching this row's own max_hp exactly — flavor/reference text
+   * for a DM to roll from, never used by any rules-engine computation.
+   * Empty string for any row that predates this column. */
+  hit_die: string;
+  /** Enemy/NPC placement follow-up: simple named spells (e.g. "Vicious
+   * Mockery") — no spell-slot tracking, purely a DM reference list the
+   * same way attacks[] is a reference list of numbers to roll with. Empty
+   * for the overwhelming majority of creatures (only the Witch template
+   * has any, per its own SRD basis). */
+  spells: string[];
   description: string;
   /** Weather & Enemies C6 (migration 0074): a LIVE pointer into
    * asset_library — the model MapSurface.tsx renders for any token backed

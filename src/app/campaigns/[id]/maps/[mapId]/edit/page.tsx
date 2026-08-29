@@ -14,6 +14,8 @@ import {
   listMapsForCampaign,
   listMapTokens,
   listMapTransitions,
+  listMonsterStatBlocks,
+  listMonsterTemplates,
 } from "@/data-access";
 // The map editor's "Generate Area" tool is generateMapArea.ts, which is
 // Anthropic-only regardless of app_settings.active_provider (structured,
@@ -68,6 +70,8 @@ export default async function MapEditPage({
     characters,
     mapArtEnabled,
     mapArt,
+    monsterTemplates,
+    monsterStatBlocks,
   ] = await Promise.all([
     listMapCells(supabase, mapId),
     listMapObjects(supabase, mapId),
@@ -88,6 +92,12 @@ export default async function MapEditPage({
     // gap this closes.
     isMapArtConfigured(),
     getMapArt(supabase, mapId),
+    // NPC placement: the global template library (Place mode's "npc" tool
+    // picks from these) plus this campaign's own already-created stat
+    // blocks (so picking a template already added here reuses that same
+    // row instead of creating a duplicate — see MapEditor's handleNpcCellClick).
+    listMonsterTemplates(supabase),
+    listMonsterStatBlocks(supabase, campaignId),
   ]);
   const paletteAssets = await resolvePaletteAssets(supabase, assets);
 
@@ -110,6 +120,8 @@ export default async function MapEditPage({
       characterNameById={Object.fromEntries(
         characters.map((character) => [character.id, character.name])
       )}
+      monsterTemplates={monsterTemplates}
+      initialMonsterStatBlocks={monsterStatBlocks}
     />
   );
 }

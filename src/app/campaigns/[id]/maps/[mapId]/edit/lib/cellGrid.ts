@@ -54,7 +54,8 @@ export type EditorTool =
   | "fill"
   | "transition"
   | "light-source"
-  | "concealed-pit";
+  | "concealed-pit"
+  | "npc";
 
 /** The paint-a-cell tools. "object" is excluded because it routes through
  * the discrete place/select/move flow, never through applyTool; "generate"
@@ -65,10 +66,12 @@ export type EditorTool =
  * than per dragged cell; "transition", "light-source", and "concealed-pit"
  * because their clicks pick a cell for a form (a link origin / a fixed
  * light anchor / a hidden trap's real depth), editing nothing in the
- * visible overlay directly. */
+ * visible overlay directly; "npc" for the same reason as "object" — a
+ * click places a real map_tokens row via the discrete pick-a-template/
+ * click-a-cell flow, never through applyTool. */
 export type SculptTool = Exclude<
   EditorTool,
-  "object" | "generate" | "fill" | "transition" | "light-source" | "concealed-pit"
+  "object" | "generate" | "fill" | "transition" | "light-source" | "concealed-pit" | "npc"
 >;
 
 /** applyTool's two elevation branches. Formerly two separate EditorTool

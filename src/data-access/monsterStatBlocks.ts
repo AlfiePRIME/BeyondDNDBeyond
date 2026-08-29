@@ -30,6 +30,14 @@ export interface MonsterStatBlock {
   armor_class: number;
   passive_perception: number;
   attacks: MonsterAttack[];
+  /** Enemy/NPC placement follow-up: see MonsterTemplate.hit_die's own doc
+   * comment — same shape, copied verbatim by
+   * createMonsterStatBlockFromTemplate, empty string for a freeform
+   * (createMonsterStatBlock) block unless the DM fills one in. */
+  hit_die: string;
+  /** Enemy/NPC placement follow-up: see MonsterTemplate.spells' own doc
+   * comment. */
+  spells: string[];
   /** Weather & Enemies C5 (migration 0073): the allegiance a token quick-
    * added from this block should default to. 'hostile' for every
    * pre-existing, hand-authored block (the column's own DB default,
@@ -84,6 +92,10 @@ export async function createMonsterStatBlock(
     armorClass: number;
     passivePerception: number;
     attacks: MonsterAttack[];
+    /** Optional — a freeform block predates hit_die/spells entirely, so
+     * both stay at their DB defaults ('', []) when omitted. */
+    hitDie?: string;
+    spells?: string[];
   }
 ): Promise<MonsterStatBlock> {
   const { data, error } = await supabase
@@ -95,6 +107,8 @@ export async function createMonsterStatBlock(
       armor_class: params.armorClass,
       passive_perception: params.passivePerception,
       attacks: params.attacks,
+      ...(params.hitDie !== undefined ? { hit_die: params.hitDie } : {}),
+      ...(params.spells !== undefined ? { spells: params.spells } : {}),
     })
     .select()
     .single();
@@ -134,6 +148,13 @@ export async function createMonsterStatBlockFromTemplate(
     passivePerception: number;
     attacks: MonsterAttack[];
     defaultAllegiance: TokenAllegiance;
+    /** Enemy/NPC placement follow-up: copied from the source template
+     * exactly like every other stat field above — optional only so
+     * existing call sites written before this field existed still
+     * type-check; every current caller now passes the template's own
+     * values through. */
+    hitDie?: string;
+    spells?: string[];
   }
 ): Promise<MonsterStatBlock> {
   const { data, error } = await supabase
@@ -147,6 +168,8 @@ export async function createMonsterStatBlockFromTemplate(
       passive_perception: params.passivePerception,
       attacks: params.attacks,
       default_allegiance: params.defaultAllegiance,
+      ...(params.hitDie !== undefined ? { hit_die: params.hitDie } : {}),
+      ...(params.spells !== undefined ? { spells: params.spells } : {}),
     })
     .select()
     .single();
@@ -156,7 +179,10 @@ export async function createMonsterStatBlockFromTemplate(
 }
 
 export type UpdateMonsterStatBlockPatch = Partial<
-  Pick<MonsterStatBlock, "name" | "max_hp" | "armor_class" | "passive_perception" | "attacks">
+  Pick<
+    MonsterStatBlock,
+    "name" | "max_hp" | "armor_class" | "passive_perception" | "attacks" | "hit_die" | "spells"
+  >
 >;
 
 export async function updateMonsterStatBlock(

@@ -4537,6 +4537,8 @@ export function GameRoom({
           passivePerception: template.passive_perception,
           attacks: template.attacks,
           defaultAllegiance: template.default_allegiance,
+          hitDie: template.hit_die,
+          spells: template.spells,
         });
       }, "Could not add that template to your campaign.");
     },
