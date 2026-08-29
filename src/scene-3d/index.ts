@@ -49,6 +49,11 @@ export {
   type MapSurfaceToken,
   type MapTokenAllegiance,
   type MapSurfaceMetrics,
+  // Object Reveal Cards: the same worldX/worldZ offset formula
+  // ObjectMarker's own invocation already uses, so GameRoom.tsx can place a
+  // reveal card at IDENTICAL coordinates to the real object it's revealing
+  // for, rather than a hand-copied duplicate of this formula.
+  mapCellOffsets,
 } from "./MapSurface";
 export { computeTableMapMetrics } from "./mapFit";
 export { buildGridOverlayPositions } from "./gridOverlay";
@@ -96,6 +101,11 @@ export {
 // chair — GameRoom.tsx mounts one of these per currently-chatting member,
 // the same Canvas-sibling pattern as DmBookProp above.
 export { ChatBubble, type ChatBubbleProps } from "./ChatBubble";
+// A triggered reveal_text/reveal_image behavior's own content, floating
+// above the object's real spot on the table (replacing MapPanel.tsx's old
+// flat inline paragraph/image) — GameRoom.tsx mounts one of these per
+// currently-revealed object, ChatBubble's own Canvas-sibling pattern again.
+export { ObjectRevealCard, type ObjectRevealCardProps } from "./ObjectRevealCard";
 export {
   computeSeatLayout,
   computeCampaignSeatLayout,
