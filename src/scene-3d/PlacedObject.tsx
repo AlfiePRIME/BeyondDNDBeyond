@@ -130,6 +130,46 @@ export function isBuildingPresetUrl(url: string | null): boolean {
   return url !== null && BUILDING_PRESET_URLS.has(url);
 }
 
+// Movement Collision & Gated Interaction Checks: the structural-default
+// answer to "does a token moving onto this preset get physically blocked",
+// matched by model url — the exact same isWallFamilyUrl/isBuildingPresetUrl
+// precedent just above, rather than any asset_library category column
+// (still none exists). This is only ever the DEFAULT: a DM's explicit
+// blocksMovement override (map_objects.behavior_config, see
+// src/data-access/mapObjects.ts's ObjectMovementConfig) always wins when
+// set, so a custom asset can be marked solid too, or a preset here can be
+// waived, with zero change to this list.
+//
+// The wall family (isWallFamilyUrl's own list) plus wall-t.glb/
+// wall-corner-l.glb/wall-corner-curved.glb — three more wall presets a
+// parallel task is adding (its own migration may not be merged yet; listed
+// here defensively so this lookup is already correct the moment it lands,
+// with nothing further to update here) — Table, Bar Counter, Bar Corner,
+// and every building preset (BUILDING_PRESET_URLS' own list, reused
+// wholesale via isBuildingPresetUrl rather than re-typed) are exactly the
+// "you'd visibly walk through a solid structure" presets; every other
+// preset (decorative props, torches, chests, pressure plates, ...) is
+// non-blocking by default, matching how none of them have ever obstructed
+// movement before this feature existed.
+const SOLID_PRESET_URLS = new Set<string>([
+  ...Object.keys(WALL_FIT_TARGET_BY_URL),
+  "/assets/presets/wall-t.glb",
+  "/assets/presets/wall-corner-l.glb",
+  "/assets/presets/wall-corner-curved.glb",
+  "/assets/presets/table.glb",
+  "/assets/presets/bar-counter.glb",
+  "/assets/presets/bar-corner.glb",
+]);
+
+/** Movement Collision & Gated Interaction Checks: true for any preset that
+ * structurally defaults to blocking movement — see SOLID_PRESET_URLS' own
+ * doc comment for exactly which presets and why "default", not "always". */
+export function isSolidPresetUrl(url: string | null | undefined): boolean {
+  return (
+    (url !== null && url !== undefined && SOLID_PRESET_URLS.has(url)) || isBuildingPresetUrl(url ?? null)
+  );
+}
+
 const PLACEHOLDER_COLOR = "#8f86ad";
 
 /** Shown while a model loads and when a load fails — a translucent crate,

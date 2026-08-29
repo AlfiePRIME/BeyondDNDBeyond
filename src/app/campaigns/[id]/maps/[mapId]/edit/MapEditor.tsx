@@ -52,6 +52,7 @@ import {
   type MapTransition,
   type MonsterStatBlock,
   type MonsterTemplate,
+  type ObjectMovementConfig,
   type SupabaseClient,
   type WaterFlowDirection,
 } from "@/data-access";
@@ -70,7 +71,7 @@ import {
   type WallMountFaceDeg,
   type WallMountHost,
 } from "@/scene-3d";
-import { FEET_PER_ELEVATION_STEP, type TerrainType } from "@/rules-engine";
+import { FEET_PER_ELEVATION_STEP, SKILLS, type SkillName, type TerrainType } from "@/rules-engine";
 import {
   applyTool,
   buildDenseCells,
@@ -383,6 +384,10 @@ export function MapEditor({
   const [destMapId, setDestMapId] = useState<string>(otherMaps[0]?.id ?? "");
   const [destX, setDestX] = useState("0");
   const [destY, setDestY] = useState("0");
+  // Movement Collision & Gated Interaction Checks: "" ("None") creates a
+  // transition with required_skill null — the ordinary immediate Yes/No
+  // confirm, today's exact existing behavior.
+  const [transitionRequiredSkill, setTransitionRequiredSkill] = useState<SkillName | "">("");
   const [transitionBusy, setTransitionBusy] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
 
@@ -1643,11 +1648,11 @@ export function MapEditor({
     });
   }
 
-  function handleSaveBehavior(behavior: MapObjectBehavior | null) {
+  function handleSaveBehavior(behavior: MapObjectBehavior | null, movement: ObjectMovementConfig) {
     if (!selectedLiveObject) return;
     const objectId = selectedLiveObject.id;
     void runObjectMutation(async (supabase) => {
-      replaceObject(await setMapObjectBehavior(supabase, objectId, behavior));
+      replaceObject(await setMapObjectBehavior(supabase, objectId, behavior, movement));
     });
   }
 
@@ -1990,9 +1995,11 @@ export function MapEditor({
         toMapId: destMap.id,
         toX: Number(destX),
         toY: Number(destY),
+        requiredSkill: transitionRequiredSkill === "" ? null : transitionRequiredSkill,
       });
       setTransitions((prev) => [...prev, created]);
       setTransitionCell(null);
+      setTransitionRequiredSkill("");
     } catch (err) {
       setTransitionError(errorMessage(err) ?? "Could not create that transition.");
     } finally {
@@ -3629,6 +3636,11 @@ export function MapEditor({
                     <BehaviorEditor
                       key={selectedLiveObject.id}
                       object={selectedLiveObject}
+                      isTransitionOrigin={transitions.some(
+                        (transition) =>
+                          transition.from_x === selectedLiveObject.x &&
+                          transition.from_y === selectedLiveObject.y
+                      )}
                       onSave={handleSaveBehavior}
                     />
                     {/* Map Editor Batch A4: a chest's (or any placed
@@ -3980,6 +3992,25 @@ export function MapEditor({
                   disabled={transitionBusy}
                   data-testid="transition-entry-y"
                 />
+                {/* Movement Collision & Gated Interaction Checks: gates this
+                    transition's own confirm-prompt behind a roll, via
+                    GameRoom.tsx's pendingInteraction flow — "None" (the
+                    default) offers the ordinary Yes/No confirm immediately,
+                    exactly as before this control existed. */}
+                <Select
+                  label="Required check"
+                  value={transitionRequiredSkill}
+                  onChange={(event) => setTransitionRequiredSkill(event.target.value as SkillName | "")}
+                  disabled={transitionBusy}
+                  data-testid="transition-required-check"
+                >
+                  <option value="">None</option>
+                  {SKILLS.map((skill) => (
+                    <option key={skill.name} value={skill.name}>
+                      {skill.name}
+                    </option>
+                  ))}
+                </Select>
                 <div className={styles.toolRow}>
                   <Button
                     size="sm"
@@ -4014,6 +4045,7 @@ export function MapEditor({
                       ({transition.from_x},{transition.from_y}) →{" "}
                       {mapNameById.get(transition.to_map_id) ?? "Unknown map"} (
                       {transition.to_x},{transition.to_y})
+                      {transition.required_skill ? ` · requires ${transition.required_skill}` : ""}
                     </span>
                     <Button
                       size="sm"

@@ -227,6 +227,21 @@ export interface ComputeReachableCellsParams {
    * token already shares that cell.
    */
   occupiedCells?: readonly GridPoint[];
+  /**
+   * Movement Collision & Gated Interaction Checks: cells a placed map
+   * OBJECT (a wall, a table, ...) physically occupies -- a HARD block,
+   * unlike `occupiedCells` above. A blocked cell behaves exactly like void
+   * terrain (see cellMovementCost's own doc comment): excluded from the
+   * returned set entirely, AND never relaxed onward as a stepping stone to
+   * whatever lies past it -- walking a token through a solid wall to reach
+   * a cell on the far side is exactly as impossible as walking it through
+   * void. This is the real difference from `occupiedCells`, which still
+   * lets a path pass THROUGH an occupied cell at its ordinary cost; a
+   * blocked cell never does. The origin is exempt from this filter too,
+   * the same `occupiedCells` reasoning: a token already standing somewhere
+   * (however it got there) can always "move" nowhere.
+   */
+  blockedCells?: readonly GridPoint[];
 }
 
 const OFF_GRID_CELL: PathCell = { terrain: "void", elevationSteps: 0 };
@@ -266,7 +281,7 @@ function pointKey(point: GridPoint): string {
  * budget including an unbounded one.
  */
 export function computeReachableCells(params: ComputeReachableCellsParams): GridPoint[] {
-  const { origin, cells, budgetFeet, occupiedCells = [] } = params;
+  const { origin, cells, budgetFeet, occupiedCells = [], blockedCells = [] } = params;
 
   const cellByKey = new Map<string, PathCell>();
   for (const cell of cells) {
@@ -279,6 +294,7 @@ export function computeReachableCells(params: ComputeReachableCellsParams): Grid
   const cellAt = (point: GridPoint): PathCell => cellByKey.get(pointKey(point)) ?? OFF_GRID_CELL;
 
   const occupiedKeys = new Set(occupiedCells.map(pointKey));
+  const blockedKeys = new Set(blockedCells.map(pointKey));
   const originKey = pointKey(origin);
 
   const bestCostFeet = new Map<string, number>([[originKey, 0]]);
@@ -314,12 +330,20 @@ export function computeReachableCells(params: ComputeReachableCellsParams): Grid
         const neighborKey = pointKey(neighbor);
         if (settled.has(neighborKey)) continue;
         const neighborCell = cellAt(neighbor);
-        const edgeCostFeet = cellMovementCost({
-          terrain: neighborCell.terrain,
-          elevationDeltaFeet:
-            (neighborCell.elevationSteps - currentElevationSteps) * FEET_PER_ELEVATION_STEP,
-          crossing: neighborCell.crossing,
-        });
+        // A blocked cell (a placed object, see blockedCells' own doc
+        // comment) is exactly as impassable as void terrain -- funneled
+        // through the SAME Infinity + Number.isFinite guard below, rather
+        // than a separate `continue`, so it's never itself reachable and
+        // never relaxed onward to whatever lies past it, at any budget
+        // including an unbounded one.
+        const edgeCostFeet = blockedKeys.has(neighborKey)
+          ? Infinity
+          : cellMovementCost({
+              terrain: neighborCell.terrain,
+              elevationDeltaFeet:
+                (neighborCell.elevationSteps - currentElevationSteps) * FEET_PER_ELEVATION_STEP,
+              crossing: neighborCell.crossing,
+            });
         const tentativeCostFeet = currentCostFeet + edgeCostFeet;
         if (!Number.isFinite(tentativeCostFeet) || tentativeCostFeet > budgetFeet) continue;
         const knownCostFeet = bestCostFeet.get(neighborKey);

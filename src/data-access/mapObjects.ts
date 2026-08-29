@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { SKILLS, type SkillName } from "@/rules-engine";
 import type { AssetSourceType } from "./assets";
 
 /** The asset fields a renderer needs to resolve a loadable URL, joined onto
@@ -173,6 +174,51 @@ export function parseMapObjectBehavior(config: Record<string, unknown>): MapObje
     triggerOnStepOn: config.triggerOnStepOn === true,
     triggered: config.triggered === true,
   };
+}
+
+/**
+ * Movement Collision & Gated Interaction Checks: two more top-level
+ * behavior_config keys, read/written independently of MapObjectBehavior's
+ * four action-authoring keys above — an object needs these even when it
+ * carries NO action at all (a plain wall has nothing to trigger, but still
+ * needs blocksMovement read), which is exactly why parseObjectMovementConfig
+ * below never returns null the way parseMapObjectBehavior does.
+ *
+ *   blocksMovement — a DM's explicit override of the structural preset
+ *                    default (src/scene-3d's isSolidPresetUrl): true always
+ *                    blocks, false never does, absent/null (every object
+ *                    placed before this addition) defers to the preset
+ *                    default entirely.
+ *   requiredCheck  — gates this object's trigger (click or step-on alike)
+ *                    behind a skill check roll instead of firing immediately
+ *                    — GameRoom.tsx's pendingInteraction "roll-then-DM-
+ *                    continues" flow. null/absent (every object placed
+ *                    before this addition) fires immediately, exactly as
+ *                    before this feature existed.
+ */
+export interface ObjectMovementConfig {
+  blocksMovement: boolean | null;
+  requiredCheck: { skill: SkillName } | null;
+}
+
+/** Never null, unlike parseMapObjectBehavior — see ObjectMovementConfig's
+ * own doc comment for why an object with no action configured (or no
+ * behavior_config at all, the '{}' column default) still has a real,
+ * meaningful movement config to read. Fails closed on a malformed shape
+ * (an unrecognized skill name, a non-boolean blocksMovement) the same
+ * "ignore, don't throw" posture parseMapObjectBehavior already takes. */
+export function parseObjectMovementConfig(config: Record<string, unknown>): ObjectMovementConfig {
+  const blocksMovement = typeof config.blocksMovement === "boolean" ? config.blocksMovement : null;
+  const rawRequiredCheck = config.requiredCheck;
+  const rawSkill =
+    rawRequiredCheck !== null && typeof rawRequiredCheck === "object" && "skill" in rawRequiredCheck
+      ? (rawRequiredCheck as { skill: unknown }).skill
+      : null;
+  const requiredCheck =
+    typeof rawSkill === "string" && SKILLS.some((skill) => skill.name === rawSkill)
+      ? { skill: rawSkill as SkillName }
+      : null;
+  return { blocksMovement, requiredCheck };
 }
 
 const OBJECT_COLUMNS = "*, asset:asset_library(name, source_type, model_ref)";
@@ -351,16 +397,31 @@ export async function revealAllPendingMapObjects(
 }
 
 /**
- * Replaces the object's whole behavior config (null clears it back to inert)
- * — an authoring operation, so it goes through the DM-only UPDATE policy
- * like rotate/move, not through the trigger RPC.
+ * Replaces the object's whole behavior config (null clears the action back
+ * to inert) — an authoring operation, so it goes through the DM-only UPDATE
+ * policy like rotate/move, not through the trigger RPC.
+ *
+ * `movement` is folded into the SAME behavior_config write rather than a
+ * separate setObjectMovementConfig call: this column is a single jsonb
+ * value, so two independent partial updates would each have to replace the
+ * WHOLE column, and whichever wrote second would silently erase the other's
+ * keys unless it first re-read the current value. BehaviorEditor.tsx (the
+ * one UI that authors both groups of fields) already holds a full draft of
+ * both at save time, so a single combined write has no such race — this is
+ * a judgment call in place of the two-function split the task description
+ * floated, made explicitly to avoid that read-modify-write hazard. Omitted
+ * (every call site from before this feature existed) behaves exactly like
+ * `{ blocksMovement: null, requiredCheck: null }` — no new keys are ever
+ * written — so an unconfigured object's behavior_config stays byte-for-byte
+ * identical to what this function always produced.
  */
 export async function setMapObjectBehavior(
   supabase: SupabaseClient,
   objectId: string,
-  behavior: MapObjectBehavior | null
+  behavior: MapObjectBehavior | null,
+  movement?: ObjectMovementConfig
 ): Promise<MapObject> {
-  const behavior_config = behavior
+  const behavior_config: Record<string, unknown> = behavior
     ? {
         action: behavior.action,
         ...(behavior.content !== null ? { content: behavior.content } : {}),
@@ -369,6 +430,12 @@ export async function setMapObjectBehavior(
         triggered: behavior.triggered,
       }
     : {};
+  if (movement?.blocksMovement !== undefined && movement.blocksMovement !== null) {
+    behavior_config.blocksMovement = movement.blocksMovement;
+  }
+  if (movement?.requiredCheck) {
+    behavior_config.requiredCheck = movement.requiredCheck;
+  }
   const { data, error } = await supabase
     .from("map_objects")
     .update({ behavior_config })

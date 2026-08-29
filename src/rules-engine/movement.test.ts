@@ -414,6 +414,87 @@ describe("computeReachableCells", () => {
     expect(result.some((p) => p.x === origin.x && p.y === origin.y)).toBe(true);
   });
 
+  // Movement Collision & Gated Interaction Checks: blockedCells (a placed
+  // object, e.g. a wall or a table) is a HARD block, unlike occupiedCells
+  // just above -- these two mirror the "a void wall blocks every path
+  // through it" / "a void cell is never reachable ... never routes through"
+  // tests above exactly, just via blockedCells on ordinary normal terrain
+  // instead of void terrain, to prove it's the same impassable-cell
+  // mechanism, not a new one.
+  describe("blockedCells (placed objects)", () => {
+    it("a blocked cell is never reachable, even with an unbounded budget, and never routes through to cells beyond it", () => {
+      const result = computeReachableCells({
+        origin,
+        cells: uniformGrid(3),
+        budgetFeet: Infinity,
+        blockedCells: [{ x: 1, y: 0 }],
+      });
+      const resultKeys = new Set(keysOf(result));
+      expect(resultKeys.has("1,0")).toBe(false);
+      // An unlimited budget reaches literally everything else in the
+      // described grid -- the blocked cell is the only exclusion.
+      for (let x = -3; x <= 3; x++) {
+        for (let y = -3; y <= 3; y++) {
+          if (x === 1 && y === 0) continue;
+          expect(resultKeys.has(`${x},${y}`)).toBe(true);
+        }
+      }
+    });
+
+    it("a wall of blocked cells blocks every path through it, not just the wall cells themselves", () => {
+      const wallY = 2;
+      const wallPoints: GridPoint[] = [];
+      for (let x = -10; x <= 10; x++) wallPoints.push({ x, y: wallY });
+      const budgetFeet = 50; // 10 cells -- comfortably past y=5 if nothing blocked it
+      const result = computeReachableCells({
+        origin,
+        cells: uniformGrid(10),
+        budgetFeet,
+        blockedCells: wallPoints,
+      });
+      expect(result.some((p) => p.y === wallY)).toBe(false); // the wall itself
+      expect(result.some((p) => p.y > wallY)).toBe(false); // and everything past it
+      expect(result.some((p) => p.y === wallY - 1)).toBe(true); // right up against it, though
+    });
+
+    it("still includes the origin even when a blocking object somehow occupies that exact cell", () => {
+      const result = computeReachableCells({
+        origin,
+        cells: uniformGrid(2),
+        budgetFeet: 10,
+        blockedCells: [origin],
+      });
+      expect(result.some((p) => p.x === origin.x && p.y === origin.y)).toBe(true);
+    });
+
+    it("passing through an occupied cell still costs its ordinary rate, unlike a blocked cell which costs Infinity", () => {
+      // Same budget as the occupiedCells test above (10 ft = 2 diagonal
+      // cells), but blocking every cell 2 could possibly be reached
+      // through in exactly 2 steps (x=1, y in -1..1 -- the only
+      // intermediate cells 2 diagonal-first steps from the origin can ever
+      // pass through on the way to (2,0), by Chebyshev-distance
+      // arithmetic), rather than just (1,0) alone: a single blocked cell
+      // on an open 8-directional grid can be walked AROUND at the same
+      // flat per-cell rate (e.g. via (1,1)), so isolating the "genuinely
+      // impassable, not just avoided" property needs every alternate route
+      // closed off too.
+      const budgetFeet = 10;
+      const result = computeReachableCells({
+        origin,
+        cells: uniformGrid(6),
+        budgetFeet,
+        blockedCells: [
+          { x: 1, y: -1 },
+          { x: 1, y: 0 },
+          { x: 1, y: 1 },
+        ],
+      });
+      const resultKeys = new Set(keysOf(result));
+      expect(resultKeys.has("1,0")).toBe(false); // blocked
+      expect(resultKeys.has("2,0")).toBe(false); // and unreachable through it, unlike occupiedCells
+    });
+  });
+
   // Bridges and stairs: computeReachableCells is the exact sweep
   // reachableCellSetForToken (GameRoom.tsx) feeds off the map's live
   // objects, so this is the same guarantee the rules-engine README
