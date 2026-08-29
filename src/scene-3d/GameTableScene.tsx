@@ -1,17 +1,29 @@
 "use client";
 
-import { Component, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Component,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { Clone, OrbitControls, PerspectiveCamera, RoundedBox, useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
-import { Box3, Plane, Raycaster, SRGBColorSpace, TextureLoader, Vector2, Vector3 } from "three";
-import type { Camera, Object3D, Texture } from "three";
+import { Box3, DoubleSide, Plane, Raycaster, SRGBColorSpace, TextureLoader, Vector2, Vector3 } from "three";
+import type { Camera, Group, Object3D, Texture } from "three";
 import { LEG, TABLE_TOP, TABLE_SURFACE_Y, TABLE_TOP_JOIN_DEPTH } from "./table";
 import {
   applySeatOffset,
   clampToTableArrangement,
   computeCampaignSeatLayout,
   getEffectiveSeat,
+  PLAYER_CHAIR_FRONTAGE,
   rotationYTowardNearestTable,
   seatEllipseSemiAxes,
   type AppendedTable,
@@ -356,6 +368,141 @@ function floorPointFromClientXY(
   return hit ? { x: chairDragHit.x, z: chairDragHit.z } : null;
 }
 
+// ---------------------------------------------------------------------------
+// Chair/tray drag feel: bug report (a) — "dragging a chair or a personal
+// dice tray moves so fast and weirdly you can't see where it will end up."
+// Root cause confirmed by inspection, not guesswork: floorPointFromClientXY
+// above raycasts the pointer against a near-flat, near-horizon plane every
+// single call with NO smoothing, and handleMove (below) feeds that raw hit
+// straight into setLocalChairOverride immediately, every pointermove event.
+// Near the horizon a perspective-camera raycast against a flat plane is
+// wildly non-linear — a couple of screen pixels of mouse motion can sweep
+// meters of world space — and there was previously zero visual feedback
+// showing WHERE the drop would land until the chair actually snapped there.
+//
+// A personal dice tray (seating.ts's computeMemberTrayPosition) has no
+// separate drag gesture of its own at all — confirmed by inspection of
+// DiceTumble.tsx/PlacedObject.tsx (neither wires up any pointer handler) and
+// GameRoom.tsx (ConnectedMemberDiceTray's own `trayPosition` prop is a pure
+// derived value, `memberTrayPositions`, fed by `liveSeatOffsets` — the
+// PERSISTED seatOffsets Map with this exact scene's own live, in-progress
+// chair offset patched on top via onLiveChairOffset). In other words: "drag
+// your personal dice tray" and "drag your own chair" are the SAME gesture —
+// a tray simply rides along next to whichever chair it's anchored to,
+// there's no independent tray-drag entry point to separately fix. Calming
+// THIS one gesture (the only one that exists) is what the bug report for
+// both objects actually needs.
+//
+// Two independent, additive changes below, both scoped to purely-local,
+// per-client visual state (never touching the RAW target itself, which
+// stays exactly as precise and immediate as before — still needed for
+// clamping/collision math, the live tray-follow offset, and the final
+// committed drop):
+//   1. A translucent ghost/preview ring (ChairDragGhost) rendered at the RAW
+//      drag target for the whole gesture, continuously, so the destination
+//      is visible in real time before release — MapSurface.tsx's own
+//      established "ghost" convention (ObjectMarker's `ghost` prop: a
+//      translucent PURPLE wireframe for a not-yet-committed placement),
+//      reused here as a flat ring (a floor position, not a placed 3D prop)
+//      rather than inventing a new visual language.
+//   2. The DRAGGED chair's own RENDERED position (TableSeat's `smoothed`
+//      prop below) eases toward that same raw target via a per-frame
+//      exponential decay instead of snapping to it on every pointermove —
+//      decoupled entirely from the raw target itself, which keeps updating
+//      at full precision underneath. The COMMITTED position on release is
+//      always the precise raw target (chairDragSessionRef.latestOffset,
+//      unchanged) — only the DURING-drag visual motion is smoothed, and it
+//      resnaps to the exact final value the instant the gesture ends (see
+//      TableSeat's own `smoothed` prop wiring: the plain JSX position
+//      binding resumes control immediately on release, overriding whatever
+//      the smoothing left it at).
+// ---------------------------------------------------------------------------
+
+// Exponential-ease time constant (seconds), same "frame-rate independent
+// via useFrame's own delta" shape as LOOK_AROUND_RECENTER_TAU above, but
+// FAR faster: that one is a leisurely multi-second drift back to center
+// once idle, while this one has to stay visually GLUED to a cursor that's
+// actively, continuously moving. Chosen by eyeballing a real recording of a
+// live drag (this project's established "never assume a number, check a
+// real screenshot/recording" pattern): 0.06 reads as a noticeably calmer,
+// continuous glide toward the cursor's target rather than a raw teleport
+// every pointermove tick, while still catching up to a stopped cursor in
+// well under a fifth of a second — nowhere near long enough to read as
+// "laggy" or disconnected from the pointer.
+const CHAIR_DRAG_RENDER_SMOOTHING_TAU = 0.06;
+
+// The ghost ring's own footprint — sized to roughly the real player chair's
+// own frontage-as-a-circle proxy (seating.ts's PLAYER_CHAIR_FRONTAGE, the
+// same circle-proxy convention maxSeatCapacity/resolveChairDrop already use
+// for a chair's effective footprint) rather than an arbitrary round number,
+// so the ring reads as "this is roughly where the chair itself will sit",
+// not a disconnected decoration. Only ever shown for a PLAYER's own chair
+// (draggableUserId never resolves to the DM's throne), so the smaller
+// player frontage — not DM_CHAIR_FRONTAGE — is the right one to size it to.
+const CHAIR_DRAG_GHOST_RADIUS = PLAYER_CHAIR_FRONTAGE / 2 + 0.1;
+// A thin annulus, not a filled disc — "a thin ring" per the brief, and it
+// reads more clearly as a floor marker/outline than a solid shape would.
+const CHAIR_DRAG_GHOST_THICKNESS = 0.06;
+// Just above the floor mesh (GameTableScene's own y=0 circleGeometry) so the
+// ring never z-fights it, while staying visually flush with the ground
+// (unlike a chair/avatar, this is a flat floor marker, not a 3D prop).
+const CHAIR_DRAG_GHOST_Y = 0.02;
+
+/** The translucent "you'll land here" ring — rendered for the ENTIRE
+ * duration of an active chair drag at the RAW (unsmoothed) drag target,
+ * continuously (every frame, via useFrame, imperatively — same "mutate an
+ * Object3D's own position directly rather than round-trip through React
+ * state 60x/second" convention as this file's look-around/own-chair-
+ * projection debug loops), so the destination is visible in real time
+ * before release. `targetRef` is mutated directly by the window
+ * "pointermove" handler below (handleMove) — this component only ever
+ * READS it, never writes it, so there's exactly one place that ever decides
+ * what the raw target actually is. `onDebug` mirrors this ring's own actual
+ * rendered position (or null once it unmounts) — WebGL has no DOM of its
+ * own for a script to otherwise confirm a real ghost mesh exists in the
+ * scene graph at all, the same reasoning as every other onXDebug prop in
+ * this file. */
+function ChairDragGhost({
+  targetRef,
+  onDebug,
+}: {
+  targetRef: RefObject<{ x: number; z: number } | null>;
+  onDebug?: (position: readonly [number, number, number] | null) => void;
+}) {
+  const groupRef = useRef<Group>(null);
+  const lastReported = useRef<[number, number, number] | null>(null);
+  useFrame(() => {
+    const group = groupRef.current;
+    const target = targetRef.current;
+    if (!group || !target) return;
+    group.position.set(target.x, CHAIR_DRAG_GHOST_Y, target.z);
+    if (!onDebug) return;
+    const last = lastReported.current;
+    if (!last || Math.abs(last[0] - target.x) > 1e-4 || Math.abs(last[2] - target.z) > 1e-4) {
+      const next: [number, number, number] = [target.x, CHAIR_DRAG_GHOST_Y, target.z];
+      lastReported.current = next;
+      onDebug(next);
+    }
+  });
+  // Reports this ring's own disappearance the instant it unmounts (the
+  // gesture ended) — a script polling `onDebug`'s mirror sees a real,
+  // unambiguous null the moment the ghost is actually gone, not just a
+  // stale last-known position.
+  useEffect(() => {
+    return () => onDebug?.(null);
+  }, [onDebug]);
+  return (
+    <group ref={groupRef}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry
+          args={[CHAIR_DRAG_GHOST_RADIUS - CHAIR_DRAG_GHOST_THICKNESS, CHAIR_DRAG_GHOST_RADIUS, 32]}
+        />
+        <meshBasicMaterial color={PURPLE} transparent opacity={0.45} toneMapped={false} side={DoubleSide} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
 // An oversized invisible grab handle over a draggable chair — DmBookProp's
 // own HIT_BOX precedent (bigger than the visible model, so grabbing it
 // doesn't need pixel-perfect aim), sized to comfortably enclose a player
@@ -364,27 +511,27 @@ function floorPointFromClientXY(
 const CHAIR_DRAG_HIT_BOX: [number, number, number] = [1.1, 2.8, 1.1];
 const CHAIR_DRAG_HANDLE_Y = 1.4;
 
-// The Y sampled by the own-chair screen-projection debug callback (below) —
-// deliberately NOT the same as CHAIR_DRAG_HANDLE_Y above, despite both
-// needing to land somewhere on the very same hit box. A seated first-person
-// camera looks PAST its own seat toward the table center (LOOK_TARGET),
-// never straight down at it, so a point at the chair's own vertical middle
-// (1.4) sits right at — empirically, for some party sizes, just past — the
-// bottom edge of the 50°-vertical-FOV seated view (verified directly against
-// a live rendered scene: 1.4 projected to a Y coordinate below the viewport
-// entirely). CAMERA_SETBACK/CAMERA_EYE_HEIGHT (seating.ts) are fixed
-// constants shared by every seat regardless of party size or which table it
-// lands on, so this isn't a one-off for a particular seat — every player's
-// own chair has the exact same problem at that height. 2.6 (near the TOP of
-// the same hit box, still safely inside its own [0, 2.8] Y range, so a real
-// click there still lands on the identical mesh) was chosen by replaying
-// this scene's own camera trigonometry (camera position, LOOK_TARGET, fov)
-// for the real range of seat distances this table produces (the head
-// square's ~3.37–3.48 semi-axes, an appended table's own ~3.48 near its
-// end-cap seats) and picking a height with comfortable margin under the 25°
-// half-FOV at every one of them (roughly 8–11° off-axis, vs. 1.4's
-// razor-thin ~26° that clips some of them entirely).
-const CHAIR_DRAG_PROJECTION_Y = 2.6;
+// The Y sampled by the own-chair screen-projection debug callback (below).
+// Used to be a DELIBERATELY different height from CHAIR_DRAG_HANDLE_Y
+// above (2.6, picked to stay inside the old seated camera's 50°-vertical-FOV
+// under the OLD behind-the-chair camera formula, where 1.4 alone projected
+// below the viewport for some party sizes). That reasoning no longer
+// applies now that the seated camera sits IN FRONT of a player's own chair
+// (seating.ts's CAMERA_FORWARD_INSET, the bug-report fix) — a real,
+// verified, unavoidable consequence being that the chair now sits OUTSIDE
+// the seated camera's forward view ENTIRELY (see seating.ts's own doc
+// comment for the full geometric reasoning), so there is no longer a
+// single well-defined "seated view" angle to tune a projection height
+// against at all: seeing (and clicking) a player's own chair now genuinely
+// requires manually orbiting the camera to some ARBITRARY resulting angle
+// first (scripts/db/lib/orbitToOwnChair.mjs), not the one fixed,
+// well-understood seated framing this constant's old reasoning assumed.
+// Reusing CHAIR_DRAG_HANDLE_Y directly — the exact same point the real
+// clickable hit box is centered on — sidesteps needing to reason about any
+// particular camera angle at all: wherever the hit box itself is actually
+// visible, this projection is now guaranteed to report that same point
+// exactly, not merely "close enough" to it.
+const CHAIR_DRAG_PROJECTION_Y = CHAIR_DRAG_HANDLE_Y;
 
 // Scratch vectors for the own-chair screen-projection debug callback below
 // (verification-only — DmBookPropProps.onProjectedPosition's own "WebGL has
@@ -611,6 +758,8 @@ const TableSeat = memo(function TableSeat({
   onAvatarMeasureDebug,
   draggable = false,
   onChairPointerDown,
+  smoothed = false,
+  onRenderPositionDebug,
 }: {
   seat: Seat;
   /** Verification-only pass-through to SeatAvatar's onPoseDebug — see
@@ -632,6 +781,26 @@ const TableSeat = memo(function TableSeat({
    * closure per seat per render (see this component's own top doc comment
    * for why that distinction is load-bearing, not stylistic). */
   onChairPointerDown?: (userId: string, event: ThreeEvent<PointerEvent>) => void;
+  /** Chair/tray drag feel: true only for the CURRENT viewer's own seat WHILE
+   * an active drag session is in progress on this client (never for any
+   * other seat — nobody else's chair can ever be mid-drag here, draggable's
+   * own doc comment above). This seat's own outer group's position is
+   * always driven imperatively (never a JSX `position` prop — see the
+   * useFrame below for why): while `smoothed` is true it eases toward
+   * `seat.position` (the still-fully-precise raw target) via exponential
+   * decay (CHAIR_DRAG_RENDER_SMOOTHING_TAU) instead of snapping straight to
+   * it — see the "Chair/tray drag feel" block comment above
+   * `floorPointFromClientXY` for the full reasoning. The instant this flips
+   * back to false (drag ends), the very next frame snaps the group directly
+   * to the exact final `seat.position` — no lagging tail after release. */
+  smoothed?: boolean;
+  /** Verification-only: this seat's own ACTUAL rendered Three.js position,
+   * reported every frame it genuinely changes — see
+   * GameTableSceneProps.onOwnChairRenderPositionDebug's own doc comment for
+   * why this needs to be read straight off the live object rather than
+   * inferred from `seat.position` (the two deliberately diverge while
+   * `smoothed` is true). */
+  onRenderPositionDebug?: (userId: string, position: [number, number, number]) => void;
 }) {
   const userId = seat.member.user_id;
   const handlePoseDebug = useCallback(
@@ -646,8 +815,49 @@ const TableSeat = memo(function TableSeat({
     (event: ThreeEvent<PointerEvent>) => onChairPointerDown?.(userId, event),
     [onChairPointerDown, userId]
   );
+  const seatGroupRef = useRef<Group>(null);
+  const lastReportedRenderPosition = useRef<[number, number, number] | null>(null);
+  // Chair/tray drag feel: this seat's own group NEVER takes `position` from
+  // a plain JSX prop (deliberately — see below) — this single useFrame is
+  // the ONLY thing that ever sets it, every frame, for every seat, whether
+  // or not a drag is in progress. While `smoothed`, it eases toward
+  // `seat.position` (the still-fully-precise raw target) via exponential
+  // decay instead of snapping straight to it; otherwise it snaps directly,
+  // byte-for-byte the old plain-JSX-binding behavior. A conditional JSX
+  // `position` PROP (present sometimes, absent others) was tried and
+  // rejected: react-three-fiber's own prop-diffing resets a REMOVED prop to
+  // its three.js constructor default (a fresh Vector3(0,0,0)) rather than
+  // leaving the current value alone — exactly the "HMR-safe prop removal"
+  // behavior R3F documents — which would teleport the chair to the origin
+  // the instant `smoothed` first flips true. Never including `position` in
+  // this group's JSX props AT ALL (imperative-only, always) sidesteps that
+  // landmine entirely, for every seat uniformly, not just the draggable
+  // one. No mount-order flash results: r3f's own frame loop always runs
+  // every subscribed useFrame callback before its next gl.render() call, so
+  // a freshly-mounted seat's very first PAINTED frame already reflects this
+  // callback's own position write, never three.js's blank (0,0,0) default.
+  useFrame((_, delta) => {
+    const group = seatGroupRef.current;
+    if (!group) return;
+    if (smoothed) {
+      const eased = 1 - Math.exp(-delta / CHAIR_DRAG_RENDER_SMOOTHING_TAU);
+      group.position.x += (seat.position[0] - group.position.x) * eased;
+      group.position.z += (seat.position[2] - group.position.z) * eased;
+      group.position.y = seat.position[1];
+    } else {
+      group.position.set(seat.position[0], seat.position[1], seat.position[2]);
+    }
+    if (!onRenderPositionDebug) return;
+    const last = lastReportedRenderPosition.current;
+    const { x, y, z } = group.position;
+    if (!last || Math.abs(last[0] - x) > 1e-4 || Math.abs(last[1] - y) > 1e-4 || Math.abs(last[2] - z) > 1e-4) {
+      const next: [number, number, number] = [x, y, z];
+      lastReportedRenderPosition.current = next;
+      onRenderPositionDebug(userId, next);
+    }
+  });
   return (
-    <group position={seat.position} rotation={[0, seat.rotationY, 0]}>
+    <group ref={seatGroupRef} rotation={[0, seat.rotationY, 0]}>
       <Chair role={seat.member.role} />
       {/* Feet land on the chair's own seat pad, not the floor — SeatAvatar
           puts a model's feet at its own local origin (see its own
@@ -937,6 +1147,28 @@ export interface GameTableSceneProps {
    * (seat mode switch, turn camera, a drag's post-drop settle). Not read by
    * GameTableScene itself. */
   onOwnCameraDebug?: (position: readonly [number, number, number]) => void;
+  /** Chair/tray drag feel, verification-only: this client's own draggable
+   * chair's ACTUAL rendered Three.js position, fired whenever it genuinely
+   * changes — same "only report real changes" shape as onOwnCameraDebug.
+   * Deliberately diverges from seat-layout-state's own (raw, unsmoothed)
+   * seat position for the whole duration of an active drag (TableSeat's own
+   * `smoothed` easing — see the "Chair/tray drag feel" block comment above
+   * `floorPointFromClientXY`), then converges back to it exactly the instant
+   * the drag ends. null whenever this viewer has no draggable seat of their
+   * own. WebGL has no DOM of its own for a script to otherwise read a live
+   * object's actual position, the same reasoning as every other onXDebug
+   * prop here. Not read by GameTableScene itself. */
+  onOwnChairRenderPositionDebug?: (position: readonly [number, number, number] | null) => void;
+  /** Chair/tray drag feel, verification-only: the translucent drag-preview
+   * ring's own current world position while a chair drag is active on this
+   * client (ChairDragGhost, above) — null whenever no drag is in progress,
+   * i.e. the ring itself isn't mounted. Mirrors the exact raw, unsmoothed
+   * drag target (the very value fed to setLocalChairOverride on every
+   * pointermove) — proves both that a real ghost mesh exists in the scene
+   * graph at all, and that it genuinely tracks the raw target, not some
+   * smoothed or stale approximation of it. Not read by GameTableScene
+   * itself. */
+  onChairDragGhostDebug?: (position: readonly [number, number, number] | null) => void;
   /** Turn camera: fires whenever THIS viewer's own chair-drag session
    * starts or stops. Not verification-only like onOwnChairProjectedPosition/
    * onOwnCameraDebug above — GameRoom.tsx mirrors it into its own state so
@@ -1090,6 +1322,8 @@ export function GameTableScene({
   onChairDragEnd,
   onOwnChairProjectedPosition,
   onOwnCameraDebug,
+  onOwnChairRenderPositionDebug,
+  onChairDragGhostDebug,
   onChairDraggingChange,
   turnCameraActive = false,
   onLiveChairOffset,
@@ -1126,7 +1360,29 @@ export function GameTableScene({
     return mine && mine.member.role === "player" ? mine.member.user_id : null;
   }, [layout.seats, currentUserId]);
 
+  // Chair/tray drag feel, verification-only: TableSeat's own per-seat
+  // onRenderPositionDebug callback (userId, position) filtered down to just
+  // draggableUserId's own seat — the only one this scene ever smooths — then
+  // handed straight to the app layer's onOwnChairRenderPositionDebug. A
+  // stable top-level useCallback (not an inline arrow at the seats.map call
+  // site below) for the exact same memoization reason TableSeat's own top
+  // doc comment already documents for handleChairPointerDown.
+  const handleOwnChairRenderPositionDebug = useCallback(
+    (userId: string, position: [number, number, number]) => {
+      if (userId !== draggableUserId) return;
+      onOwnChairRenderPositionDebug?.(position);
+    },
+    [draggableUserId, onOwnChairRenderPositionDebug]
+  );
+
   const chairDragSessionRef = useRef<ChairDragSession | null>(null);
+  // Chair/tray drag feel: the ghost ring's own RAW target, mutated directly
+  // by handleMove below on every pointermove tick (and seeded once at press
+  // in handleChairPointerDown, so the ring starts in the right spot even
+  // before the first pointermove arrives) — read only by ChairDragGhost's
+  // own useFrame, never by React state, so updating it 60+ times a second
+  // during a drag never itself triggers a re-render.
+  const chairDragGhostTargetRef = useRef<{ x: number; z: number } | null>(null);
   const [isDraggingChair, setIsDraggingChair] = useState(false);
   // Turn camera: mirrors isDraggingChair out to GameRoom.tsx (see
   // onChairDraggingChange's own doc comment) — fires exactly on the two
@@ -1221,6 +1477,7 @@ export function GameTableScene({
         moved: false,
         latestOffset: null,
       };
+      chairDragGhostTargetRef.current = { x: currentSeat.position[0], z: currentSeat.position[2] };
       setIsDraggingChair(true);
     },
     [seats, layout.seats, camera, gl]
@@ -1252,11 +1509,13 @@ export function GameTableScene({
       };
       session.moved = true;
       session.latestOffset = offset;
+      chairDragGhostTargetRef.current = { x: clamped.x, z: clamped.z };
       setLocalChairOverride({ userId: session.userId, offset });
     }
     function handleUp() {
       const session = chairDragSessionRef.current;
       chairDragSessionRef.current = null;
+      chairDragGhostTargetRef.current = null;
       setIsDraggingChair(false);
       if (session?.moved && session.latestOffset) {
         onChairDragEndRef.current?.(session.userId, session.latestOffset);
@@ -1848,8 +2107,23 @@ export function GameTableScene({
           // distinction is what actually keeps this memoized component's
           // props referentially stable across unrelated re-renders.
           onChairPointerDown={handleChairPointerDown}
+          // Chair/tray drag feel: only ever true for the current viewer's
+          // own seat, and only while their own drag session is active —
+          // every other seat keeps snapping directly to its own
+          // `seat.position`, byte-for-byte the pre-existing behavior.
+          smoothed={seat.member.user_id === draggableUserId && isDraggingChair}
+          onRenderPositionDebug={handleOwnChairRenderPositionDebug}
         />
       ))}
+      {/* Chair/tray drag feel: the translucent "you'll land here" ring,
+          mounted for the entire duration of an active chair drag — see the
+          "Chair/tray drag feel" block comment above `floorPointFromClientXY`
+          for the full reasoning. Only ever exists for THIS viewer's own
+          seat (isDraggingChair can only ever be true for draggableUserId's
+          own gesture), so there's no per-seat keying needed here. */}
+      {isDraggingChair ? (
+        <ChairDragGhost targetRef={chairDragGhostTargetRef} onDebug={onChairDragGhostDebug} />
+      ) : null}
     </>
   );
 }

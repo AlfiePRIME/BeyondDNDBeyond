@@ -1498,6 +1498,20 @@ export function GameRoom({
   // backs the opposite proof: that this value stays byte-for-byte
   // unchanged for the entire duration of an active chair drag.
   const [ownCameraPosition, setOwnCameraPosition] = useState<readonly [number, number, number] | null>(null);
+  // Chair/tray drag feel: this client's own draggable chair's ACTUAL
+  // rendered position (post drag-smoothing) — GameTableScene's
+  // onOwnChairRenderPositionDebug's own doc comment. Deliberately lags
+  // seat-layout-state's own raw seat position for the whole duration of an
+  // active drag, then converges back to it exactly on release.
+  const [ownChairRenderPosition, setOwnChairRenderPosition] = useState<readonly [number, number, number] | null>(
+    null
+  );
+  // Chair/tray drag feel: the drag-preview ring's own current world
+  // position while a chair drag is active on this client, or null while no
+  // drag is in progress — GameTableScene's onChairDragGhostDebug.
+  const [chairDragGhostPosition, setChairDragGhostPosition] = useState<readonly [number, number, number] | null>(
+    null
+  );
   // Seated look-around: this client's own look-around yaw/pitch offset,
   // live — GameTableScene's onLookAroundDebug, the same "WebGL has no DOM
   // of its own for a test to inspect a camera's orientation" reasoning as
@@ -6367,6 +6381,8 @@ export function GameRoom({
           onChairDragEnd={handleChairDragEnd}
           onOwnChairProjectedPosition={setOwnChairScreenPosition}
           onOwnCameraDebug={setOwnCameraPosition}
+          onOwnChairRenderPositionDebug={setOwnChairRenderPosition}
+          onChairDragGhostDebug={setChairDragGhostPosition}
           onChairDraggingChange={handleChairDraggingChange}
           turnCameraActive={turnCameraActive}
           onLiveChairOffset={handleLiveChairOffset}
@@ -6954,20 +6970,31 @@ export function GameRoom({
           })),
         })}
       </div>
-      {/* Hidden render-state mirror for verify-chair-drag.mjs — same "WebGL
-          has no DOM of its own" reasoning as every other mirror on this
-          page. `ownChairScreen` is this client's own draggable chair's live
+      {/* Hidden render-state mirror for verify-chair-drag.mjs /
+          verify-chair-camera-and-drag-feel.mjs — same "WebGL has no DOM of
+          its own" reasoning as every other mirror on this page.
+          `ownChairScreen` is this client's own draggable chair's live
           canvas-relative CSS-pixel projection (or null if this viewer has
           no draggable seat, or it's off-screen), the only way a Playwright
           drag simulation can find real pixel coordinates to press down on
           and drag from — see GameTableSceneProps.onOwnChairProjectedPosition's
           own doc comment. `error` mirrors the last failed chair-move
           attempt, if any (the same "surface it in a hidden mirror,
-          nothing else reads it back" shape as switchError/tokenError). */}
+          nothing else reads it back" shape as switchError/tokenError).
+          Chair/tray drag feel: `ownChairRender` is this seat's own ACTUAL
+          rendered position (post drag-smoothing — GameTableScene's
+          onOwnChairRenderPositionDebug), which deliberately diverges from
+          seat-layout-state's own raw seats[].position for the whole
+          duration of an active drag and converges back to it exactly on
+          release; `dragGhost` is the drag-preview ring's own current world
+          position (GameTableScene's onChairDragGhostDebug), or null
+          whenever no drag is in progress. */}
       <div data-testid="chair-drag-state" hidden>
         {JSON.stringify({
           ownChairScreen: ownChairScreenPosition,
           ownCamera: ownCameraPosition,
+          ownChairRender: ownChairRenderPosition,
+          dragGhost: chairDragGhostPosition,
           error: chairMoveError,
         })}
       </div>
