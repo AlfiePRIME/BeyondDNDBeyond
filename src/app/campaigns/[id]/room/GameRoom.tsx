@@ -5963,6 +5963,25 @@ export function GameRoom({
           // token elevation is a placement-time snapshot, not the render input.
           elevation: (overlay.get(cellKey(token.x, token.y)) ?? DEFAULT_CELL).elevation,
           allegiance: token.allegiance,
+          // Token hover labels (a post-roadmap addition): `character` above
+          // is already the exact per-viewer-RLS-trimmed row `hp` reads —
+          // reused as-is, not a new lookup. Deliberately never falls back to
+          // token.npc_name here the way e.g. the transition-offer label
+          // does elsewhere in this file: a token WITH a character_id whose
+          // `character` came back undefined is another player's PC the
+          // current viewer can't read under characters RLS (0008), and
+          // token.npc_name is always null for a PC token (0019's XOR
+          // constraint) — there is no real name to show in that case, so
+          // this stays undefined and MapSurface renders no label at all,
+          // the same omit-rather-than-guess treatment `hp` already gets for
+          // that identical combination. An NPC/enemy token (character
+          // always undefined) falls straight through to its own npc_name.
+          name: character?.name ?? token.npc_name ?? undefined,
+          // Paired with `name` above — only ever set alongside a resolved
+          // `character`, so an NPC/enemy token (no meaningful "level" the
+          // way a PC has one) never carries it; MapSurface renders no
+          // "· Level N" suffix when this is absent.
+          level: character?.level ?? undefined,
           modelUrl,
           forwardOffsetDeg,
           colorOverride,

@@ -1,0 +1,26 @@
+/* Token hover labels (a post-roadmap addition) — see MapSurface.tsx's own
+   TokenHoverLabel doc comment. This module supplies only the label's static
+   chrome (shape/typography/background); its accent color is set per-token
+   via an inline `style.color`, and `border-color: currentColor` picks that
+   same value up rather than duplicating the caller's already-computed
+   ALLEGIANCE_COLOR/colorOverride lookup here. ChatBubble.module.css is this
+   directory's own precedent for a component owning its own CSS module
+   rather than taking styled `children` from the app layer (TokenMarker is,
+   like ChatBubble, rendered directly inside a scene-level loop rather than
+   composed per-instance by an app-layer wrapper). */
+
+.label {
+  width: max-content;
+  max-width: 200px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  font-family: var(--font-b);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  background: color-mix(in srgb, var(--surface2) 90%, transparent);
+  border: 1px solid currentColor;
+  box-shadow: var(--ga);
+  white-space: nowrap;
+  text-align: center;
+}

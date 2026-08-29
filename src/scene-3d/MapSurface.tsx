@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, memo, useEffect, useMemo, useState } from "react";
-import { Billboard } from "@react-three/drei";
+import { Billboard, Html } from "@react-three/drei";
 import { BufferAttribute, BufferGeometry, CanvasTexture, Color, SRGBColorSpace } from "three";
 import type { ThreeEvent } from "@react-three/fiber";
 import { playSound, SOUND_KEYS } from "@/audio";
@@ -9,6 +9,7 @@ import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
 import { crossingSurfaceHeight, crossingTiltPitchRadians, isStairsPresetUrl } from "./crossingSurface";
 import { buildGridOverlayPositions } from "./gridOverlay";
+import styles from "./TokenHoverLabel.module.css";
 import { useTokenSlide, type TokenSlidePhase } from "./useTokenSlide";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
@@ -816,6 +817,26 @@ export interface MapSurfaceToken {
   /** The cell's current elevation in steps, caller-derived like objects'. */
   elevation: number;
   allegiance: MapTokenAllegiance;
+  /** Token hover labels (a post-roadmap addition): this token's display
+   * name — a linked PC's `character.name`, or an NPC/enemy token's own
+   * `npc_name` — shown in a floating label while hovered (see TokenMarker's
+   * own hover-label rendering). Absent/undefined renders no label at all,
+   * regardless of hover state: this covers a PC token whose linked
+   * character the current viewer can't read under characters RLS (another
+   * player's PC, viewed by neither its owner nor the DM — 0008's own doc
+   * comment: "other campaign members cannot see it, even though they share
+   * a campaign") — GameRoom has no name to give it in that case, so this is
+   * simply never set, the same omit-rather-than-guess treatment `hp`
+   * already gets for the identical viewer/token combination. */
+  name?: string;
+  /** Paired with `name` above: a linked PC's `character.level`, shown as
+   * "· Level N" after the name. null/undefined renders just the bare name
+   * with no "Level" suffix at all — the caller (GameRoom) only ever sets
+   * this alongside a resolved `character`, so an NPC/enemy token (no
+   * character, and no meaningful "level" the way a PC has one — a stat
+   * block's `hit_die` is a different concept, never substituted here) never
+   * carries it. */
+  level?: number | null;
   /** Draws the pre-existing, visible-to-EVERY-viewer armed-for-move ring
    * (TokenPanel's separate DM-repositioning "move" mechanism). Unrelated to
    * `raised` below, which is the NEW click-select flow's OWN, per-viewer
@@ -1128,6 +1149,53 @@ const TokenConcentrationBadge = memo(function TokenConcentrationBadge() {
   );
 });
 
+// Token hover labels: comfortably above the HP bar (0.82) and the condition
+// badges' own first row (1.02) so a hovered token's name doesn't compete
+// with either — a heavily-afflicted token stacking several condition rows
+// upward may still brush the label, an acceptable tradeoff for a purely
+// transient, pointer-gated readout rather than a fixed HUD element.
+const TOKEN_HOVER_LABEL_HEIGHT = 1.25;
+
+// Arbitrary player-authored/DM-authored text (a character or NPC name),
+// not a small fixed set of cacheable strings like a condition abbreviation
+// or the death-save badge's three states — so this follows ChatBubble.tsx's
+// own established precedent (see its doc comment) of a real DOM `<Html
+// transform={false}>` overlay rather than a 2D-canvas texture sprite.
+// `pointerEvents="none"` for the same reason as ChatBubble's own bubble: a
+// passive readout, never a control, so it can't steal a click/drag meant
+// for the pawn or the cell beneath it. Tinted via a plain inline `color`
+// style (this component's own CSS module supplies only static chrome —
+// padding/radius/background/border-via-currentColor — never a color of its
+// own), so the caller's already-computed ALLEGIANCE_COLOR/colorOverride
+// value is reused directly rather than re-derived here.
+const TokenHoverLabel = memo(function TokenHoverLabel({
+  id,
+  name,
+  level,
+  color,
+}: {
+  id: string;
+  name: string;
+  /** null renders the bare name with no "· Level N" suffix — see
+   * MapSurfaceToken.level's own doc comment. */
+  level: number | null;
+  color: string;
+}) {
+  return (
+    <Html
+      position={[0, TOKEN_HOVER_LABEL_HEIGHT, 0]}
+      center
+      transform={false}
+      pointerEvents="none"
+      zIndexRange={[400, 0]}
+    >
+      <div className={styles.label} style={{ color }} data-testid={`token-hover-label-${id}`}>
+        {level !== null ? `${name} · Level ${level}` : name}
+      </div>
+    </Html>
+  );
+});
+
 // How far a click-selected pawn lifts off the table — enough to read as
 // "picked up" at the table's fitted per-map scale without floating so high
 // it looks detached from its cell.
@@ -1153,6 +1221,9 @@ const TokenMarker = memo(function TokenMarker({
   selected,
   raised,
   draggable,
+  // Token hover labels: see MapSurfaceToken.name/level's own doc comments.
+  name,
+  level,
   // Split into two primitives (not the MapSurfaceToken.hp object) so the
   // memo's shallow compare keeps working.
   hpCurrent,
@@ -1186,6 +1257,12 @@ const TokenMarker = memo(function TokenMarker({
   selected: boolean;
   raised: boolean;
   draggable: boolean;
+  /** Token hover labels: see MapSurfaceToken.name's own doc comment. null
+   * renders no hover label at all, regardless of hover state. */
+  name: string | null;
+  /** Token hover labels: see MapSurfaceToken.level's own doc comment. null
+   * renders the bare name with no "· Level N" suffix. */
+  level: number | null;
   hpCurrent: number | null;
   hpMax: number | null;
   conditionLabels: string;
@@ -1379,26 +1456,41 @@ const TokenMarker = memo(function TokenMarker({
         {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
         {deathSaveLabel !== "" ? <TokenDeathSaveBadge label={deathSaveLabel} /> : null}
         {concentrating ? <TokenConcentrationBadge /> : null}
-        {draggable ? (
+        {
           // Same uniform-hit-box reasoning as ObjectMarker: raycasting the
-          // pawn's thin stem makes grabbing fiddly at table scale. Attached
-          // only for draggable tokens so everyone else's pawns stay
-          // raycast-free. Nested inside the raise group so the hit-box
-          // tracks wherever the pawn is actually drawn.
+          // pawn's thin stem makes grabbing fiddly at table scale. Rendered
+          // for EVERY token (not just draggable ones — token hover labels'
+          // own fix) so hover state/handlers are available regardless of
+          // this viewer's drag permission; onPointerDown itself stays
+          // conditional, so a non-draggable token is still not a click/drag
+          // target — see MapSurfaceProps.onTokenPointerDown's own doc
+          // comment. Attaching onPointerOver/onPointerOut unconditionally
+          // doesn't change click behavior for a non-draggable token: r3f
+          // only invokes a hit's onPointerDown when that specific object
+          // has one, so an event with none simply passes through to
+          // whatever's beneath (the cell floor) exactly as it always did
+          // when this mesh wasn't rendered at all. Nested inside the raise
+          // group so the hit-box tracks wherever the pawn is actually
+          // drawn.
           <mesh
             position={[0, 0.34, 0]}
-            onPointerDown={(event) => {
-              if (event.button !== 0) return;
-              event.stopPropagation();
-              onPointerDown(id, event);
-            }}
+            onPointerDown={
+              draggable
+                ? (event) => {
+                    if (event.button !== 0) return;
+                    event.stopPropagation();
+                    onPointerDown(id, event);
+                  }
+                : undefined
+            }
             onPointerOver={() => setHovered(true)}
             onPointerOut={() => setHovered(false)}
           >
             <cylinderGeometry args={[0.42, 0.42, 0.72, 12]} />
             <meshBasicMaterial transparent opacity={0} depthWrite={false} />
           </mesh>
-        ) : null}
+        }
+        {hovered && name ? <TokenHoverLabel id={id} name={name} level={level} color={color} /> : null}
         {selected || (draggable && hovered) ? (
           <mesh position={[0, 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
             <torusGeometry args={[0.44, 0.035, 10, 32]} />
@@ -1785,6 +1877,8 @@ export function MapSurface({
           selected={token.selected ?? false}
           raised={token.raised ?? false}
           draggable={Boolean(onTokenPointerDown) && (token.draggable ?? false)}
+          name={token.name ?? null}
+          level={token.level ?? null}
           hpCurrent={token.hp?.current ?? null}
           hpMax={token.hp?.max ?? null}
           conditionLabels={token.conditions?.join(",") ?? ""}
