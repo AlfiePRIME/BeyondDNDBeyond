@@ -101,6 +101,7 @@ export {
   straightCellPath,
   pathMovementCost,
   computeReachableCells,
+  spreadPositionsAround,
   FEET_PER_CELL,
   FEET_PER_ELEVATION_STEP,
   type TerrainType,

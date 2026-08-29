@@ -148,6 +148,7 @@ import {
   fallDepthFeet,
   meleeReachFeet,
   pathMovementCost,
+  spreadPositionsAround,
   straightCellPath,
   type AdvantageMode,
   type AttackKind,
@@ -5270,23 +5271,17 @@ export function GameRoom({
         // The entry cell's stored elevation on the DESTINATION map (sparse
         // rows, absent means 0) — same lookup in-map moves already do.
         const destinationCells = await listMapCells(supabase, transition.to_map_id);
-        const destination = {
-          mapId: transition.to_map_id,
-          x: transition.to_x,
-          y: transition.to_y,
-          elevation: cellElevation(destinationCells, transition.to_x, transition.to_y),
-        };
+        const entryPoint: GridPoint = { x: transition.to_x, y: transition.to_y };
         // "Whole party" = every party-allegiance token on the SOURCE map
-        // (never NPCs/hostiles), plus the triggering token itself; all land
-        // stacked on the entry cell — tokens may share a cell here as
-        // anywhere else. Fetched fresh from the source map directly
-        // (transition.from_map_id), NOT liveMapRef.current's own tokens
-        // (0046): the confirming DM's own view is independently selectable
-        // now and may not even BE the source map — this offer can be
-        // raised by a broadcast from a player's move on a map the DM isn't
-        // currently looking at at all (see maybeOfferTransition/
-        // transitionsRef's own comment on why the fetch that populates the
-        // offer itself is already campaign-wide, not liveMap-scoped).
+        // (never NPCs/hostiles), plus the triggering token itself; fetched
+        // fresh from the source map directly (transition.from_map_id), NOT
+        // liveMapRef.current's own tokens (0046): the confirming DM's own
+        // view is independently selectable now and may not even BE the
+        // source map — this offer can be raised by a broadcast from a
+        // player's move on a map the DM isn't currently looking at at all
+        // (see maybeOfferTransition/transitionsRef's own comment on why the
+        // fetch that populates the offer itself is already campaign-wide,
+        // not liveMap-scoped).
         const movers = new Map<string, MapToken>([[offer.token.id, offer.token]]);
         if (wholeParty) {
           const sourceTokens = await listMapTokens(supabase, transition.from_map_id);
@@ -5294,7 +5289,42 @@ export function GameRoom({
             if (token.allegiance === "party") movers.set(token.id, token);
           }
         }
-        for (const token of movers.values()) {
+        // Spread a multi-token arrival across the cells around the entry
+        // point instead of stacking everyone on the exact same cell (a real
+        // reported "feels bad" — tokens landed indistinguishable from one
+        // another). A solo crossing (movers.size === 1, by far the common
+        // case) is untouched: it still lands exactly on the transition's
+        // own stored entry cell, preserving today's precise "arrive exactly
+        // here" behavior for a doorway/staircase where that precision
+        // matters. Falls back to the plain entry point for any mover
+        // spreadPositionsAround couldn't find room for (a tiny or
+        // void-choked destination) rather than leaving it unplaced.
+        const destinationMap = availableMaps.find((candidate) => candidate.id === transition.to_map_id);
+        let entryPoints: GridPoint[] = [entryPoint];
+        if (movers.size > 1) {
+          const destinationTokens = destinationMap
+            ? await listMapTokens(supabase, transition.to_map_id)
+            : [];
+          const bounds = destinationMap
+            ? { width: destinationMap.grid_width, height: destinationMap.grid_height }
+            : null;
+          const isBlocked = (point: GridPoint) =>
+            (bounds !== null &&
+              (point.x < 0 || point.y < 0 || point.x >= bounds.width || point.y >= bounds.height)) ||
+            cellIsVoid(destinationCells, point.x, point.y) ||
+            destinationTokens.some((token) => token.x === point.x && token.y === point.y);
+          entryPoints = spreadPositionsAround(entryPoint, movers.size, isBlocked);
+        }
+        const moverList = [...movers.values()];
+        for (let i = 0; i < moverList.length; i++) {
+          const token = moverList[i];
+          const point = entryPoints[i] ?? entryPoint;
+          const destination = {
+            mapId: transition.to_map_id,
+            x: point.x,
+            y: point.y,
+            elevation: cellElevation(destinationCells, point.x, point.y),
+          };
           const { moved, removedTokenId } = await transitionMapToken(supabase, token, destination);
           // Apply locally FIRST, exactly like every other token mutation
           // in this file — publish never echoes to its own sender, and the
@@ -5345,7 +5375,7 @@ export function GameRoom({
         setTransitionBusy(false);
       }
     },
-    [transitionOffer, transitionBusy, applyTokenChange, publishTokenChange, handleSwitchMap]
+    [transitionOffer, transitionBusy, applyTokenChange, publishTokenChange, handleSwitchMap, availableMaps]
   );
 
   const handleCreateHandout = useCallback(

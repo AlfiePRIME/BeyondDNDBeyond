@@ -5,6 +5,7 @@ import {
   gridCellDistance,
   gridDistanceFeet,
   pathMovementCost,
+  spreadPositionsAround,
   straightCellPath,
   type GridPoint,
   type MovementCellInput,
@@ -543,5 +544,64 @@ describe("computeReachableCells", () => {
     );
     const stairedResult = computeReachableCells({ origin, cells: stairedAtOne, budgetFeet });
     expect(new Set(keysOf(stairedResult)).has("1,0")).toBe(true);
+  });
+});
+
+describe("spreadPositionsAround", () => {
+  const center: GridPoint = { x: 5, y: 5 };
+  const keyOf = (point: GridPoint) => `${point.x},${point.y}`;
+
+  it("returns just the center for a single requested point", () => {
+    const result = spreadPositionsAround(center, 1, () => false);
+    expect(result).toEqual([center]);
+  });
+
+  it("returns N distinct points for N requested, all around an unblocked open area", () => {
+    const result = spreadPositionsAround(center, 5, () => false);
+    expect(result).toHaveLength(5);
+    expect(new Set(result.map(keyOf)).size).toBe(5);
+  });
+
+  it("includes the center itself first, before any ring point", () => {
+    const result = spreadPositionsAround(center, 4, () => false);
+    expect(result[0]).toEqual(center);
+  });
+
+  it("prefers points CLOSER to center — every found point is within the smallest radius that could satisfy the count", () => {
+    // The center + the 8-cell radius-1 ring holds exactly 9 points; asking
+    // for all 9 should never reach out to radius 2.
+    const result = spreadPositionsAround(center, 9, () => false);
+    for (const point of result) {
+      expect(Math.max(Math.abs(point.x - center.x), Math.abs(point.y - center.y))).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("skips blocked points (e.g. the center itself already occupied) and finds the count elsewhere", () => {
+    const result = spreadPositionsAround(center, 3, (point) => point.x === center.x && point.y === center.y);
+    expect(result).toHaveLength(3);
+    expect(result.some((point) => keyOf(point) === keyOf(center))).toBe(false);
+  });
+
+  it("respects map-bounds-style blocking (e.g. a corner near the edge) by expanding outward instead of off-grid", () => {
+    const corner: GridPoint = { x: 0, y: 0 };
+    const isBlocked = (point: GridPoint) => point.x < 0 || point.y < 0;
+    const result = spreadPositionsAround(corner, 5, isBlocked);
+    expect(result).toHaveLength(5);
+    for (const point of result) {
+      expect(point.x).toBeGreaterThanOrEqual(0);
+      expect(point.y).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("returns fewer than the requested count (not an infinite loop) when the whole map is blocked", () => {
+    const result = spreadPositionsAround(center, 5, () => true);
+    expect(result).toEqual([]);
+  });
+
+  it("returns fewer than the requested count when only a handful of cells are actually open", () => {
+    const open = new Set([keyOf(center), keyOf({ x: 6, y: 5 }), keyOf({ x: 4, y: 5 })]);
+    const result = spreadPositionsAround(center, 10, (point) => !open.has(keyOf(point)));
+    expect(result).toHaveLength(3);
+    expect(new Set(result.map(keyOf))).toEqual(open);
   });
 });

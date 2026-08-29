@@ -362,3 +362,50 @@ export function computeReachableCells(params: ComputeReachableCellsParams): Grid
       return { x, y };
     });
 }
+
+/**
+ * `count` distinct grid points near `center`, for spreading a group that
+ * would otherwise all land on the exact same cell — a whole party crossing
+ * a map transition together, for instance, which previously stacked every
+ * mover on the transition's single stored entry cell. A ring-by-ring
+ * spiral search (the center cell itself first, then the 8-cell ring at
+ * Chebyshev distance 1, then distance 2, and so on outward), skipping any
+ * point the caller's `isBlocked` predicate rejects — typically: off the
+ * map's edge, void terrain, or already occupied by an unrelated token — so
+ * this stays a plain grid-geometry utility with no knowledge of what "the
+ * map" or "occupied" actually mean; the caller composes those checks.
+ *
+ * Returns FEWER than `count` points only if the search exhausts a generous
+ * radius (200 cells out) without finding enough open ground — a
+ * pathologically small or void-choked map — so a caller must not assume
+ * the result is always exactly `count` long.
+ */
+export function spreadPositionsAround(
+  center: GridPoint,
+  count: number,
+  isBlocked: (point: GridPoint) => boolean
+): GridPoint[] {
+  const found: GridPoint[] = [];
+  const seen = new Set<string>();
+  const tryPoint = (point: GridPoint) => {
+    if (found.length >= count) return;
+    const key = pointKey(point);
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (isBlocked(point)) return;
+    found.push(point);
+  };
+
+  tryPoint(center);
+  for (let radius = 1; found.length < count && radius <= 200; radius++) {
+    for (let x = center.x - radius; x <= center.x + radius && found.length < count; x++) {
+      tryPoint({ x, y: center.y - radius });
+      tryPoint({ x, y: center.y + radius });
+    }
+    for (let y = center.y - radius + 1; y <= center.y + radius - 1 && found.length < count; y++) {
+      tryPoint({ x: center.x - radius, y });
+      tryPoint({ x: center.x + radius, y });
+    }
+  }
+  return found;
+}
