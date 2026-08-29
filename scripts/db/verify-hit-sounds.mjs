@@ -234,14 +234,69 @@ async function waitForPlayMatching(page, baselineAt, matchFn, timeoutMs = 15000)
   return { debug, entry: null };
 }
 
+// Real-audio verification (BeyondDNDBeyond override-sound-silence-fix
+// investigation) — see verify-natural-roll-sounds.mjs's own identical
+// top-of-block doc comment for the full rationale: waitForPlayMatching above
+// only ever proves recordPlay's bookkeeping ran (an entry appears the
+// instant .start() is CALLED), never that real, non-silent audio actually
+// came out. soundManager.ts's masterOutputPeak (a live sample of the real
+// post-gain master output) and playErrorLog (every real fetch/decode/
+// scheduling failure, previously a silent unhandled rejection) close that
+// gap. hit_critical and hit_miss both have real admin-configured overrides
+// in the shared dev database (same as nat_20/nat_1) — hit_normal does not,
+// so its own existing playLog-only checks are lower-risk, but hit_critical/
+// hit_miss get the same upgrade nat_20/nat_1 did.
+const AUDIBLE_PEAK_THRESHOLD = 0.02;
+
+function latestErrorAt(debug) {
+  const log = debug?.playErrorLog ?? [];
+  return log.length > 0 ? log[log.length - 1].at : 0;
+}
+
+async function waitForAudiblePlayMatching(page, baselineAt, key, matchFn, timeoutMs = 20000) {
+  const errorBaselineAt = latestErrorAt(await readSoundDebug(page));
+  const deadline = Date.now() + timeoutMs;
+  let debug = null;
+  let entry = null;
+  let peakSeen = 0;
+  while (Date.now() < deadline && !entry) {
+    debug = await readSoundDebug(page);
+    peakSeen = Math.max(peakSeen, debug?.masterOutputPeak ?? 0);
+    entry = (debug?.playLog ?? []).find((candidate) => candidate.at > baselineAt && matchFn(candidate));
+    if (!entry) await sleep(50);
+  }
+  const extraDeadline = Date.now() + 600;
+  while (Date.now() < extraDeadline) {
+    debug = await readSoundDebug(page);
+    peakSeen = Math.max(peakSeen, debug?.masterOutputPeak ?? 0);
+    await sleep(50);
+  }
+  const newErrors = (debug?.playErrorLog ?? []).filter(
+    (candidate) => candidate.at > errorBaselineAt && candidate.key === key
+  );
+  return { debug, entry, peakSeen, newErrors, audible: peakSeen >= AUDIBLE_PEAK_THRESHOLD };
+}
+
 function isHitNormalEntry(entry) {
   return entry?.key === "hit_normal" && HIT_NORMAL_FILES.includes(entry?.url);
 }
+// Key-only for hit_miss/hit_critical — NOT the literal baked default path.
+// An admin can configure a real sound_overrides row for either key (SP2's
+// admin override system), which resolveSoundUrl() correctly prefers over
+// the baked default; asserting the exact default URL would false-fail the
+// instant a legitimate override exists for that key, even though playback
+// is working exactly as designed. hit_normal above is unaffected — it has
+// no override configured in the shared dev database at the time of writing
+// and its own check already tolerates any of its 3 pooled files, so this
+// isn't a live problem there today, but hit_miss/hit_critical's own
+// verify-natural-roll-sounds.mjs sibling already documents this exact
+// failure mode against the same shared database (see that file's own
+// isNat20Entry/isNat1Entry doc comment) — the identical fix applies here.
 function isHitMissEntry(entry) {
-  return entry?.key === "hit_miss" && entry?.url === "/sounds/hit_miss.mp3";
+  return entry?.key === "hit_miss";
 }
 function isHitCriticalEntry(entry) {
-  return entry?.key === "hit_critical" && entry?.url === "/sounds/hit_critical.mp3";
+  return entry?.key === "hit_critical";
 }
 
 function baseCharacter(id, campaignId, ownerId, name, overrides = {}) {
@@ -425,8 +480,8 @@ try {
   );
 
   const [dmAfterMiss, playerAfterMiss] = await Promise.all([
-    waitForPlayMatching(dmPage, dmAt, isHitMissEntry),
-    waitForPlayMatching(playerPage, playerAt, isHitMissEntry),
+    waitForAudiblePlayMatching(dmPage, dmAt, "hit_miss", isHitMissEntry),
+    waitForAudiblePlayMatching(playerPage, playerAt, "hit_miss", isHitMissEntry),
   ]);
   check(
     "the roller's own client hears hit_miss on a genuine miss",
@@ -437,6 +492,21 @@ try {
     "the second, already-connected client ALSO hears hit_miss on a genuine miss",
     isHitMissEntry(playerAfterMiss.entry),
     JSON.stringify(playerAfterMiss.entry)
+  );
+  check(
+    "the roller's master output tap actually shows non-silent audio during hit_miss's play window (not just a playLog entry — hit_miss has a real admin override configured)",
+    dmAfterMiss.audible,
+    JSON.stringify({ peakSeen: dmAfterMiss.peakSeen, threshold: AUDIBLE_PEAK_THRESHOLD })
+  );
+  check(
+    "the second client's master output tap also shows non-silent audio for hit_miss",
+    playerAfterMiss.audible,
+    JSON.stringify({ peakSeen: playerAfterMiss.peakSeen, threshold: AUDIBLE_PEAK_THRESHOLD })
+  );
+  check(
+    "no real fetch/decode/scheduling failure was recorded for hit_miss on either client (playErrorLog)",
+    dmAfterMiss.newErrors.length === 0 && playerAfterMiss.newErrors.length === 0,
+    JSON.stringify({ dm: dmAfterMiss.newErrors, player: playerAfterMiss.newErrors })
   );
 
   const missRollText = await dmPage.locator(`[data-testid="roll-entry-${miss.id}"]`).textContent().catch(() => null);
@@ -479,8 +549,8 @@ try {
   );
 
   const [dmAfterCrit, playerAfterCrit] = await Promise.all([
-    waitForPlayMatching(dmPage, dmAt, isHitCriticalEntry, 20000),
-    waitForPlayMatching(playerPage, playerAt, isHitCriticalEntry, 20000),
+    waitForAudiblePlayMatching(dmPage, dmAt, "hit_critical", isHitCriticalEntry, 20000),
+    waitForAudiblePlayMatching(playerPage, playerAt, "hit_critical", isHitCriticalEntry, 20000),
   ]);
   check(
     "the roller's own client hears hit_critical on a genuine critical hit",
@@ -491,6 +561,21 @@ try {
     "the second, already-connected client ALSO hears hit_critical on a genuine critical hit",
     isHitCriticalEntry(playerAfterCrit.entry),
     JSON.stringify(playerAfterCrit.entry)
+  );
+  check(
+    "the roller's master output tap actually shows non-silent audio during hit_critical's play window (not just a playLog entry — hit_critical has a real admin override configured)",
+    dmAfterCrit.audible,
+    JSON.stringify({ peakSeen: dmAfterCrit.peakSeen, threshold: AUDIBLE_PEAK_THRESHOLD })
+  );
+  check(
+    "the second client's master output tap also shows non-silent audio for hit_critical",
+    playerAfterCrit.audible,
+    JSON.stringify({ peakSeen: playerAfterCrit.peakSeen, threshold: AUDIBLE_PEAK_THRESHOLD })
+  );
+  check(
+    "no real fetch/decode/scheduling failure was recorded for hit_critical on either client (playErrorLog)",
+    dmAfterCrit.newErrors.length === 0 && playerAfterCrit.newErrors.length === 0,
+    JSON.stringify({ dm: dmAfterCrit.newErrors, player: playerAfterCrit.newErrors })
   );
 
   const critRollText = await dmPage.locator(`[data-testid="roll-entry-${crit.id}"]`).textContent().catch(() => null);

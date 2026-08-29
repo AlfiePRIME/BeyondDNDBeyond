@@ -211,6 +211,61 @@ async function assertNoPlayMatching(page, baselineAt, matchFn, windowMs = 3000) 
   return null;
 }
 
+// ===========================================================================
+// Real-audio verification (BeyondDNDBeyond override-sound-silence-fix
+// investigation): the checks above only ever proved recordPlay's bookkeeping
+// ran — playLog gets an entry the instant .start() is CALLED, which is real
+// evidence the JS scheduling succeeded but NOT evidence that any actual,
+// non-silent audio ever flowed through the graph (a scheduled source on a
+// muted/zero-gain graph, or a buffer that failed to decode meaningfully,
+// still "starts" with zero thrown error and zero playLog difference). This
+// is precisely the gap a real manual tester's report can fall into that this
+// script's own playLog-only checks were structurally unable to catch.
+//
+// soundManager.ts now exposes two new debug fields specifically to close
+// this: `masterOutputPeak` (a REAL, live, this-instant sample of the actual
+// post-gain master output — reads ~0 during genuine digital silence, well
+// above it whenever real audio is flowing) and `playErrorLog` (every real
+// fetch/decode/scheduling failure that used to be a silent, unhandled
+// promise rejection — see soundManager.ts's own doc comments on both).
+const AUDIBLE_PEAK_THRESHOLD = 0.02;
+
+function latestErrorAt(debug) {
+  const log = debug?.playErrorLog ?? [];
+  return log.length > 0 ? log[log.length - 1].at : 0;
+}
+
+/** waitForPlayMatching's own contract, PLUS genuine audible-output
+ * verification and a check that no new playErrorLog entry landed for `key`
+ * in the same window. Polls masterOutputPeak continuously from the moment
+ * this is called (not just once after the playLog entry is found) and for a
+ * further 600ms afterward — a one-shot's actual audible samples follow the
+ * .start() call by a few render quanta, so stopping the instant the log
+ * entry appears would systematically under-read the true peak. */
+async function waitForAudiblePlayMatching(page, baselineAt, key, matchFn, timeoutMs = 15000) {
+  const errorBaselineAt = latestErrorAt(await readSoundDebug(page));
+  const deadline = Date.now() + timeoutMs;
+  let debug = null;
+  let entry = null;
+  let peakSeen = 0;
+  while (Date.now() < deadline && !entry) {
+    debug = await readSoundDebug(page);
+    peakSeen = Math.max(peakSeen, debug?.masterOutputPeak ?? 0);
+    entry = (debug?.playLog ?? []).find((candidate) => candidate.at > baselineAt && matchFn(candidate));
+    if (!entry) await sleep(50);
+  }
+  const extraDeadline = Date.now() + 600;
+  while (Date.now() < extraDeadline) {
+    debug = await readSoundDebug(page);
+    peakSeen = Math.max(peakSeen, debug?.masterOutputPeak ?? 0);
+    await sleep(50);
+  }
+  const newErrors = (debug?.playErrorLog ?? []).filter(
+    (candidate) => candidate.at > errorBaselineAt && candidate.key === key
+  );
+  return { debug, entry, peakSeen, newErrors, audible: peakSeen >= AUDIBLE_PEAK_THRESHOLD };
+}
+
 // Key-only — NOT the literal baked default path. An admin can configure a
 // real sound_overrides row for any of these keys (SP2's own admin override
 // system), which resolveSoundUrl() correctly prefers over the baked
@@ -315,8 +370,8 @@ try {
   );
 
   const [dmAfterNat20, playerAfterNat20] = await Promise.all([
-    waitForPlayMatching(dmPage, dmAt, isNat20Entry),
-    waitForPlayMatching(playerPage, playerAt, isNat20Entry),
+    waitForAudiblePlayMatching(dmPage, dmAt, "nat_20", isNat20Entry),
+    waitForAudiblePlayMatching(playerPage, playerAt, "nat_20", isNat20Entry),
   ]);
   check(
     "a second, already-connected client (the DM, who never rolled) hears nat_20 on a natural 20 check",
@@ -327,6 +382,24 @@ try {
     "the roller's own client also hears nat_20",
     isNat20Entry(playerAfterNat20.entry),
     JSON.stringify(playerAfterNat20.entry)
+  );
+  // Real audible-output verification (not just recordPlay's bookkeeping) —
+  // see this file's own waitForAudiblePlayMatching doc comment for exactly
+  // why playLog alone was never sufficient evidence.
+  check(
+    "the DM's master output tap actually shows non-silent audio during nat_20's play window (not just a playLog entry)",
+    dmAfterNat20.audible,
+    JSON.stringify({ peakSeen: dmAfterNat20.peakSeen, threshold: AUDIBLE_PEAK_THRESHOLD })
+  );
+  check(
+    "the roller's master output tap actually shows non-silent audio during nat_20's play window",
+    playerAfterNat20.audible,
+    JSON.stringify({ peakSeen: playerAfterNat20.peakSeen, threshold: AUDIBLE_PEAK_THRESHOLD })
+  );
+  check(
+    "no real fetch/decode/scheduling failure was recorded for nat_20 on either client (playErrorLog)",
+    dmAfterNat20.newErrors.length === 0 && playerAfterNat20.newErrors.length === 0,
+    JSON.stringify({ dm: dmAfterNat20.newErrors, player: playerAfterNat20.newErrors })
   );
 
   const checkRollText = await dmPage
@@ -360,8 +433,8 @@ try {
   );
 
   const [dmAfterNat1, playerAfterNat1] = await Promise.all([
-    waitForPlayMatching(dmPage, dmAt, isNat1Entry),
-    waitForPlayMatching(playerPage, playerAt, isNat1Entry),
+    waitForAudiblePlayMatching(dmPage, dmAt, "nat_1", isNat1Entry),
+    waitForAudiblePlayMatching(playerPage, playerAt, "nat_1", isNat1Entry),
   ]);
   check(
     "a second, already-connected client hears nat_1 on a natural 1 saving throw",
@@ -369,6 +442,21 @@ try {
     JSON.stringify(dmAfterNat1.entry)
   );
   check("the roller's own client also hears nat_1", isNat1Entry(playerAfterNat1.entry), JSON.stringify(playerAfterNat1.entry));
+  check(
+    "the DM's master output tap actually shows non-silent audio during nat_1's play window (not just a playLog entry)",
+    dmAfterNat1.audible,
+    JSON.stringify({ peakSeen: dmAfterNat1.peakSeen, threshold: AUDIBLE_PEAK_THRESHOLD })
+  );
+  check(
+    "the roller's master output tap actually shows non-silent audio during nat_1's play window",
+    playerAfterNat1.audible,
+    JSON.stringify({ peakSeen: playerAfterNat1.peakSeen, threshold: AUDIBLE_PEAK_THRESHOLD })
+  );
+  check(
+    "no real fetch/decode/scheduling failure was recorded for nat_1 on either client (playErrorLog)",
+    dmAfterNat1.newErrors.length === 0 && playerAfterNat1.newErrors.length === 0,
+    JSON.stringify({ dm: dmAfterNat1.newErrors, player: playerAfterNat1.newErrors })
+  );
 
   const saveRollText = await dmPage
     .locator(`[data-testid="roll-entry-${nat1Save.id}"]`)
@@ -382,6 +470,50 @@ try {
 
   dmAt = dmAfterNat1.entry?.at ?? dmAt;
   playerAt = playerAfterNat1.entry?.at ?? playerAt;
+
+  // ===========================================================================
+  // Part 2.5 — proving the new audible-output check above actually has teeth,
+  // rather than trusting an assertion that might just always be true. Real,
+  // reproducible silent-failure condition: mute the player's own client via
+  // SoundControl's real master mute button (the same control a real user
+  // has). playLog MUST still get an entry (a muted GainNode doesn't stop
+  // .start() from succeeding or recordPlay from firing — this is exactly why
+  // the OLD playLog-only checks structurally could not have caught this
+  // class of silent failure), but masterOutputPeak must now genuinely read
+  // silent. If this check ever goes green while muted, waitForAudiblePlayMatching
+  // itself is broken and every other audible-output check in this file is
+  // worthless.
+  // ===========================================================================
+  await playerPage.locator('[data-testid="sound-mute-toggle"]').click();
+  await sleep(300); // let setMuted's real gain.value=0 actually apply
+  playerAt = latestAt(await readSoundDebug(playerPage));
+  const nat20WhileMuted = await rollUntil(
+    playerA,
+    campaignId,
+    { kind: "check", characterId, ability: "wisdom", mode: "normal" },
+    (facts) => facts.d20Result === 20 || facts.d20Result === 1
+  );
+  check(
+    "(setup) a real natural 20/1 ability check was rolled while muted",
+    nat20WhileMuted?.ok && (nat20WhileMuted.d20Result === 20 || nat20WhileMuted.d20Result === 1),
+    JSON.stringify(nat20WhileMuted)
+  );
+  const mutedKey = nat20WhileMuted.d20Result === 20 ? "nat_20" : "nat_1";
+  const mutedMatch = mutedKey === "nat_20" ? isNat20Entry : isNat1Entry;
+  const playerWhileMuted = await waitForAudiblePlayMatching(playerPage, playerAt, mutedKey, mutedMatch);
+  check(
+    `while muted, playLog STILL records the ${mutedKey} entry (recordPlay fires regardless of gain — proves the OLD check alone would have falsely passed this)`,
+    mutedMatch(playerWhileMuted.entry),
+    JSON.stringify(playerWhileMuted.entry)
+  );
+  check(
+    `while muted, the master output tap correctly reads silent for ${mutedKey} (peak stayed below ${AUDIBLE_PEAK_THRESHOLD}) — this is what the NEW check catches that the old one could not`,
+    !playerWhileMuted.audible,
+    JSON.stringify({ peakSeen: playerWhileMuted.peakSeen, threshold: AUDIBLE_PEAK_THRESHOLD })
+  );
+  playerAt = playerWhileMuted.entry?.at ?? playerAt;
+  await playerPage.locator('[data-testid="sound-mute-toggle"]').click(); // unmute for every check below
+  await sleep(300);
 
   // ===========================================================================
   // Part 3 — CRITICAL: a natural 20 on an ATTACK roll plays ONLY
