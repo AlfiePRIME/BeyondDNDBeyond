@@ -1,7 +1,9 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Euler, Quaternion, Vector3 } from "three";
 import {
+  FLOOR_CLAMP_SLOP,
   MAX_PHYSICS_DICE_PER_ROLL,
+  clampDieOriginY,
   disposeDicePhysicsRoll,
   isDicePhysicsReady,
   physicsDiceAnimator,
@@ -11,7 +13,7 @@ import {
   type DiceAnimator,
   type DiceTumbleDieSpec,
 } from "./diceAnimator";
-import { DIE_KINDS, faceNormalForResult, type DieKind } from "./diceGeometry";
+import { DIE_KINDS, DIE_SIZE, facePlaneDistance, faceNormalForResult, type DieKind } from "./diceGeometry";
 
 const SPEC: DiceTumbleDieSpec = { id: "roll-1:0", sides: 20, result: 17 };
 
@@ -58,6 +60,44 @@ describe("scriptedDiceAnimator.step", () => {
   it("SP8: never reports impacted — there is no real collision for a keyframed tumble to detect", () => {
     for (const t of [0, 0.1, 0.3, 0.55, 1, 5]) {
       expect(scriptedDiceAnimator.step(SPEC, t).impacted).toBe(false);
+    }
+  });
+});
+
+// -----------------------------------------------------------------------
+// clampDieOriginY — the dice-tunneling-fix defensive floor clamp's own pure
+// math, tested in isolation (no WASM physics needed) against
+// diceGeometry.ts's real facePlaneDistance values, the same "real measured
+// geometry, not a hand-picked literal" precedent this file's own
+// restingOriginHeight/colliderDescFor already follow.
+// -----------------------------------------------------------------------
+describe("clampDieOriginY", () => {
+  it("passes a Y at or above the die's own real geometric floor bound straight through, unchanged", () => {
+    const minOriginHeight = facePlaneDistance("d20", DIE_SIZE);
+    expect(clampDieOriginY(minOriginHeight, minOriginHeight)).toBe(minOriginHeight);
+    expect(clampDieOriginY(minOriginHeight + 5, minOriginHeight)).toBe(minOriginHeight + 5);
+  });
+
+  it("leaves a small, legitimate solver-slop dip below the exact geometric bound untouched (never fights ordinary resting jitter)", () => {
+    const minOriginHeight = facePlaneDistance("d6", DIE_SIZE);
+    const tinyDip = minOriginHeight - FLOOR_CLAMP_SLOP / 2;
+    expect(clampDieOriginY(tinyDip, minOriginHeight)).toBe(tinyDip);
+  });
+
+  it("clamps a genuinely broken sub-floor Y (a tunneled die's own free-fall position) up to the safe floor bound", () => {
+    const minOriginHeight = facePlaneDistance("d20", DIE_SIZE);
+    // -3 stands in for a die that tunneled through the thin floor collider
+    // and free-fell under gravity for a real fraction of a second — many
+    // times farther below the floor than any legitimate solver slop.
+    expect(clampDieOriginY(-3, minOriginHeight)).toBe(minOriginHeight - FLOOR_CLAMP_SLOP);
+  });
+
+  it("never overcorrects a broken position higher than its own floor-clamp bound (never makes a recovered die look like it's floating)", () => {
+    for (const kind of DIE_KINDS) {
+      const minOriginHeight = facePlaneDistance(kind, DIE_SIZE);
+      const clamped = clampDieOriginY(-10, minOriginHeight);
+      expect(clamped).toBe(minOriginHeight - FLOOR_CLAMP_SLOP);
+      expect(clamped).toBeLessThan(minOriginHeight);
     }
   });
 });
@@ -262,4 +302,80 @@ describe("physicsDiceAnimator (after the WASM engine has loaded)", () => {
     disposeDicePhysicsRoll(rollId);
   });
 
+  // -----------------------------------------------------------------------
+  // Dice-tunneling fix (createDieBody's own setCcdEnabled(true) + this
+  // file's own defensive floor clamp): the single non-negotiable property a
+  // "the rolled number displays beneath the table" bug report is about — no
+  // real tumble, at ANY single frame (not just once settled), should ever
+  // render a die's origin below its own real geometric floor-clamp bound.
+  // Run across every standard kind, a handful of times each, at real
+  // ordinary (non-forced) randomized throw parameters — the everyday case
+  // CCD alone should already make airtight, with the clamp underneath it as
+  // an unreachable-in-practice backstop.
+  // -----------------------------------------------------------------------
+  it.each(DIE_KINDS)(
+    "%s never renders below its own real floor-clamp bound, at any single frame of several real tumbles",
+    (kind) => {
+      const sides = { d4: 4, d6: 6, d8: 8, d10: 10, d12: 12, d20: 20 }[kind as DieKind];
+      const minOriginHeight = facePlaneDistance(kind as DieKind, DIE_SIZE);
+      const safeFloor = minOriginHeight - FLOOR_CLAMP_SLOP - 1e-9; // tiny epsilon for float comparison only.
+      for (let repeat = 0; repeat < 5; repeat++) {
+        const rollId = nextRollId(`${kind}-floor-${repeat}`);
+        const spec: DiceTumbleDieSpec = { id: `${rollId}:0`, sides, result: 1 };
+        const dt = 1 / 60;
+        let pose = physicsDiceAnimator.step(spec, 0);
+        expect(pose.position[1]).toBeGreaterThanOrEqual(safeFloor);
+        for (let t = dt; t <= 3 && !pose.settled; t += dt) {
+          pose = physicsDiceAnimator.step(spec, t);
+          expect(pose.position[1]).toBeGreaterThanOrEqual(safeFloor);
+        }
+        expect(pose.settled).toBe(true);
+        disposeDicePhysicsRoll(rollId);
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // Stress test: the most extreme throw the existing randomized velocity/
+  // spin ranges in createDieBody allow — diceAnimator.ts exposes no separate
+  // seam for injecting a throw's initial velocity/spin directly (confirmed
+  // by reading createDieBody: every one of upSpeed/outwardSpeed/startY/the
+  // per-axis THROW_MAX_SPIN angular velocity is Math.random()-derived with
+  // no override parameter), so pinning Math.random() itself to its maximum
+  // is the direct way to push every one of those ranges to their
+  // simultaneous ceiling at once: the fastest, hardest-spinning throw this
+  // system can actually produce against the tray's own thin floor/wall
+  // colliders — exactly the scenario CCD exists to protect against, and the
+  // one this task's own diagnosis identified as the tunneling trigger.
+  // -----------------------------------------------------------------------
+  it("an extreme max-velocity, max-spin throw (every Math.random() pinned to its ceiling) still never tunnels through the floor, and still settles correctly", () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.999999);
+    try {
+      for (const kind of DIE_KINDS) {
+        const sides = { d4: 4, d6: 6, d8: 8, d10: 10, d12: 12, d20: 20 }[kind];
+        const minOriginHeight = facePlaneDistance(kind, DIE_SIZE);
+        const safeFloor = minOriginHeight - FLOOR_CLAMP_SLOP - 1e-9;
+        const rollId = nextRollId(`extreme-${kind}`);
+        const spec: DiceTumbleDieSpec = { id: `${rollId}:0`, sides, result: 1 };
+        const dt = 1 / 60;
+        let pose = physicsDiceAnimator.step(spec, 0);
+        expect(pose.position[1]).toBeGreaterThanOrEqual(safeFloor);
+        for (let t = dt; t <= 3 && !pose.settled; t += dt) {
+          pose = physicsDiceAnimator.step(spec, t);
+          expect(pose.position[1]).toBeGreaterThanOrEqual(safeFloor);
+        }
+        expect(pose.settled).toBe(true);
+        // Correctness didn't regress under the extreme throw either — same
+        // faceNormalForResult invariant every other settle test in this file
+        // asserts.
+        const quaternion = new Quaternion().setFromEuler(new Euler(...pose.rotation));
+        const targetNormal = new Vector3(...faceNormalForResult(kind, 1));
+        const rotated = targetNormal.clone().applyQuaternion(quaternion);
+        expect(rotated.y).toBeCloseTo(1, 2);
+        disposeDicePhysicsRoll(rollId);
+      }
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
 });

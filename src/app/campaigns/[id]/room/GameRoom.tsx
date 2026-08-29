@@ -1153,17 +1153,31 @@ export function GameRoom({
   // and scripts/perf/dice-physics-benchmark.mjs both read this to confirm
   // real physics genuinely ran, not just that the (always-correct-either-way)
   // result was right.
+  // positionY (dice-tunneling-fix): this die's own settled tray-local Y —
+  // see DiceFaceSettledInfo.positionY's own doc comment. scripts/db/
+  // verify-dice-tunneling-fix.mjs reads this to confirm a real settled die
+  // (and, by construction, its ResultBadge riding a fixed offset above it)
+  // never renders below the tray's own floor.
   const [diceFaceLabelsDebugByUser, setDiceFaceLabelsDebugByUser] = useState<
     Record<
       string,
-      { rollId: string; dice: Record<number, { sides: number; result: number; label: string; usedPhysics: boolean }> }
+      {
+        rollId: string;
+        dice: Record<number, { sides: number; result: number; label: string; usedPhysics: boolean; positionY: number }>;
+      }
     >
   >({});
   const handleDieSettledDebug = useCallback((userId: string, info: DiceFaceSettledInfo) => {
     setDiceFaceLabelsDebugByUser((current) => {
       const existing = current[userId];
       const dice = existing && existing.rollId === info.rollId ? { ...existing.dice } : {};
-      dice[info.dieIndex] = { sides: info.sides, result: info.result, label: info.label, usedPhysics: info.usedPhysics };
+      dice[info.dieIndex] = {
+        sides: info.sides,
+        result: info.result,
+        label: info.label,
+        usedPhysics: info.usedPhysics,
+        positionY: info.positionY,
+      };
       return { ...current, [userId]: { rollId: info.rollId, dice } };
     });
   }, []);
