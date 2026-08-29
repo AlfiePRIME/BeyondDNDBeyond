@@ -211,10 +211,17 @@ async function assertNoPlayMatching(page, baselineAt, matchFn, windowMs = 3000) 
   return null;
 }
 
-const isNat20Entry = (entry) => entry?.key === "nat_20" && entry?.url === "/sounds/nat_20.mp3";
-const isNat1Entry = (entry) => entry?.key === "nat_1" && entry?.url === "/sounds/nat_1.mp3";
-const isHitCriticalEntry = (entry) => entry?.key === "hit_critical" && entry?.url === "/sounds/hit_critical.mp3";
-const isHitMissEntry = (entry) => entry?.key === "hit_miss" && entry?.url === "/sounds/hit_miss.mp3";
+// Key-only — NOT the literal baked default path. An admin can configure a
+// real sound_overrides row for any of these keys (SP2's own admin override
+// system), which resolveSoundUrl() correctly prefers over the baked
+// default; asserting the exact default URL would false-fail the instant a
+// legitimate override exists for that key, even though playback is working
+// exactly as designed (confirmed live: this is what actually broke this
+// script against the shared dev database, not a real regression).
+const isNat20Entry = (entry) => entry?.key === "nat_20";
+const isNat1Entry = (entry) => entry?.key === "nat_1";
+const isHitCriticalEntry = (entry) => entry?.key === "hit_critical";
+const isHitMissEntry = (entry) => entry?.key === "hit_miss";
 
 function baseCharacter(id, campaignId, ownerId, name, overrides = {}) {
   return {
