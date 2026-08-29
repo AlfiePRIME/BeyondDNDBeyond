@@ -41,17 +41,68 @@ export interface Seat {
 }
 
 const SEAT_MARGIN = 0.4;
-// Eye point sits above and behind the stool — a strict seated eye height
-// buries the view in the tabletop and hides everyone else's seat markers.
-// Re-tuned up from 1.6/3.4 for the two-table combined footprint (table.ts's
-// COMBINED_TABLE_TOP, this function's new default `table`): the ellipse's
-// depth-axis half-extent nearly doubled (old single-table depth 2.1 → the
-// combined 4.2), so every seat sits noticeably further from center than
-// before. A taller, further-back eye point keeps the WHOLE combined surface
-// comfortably inside the seated camera's 50° FOV from any seat, the same
-// way the old values kept the smaller single table comfortably framed.
-const CAMERA_SETBACK = 2.1;
-const CAMERA_EYE_HEIGHT = 4.3;
+// Bug report (both filed together, same underlying formula): "the seated
+// camera looks from BEHIND the chair; it should look from IN FRONT of the
+// chair/avatar, toward the table." The ORIGINAL formula here ADDED a
+// setback to the seat's own radial distance from center, pushing the
+// camera FARTHER OUT than the chair — an over-the-shoulder view from behind
+// the seated avatar's own head, looking back past it at the table. That's
+// backwards from how a real seated player actually looks at a table: from
+// their own eyes, past the table's near edge, at the board — i.e. a point
+// CLOSER to center than the chair, not farther.
+//
+// CAMERA_FORWARD_INSET is SUBTRACTED from the seat's own radial distance
+// instead (seatAtAngle below) — the camera now sits BETWEEN the chair and
+// the table center, in front of the seated avatar.
+//
+// Both numbers were reached by iterating against real Playwright
+// screenshots of a live seated view (this project's established "never
+// trust a formula's numbers blindly for 3D placement" pattern), not picked
+// once and assumed correct:
+//   - inset=1.0 / height=3.0 (a naive "meaningfully forward" first guess)
+//     put the camera almost directly over the tabletop's own near edge,
+//     producing a steep, disorienting close-up of bare wood grain with the
+//     far side of the table barely visible — the exact "looking down
+//     into/through the table" failure this constant's own brief warned
+//     about.
+//   - inset=0.35 / height=2.2 pulled back to a sane horizontal distance but
+//     sat too low: the shared dice tray in the foreground dominated the
+//     frame and the far side of the table (where a map/tokens actually
+//     live) was barely visible.
+//   - inset=0.35 / height=3.0 (final) reads as "leaning in at your own
+//     seat, looking across the board": the near edge is close but not
+//     overwhelming, both neighboring chairs and the table's far edge are
+//     comfortably in frame, and the room's horizon is visible above the
+//     table — a real, verified improvement over both the old behind-the-
+//     chair framing and the too-close first guess above.
+// The 0.35 magnitude also deliberately stays well short of the OLD
+// CAMERA_SETBACK's own 2.1 with a flipped sign — that larger a move would
+// land the camera doubly wrong (essentially inside the tabletop's own
+// footprint: the combined head square's smallest relevant half-extent,
+// semiZ ≈ 3.37, minus 2.1 ≈ 1.27, WELL inside TABLE_TOP's own half-depth of
+// 2.1). 0.35 keeps every seat's camera radial distance comfortably outside
+// that half-depth (≈ 3.0-3.1, never inside 2.1), so it never floats out
+// over the physical tabletop mesh.
+//
+// One further, real consequence of moving the camera to the FRONT of the
+// chair rather than behind it (confirmed via the actual onOwnChairProjectedPosition
+// debug mirror, not assumed): the seated camera's own forward view now
+// looks AWAY from the player's own chair, not at it — by construction, the
+// chair sits on the opposite side of the camera from LOOK_TARGET along the
+// same radial ray, so it falls outside the camera's forward hemisphere
+// entirely, for any positive inset. A player can no longer see (or click)
+// their OWN chair while in ordinary seated view — which matches how a real
+// person seated at a table doesn't see their own chair behind them either.
+// The movable-chair DRAG gesture itself is completely unaffected (it's a
+// raw floor-plane raycast independent of what's on screen), but grabbing it
+// now practically requires switching to orbit/"Free camera" mode first,
+// where the chair is genuinely visible — GameTableScene.tsx's own drag
+// mechanics already work identically in either camera mode. See
+// scripts/db/verify-chair-drag.mjs's own updated setup (switches to orbit
+// before dragging) and scripts/db/verify-chair-camera-and-drag-feel.mjs for
+// the real end-to-end proof of this.
+const CAMERA_FORWARD_INSET = 0.35;
+const CAMERA_EYE_HEIGHT = 3.0;
 // Seat 0 (the campaign creator, first in joined_at order) sits on the near
 // (+z) side, matching the direction Prompt 19's fixed camera looked from.
 const FIRST_SEAT_ANGLE = Math.PI / 2;
@@ -166,10 +217,13 @@ function seatAtAngle(
   return {
     position: [x, 0, z],
     rotationY: roundCoord(Math.atan2(x, z)),
+    // Subtracted (not added) — see CAMERA_FORWARD_INSET's own doc comment
+    // above: the camera sits between the chair and the table center now,
+    // never behind the chair.
     cameraPosition: [
-      roundCoord((semiX + CAMERA_SETBACK) * Math.cos(angle)),
+      roundCoord((semiX - CAMERA_FORWARD_INSET) * Math.cos(angle)),
       CAMERA_EYE_HEIGHT,
-      roundCoord((semiZ + CAMERA_SETBACK) * Math.sin(angle)),
+      roundCoord((semiZ - CAMERA_FORWARD_INSET) * Math.sin(angle)),
     ],
   };
 }

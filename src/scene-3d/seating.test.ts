@@ -202,11 +202,20 @@ describe("computeSeatLayout", () => {
     }
   });
 
-  it("puts the camera behind the seat, further from center than the stool", () => {
+  it("puts the camera in front of the seat, closer to center than the stool (not behind it)", () => {
+    // Updated expectation: the project owner reported the seated camera
+    // looking from BEHIND the chair (an over-the-shoulder view back past
+    // the seated avatar) when it should look from IN FRONT of it, toward
+    // the table — seatAtAngle's own cameraPosition formula now SUBTRACTS
+    // CAMERA_FORWARD_INSET from the seat's own radial distance instead of
+    // adding a setback, so camDist < seatDist is now the correct,
+    // intentional relationship (see CAMERA_FORWARD_INSET's own doc comment
+    // in seating.ts for the full reasoning and the real-screenshot check
+    // behind these numbers).
     for (const seat of computeSeatLayout(makeMembers(3))) {
       const seatDist = Math.hypot(seat.position[0], seat.position[2]);
       const camDist = Math.hypot(seat.cameraPosition[0], seat.cameraPosition[2]);
-      expect(camDist).toBeGreaterThan(seatDist);
+      expect(camDist).toBeLessThan(seatDist);
       expect(seat.cameraPosition[1]).toBeGreaterThan(0);
     }
   });
