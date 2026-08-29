@@ -590,6 +590,23 @@ try {
     required_skill: "Investigation",
   });
 
+  // A plain structural object — no `behavior_config` at all, exactly like a
+  // decorative house/building on the 2D map — sitting on the SAME cell as
+  // the transition above. This is the exact regression scenario reported
+  // from real play: map_objects.behavior_config and map_transitions are two
+  // entirely independent mechanisms, and a blocking object with nothing of
+  // its own to trigger must never shadow a real transition anchored at the
+  // same cell. Phase 5 below must still reach the transition prompt despite
+  // this object being here.
+  await admin.from("map_objects").insert({
+    map_id: mapId,
+    asset_id: TABLE_PRESET_ID,
+    x: transitionCell.x,
+    y: transitionCell.y,
+    elevation: 0,
+    rotation: 0,
+  });
+
   const dmContext = await browser.newContext();
   await dmContext.addCookies(sessionCookies(dm.session));
   const dmRoom = await dmContext.newPage();

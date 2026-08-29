@@ -2501,13 +2501,26 @@ export function GameRoom({
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
 
-  // Ref, not state: only broadcast/move handlers consult the list, so a
-  // fetch landing never needs a re-render.
+  // Ref, not state, for the two existing move-time consumers below
+  // (maybeOfferTransition, handleSelectedTokenCellClick): both run from
+  // event handlers, never during render, so a fetch landing there never
+  // needs a re-render. blockedCellsForMovement's own reachable-set
+  // exception further down is different — it runs INSIDE a useMemo, which
+  // React evaluates during render, where reading a ref's current value is
+  // disallowed (react-hooks/refs) and wouldn't reliably trigger a
+  // recompute anyway. `transitions` is a plain, reactive mirror of the same
+  // rows kept only for that one consumer.
   const transitionsRef = useRef<MapTransition[]>([]);
+  const [transitions, setTransitions] = useState<MapTransition[]>([]);
 
   const liveMapId = liveMap?.map.id ?? null;
   useEffect(() => {
     transitionsRef.current = [];
+    // transitions (the state mirror) is left alone here rather than reset
+    // to [] synchronously (react-hooks/set-state-in-effect) — it briefly
+    // holds the previous campaign/map's rows until this fetch resolves,
+    // exactly the same transient staleness transitionsRef.current already
+    // has above, not a new behavior.
     // Transitions are DM-only-readable (0025) and the offer is DM-only by
     // design — a player's client would just get an empty list back anyway.
     // Campaign-wide (0046), not keyed to whichever single map this DM
@@ -2522,7 +2535,10 @@ export function GameRoom({
     let cancelled = false;
     listMapTransitionsForCampaign(createBrowserSupabaseClient(), campaignId)
       .then((rows) => {
-        if (!cancelled) transitionsRef.current = rows;
+        if (!cancelled) {
+          transitionsRef.current = rows;
+          setTransitions(rows);
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -2862,9 +2878,31 @@ export function GameRoom({
     return map;
   }, [liveMap]);
 
+  // A blocked cell that's ALSO a real map_transitions anchor (a decorative
+  // building/door sitting on top of a link to another map) must still be
+  // reachable — otherwise a token can never walk onto it at all, and
+  // handleSelectedTokenCellClick's own denied-but-has-a-transition fallback
+  // (see its own doc comment) never gets a chance to run: this reachable-set
+  // computation is a SEPARATE gate downstream of that click-time check,
+  // confirmed via a real regression (a token could reach the click handler's
+  // fallback fine, but still got silently cancelled here since the cell was
+  // never in the reachable set to begin with). transitionsRef is DM-only
+  // populated (see its own comment) — a player's own client never has any
+  // rows here, matching the transition OFFER already being DM-only by
+  // design; this exception is therefore a no-op for a player's own
+  // reachable-set computation, not a behavior change for them.
   const blockedCellsForMovement = useMemo(
-    () => [...blockingObjectByCellKey.keys()].map(parseCellKey),
-    [blockingObjectByCellKey]
+    () =>
+      [...blockingObjectByCellKey.keys()]
+        .map(parseCellKey)
+        .filter(
+          ({ x, y }) =>
+            !liveMapId ||
+            !transitions.some(
+              (transition) => transition.from_map_id === liveMapId && transition.from_x === x && transition.from_y === y
+            )
+        ),
+    [blockingObjectByCellKey, liveMapId, transitions]
   );
 
   // The click-select flow's targeting aid for THIS client's own selection —
@@ -4707,12 +4745,32 @@ export function GameRoom({
       if (blockingObject) {
         const outcome = attemptObjectTrigger(blockingObject, "click_trigger", token.character_id);
         if (outcome === "denied") {
-          setTokenError(BLOCKED_CELL_MESSAGE);
+          // The blocking object itself has nothing configured to trigger —
+          // but this exact cell might STILL be a real map_transitions
+          // anchor (map_transitions and an object's own behavior_config are
+          // two entirely independent mechanisms): a decorative "building"
+          // object representing a house/tavern the DM has linked a real
+          // transition to underneath it, for instance. A transition must
+          // never be silently swallowed just because the unrelated object
+          // sitting on the same cell has no action of its own — fall
+          // through to the ordinary move-commit path below exactly as if
+          // there were no blocking object here at all, so whichever client
+          // is the DM still offers the transition normally once the move
+          // settles (maybeOfferTransition's own realtime-driven trigger,
+          // completely independent of this click handler).
+          const hasTransitionHere = transitionsRef.current.some(
+            (candidate) =>
+              candidate.from_map_id === current.map.id && candidate.from_x === x && candidate.from_y === y
+          );
+          if (!hasTransitionHere) {
+            setTokenError(BLOCKED_CELL_MESSAGE);
+            return;
+          }
+        } else {
+          setSelectedTokenId(null);
+          void publishTokenSelection(null);
           return;
         }
-        setSelectedTokenId(null);
-        void publishTokenSelection(null);
-        return;
       }
       if (cellIsVoid(current.cells, x, y)) {
         setTokenError(VOID_CELL_MESSAGE);
