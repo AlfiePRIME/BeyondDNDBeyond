@@ -181,6 +181,7 @@ import {
   DM_CHAIR_FRONTAGE,
   GameTableScene,
   getEffectiveSeat,
+  pawnBodyTypeForRace,
   PERSONAL_TRAY_RADIUS,
   PERSONAL_TRAY_SCALE,
   PLAYER_CHAIR_FRONTAGE,
@@ -6154,6 +6155,12 @@ export function GameRoom({
           // PC token whose (viewer-readable) character is concentrating.
           concentrating: character ? character.concentrating_on !== null : false,
           dimmed: tier === "dim",
+          // Race-variant pawns: only ever meaningful for a readable PC
+          // token (an NPC/monster has no race, and stays "standard" —
+          // pawnBodyTypeForRace's own null-input default). Ignored by
+          // MapSurface entirely once modelUrl is set — a custom upload or
+          // NPC preset model already fully replaces the pawn's shape.
+          bodyType: pawnBodyTypeForRace(character?.race),
         }];
       }),
     };
@@ -7054,6 +7061,14 @@ export function GameRoom({
           ),
           colorOverrideByTokenId: Object.fromEntries(
             (tableMap?.tokens ?? []).map((token) => [token.id, token.colorOverride ?? null])
+          ),
+          // Race-variant pawns: the SAME "sourced straight from tableMap"
+          // proof as modelUrlByTokenId/colorOverrideByTokenId above, applied
+          // to a token's resolved disc-fallback build — always "standard"
+          // for a token that has a modelUrl (ignored entirely by MapSurface
+          // once a real model/preset takes over the pawn's whole shape).
+          bodyTypeByTokenId: Object.fromEntries(
+            (tableMap?.tokens ?? []).map((token) => [token.id, token.bodyType ?? "standard"])
           ),
           measured: tokenModelMeasureDebug,
         })}

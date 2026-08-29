@@ -9,6 +9,7 @@ import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
 import { crossingSurfaceHeight, crossingTiltPitchRadians, isStairsPresetUrl } from "./crossingSurface";
 import { buildGridOverlayPositions } from "./gridOverlay";
+import type { PawnBodyType } from "./pawnBodyType";
 import { useTokenSlide, type TokenSlidePhase } from "./useTokenSlide";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
@@ -923,6 +924,14 @@ export interface MapSurfaceToken {
    * crossingSurface.ts's STAIRS_TILT_PITCH_RADIANS doc comment for the
    * pitch this pairs with. */
   crossingRotationDeg?: number | null;
+  /** Race-variant pawns: which of TokenMarker's own PAWN_BODY_GEOMETRY
+   * shapes the disc-fallback (no modelUrl) branch renders — the caller
+   * (GameRoom) derives this from a PC token's own character.race via
+   * pawnBodyTypeForRace; undefined/"standard" for every NPC token and every
+   * token before this feature reproduces today's exact disc/stem/head
+   * shape unchanged. Ignored entirely once modelUrl is set — a custom
+   * upload or NPC preset model already fully replaces the pawn's shape. */
+  bodyType?: PawnBodyType;
 }
 
 const HP_BAR_WIDTH = 0.7;
@@ -1140,6 +1149,60 @@ const PLINTH_HEIGHT = 0.04;
 // A pawn silhouette (disc + stem + head) rather than a flat disc: the seat
 // cameras view the table at a shallow angle, where a flat disc on a small
 // cell all but disappears.
+//
+// Race-variant pawns: four archetypal builds, each a genuinely distinct
+// silhouette (not just a uniform rescale of the same three primitives) —
+// "standard" is byte-for-byte the pre-existing disc/stem/head dimensions,
+// so an unclassified/Human/etc. token renders pixel-identical to before
+// this feature. "bulky" additionally grows a pair of small shoulder
+// spheres flanking the stem (TokenMarker's own JSX below, gated on
+// `shoulders`) — the one variant a pure resize alone couldn't sell as a
+// visibly broader build at this tiny tabletop-mini scale.
+interface PawnBodyGeometry {
+  discArgs: readonly [number, number, number, number];
+  discY: number;
+  stemArgs: readonly [number, number, number, number];
+  stemY: number;
+  headRadius: number;
+  headY: number;
+  shoulders?: { y: number; x: number; radius: number };
+}
+const PAWN_BODY_GEOMETRY: Record<PawnBodyType, PawnBodyGeometry> = {
+  standard: {
+    discArgs: [0.3, 0.36, 0.1, 20],
+    discY: 0.05,
+    stemArgs: [0.12, 0.16, 0.32, 12],
+    stemY: 0.26,
+    headRadius: 0.17,
+    headY: 0.5,
+  },
+  small: {
+    discArgs: [0.27, 0.33, 0.09, 20],
+    discY: 0.045,
+    stemArgs: [0.1, 0.13, 0.2, 12],
+    stemY: 0.19,
+    headRadius: 0.155,
+    headY: 0.375,
+  },
+  bulky: {
+    discArgs: [0.36, 0.42, 0.12, 20],
+    discY: 0.06,
+    stemArgs: [0.18, 0.22, 0.3, 12],
+    stemY: 0.27,
+    headRadius: 0.185,
+    headY: 0.5,
+    shoulders: { y: 0.4, x: 0.17, radius: 0.09 },
+  },
+  slender: {
+    discArgs: [0.26, 0.3, 0.09, 20],
+    discY: 0.045,
+    stemArgs: [0.09, 0.11, 0.42, 12],
+    stemY: 0.3,
+    headRadius: 0.15,
+    headY: 0.58,
+  },
+};
+
 const TokenMarker = memo(function TokenMarker({
   id,
   gridX,
@@ -1169,6 +1232,7 @@ const TokenMarker = memo(function TokenMarker({
   colorOverride,
   crossingRotationDeg,
   crossingTiltPitchMagnitude,
+  bodyType,
   onPointerDown,
   onSlideDebug,
   onMeasureDebug,
@@ -1214,6 +1278,9 @@ const TokenMarker = memo(function TokenMarker({
    * resolved url), not hardcoded here, so this component never assumes any
    * one stairs preset's own incline angle. */
   crossingTiltPitchMagnitude: number;
+  /** Race-variant pawns: see MapSurfaceToken.bodyType's own doc comment.
+   * Only ever read in the disc-fallback (no modelUrl) branch below. */
+  bodyType: PawnBodyType;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
   onSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
   /** Verification-only: see MapSurfaceProps.onTokenMeasureDebug's doc
@@ -1238,6 +1305,9 @@ const TokenMarker = memo(function TokenMarker({
   // PC token's own re-render, never per-frame.
   const baseColor = colorOverride ?? ALLEGIANCE_COLOR[allegiance];
   const color = dimmed ? (colorOverride ? dimmedHex(colorOverride) : DIMMED_ALLEGIANCE_COLOR[allegiance]) : baseColor;
+  // Race-variant pawns: only ever read by the disc-fallback branch below —
+  // a loaded model (modelUrl set) already fully determines its own shape.
+  const pawnGeometry = PAWN_BODY_GEOMETRY[bodyType];
   // A dim pawn keeps a sliver of glow — fully zero reads as a different
   // material, not a darker one. A raised (click-selected) pawn gets a
   // brighter glow on top of whatever dimmed already did — the lift alone
@@ -1361,16 +1431,31 @@ const TokenMarker = memo(function TokenMarker({
           </>
         ) : (
           <>
-            <mesh position={[0, 0.05, 0]}>
-              <cylinderGeometry args={[0.3, 0.36, 0.1, 20]} />
+            <mesh position={[0, pawnGeometry.discY, 0]}>
+              <cylinderGeometry args={pawnGeometry.discArgs} />
               <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
             </mesh>
-            <mesh position={[0, 0.26, 0]}>
-              <cylinderGeometry args={[0.12, 0.16, 0.32, 12]} />
+            <mesh position={[0, pawnGeometry.stemY, 0]}>
+              <cylinderGeometry args={pawnGeometry.stemArgs} />
               <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
             </mesh>
-            <mesh position={[0, 0.5, 0]}>
-              <sphereGeometry args={[0.17, 16, 16]} />
+            {pawnGeometry.shoulders ? (
+              // The "bulky" build's own detail — a pair of small shoulder
+              // spheres flanking the stem, the one variant a uniform resize
+              // alone couldn't sell as visibly broader at this tiny scale.
+              <>
+                <mesh position={[-pawnGeometry.shoulders.x, pawnGeometry.shoulders.y, 0]}>
+                  <sphereGeometry args={[pawnGeometry.shoulders.radius, 12, 12]} />
+                  <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+                </mesh>
+                <mesh position={[pawnGeometry.shoulders.x, pawnGeometry.shoulders.y, 0]}>
+                  <sphereGeometry args={[pawnGeometry.shoulders.radius, 12, 12]} />
+                  <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+                </mesh>
+              </>
+            ) : null}
+            <mesh position={[0, pawnGeometry.headY, 0]}>
+              <sphereGeometry args={[pawnGeometry.headRadius, 16, 16]} />
               <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5 * emissiveScale} roughness={0.35} />
             </mesh>
           </>
@@ -1798,6 +1883,7 @@ export function MapSurface({
             isStairsPresetUrl(token.crossingSurface) ? (token.crossingRotationDeg ?? null) : null
           }
           crossingTiltPitchMagnitude={crossingTiltPitchRadians(token.crossingSurface)}
+          bodyType={token.bodyType ?? "standard"}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
           onSlideDebug={onTokenSlideDebug}
           onMeasureDebug={onTokenMeasureDebug}

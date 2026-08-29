@@ -10,16 +10,33 @@ export interface PawnColorPickerProps {
   initialColor: string;
 }
 
-// A handful of hues that stay distinct against both the app's own token
-// palette (tokens.css) and each other — the current TEAL default, plus a
-// few more so a player who wants their OWN color still has an easy one-click
-// pick before reaching for the free-form picker. Deliberately NOT the same
-// values as ALLEGIANCE_COLOR's hostile/neutral hues (#ff3b3b/#ff9a3c) —
-// picking either of those as your own party token's color would make it
-// hard to tell your pawn apart from a hostile/neutral one at a glance, the
-// exact confusion this feature's own color/allegiance interaction reasoning
-// is trying to avoid.
-const PRESET_COLORS = ["#1ec8c8", "#cc55ff", "#3ddc68", "#ede0ff", "#ffd23f", "#5aa9ff"];
+// A broad spread of hues that stay distinct against both the app's own
+// token palette (tokens.css) and each other — the original 6 (teal/purple/
+// green/lavender/gold/blue) plus 8 more, so a player who wants their OWN
+// color has a genuinely wide one-click spread to choose from before
+// reaching for the free-form native picker (which already covers any color
+// at all — this row is about convenience, not capability). Deliberately
+// NONE of these sit in the ALLEGIANCE_COLOR hostile/neutral hue range
+// (#ff3b3b's red / #ff9a3c's orange, roughly hue 0-40°) — picking a color
+// that close would make it hard to tell your own party pawn apart from a
+// hostile/neutral one at a glance, the exact confusion this feature's own
+// color/allegiance interaction reasoning is trying to avoid.
+const PRESET_COLORS = [
+  "#1ec8c8", // teal
+  "#cc55ff", // purple/magenta
+  "#3ddc68", // green
+  "#ede0ff", // pale lavender
+  "#ffd23f", // amber/gold
+  "#5aa9ff", // blue
+  "#ff5fa2", // rose
+  "#6c5ce7", // indigo
+  "#4dd9e8", // bright cyan
+  "#a8e063", // lime
+  "#ff4fd8", // fuchsia
+  "#7c93b3", // slate blue-gray
+  "#f2f2f2", // silver
+  "#4a4a52", // charcoal
+];
 
 /**
  * Pawn Customization P1: sets the signed-in user's account-wide default

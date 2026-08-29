@@ -50,6 +50,7 @@ export {
   type MapTokenAllegiance,
   type MapSurfaceMetrics,
 } from "./MapSurface";
+export { pawnBodyTypeForRace, type PawnBodyType } from "./pawnBodyType";
 export { computeTableMapMetrics } from "./mapFit";
 export { buildGridOverlayPositions } from "./gridOverlay";
 // Map Art Generation E5 — the reference-image feature's own contain-fit
