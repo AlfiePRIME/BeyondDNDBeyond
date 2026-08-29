@@ -5,6 +5,7 @@ import { Button } from "@/ui-components";
 import type {
   Character,
   DayNightMode,
+  DmBookSize,
   DmNote,
   InteractionEvent,
   LorePage,
@@ -23,7 +24,6 @@ import { MonsterPanel } from "./MonsterPanel";
 import { DmOverridesPanel } from "./DmOverridesPanel";
 import { DmBookLorePage } from "./DmBookLorePage";
 import { DmBookActivityPage } from "./DmBookActivityPage";
-import { useDmBookSize } from "./DraggablePanel";
 import roomStyles from "./room.module.css";
 import styles from "./DmBook.module.css";
 
@@ -205,6 +205,9 @@ export function DmBook({
   // Activity (DmBookActivityPage)
   initialInteractionEvents,
   initialRolls,
+  // Resize follow-up
+  dmBookSize,
+  onDmBookSizeChange,
 }: {
   onClose: () => void;
   statBlocks: MonsterStatBlock[];
@@ -289,6 +292,22 @@ export function DmBook({
    * from, handed here too so the Activity page's damage feed opens with no
    * loading flash. */
   initialRolls: RollLogEntry[];
+  /** The DM's own persisted book window size, and its setter — threaded in
+   * as plain props (not read via `useDmBookSize()`/`usePanelLayout()`
+   * internally) because this component is mounted inside DmBookProp's
+   * `<Html>`, itself inside the Game Room's react-three-fiber `<Canvas>`:
+   * a separate React reconciler root that a Context provider set up
+   * OUTSIDE the Canvas (PanelLayoutProvider, in GameRoom.tsx) never
+   * propagates into — confirmed directly (a real "must be rendered inside
+   * a PanelLayoutProvider" thrown error, silently swallowed by a Canvas-
+   * level error boundary, which is why the book would flip to `open` but
+   * never actually render any content at all). GameRoom.tsx bridges the
+   * Provider's value out via DraggablePanel.tsx's `DmBookSizeBridge`,
+   * mounted as a plain DOM-tree sibling of `<Canvas>` — the exact same
+   * "props, never context, across this boundary" convention every other
+   * DmBook/DmBookProp prop already follows. */
+  dmBookSize: DmBookSize | null;
+  onDmBookSizeChange: (size: DmBookSize) => void;
 }) {
   const [page, setPage] = useState<BookPage>("enemies");
   // Weather & Enemies C4: the mechanical-damage toggle only makes sense for
@@ -304,7 +323,6 @@ export function DmBook({
   // AND a resize-drag through one set of handlers), this book has only the
   // one gesture, so pointer capture and the move/up listeners all live
   // directly on the handle element itself rather than a shared ancestor.
-  const { size: dmBookSize, setSize: setDmBookSize } = useDmBookSize();
   const bookRef = useRef<HTMLDivElement>(null);
   const resizeSessionRef = useRef<{
     pointerId: number;
@@ -344,9 +362,9 @@ export function DmBook({
       if (!session || session.pointerId !== event.pointerId) return;
       const dx = event.clientX - session.startX;
       const dy = event.clientY - session.startY;
-      setDmBookSize(clampDmBookSize(session.startWidth + dx, session.startHeight + dy));
+      onDmBookSizeChange(clampDmBookSize(session.startWidth + dx, session.startHeight + dy));
     },
-    [setDmBookSize]
+    [onDmBookSizeChange]
   );
 
   const endResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {

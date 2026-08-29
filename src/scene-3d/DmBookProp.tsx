@@ -56,24 +56,45 @@ export const DM_BOOK_FOOTPRINT_RADIUS = 0.35;
 // treats an element outside the viewport as un-actionable; a real user
 // would just be unable to reach it with the mouse either).
 //
-// Re-tuned from 1.15 for the doubled table's re-tuned, further-back seated
-// camera (seating.ts's CAMERA_SETBACK/CAMERA_EYE_HEIGHT): the book's
-// on-screen vertical position barely moves with that camera change (it sits
-// close enough to the look-target that the two roughly cancel out), but the
-// available on-screen room ABOVE the book — where this fixed-360px panel
-// has to fit, between the viewport's top edge and the book's own hit box —
-// did not grow to match, and the original 1.15 already left barely any
-// margin on either side (confirmed by measuring the ORIGINAL, single-table
-// geometry directly: its tab row's center already sat a hair above the
-// viewport's top edge, and its click clearance below the panel was real but
-// modest). This value is the empirically-measured midpoint that splits the
-// (unchanged, still narrow) total slack evenly between "tab row stays
-// clearly on-screen" and "panel stays clearly clear of the book's own hit
-// box" — verified directly via real getBoundingClientRect() measurements at
-// this exact camera/book configuration, and then end to end against
-// verify-dm-book.mjs's full open → tab-switch → close → reopen → close
-// flow, not just a single click.
-const HTML_ANCHOR_Y = 1.55;
+// Re-tuned from 1.55 to 0.8 (2026-08-29): the chair/tray drag-feel-and-
+// camera work (seating.ts's seatAtAngle) changed the seated camera's own
+// formula from a SETBACK behind the chair to an INSET in front of it —
+// pulling the camera dramatically closer to the table than the "further-
+// back seated camera" this constant's OWN previous tuning (1.55, up from an
+// original 1.15) was measured against. That's a materially bigger swing
+// than the setback-distance tweak the previous re-tuning compensated for,
+// and it invalidated this value outright: confirmed directly, the un-
+// retuned 1.55 projected the panel's own tab row roughly 400px ABOVE the
+// viewport's top edge entirely (getBoundingClientRect() top ≈ -211 against
+// a 720px-tall viewport), not just "a hair above" it — Playwright's own
+// click-actionability check (and a real user's mouse) simply couldn't
+// reach any tab past the first.
+//
+// A first re-tuning pass (0.15) fixed the tab-row-off-screen problem but
+// overcorrected the OTHER constraint this same constant balances: the gap
+// between the panel's own bottom edge and the closed book's own hit-box
+// underneath it — confirmed directly, at 0.15 the panel's bottom edge
+// dropped low enough to visually and interactively cover the book's own
+// click point (getBoundingClientRect() showed the book's own screen
+// position landing inside the panel's DOM, hitting real panel content —
+// its tab-row header at one viewport, a hint paragraph at another — never
+// the canvas), breaking "click the physical book again to close it" even
+// though opening/tab-switching worked fine. 0.8 is the empirically
+// re-measured value that clears BOTH constraints with real (if not
+// generous — this camera leaves genuinely little vertical room to work
+// with) margin at both this file's own tested viewports (1280x720 and
+// 1440x900, whose taller `min(400px, 50vh)` CSS panel default eats more of
+// that same margin). Re-measured the same way the previous tuning was:
+// real getBoundingClientRect() on the open panel, its tab row, AND the
+// closed book's own click point, against the CURRENT camera — then
+// re-verified end to end against verify-dm-book.mjs's full open →
+// tab-switch → close → reopen → close flow AND verify-dm-book-resize-
+// move.mjs's own open/close-around-a-resize/drag flow, for both a solo-DM
+// room and a DM+1-player room, not just a single click. Whichever seated-
+// camera formula lands next will very likely need this re-measured again —
+// it is fundamentally a function of that camera, not a fixed book-geometry
+// constant.
+const HTML_ANCHOR_Y = 0.8;
 
 const labelTextureCache = new Map<string, CanvasTexture>();
 // Same cached 2D-canvas-texture technique as DiceTumble's resultBadgeTexture
@@ -404,7 +425,13 @@ export function DmBookProp({
     moved: boolean;
     lastDelta: { dx: number; dz: number };
   } | null>(null);
-  const [dragActive, setDragActive] = useState(false);
+  // Detaches whatever drag's own window listeners are currently attached, if
+  // any — invoked both by that same drag's own "pointerup" (the ordinary
+  // path) and by this component's unmount cleanup below (the only
+  // extraordinary one: a drag still in flight when the book prop itself
+  // goes away, e.g. a live map switch mid-drag).
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanupRef.current?.(), []);
 
   useFrame(() => {
     if (!onProjectedPosition) return;
@@ -434,6 +461,23 @@ export function DmBookProp({
     }
   });
 
+  // The drag's own continuation — GameTableScene's own window-"pointermove"/
+  // "pointerup" precedent (that file's own doc comment: "the release can
+  // land anywhere... so the pointerup listener lives on window", and a fast
+  // drag needs the pointer's live position between press and release, not
+  // just its final one). Attached SYNCHRONOUSLY inside handlePointerDown
+  // itself below, NOT via a useEffect keyed off a "drag active" state flag:
+  // a state update's own effect-commit is asynchronous, so a real "press and
+  // release with (near-)zero elapsed time" — a plain click, exactly the
+  // book's own click-to-open/close gesture, and exactly what a genuine
+  // user's fast click (or Playwright's zero-travel page.mouse.click, which
+  // is how this was actually caught) produces — could see the native
+  // "pointerup" fire on window BEFORE a state-gated effect ever go around to
+  // attaching its own listener, silently swallowing the click into nothing
+  // at all: neither this drag path (which never even started listening) nor
+  // any other handler ever sees it. Registering here removes that race
+  // entirely — the exact same task that captures the press also arms the
+  // release listener, with nothing async in between.
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (event.button !== 0) return;
     event.stopPropagation();
@@ -444,7 +488,8 @@ export function DmBookProp({
       onToggleOpen();
       return;
     }
-    const floorPoint = floorPointAtHeight(camera, gl.domElement, event.clientX, event.clientY, position[1]);
+    const canvas = gl.domElement;
+    const floorPoint = floorPointAtHeight(camera, canvas, event.clientX, event.clientY, position[1]);
     dragSessionRef.current = {
       startClientX: event.clientX,
       startClientY: event.clientY,
@@ -460,30 +505,19 @@ export function DmBookProp({
       moved: false,
       lastDelta: { dx: 0, dz: 0 },
     };
-    setDragActive(true);
-  };
 
-  // The drag's own continuation — GameTableScene's own window-"pointermove"/
-  // "pointerup" precedent (that file's own doc comment: "the release can
-  // land anywhere... so the pointerup listener lives on window", and a fast
-  // drag needs the pointer's live position between press and release, not
-  // just its final one). Registered only while a drag is actually in
-  // progress, so an idle book costs nothing extra.
-  useEffect(() => {
-    if (!dragActive) return;
-    const canvas = gl.domElement;
-    function handleMove(event: PointerEvent) {
+    function handleMove(moveEvent: PointerEvent) {
       const session = dragSessionRef.current;
       if (!session) return;
       if (!session.moved) {
         const screenDistance = Math.hypot(
-          event.clientX - session.startClientX,
-          event.clientY - session.startClientY
+          moveEvent.clientX - session.startClientX,
+          moveEvent.clientY - session.startClientY
         );
         if (screenDistance < BOOK_DRAG_CLICK_THRESHOLD_PX) return; // still within click jitter
         session.moved = true;
       }
-      const floorPoint = floorPointAtHeight(camera, canvas, event.clientX, event.clientY, session.planeY);
+      const floorPoint = floorPointAtHeight(camera, canvas, moveEvent.clientX, moveEvent.clientY, session.planeY);
       if (!floorPoint) return;
       const moveDelta = { dx: floorPoint.x - session.startFloorX, dz: floorPoint.z - session.startFloorZ };
       session.lastDelta = moveDelta;
@@ -492,7 +526,9 @@ export function DmBookProp({
     function handleUp() {
       const session = dragSessionRef.current;
       dragSessionRef.current = null;
-      setDragActive(false);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      dragCleanupRef.current = null;
       if (session?.moved) {
         onDragEndRef.current?.(session.lastDelta);
       } else {
@@ -501,13 +537,13 @@ export function DmBookProp({
         onToggleOpenRef.current();
       }
     }
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleUp);
-    return () => {
+    dragCleanupRef.current = () => {
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
     };
-  }, [dragActive, camera, gl]);
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+  };
 
   return (
     <group ref={groupRef} position={position as [number, number, number]} rotation={[0, rotationY, 0]}>

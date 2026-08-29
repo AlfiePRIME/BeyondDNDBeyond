@@ -113,6 +113,7 @@ import {
   type DayNightMode,
   type DiceTrayModelPreference,
   type DmBookOffset,
+  type DmBookSize,
   type DmNote,
   type Handout,
   type InteractionEvent,
@@ -254,7 +255,7 @@ import { ChatDock } from "./ChatDock";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { ChatLogPanel } from "./ChatLogPanel";
 import { ContainerPanel } from "./ContainerPanel";
-import { DraggablePanel, PanelDockBar, PanelLayoutProvider } from "./DraggablePanel";
+import { DraggablePanel, DmBookSizeBridge, PanelDockBar, PanelLayoutProvider } from "./DraggablePanel";
 import { SoundControl } from "./SoundControl";
 import { AdvantageToggle, DiceLogPanel } from "./DiceLogPanel";
 import { DiceTrayPicker } from "./DiceTrayPicker";
@@ -481,7 +482,28 @@ function outwardFromOrigin(position: readonly [number, number, number]): [number
 // 2 through 8) AND empirically against a live DM Room with
 // verify-dm-book.mjs's own click search.
 const DM_BOOK_FORWARD_OFFSET = 0.3;
-const DM_BOOK_LATERAL_OFFSET = -1.7;
+// Flipped from -1.7 to +1.0 (2026-08-29): the original -1.7 projected the
+// book into screen-space "mid-right" for a real re-check against the
+// CURRENT codebase — exactly DraggablePanel.tsx's own DEFAULT_ANCHOR_CLASS
+// chatLog anchor (anchorMidRight), silently hiding the book behind the
+// default-positioned Chat panel and swallowing every click aimed at it
+// (confirmed directly: element hit-testing the book's own projected screen
+// point landed on the chat input, not the canvas, for both a solo-DM room
+// and a DM+1-player room). A first attempt just flipped the SIGN (-1.7 ->
+// +1.7), which cleared the chat panel but pushed the book's own left edge
+// (its up-to-480px-wide panel is screen-CENTERED on this projected point)
+// PAST the opposite viewport edge instead — a real regression caught
+// directly via verify-dm-book.mjs: the DM Controls tab landed outside the
+// viewport and could never be clicked. +1.7's magnitude turned out to be
+// right at the edge of viewport-safety in EITHER direction (confirmed: the
+// ORIGINAL -1.7 also left only ~16px of margin on ITS side) — the real fix
+// is a smaller magnitude, not just a different sign, landing comfortably
+// left-of-center with real margin on both edges. "Mid-left" has no
+// DEFAULT_ANCHOR_CLASS claim at all, so a positive value stays clear of any
+// default panel; +1.0 (down from +1.7) was re-verified clean against real
+// verify-dm-book.mjs runs for both party sizes, including clicking every
+// one of the book's 6 tabs.
+const DM_BOOK_LATERAL_OFFSET = 1.0;
 
 interface LiveMapPayload {
   mapId: string | null;
@@ -7036,8 +7058,34 @@ export function GameRoom({
       : openContainer.items.filter((item) => item.hidden_dc === null);
   }, [openContainer, currentUserIsDM, liveMap, ownCharacterIds, characterById]);
 
+  // DM book resize — see DmBookSizeBridge's own doc comment for why this
+  // has to be bridged out of PanelLayoutProvider's own context rather than
+  // read directly by DmBook (mounted deep inside the Canvas's own separate
+  // react-three-fiber reconciler root, where that context never reaches).
+  // `dmBookSetSizeRef` holds the Provider's own (stable, useCallback-
+  // memoized) setter, updated every time the bridge's effect fires — a ref
+  // rather than state since DmBook only ever needs to CALL it, never read
+  // it, and storing it in state would trigger an extra render for no
+  // visible effect every time the bridge itself re-mounts.
+  const [dmBookSize, setDmBookSize] = useState<DmBookSize | null>(null);
+  const dmBookSetSizeRef = useRef<(size: DmBookSize) => void>(() => {});
+  const handleDmBookSizeBridge = useCallback((size: DmBookSize | null, setSize: (size: DmBookSize) => void) => {
+    setDmBookSize(size);
+    dmBookSetSizeRef.current = setSize;
+  }, []);
+  const handleDmBookSizeChange = useCallback((size: DmBookSize) => {
+    dmBookSetSizeRef.current(size);
+  }, []);
+
   return (
     <PanelLayoutProvider userId={currentUserId} initialPreferences={initialUiPreferences}>
+    {/* Bridges the Provider's dmBookSize state out to a plain callback —
+        see DmBookSizeBridge's own doc comment. A DOM-tree sibling of
+        <Canvas>, still a real descendant of PanelLayoutProvider above, so
+        its internal useDmBookSize() call is legal; DmBookProp/DmBook
+        themselves live INSIDE the Canvas's own separate react-three-fiber
+        reconciler root, where that same context call would throw. */}
+    <DmBookSizeBridge onChange={handleDmBookSizeBridge} />
     <div className={styles.room}>
       <Canvas
         shadows
@@ -7210,6 +7258,8 @@ export function GameRoom({
               onSetWeather={(kind, mechanical) => void handleSetWeather(kind, mechanical)}
               initialInteractionEvents={initialInteractionEvents}
               initialRolls={initialRolls}
+              dmBookSize={dmBookSize}
+              onDmBookSizeChange={handleDmBookSizeChange}
             />
           </DmBookProp>
         ) : null}

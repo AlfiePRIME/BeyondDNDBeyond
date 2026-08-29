@@ -435,9 +435,16 @@ try {
     persistedDmBookSize = (await readUiPreferences(dm.id)).dmBookSize;
     if (persistedDmBookSize) break;
   }
+  // Rounded on both sides before comparing — a real resize handle drag
+  // computes width/height from subpixel getBoundingClientRect() deltas, so
+  // the persisted value is naturally something like 580.0000305175781, not
+  // a bit-exact integer; expectedWidth/expectedHeight are already rounded
+  // for the same reason. Comparing raw floats here would fail on that
+  // ordinary subpixel noise, not on any real persistence bug.
   check(
     "the resized size is persisted to profiles.ui_preferences.dmBookSize after the debounce",
-    persistedDmBookSize?.width === expectedWidth && persistedDmBookSize?.height === expectedHeight,
+    Math.round(persistedDmBookSize?.width) === expectedWidth &&
+      Math.round(persistedDmBookSize?.height) === expectedHeight,
     JSON.stringify(persistedDmBookSize)
   );
   // Same jsonb column, different sub-key — the OTHER existing key

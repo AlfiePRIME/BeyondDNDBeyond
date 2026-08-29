@@ -986,6 +986,36 @@ export function useDmBookSize(): {
 }
 
 /**
+ * Bridges `useDmBookSize`'s Provider-scoped value out to a plain callback —
+ * for GameRoom.tsx's own DmBookProp/DmBook mount site, which sits inside the
+ * Game Room's react-three-fiber `<Canvas>`. `<Canvas>` renders its own
+ * subtree through a SEPARATE React reconciler root; a Context provider set
+ * up in the outer DOM tree (PanelLayoutProvider) does not propagate across
+ * that boundary, so `DmBook` calling `useDmBookSize()` (and therefore
+ * `usePanelLayout()`) directly throws "must be rendered inside a
+ * PanelLayoutProvider" — a real, confirmed bug, not a hypothetical one — the
+ * exact same reason every other DmBookProp/DmBook prop is already threaded
+ * explicitly rather than read via context.
+ *
+ * Mount this as a plain DOM-tree SIBLING of `<Canvas>`, itself still inside
+ * `<PanelLayoutProvider>` — a genuine descendant, so the hook call below is
+ * legal — and thread its two `onChange` arguments down as ordinary props
+ * through `<Canvas>` -> `<DmBookProp>` -> `<DmBook>`. Renders nothing itself;
+ * it exists purely to make one legal hook call and forward the result out.
+ */
+export function DmBookSizeBridge({
+  onChange,
+}: {
+  onChange: (size: DmBookSize | null, setSize: (size: DmBookSize) => void) => void;
+}) {
+  const { size, setSize } = useDmBookSize();
+  useEffect(() => {
+    onChange(size, setSize);
+  }, [size, setSize, onChange]);
+  return null;
+}
+
+/**
  * csstype's `CSSProperties` (what `@types/react`'s own `style` prop type is
  * built on) has no index signature for CSS custom properties — a plain
  * `{ "--panel-height": "500px" }` object doesn't structurally satisfy it.
