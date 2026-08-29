@@ -57,7 +57,10 @@ import {
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
+  canShareCell,
   isBuildingPresetUrl,
+  isSurfaceHostUrl,
+  isSurfacePropUrl,
   isWallFamilyUrl,
   MapEditorScene,
   resolveWallMountOffset,
@@ -985,22 +988,6 @@ export function MapEditor({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [aiEnabled]);
 
-  // Plain click (no event, or a click without the shift key) replaces the
-  // selection with just this object — today's exact single-select behavior.
-  // Shift-click toggles this object in the current selection: adds it if
-  // absent, removes it if already selected (the standard toggle-in-set
-  // convention), building up the multi-selection one click at a time.
-  const handleSelectObject = useCallback((id: string, event?: { shiftKey: boolean }) => {
-    setSelectedObjectIds((prev) => {
-      if (!event?.shiftKey) return new Set([id]);
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-    setMoveArmed(false);
-  }, []);
-
   // The terrain the editor currently DISPLAYS at a cell — draft state inside
   // an active preview region, sculpted overlay elsewhere (the sceneObjects
   // surfaceElevation lookup's exact precedence). Ref-based like the paint
@@ -1128,6 +1115,17 @@ export function MapEditor({
     [assets]
   );
 
+  // Moved up from this file's other per-asset derived maps (originally
+  // declared right alongside assetForwardOffsetById, much further down) so
+  // handleCellClick's own useCallback below — which needs it, for the
+  // tavern furniture surface-stacking allowlist check — can list it as a
+  // real dependency without a "used before its declaration" TDZ error: a
+  // useCallback's DEPENDENCY ARRAY is a plain array literal evaluated
+  // eagerly at render time, unlike the callback body itself (deferred until
+  // actually invoked), so it can't tolerate the same forward reference a
+  // closure body can.
+  const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
+
   // Shared by handleCellClick's plain-click path AND the Ctrl+click
   // quick-place popover's onPick (Map Editor Batch A1) — the actual
   // "put this asset at this cell" logic used to live inline in
@@ -1184,6 +1182,53 @@ export function MapEditor({
       makePlacementEntry,
       setPreviewState,
     ]
+  );
+
+  // Plain click (no event, or a click without the shift key) replaces the
+  // selection with just this object — today's exact single-select behavior.
+  // Shift-click toggles this object in the current selection: adds it if
+  // absent, removes it if already selected (the standard toggle-in-set
+  // convention), building up the multi-selection one click at a time.
+  //
+  // Tavern furniture surface-stacking: this is the ONLY code path that
+  // actually runs when clicking a cell that already has an object on it —
+  // ObjectMarker's own hit-box (MapSurface.tsx) sits on top of the cell
+  // beneath it and calls onSelectObject (this function) directly via
+  // stopPropagation, so handleCellClick's own occupant/previewOccupant
+  // checks (however defensively still present there) never actually fire
+  // for a real object's click. An allowlisted (host, prop) pair may still
+  // share a cell instead of the ordinary "just select what's already
+  // there" behavior below — checked against whatever's currently selected
+  // in the palette, mirroring handleCellClick's identical exception for a
+  // bare-floor click. Skipped entirely while a move is armed (selecting a
+  // DIFFERENT object to move must never accidentally place a new one) or
+  // for a shift-click (building a multi-selection, never a placement
+  // gesture).
+  const handleSelectObject = useCallback(
+    (id: string, event?: { shiftKey: boolean }) => {
+      if (!moveArmedRef.current && !event?.shiftKey && toolRef.current === "object") {
+        const clicked = objectsRef.current.find((object) => object.id === id);
+        const candidateAssetId = selectedAssetIdRef.current;
+        const candidateUrl = candidateAssetId ? (assetUrlById.get(candidateAssetId) ?? null) : null;
+        if (
+          clicked &&
+          candidateAssetId &&
+          canShareCell(assetUrlById.get(clicked.asset_id) ?? null, candidateUrl)
+        ) {
+          placeAssetAtCell(candidateAssetId, clicked.x, clicked.y);
+          return;
+        }
+      }
+      setSelectedObjectIds((prev) => {
+        if (!event?.shiftKey) return new Set([id]);
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      setMoveArmed(false);
+    },
+    [assetUrlById, placeAssetAtCell]
   );
 
   // NPC placement: the "npc" Place-mode tool's own onCellClick — a single-
@@ -1331,8 +1376,19 @@ export function MapEditor({
     (x: number, y: number, event?: ThreeEvent<PointerEvent>) => {
       if (toolRef.current !== "object") return;
       const preview = previewRef.current;
-      const previewOccupant = preview?.objects.find((object) => object.x === x && object.y === y);
-      const occupant = objectsRef.current.find((object) => object.x === x && object.y === y);
+      // Tavern furniture surface-stacking: once two objects can legitimately
+      // share a cell, ".find()"'s "whichever comes first in array order"
+      // stops being good enough — a click should select the TOPMOST thing
+      // visually sitting there (the small prop), not whichever of the two
+      // happened to be created first. Falls back to plain "first match" the
+      // exact same way `.find()` already did, so a cell with 0 or 1 occupant
+      // behaves identically to before this feature.
+      const previewOccupant =
+        preview?.objects.filter((object) => object.x === x && object.y === y).find((object) => isSurfacePropUrl(assetUrlById.get(object.assetId) ?? null)) ??
+        preview?.objects.find((object) => object.x === x && object.y === y);
+      const occupantsHere = objectsRef.current.filter((object) => object.x === x && object.y === y);
+      const occupant =
+        occupantsHere.find((object) => isSurfacePropUrl(assetUrlById.get(object.asset_id) ?? null)) ?? occupantsHere[0];
       // Move only ever acts on a single object (bulk-move isn't part of this
       // feature) — null out selectedId whenever more than one is selected so
       // the move branch below can't run against an arbitrary set member.
@@ -1404,13 +1460,33 @@ export function MapEditor({
         return;
       }
 
+      // Tavern furniture surface-stacking: an allowlisted (host, prop) pair
+      // may share a cell instead of the ordinary "select what's already
+      // there" occupant block below — checked against whatever's currently
+      // selected in the palette, so this only ever bypasses selection when
+      // the click is genuinely trying to place the OTHER half of a valid
+      // pair. Ctrl+click's own quick-place popover (below) is deliberately
+      // NOT exempted: its onPick calls placeAssetAtCell directly with no
+      // occupant check of its own (this occupant check is the ONLY real
+      // gate against stacking two arbitrary objects today), so it stays
+      // blocked on an occupied cell exactly as before, stackable or not.
+      const candidateUrl =
+        !previewOccupant && !occupant
+          ? null
+          : !event?.ctrlKey && !event?.metaKey && selectedAssetIdRef.current
+            ? (assetUrlById.get(selectedAssetIdRef.current) ?? null)
+            : null;
+
       if (previewOccupant) {
-        handleSelectObject(previewOccupant.id);
-        return;
-      }
-      if (occupant) {
-        handleSelectObject(occupant.id);
-        return;
+        if (!canShareCell(assetUrlById.get(previewOccupant.assetId) ?? null, candidateUrl)) {
+          handleSelectObject(previewOccupant.id);
+          return;
+        }
+      } else if (occupant) {
+        if (!canShareCell(assetUrlById.get(occupant.asset_id) ?? null, candidateUrl)) {
+          handleSelectObject(occupant.id);
+          return;
+        }
       }
 
       // Ctrl (or Cmd, matching this file's existing undo/redo modifier
@@ -1454,6 +1530,7 @@ export function MapEditor({
       pushHistory,
       makeObjectPatchEntry,
       placeAssetAtCell,
+      assetUrlById,
     ]
   );
 
@@ -2350,7 +2427,6 @@ export function MapEditor({
     [map.grid_width, map.grid_height, overlay, preview]
   );
 
-  const assetUrlById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset.url])), [assets]);
   // Stored forward-direction correction per asset (model_orientation, see
   // docs/design/model-orientation-and-posing.md §8) — same id-keyed map
   // shape as assetUrlById, read alongside it below.
@@ -2499,6 +2575,17 @@ export function MapEditor({
     for (const object of objects) {
       if (object.crossing_type) crossingObjectByCell.set(cellKey(object.x, object.y), object);
     }
+    // Tavern furniture surface-stacking: the surface HOST object's own
+    // resolved url (if any) at each cell — mirrors crossingObjectByCell's
+    // exact keyed-once-up-front shape just above. handleCellClick's own
+    // canShareCell allowlist is the only way two objects share a cell
+    // today, and it's a strict (host, prop) pair, so "the" host per cell is
+    // unambiguous the same way "the" crossing object is.
+    const surfaceHostUrlByCell = new Map<string, string>();
+    for (const object of objects) {
+      const url = assetUrlById.get(object.asset_id) ?? null;
+      if (isSurfaceHostUrl(url)) surfaceHostUrlByCell.set(cellKey(object.x, object.y), url!);
+    }
     const resolveMount = (
       object: MapObject
     ): { x: number; y: number; rotation: number; renderOffsetX: number; renderOffsetZ: number } => {
@@ -2515,6 +2602,7 @@ export function MapEditor({
     return [
       ...objects.map((object) => {
         const mount = resolveMount(object);
+        const url = assetUrlById.get(object.asset_id) ?? null;
         return {
           id: object.id,
           x: mount.x,
@@ -2523,10 +2611,14 @@ export function MapEditor({
           rotation: mount.rotation,
           renderOffsetX: mount.renderOffsetX,
           renderOffsetZ: mount.renderOffsetZ,
-          url: assetUrlById.get(object.asset_id) ?? null,
+          url,
           forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
           tint: object.tint,
           linkStatus: buildingLinkStatusByObjectId[object.id],
+          // Tavern furniture surface-stacking: only ever set for the small
+          // PROP's own render (never the host's own row — the host renders
+          // correctly at its own base regardless of what's sitting on it).
+          surfaceHostUrl: isSurfacePropUrl(url) ? surfaceHostUrlByCell.get(cellKey(mount.x, mount.y)) : undefined,
           crossingSurface: object.crossing_type
             ? undefined
             : (crossingObjectByCell.get(cellKey(mount.x, mount.y))?.crossing_type ?? undefined),

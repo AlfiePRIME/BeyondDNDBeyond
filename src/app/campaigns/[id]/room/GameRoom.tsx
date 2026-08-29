@@ -181,6 +181,8 @@ import {
   DM_CHAIR_FRONTAGE,
   GameTableScene,
   getEffectiveSeat,
+  isSurfaceHostUrl,
+  isSurfacePropUrl,
   pawnBodyTypeForRace,
   PERSONAL_TRAY_RADIUS,
   PERSONAL_TRAY_SCALE,
@@ -5895,6 +5897,16 @@ export function GameRoom({
     // resolve every object/token's own render url — no new lookup.
     const crossingPresetUrlFor = (object: MapObject | undefined): string | null | undefined =>
       object ? assetUrlById.get(object.asset_id) : undefined;
+    // Tavern furniture surface-stacking: the surface HOST object's own
+    // resolved url (if any) at each cell — the SAME keyed-once-up-front
+    // shape as crossingObjectByCell just above, so the live table renders a
+    // stacked prop lifted onto its host exactly like the map editor's own
+    // preview already does (MapEditor.tsx's own surfaceHostUrlByCell).
+    const surfaceHostUrlByCell = new Map<string, string>();
+    for (const object of liveMap.objects) {
+      const url = assetUrlById.get(object.asset_id) ?? null;
+      if (isSurfaceHostUrl(url)) surfaceHostUrlByCell.set(cellKey(object.x, object.y), url!);
+    }
     return {
       id: liveMap.map.id,
       gridWidth: liveMap.map.grid_width,
@@ -5972,6 +5984,12 @@ export function GameRoom({
             url: assetUrlById.get(object.asset_id) ?? null,
             forwardOffsetDeg: assetForwardOffsetById.get(object.asset_id) ?? 0,
             tint: object.tint,
+            // Tavern furniture surface-stacking: only ever set for the small
+            // PROP's own render — see MapEditor.tsx's own surfaceHostUrl
+            // comment for why the host's own row never looks up itself here.
+            surfaceHostUrl: isSurfacePropUrl(assetUrlById.get(object.asset_id) ?? null)
+              ? surfaceHostUrlByCell.get(cellKey(object.x, object.y))
+              : undefined,
             // An object's own invisible, cell-sized hit box (MapSurface's
             // own "makes thin/holey props clickable" doc comment) sits ON
             // TOP of the cell beneath it, so a click there would otherwise

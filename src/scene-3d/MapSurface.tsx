@@ -8,6 +8,7 @@ import { playSound, SOUND_KEYS } from "@/audio";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
 import { crossingSurfaceHeight, crossingTiltPitchRadians, isStairsPresetUrl } from "./crossingSurface";
+import { surfaceStackLift, surfaceStackScale } from "./surfaceStack";
 import { buildGridOverlayPositions } from "./gridOverlay";
 import type { PawnBodyType } from "./pawnBodyType";
 import { useTokenSlide, type TokenSlidePhase } from "./useTokenSlide";
@@ -607,6 +608,17 @@ export interface MapSurfaceObject {
    * this is the exact url MapSurface/GameRoom already resolve for
    * rendering that object's model, so no new lookup mechanism is needed. */
   crossingSurface?: string | null;
+  /** Tavern furniture surface-stacking (a follow-up to Task #118): the
+   * SURFACE HOST object's own resolved model url (Table/Bar Counter/Bar
+   * Corner) sharing THIS object's cell, when this object is itself an
+   * eligible small prop (Glass/Beer Pump/Food Plate — see surfaceStack.ts's
+   * isSurfaceHostUrl/isSurfacePropUrl). The caller must never set this for
+   * the host object's own render, the same "never set for the crossing
+   * object's own row" contract crossingSurface above already establishes.
+   * null/undefined (every object not sharing a cell with a host, and every
+   * object before this feature) renders at exactly today's height/scale —
+   * see surfaceStack.ts's surfaceStackLift/surfaceStackScale. */
+  surfaceHostUrl?: string | null;
 }
 
 interface ObjectMarkerProps {
@@ -1824,13 +1836,18 @@ export function MapSurface({
           // crossingSurface.ts's crossingSurfaceHeight doc comment. 0 for
           // every object not sharing a cell with a crossing structure
           // (crossingSurface undefined/null), rendering at exactly today's
-          // height.
+          // height. Tavern furniture surface-stacking: the SAME additive
+          // pattern, for a small prop sharing a cell with a Table/Bar
+          // Counter/Bar Corner host — see surfaceStack.ts's
+          // surfaceStackLift doc comment. Both add exactly 0 for every
+          // object before either feature.
           topY={
             baseHeight +
             object.elevation * elevationStepHeight +
-            crossingSurfaceHeight(object.crossingSurface) * cellSize
+            crossingSurfaceHeight(object.crossingSurface) * cellSize +
+            surfaceStackLift(object.surfaceHostUrl) * cellSize
           }
-          scale={cellSize}
+          scale={cellSize * surfaceStackScale(object.surfaceHostUrl)}
           rotation={object.rotation}
           url={object.url}
           forwardOffsetDeg={object.forwardOffsetDeg ?? 0}

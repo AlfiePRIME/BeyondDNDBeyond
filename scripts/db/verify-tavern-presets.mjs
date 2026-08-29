@@ -398,11 +398,33 @@ try {
 
   const allPlaced = await objectRows(mapId);
   check("all 5 new tavern presets were placed as 5 distinct objects", allPlaced.length === EXPECTED.length);
-  const coordKeys = allPlaced.map((row) => `${row.x},${row.y}`);
+  // Surface-stacking follow-up: Beer Pump/Glass/Food Plate may now
+  // legitimately land on the SAME cell as Bar Counter/Bar Corner (a real,
+  // intentional feature — see surfaceStack.ts) — scanClick's own "click the
+  // nearest reactive point" search actively prefers an already-furnished
+  // cell once stacking makes it a valid target too, so this is no longer a
+  // "0 or 1 objects per cell, always" invariant. What must still never
+  // happen: two objects sharing a cell where the pair ISN'T a legitimate
+  // (host, prop) stack — e.g. two hosts, or two props, silently overlapping
+  // by accident.
+  const HOST_UUIDS = new Set([EXPECTED[0].uuid, EXPECTED[1].uuid]); // Bar Counter, Bar Corner
+  const PROP_UUIDS = new Set([EXPECTED[2].uuid, EXPECTED[3].uuid, EXPECTED[4].uuid]); // Beer Pump, Glass, Food Plate
+  const byCoord = new Map();
+  for (const row of allPlaced) {
+    const key = `${row.x},${row.y}`;
+    if (!byCoord.has(key)) byCoord.set(key, []);
+    byCoord.get(key).push(row);
+  }
+  const noIllegitimateOverlap = [...byCoord.values()].every((group) => {
+    if (group.length <= 1) return true;
+    const hostCount = group.filter((row) => HOST_UUIDS.has(row.asset_id)).length;
+    const propCount = group.filter((row) => PROP_UUIDS.has(row.asset_id)).length;
+    return hostCount === 1 && propCount === group.length - 1;
+  });
   check(
-    "every placement landed on its own distinct cell — no accidental double-placement/overlap",
-    new Set(coordKeys).size === coordKeys.length,
-    JSON.stringify(coordKeys)
+    "every cell either got exactly one placement, or a legitimate (host, prop) surface stack — never an unrelated collision",
+    noIllegitimateOverlap,
+    JSON.stringify(allPlaced.map((row) => ({ name: row.asset_id, x: row.x, y: row.y })))
   );
 
   // ═════════════════════════════════════════════════════════════════════

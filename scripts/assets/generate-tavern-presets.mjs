@@ -31,10 +31,10 @@
 //     ("beer engine") fixture — brass column, badge, drip tray, and the
 //     iconic angled handle+knob — a separate placeable prop, distinct from
 //     the simpler taps built into Bar Counter's own top surface.
-//   - "Glass" (glass.glb): a small pewter tankard with foam and a side
-//     handle — an ordinary small placeable prop (see this file's own
-//     "single-cell, no surface-detection" note below), sized to read
-//     plausibly next to/on either Bar Counter or the existing Table preset.
+//   - "Glass" (glass.glb): a small pewter tankard with foam — an ordinary
+//     small placeable prop (see this file's own "single-cell, no
+//     surface-detection" note below), sized to read plausibly next to/on
+//     either Bar Counter or the existing Table preset.
 //   - "Food Plate" (food-plate.glb): a shallow ceramic plate with a raised
 //     rim, a bread roll, and a couple of garnish spheres — same "ordinary
 //     small prop" treatment as Glass.
@@ -285,9 +285,8 @@ function buildBeerPump() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Glass — a small pewter tankard with foam and a side handle. Ordinary
-// small placeable prop (see this file's own top comment on why there's no
-// surface-detection logic here).
+// Glass — a small pewter tankard with foam. Ordinary small placeable prop
+// (see this file's own top comment).
 // ═══════════════════════════════════════════════════════════════════════
 function buildGlass() {
   // Taller, slimmer body than the first pass (this task's own real-
@@ -295,24 +294,23 @@ function buildGlass() {
   // pale bucket/lidded cup rather than a tankard — see
   // scripts/db/verify-tavern-presets.mjs's own comment for the before/after
   // screenshots). A taller body shows more of its own side wall from the
-  // editor's oblique camera, a thinner foam cap (barely wider than the
-  // body) stops it reading as a second, dominant cylinder, and a bigger
-  // handle torus is actually visible at this render distance.
+  // editor's oblique camera, and a thinner foam cap (barely wider than the
+  // body) stops it reading as a second, dominant cylinder.
+  //
+  // A handle torus used to sit here too, but at this render distance/angle
+  // a partial-sweep torus offset to the side just reads as a floating bent
+  // tube rather than a proper handle flush against the body (the project
+  // owner's own direct feedback) — removed rather than reworked, since
+  // Glass is deliberately a small, simple prop (this function's own top
+  // comment) and a two-part tankard body communicates "drinking vessel"
+  // fine on its own.
   const bodyHeight = 0.22;
   const bodyRadiusTop = 0.095;
   const bodyRadiusBottom = 0.078;
   const foamHeight = 0.016;
   return prop(
     [new THREE.CylinderGeometry(bodyRadiusTop, bodyRadiusBottom, bodyHeight, 12), pewter(), 0, bodyHeight / 2, 0],
-    [new THREE.CylinderGeometry(bodyRadiusTop + 0.002, bodyRadiusTop, foamHeight, 12), foam(), 0, bodyHeight + foamHeight / 2, 0],
-    [
-      new THREE.TorusGeometry(0.075, 0.02, 8, 16, Math.PI * 1.15),
-      pewter(),
-      bodyRadiusTop + 0.055,
-      bodyHeight * 0.5,
-      0,
-      [0, Math.PI / 2, -Math.PI * 0.05],
-    ]
+    [new THREE.CylinderGeometry(bodyRadiusTop + 0.002, bodyRadiusTop, foamHeight, 12), foam(), 0, bodyHeight + foamHeight / 2, 0]
   );
 }
 
