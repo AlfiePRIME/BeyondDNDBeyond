@@ -54,11 +54,42 @@ export const PLACED_OBJECT_SIZE = 0.92;
 // made every wall-family piece converge on the SAME maxDim as wall.glb —
 // confirmed via the generate script's own re-measurement of the actual
 // regenerated .glb files, not assumed from the geometry formulas alone.
+// wall-t.glb, wall-corner-l.glb, and wall-corner-curved.glb (generate-wall-
+// corner-variants.mjs) add a T-junction, a genuine right-angle corner, and a
+// curved corner to the wall family — all three orientation-dependent (the
+// DM reaches all 4 rotations with the ordinary rotate control), unlike
+// wall-corner.glb's own rotationally-symmetric 4-way plus.
+//
+// wall-t.glb's own fit target is 1, same reasoning as the four entries
+// above it: its full-length through-run footprint reaches the whole 1-unit
+// cell width, exactly like a straight run, so its own real measured maxDim
+// is ~1.0 already.
+//
+// wall-corner-l.glb and wall-corner-curved.glb are NOT 1, by real
+// measurement, not a typo: an "L" (or its rounded equivalent) only reaches
+// ONE cell edge in each of two directions, never both edges of any single
+// axis — so their real footprint tops out at ~0.635/0.62 respectively,
+// SMALLER than the wall family's own shared 0.85 peak height. Their real
+// measured maxDim is therefore HEIGHT-dominated at exactly 0.85, confirmed
+// by generate-wall-corner-variants.mjs's own printed Box3 measurement, not
+// assumed. Using fit target 1 for either (dividing by a maxDim smaller than
+// 1) would scale the WHOLE model — including its height — up by
+// 1/0.85 ≈ 1.176×, reproducing (at a smaller magnitude) the exact
+// "corner/diagonal peak taller than a straight run's real 0.85" bug this
+// file's own doc comment above describes finding and fixing for the
+// original wall-corner.glb/wall-diagonal.glb. So both use their own real
+// measured maxDim (0.85) as their fit target instead — the same "each
+// one's own fit target is simply its own measured maxDim, making scale
+// exactly 1" rule the rest of this table already follows, just landing on
+// a different real number for these two shapes.
 const WALL_FIT_TARGET_BY_URL: Record<string, number> = {
   "/assets/presets/wall.glb": 1,
   "/assets/presets/wall-corner.glb": 1,
   "/assets/presets/wall-diagonal.glb": 1,
   "/assets/presets/wall-door.glb": 1,
+  "/assets/presets/wall-t.glb": 1,
+  "/assets/presets/wall-corner-l.glb": 0.85,
+  "/assets/presets/wall-corner-curved.glb": 0.85,
 };
 
 /**
