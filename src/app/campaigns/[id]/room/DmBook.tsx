@@ -512,9 +512,32 @@ export function DmBook({
                     .join(" ")}
                   aria-pressed={weatherKind === option.id}
                   disabled={weatherBusy}
-                  onClick={() => {
-                    if (weatherKind !== option.id) onSetWeather(option.id, false);
-                  }}
+                  // Bug fix (weather-audio-stop-race): deliberately calls
+                  // onSetWeather unconditionally, with NO "skip if this is
+                  // already the selected kind" guard. That guard used to
+                  // read `weatherKind` here — a prop that only catches up
+                  // once GameRoom re-renders after a PREVIOUS click's own
+                  // setWeather has resolved. A real, reproduced case (a
+                  // heavy R3F frame delaying that re-render, or a genuinely
+                  // simultaneous double dispatch) let a second click for a
+                  // DIFFERENT kind land while this prop still reflected the
+                  // kind from BEFORE the first click — and if that second
+                  // click's target happened to equal the stale value (e.g.
+                  // clicking 'clear' right after 'thunderstorm', when this
+                  // prop still said 'clear'), this guard silently swallowed
+                  // it: onSetWeather was never called, no DB write was ever
+                  // attempted, and the previous kind's weather audio kept
+                  // playing with no error and no visual sign anything had
+                  // gone wrong. handleSetWeather (GameRoom.tsx) is already
+                  // safe to call unconditionally — its own weatherBusyRef
+                  // gate rejects a genuinely-concurrent second call, and a
+                  // redundant call for the ALREADY-current kind is a cheap,
+                  // correct no-op-in-effect DB write (setWeather is
+                  // idempotent) plus an idempotent applyWeatherAudio
+                  // re-evaluation — so there's no correctness reason left
+                  // to skip the call here, only the staleness risk of
+                  // trying to.
+                  onClick={() => onSetWeather(option.id, false)}
                   data-testid={`weather-select-${option.id}`}
                 >
                   {option.label}
