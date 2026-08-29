@@ -57,7 +57,13 @@ export { buildGridOverlayPositions } from "./gridOverlay";
 // math (MapEditorScene.tsx's ReferenceImagePlane), factored out so
 // GameTableScene's own MapArtPlane reuses it verbatim.
 export { computeMapArtFit } from "./mapArtFit";
-export { PlacedObject, PLACED_OBJECT_SIZE, isWallFamilyUrl, isBuildingPresetUrl } from "./PlacedObject";
+export {
+  PlacedObject,
+  PLACED_OBJECT_SIZE,
+  isWallFamilyUrl,
+  isBuildingPresetUrl,
+  isSolidPresetUrl,
+} from "./PlacedObject";
 export { isSurfaceHostUrl, isSurfacePropUrl, canShareCell } from "./surfaceStack";
 // Avatar's own normalization target — exported for the account/campaign
 // upload flows' rotate-and-confirm preview (OrientationPreview), which must

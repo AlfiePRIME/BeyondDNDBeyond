@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SkillName } from "@/rules-engine";
 
 /**
  * A DM-authored link from a cell on one map to an entry cell on another —
@@ -14,6 +15,16 @@ export interface MapTransition {
   to_map_id: string;
   to_x: number;
   to_y: number;
+  /** Movement Collision & Gated Interaction Checks (0093): gates
+   * GameRoom.tsx's transition confirm-prompt behind a skill check roll —
+   * the map_transitions table's own equivalent of map_objects.
+   * behavior_config's requiredCheck key (src/data-access/mapObjects.ts's
+   * ObjectMovementConfig), needed as a REAL column here since a transition
+   * is a row in its own table, not a jsonb blob. null (every transition
+   * authored before this addition, and every one left unconfigured) offers
+   * the ordinary Yes/No confirm immediately, exactly as before this column
+   * existed. */
+  required_skill: SkillName | null;
   created_at: string;
 }
 
@@ -71,13 +82,25 @@ export async function listMapTransitionsForCampaign(
     to_map_id: row.to_map_id,
     to_x: row.to_x,
     to_y: row.to_y,
+    required_skill: row.required_skill,
     created_at: row.created_at,
   }));
 }
 
 export async function createMapTransition(
   supabase: SupabaseClient,
-  params: { fromMapId: string; fromX: number; fromY: number; toMapId: string; toX: number; toY: number }
+  params: {
+    fromMapId: string;
+    fromX: number;
+    fromY: number;
+    toMapId: string;
+    toX: number;
+    toY: number;
+    /** Movement Collision & Gated Interaction Checks: omitted (or null) by
+     * every call site that predates this addition — see MapTransition.
+     * required_skill's own doc comment. */
+    requiredSkill?: SkillName | null;
+  }
 ): Promise<MapTransition> {
   const { data, error } = await supabase
     .from("map_transitions")
@@ -88,6 +111,7 @@ export async function createMapTransition(
       to_map_id: params.toMapId,
       to_x: params.toX,
       to_y: params.toY,
+      required_skill: params.requiredSkill ?? null,
     })
     .select()
     .single();

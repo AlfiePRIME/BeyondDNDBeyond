@@ -185,11 +185,13 @@ export {
   triggerMapObject,
   revealAllPendingMapObjects,
   parseMapObjectBehavior,
+  parseObjectMovementConfig,
   subscribeToMapObjectChanges,
   MAP_OBJECT_ACTIONS,
   type MapObject,
   type MapObjectAction,
   type MapObjectBehavior,
+  type ObjectMovementConfig,
   type PlacedObjectAsset,
   type CrossingType,
 } from "./mapObjects";

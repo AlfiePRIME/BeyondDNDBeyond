@@ -63,6 +63,7 @@ import {
   moveCombatToken,
   moveMapToken,
   parseMapObjectBehavior,
+  parseObjectMovementConfig,
   listCombatantConditions,
   placeCharacterToken,
   placeNpcToken,
@@ -127,6 +128,7 @@ import {
   type MonsterTemplate,
   type MonsterTemplateOverride,
   type Npc,
+  type ObjectMovementConfig,
   type RollLogEntry,
   type SeenCellSnapshot,
   type SupabaseClient,
@@ -152,6 +154,7 @@ import {
   type ConditionKey,
   type GridPoint,
   type MovementCellInput,
+  type SkillName,
   type VisibilityCellInput,
   type VisibilityTier,
 } from "@/rules-engine";
@@ -181,6 +184,7 @@ import {
   DM_CHAIR_FRONTAGE,
   GameTableScene,
   getEffectiveSeat,
+  isSolidPresetUrl,
   isSurfaceHostUrl,
   isSurfacePropUrl,
   pawnBodyTypeForRace,
@@ -719,6 +723,21 @@ function cellIsVoid(cells: MapCell[], x: number, y: number): boolean {
 // error — a void cell is not expensive, it does not exist as a floor.
 const VOID_CELL_MESSAGE = "There's no floor there — that cell is void, outside the walkable map.";
 
+// Movement Collision & Gated Interaction Checks: a blocking object with no
+// configured action at all (a plain wall, table, ...) — the "just reject
+// the move outright" case, no modal at all. Also used for a blocking
+// object this viewer isn't permitted to interact with at all (not DM, not
+// playerTriggerable): from a mover's own perspective that's exactly as
+// impassable as a plain wall, since there is nothing they can do about it
+// either way.
+const BLOCKED_CELL_MESSAGE = "Something's in the way there — that cell is blocked.";
+
+// Movement Collision & Gated Interaction Checks: tightens the reachable-
+// cell highlight's existing soft occupied-cell exclusion (movement.ts's own
+// occupiedCells doc comment) into a real click-time rejection for any
+// occupied cell that ISN'T a valid click-to-attack target.
+const OCCUPIED_CELL_MESSAGE = "Something's already standing there.";
+
 // Bridges and stairs (crossing structures — a placed OBJECT, not a terrain
 // type; see @/data-access's CrossingType doc comment for the full design):
 // the one place that answers "does cell (x,y) have one", read directly off
@@ -798,8 +817,15 @@ function reachableCellSetForToken(params: {
   cellOverlay: ReadonlyMap<string, CellState>;
   combat: CombatState | null;
   characterRows: Character[];
+  /** Movement Collision & Gated Interaction Checks: every cell a blocking
+   * placed object occupies (see blockingObjectByCellKey's own doc comment,
+   * where this comes from at the call site) — threaded straight into
+   * computeReachableCells' own blockedCells param, so a wall can never
+   * highlight as reachable and then turn out unenforced when a move there
+   * is actually attempted, or vice versa. */
+  blockedCells?: readonly GridPoint[];
 }): Set<string> | null {
-  const { tokenId, liveMap, cellOverlay, combat, characterRows } = params;
+  const { tokenId, liveMap, cellOverlay, combat, characterRows, blockedCells } = params;
   const token = liveMap.tokens.find((candidate) => candidate.id === tokenId);
   if (!token) return null;
   const currentCombatant = currentCombatantOf(combat);
@@ -836,6 +862,7 @@ function reachableCellSetForToken(params: {
     cells,
     budgetFeet,
     occupiedCells,
+    blockedCells,
   });
   return new Set(reachable.map((point) => cellKey(point.x, point.y)));
 }
@@ -2240,6 +2267,49 @@ export function GameRoom({
   } | null>(null);
   const [transitionBusy, setTransitionBusy] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
+
+  // Movement Collision & Gated Interaction Checks: the "roll-then-DM-
+  // continues" flow, modeled directly on pendingAttack's own shape/
+  // lifecycle further below. Set whenever a move-onto or a direct click
+  // hits either (a) a blocking object with a configured action, or (b) a
+  // transition's origin cell — AND that object/transition ALSO has a
+  // requiredCheck/required_skill configured (see attemptObjectTrigger and
+  // maybeOfferTransition below for the two set sites). An object/transition
+  // with an action but NO required check never reaches this state at all —
+  // it fires/offers immediately, today's exact existing behavior.
+  //
+  // `actorCharacterId` is whoever's rolling: the mover's own character for
+  // a move-onto interception (handleSelectedTokenCellClick, handleToken-
+  // Landed's step-on branch, maybeOfferTransition), or the clicking
+  // member's own most-recently-active character for a direct object click
+  // (handleTrigger) — the exact mostRecentOwnToken/ownCharacterIdsRef
+  // idiom handleTakeContainerItem already uses. null when no such character
+  // exists (a bare NPC token, or a DM with no PC in this campaign) —
+  // handleRollInteraction below rejects that case with a clear message
+  // instead of silently sending a bogus roll.
+  const [pendingInteraction, setPendingInteraction] = useState<
+    | {
+        kind: "object";
+        object: MapObject;
+        actionType: "click_trigger" | "step_on_trigger";
+        requiredSkill: SkillName;
+        actorCharacterId: string | null;
+      }
+    | {
+        kind: "transition";
+        token: MapToken;
+        transition: MapTransition;
+        requiredSkill: SkillName;
+        actorCharacterId: string | null;
+      }
+    | null
+  >(null);
+  const [interactionDc, setInteractionDc] = useState("10");
+  const [interactionMode, setInteractionMode] = useState<AdvantageMode>("normal");
+  const [interactionRoll, setInteractionRoll] = useState<{ total: number } | null>(null);
+  const [interactionBusy, setInteractionBusy] = useState(false);
+  const [interactionError, setInteractionError] = useState<string | null>(null);
+
   // Ref, not state: only broadcast/move handlers consult the list, so a
   // fetch landing never needs a re-render.
   const transitionsRef = useRef<MapTransition[]>([]);
@@ -2303,9 +2373,137 @@ export function GameRoom({
           candidate.from_x === token.x &&
           candidate.from_y === token.y
       );
-      if (transition) setTransitionOffer({ token, transition });
+      if (!transition) return;
+      // Movement Collision & Gated Interaction Checks: a required check
+      // gates the ordinary Yes/No confirm behind a roll first —
+      // handleContinueInteraction below sets transitionOffer itself once
+      // the DM continues, so this exact confirm flow runs unaffected
+      // either way, just deferred. No required_skill (every transition
+      // authored before this addition) skips straight to it, unchanged.
+      if (transition.required_skill) {
+        setPendingInteraction({
+          kind: "transition",
+          token,
+          transition,
+          requiredSkill: transition.required_skill,
+          actorCharacterId: token.character_id,
+        });
+        setInteractionDc("10");
+        setInteractionMode("normal");
+        setInteractionRoll(null);
+        setInteractionError(null);
+        return;
+      }
+      setTransitionOffer({ token, transition });
     },
     [currentUserIsDM]
+  );
+
+  // Shared busy-guard for every object-trigger write below (performObject-
+  // Trigger's own persist-then-broadcast, whichever call site reaches it) —
+  // moved up from where handleTrigger used to declare it (this file's own
+  // "declared before every hook that needs it" ordering, since
+  // handleTokenLanded's step-on branch below now shares this too).
+  const triggeringRef = useRef(false);
+
+  /**
+   * Movement Collision & Gated Interaction Checks: the one place an
+   * object's `triggered` state is actually persisted/broadcast/logged —
+   * factored out of the old handleTrigger so BOTH an immediate trigger
+   * (no required check configured) and pendingInteraction's own DM-only
+   * "Continue" button (a required check WAS configured, and the DM just
+   * resolved the roll) go through the exact same write, rather than two
+   * copies that could drift. Re-reads the object fresh off liveMapRef by
+   * id — never trusts a possibly-stale MapObject a caller captured earlier
+   * (pendingInteraction can sit open for a while) — the same freshness
+   * reasoning commitTokenMove's own overlay lookup already documents.
+   */
+  const performObjectTrigger = useCallback(
+    async (objectId: string, actionType: "click_trigger" | "step_on_trigger") => {
+      if (triggeringRef.current) return;
+      const object = liveMapRef.current?.objects.find((candidate) => candidate.id === objectId);
+      const behavior = object ? parseMapObjectBehavior(object.behavior_config) : null;
+      if (!object || !behavior) return;
+      triggeringRef.current = true;
+      setTriggerError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const next = !behavior.triggered;
+        // Persist first (DB is the source of truth for rejoining clients),
+        // then broadcast so already-connected clients update immediately.
+        await triggerMapObject(supabase, object.id, next);
+        applyTriggered(object.id, next);
+        await campaignChannelRef.current?.publish<TriggerPayload>(TRIGGER_EVENT, {
+          objectId: object.id,
+          triggered: next,
+        });
+        // Map Editor Batch A6: the shared interaction-event table.
+        await createInteractionEvent(supabase, {
+          campaignId,
+          mapObjectId: object.id,
+          actionType,
+          tag: object.tag,
+          actorUserId: currentUserId,
+        });
+      } catch (err) {
+        setTriggerError(errorMessage(err) ?? "Could not trigger that object.");
+      } finally {
+        triggeringRef.current = false;
+      }
+    },
+    [campaignId, currentUserId, applyTriggered]
+  );
+
+  /**
+   * The one gate-or-fire decision point for triggering a map object —
+   * shared by handleSelectedTokenCellClick's own move-onto-a-blocking-
+   * object interception and handleTrigger's direct-click path (the task's
+   * own two named call sites), and reused a third time by handleToken-
+   * Landed's step-on branch for the exact same reason: one function that
+   * decides "does this need a roll first", not three copies that could
+   * silently disagree. Synchronous (the caller learns the outcome
+   * immediately) — the "immediate" branch fires performObjectTrigger in
+   * the background rather than awaiting it, matching how a direct click
+   * always behaved before this feature existed (fire-and-forget from the
+   * caller's own perspective; performObjectTrigger's own busy-guard/catch
+   * surfaces any failure into triggerError regardless of whether anyone
+   * awaited it).
+   *
+   * Returns "denied" for a genuinely inert object (no action configured at
+   * all) OR one this viewer isn't permitted to trigger (not DM, not
+   * playerTriggerable) — every existing call site than reaches this exact
+   * condition already no-ops silently (handleTrigger's own precedent); it's
+   * ONLY handleSelectedTokenCellClick's NEW blocking-object interception
+   * that turns "denied" into a visible rejection, its own judgment call
+   * (see that function's own doc comment).
+   */
+  const attemptObjectTrigger = useCallback(
+    (
+      object: MapObject,
+      actionType: "click_trigger" | "step_on_trigger",
+      actorCharacterId: string | null
+    ): "denied" | "gated" | "immediate" => {
+      const behavior = parseMapObjectBehavior(object.behavior_config);
+      if (!behavior || (!currentUserIsDM && !behavior.playerTriggerable)) return "denied";
+      const movement = parseObjectMovementConfig(object.behavior_config);
+      if (movement.requiredCheck) {
+        setPendingInteraction({
+          kind: "object",
+          object,
+          actionType,
+          requiredSkill: movement.requiredCheck.skill,
+          actorCharacterId,
+        });
+        setInteractionDc("10");
+        setInteractionMode("normal");
+        setInteractionRoll(null);
+        setInteractionError(null);
+        return "gated";
+      }
+      void performObjectTrigger(object.id, actionType);
+      return "immediate";
+    },
+    [currentUserIsDM, performObjectTrigger]
   );
 
   // Live sync for a concealed pit's reveal (a player's OWN client never
@@ -2444,6 +2642,40 @@ export function GameRoom({
     [liveMap]
   );
 
+  // Movement Collision & Gated Interaction Checks: every placed object on
+  // the live map whose EFFECTIVE blocking resolves true, keyed by the cell
+  // it sits on — a DM's explicit behavior_config.blocksMovement override
+  // (see mapObjects.ts's ObjectMovementConfig) when set, else the
+  // structural preset default (isSolidPresetUrl), the exact same
+  // "override, else structural default" shape crossingAt/isWallFamilyUrl
+  // already establish elsewhere in this file. Feeds BOTH the reachable-cell
+  // highlight below (via blockedCells) and handleSelectedTokenCellClick's
+  // own click-time rejection, so a cell can never render reachable and then
+  // turn out unenforced, or vice versa.
+  //
+  // Reads `object.asset.model_ref` directly, not the resolved assetUrlById
+  // map (declared later in this component) — for a PRESET row model_ref
+  // already IS the public path these matchers key on (every preset-seeding
+  // migration inserts it that way), and a custom upload's own model_ref (a
+  // storage key) can never coincidentally match a preset path anyway, so
+  // this is exactly equivalent for structural-preset matching without
+  // needing assetUrlById's own later declaration.
+  const blockingObjectByCellKey = useMemo(() => {
+    const map = new Map<string, MapObject>();
+    if (!liveMap) return map;
+    for (const object of liveMap.objects) {
+      const movement = parseObjectMovementConfig(object.behavior_config);
+      const blocks = movement.blocksMovement ?? isSolidPresetUrl(object.asset.model_ref);
+      if (blocks) map.set(cellKey(object.x, object.y), object);
+    }
+    return map;
+  }, [liveMap]);
+
+  const blockedCellsForMovement = useMemo(
+    () => [...blockingObjectByCellKey.keys()].map(parseCellKey),
+    [blockingObjectByCellKey]
+  );
+
   // The click-select flow's targeting aid for THIS client's own selection —
   // see reachableCellSetForToken's doc comment for what null vs. a concrete
   // set means. Recomputed live off combat/liveMap/characterRows, so a
@@ -2457,8 +2689,9 @@ export function GameRoom({
       cellOverlay,
       combat,
       characterRows,
+      blockedCells: blockedCellsForMovement,
     });
-  }, [selectedTokenId, liveMap, cellOverlay, combat, characterRows]);
+  }, [selectedTokenId, liveMap, cellOverlay, combat, characterRows, blockedCellsForMovement]);
 
   const [rulerActive, setRulerActive] = useState(false);
   // Same ahead-of-React ref pattern as liveMapRef: the drag-over stream
@@ -2744,28 +2977,17 @@ export function GameRoom({
           ? parseMapObjectBehavior(steppedOnObject.behavior_config)
           : null;
         if (steppedOnObject && stepBehavior?.triggerOnStepOn) {
-          try {
-            const supabase = createBrowserSupabaseClient();
-            const next = !stepBehavior.triggered;
-            // Same persist-then-broadcast order handleTrigger's click path
-            // already uses (DB is the source of truth for rejoining
-            // clients, then already-connected clients update immediately).
-            await triggerMapObject(supabase, steppedOnObject.id, next);
-            applyTriggered(steppedOnObject.id, next);
-            await campaignChannelRef.current?.publish<TriggerPayload>(TRIGGER_EVENT, {
-              objectId: steppedOnObject.id,
-              triggered: next,
-            });
-            await createInteractionEvent(supabase, {
-              campaignId,
-              mapObjectId: steppedOnObject.id,
-              actionType: "step_on_trigger",
-              tag: steppedOnObject.tag,
-              actorUserId: currentUserId,
-            });
-          } catch (err) {
-            setTriggerError(errorMessage(err) ?? "Could not resolve that trigger.");
-          }
+          // Movement Collision & Gated Interaction Checks: a Perception-
+          // gated (or any other required-check) object opens
+          // pendingInteraction instead of firing immediately — the "move a
+          // token onto it" half of the roll-then-DM-continues flow. No
+          // required check (every triggerOnStepOn object placed before this
+          // addition) still fires here immediately, unaffected. "denied"
+          // can only mean a permission failure, which is impossible here —
+          // this whole branch already runs only on the DM's own
+          // authoritative client (this function's own doc comment) — kept
+          // as a defensive no-op rather than an error nobody would see.
+          attemptObjectTrigger(steppedOnObject, "step_on_trigger", token.character_id);
         }
       }
       if (currentUserIsDM && token.character_id) {
@@ -2927,16 +3149,15 @@ export function GameRoom({
     },
     [
       currentUserIsDM,
-      currentUserId,
       campaignId,
       combat,
       refreshCombat,
       applyTokenChange,
       publishTokenChange,
       applyCellChange,
-      applyTriggered,
       applyPitItemsFound,
       maybeOfferTransition,
+      attemptObjectTrigger,
     ]
   );
 
@@ -3424,43 +3645,28 @@ export function GameRoom({
     refreshCombat,
   ]);
 
-  const triggeringRef = useRef(false);
+  /**
+   * The direct-click path (GameTableScene's onSelectMapObject, via
+   * handleSelectMapObject below, and MapPanel's own interactive-entries
+   * list via its onTrigger prop) — now a thin dispatch onto
+   * attemptObjectTrigger, the exact permission-check-then-gate-or-fire
+   * logic handleSelectedTokenCellClick's own blocking-object interception
+   * shares below, rather than two copies. A "denied" outcome here stays a
+   * silent no-op, the same behavior this function always had (both real
+   * callers already only ever reach a triggerable object in practice —
+   * MapSurfaceObject.selectable and interactiveEntries both already gate
+   * on `behavior !== null && (currentUserIsDM || behavior.playerTriggerable)`
+   * before a click can even land here).
+   */
   const handleTrigger = useCallback(
-    async (object: MapObject) => {
-      const behavior = parseMapObjectBehavior(object.behavior_config);
-      if (!behavior || (!currentUserIsDM && !behavior.playerTriggerable) || triggeringRef.current) {
-        return;
-      }
-      triggeringRef.current = true;
-      setTriggerError(null);
-      try {
-        const supabase = createBrowserSupabaseClient();
-        const next = !behavior.triggered;
-        // Persist first (DB is the source of truth for rejoining clients),
-        // then broadcast so already-connected clients update immediately.
-        await triggerMapObject(supabase, object.id, next);
-        applyTriggered(object.id, next);
-        await campaignChannelRef.current?.publish<TriggerPayload>(TRIGGER_EVENT, {
-          objectId: object.id,
-          triggered: next,
-        });
-        // Map Editor Batch A6: the shared interaction-event table — the
-        // click-trigger path's own write, alongside handleTokenLanded's
-        // step-on write above.
-        await createInteractionEvent(supabase, {
-          campaignId,
-          mapObjectId: object.id,
-          actionType: "click_trigger",
-          tag: object.tag,
-          actorUserId: currentUserId,
-        });
-      } catch (err) {
-        setTriggerError(errorMessage(err) ?? "Could not trigger that object.");
-      } finally {
-        triggeringRef.current = false;
-      }
+    (object: MapObject) => {
+      const actorCharacterId =
+        mostRecentOwnToken(liveMapRef.current?.tokens ?? [], ownCharacterIdsRef.current)?.character_id ??
+        [...ownCharacterIdsRef.current][0] ??
+        null;
+      attemptObjectTrigger(object, "click_trigger", actorCharacterId);
     },
-    [currentUserIsDM, currentUserId, campaignId, applyTriggered]
+    [attemptObjectTrigger]
   );
 
   // Map Editor Batch A4: opens a chest's contents panel when a player
@@ -3606,10 +3812,10 @@ export function GameRoom({
   // the exact same "never send a row before it's safe to" discipline
   // MAP_OBJECT_UPSERTED_EVENT's own doc comment describes for placement.
   const handleSaveLiveObjectBehavior = useCallback(
-    async (objectId: string, behavior: MapObjectBehavior | null) => {
+    async (objectId: string, behavior: MapObjectBehavior | null, movement: ObjectMovementConfig) => {
       try {
         const supabase = createBrowserSupabaseClient();
-        const updated = await setMapObjectBehavior(supabase, objectId, behavior);
+        const updated = await setMapObjectBehavior(supabase, objectId, behavior, movement);
         applyObjectUpserted(updated);
         if (updated.revealed_to_players) {
           await campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
@@ -4234,7 +4440,7 @@ export function GameRoom({
     (x: number, y: number) => {
       const current = liveMapRef.current;
       const tokenId = selectedTokenId;
-      if (!tokenId || !current || tokenBusy || pendingAttack) return;
+      if (!tokenId || !current || tokenBusy || pendingAttack || pendingInteraction) return;
       const token = current.tokens.find((candidate) => candidate.id === tokenId);
       if (!token) {
         // The selected token vanished from under the selection (removed by
@@ -4251,14 +4457,15 @@ export function GameRoom({
       }
       // Click-to-attack: a PC's token clicked onto a cell occupied by a
       // non-party token offers the Roll!/Cancel prompt INSTEAD of moving —
-      // takes priority over the void/reachable checks below since there's
-      // plainly a floor there (a token stands on it) and this isn't really
-      // a move attempt at all. A DM repositioning a bare NPC token
-      // (token.character_id null) never triggers this — only a player's
-      // own PC walking into something offers to fight it. Whether combat
-      // is formally active is irrelevant here (resolvePcAttackOnNpcDamage
+      // takes priority over every check below since there's plainly a
+      // floor there (a token stands on it) and this isn't really a move
+      // attempt at all. A DM repositioning a bare NPC token (token.
+      // character_id null) never triggers this — only a player's own PC
+      // walking into something offers to fight it. Whether combat is
+      // formally active is irrelevant here (resolvePcAttackOnNpcDamage
       // tracks NPC HP independent of it) — "whether in combat or not", per
-      // the feature's own ask.
+      // the feature's own ask. UNAFFECTED by this task's own changes below
+      // — verified via a regression run of verify-click-to-attack.mjs.
       const occupant = current.tokens.find((candidate) => candidate.x === x && candidate.y === y);
       if (occupant && token.character_id && occupant.allegiance !== "party") {
         setSelectedTokenId(null);
@@ -4268,6 +4475,36 @@ export function GameRoom({
         setAttackMode("normal");
         setAttackError(null);
         setPendingAttack({ attackerCharacterId: token.character_id, targetToken: occupant });
+        return;
+      }
+      // Movement Collision & Gated Interaction Checks: any OTHER occupied
+      // cell — a friendly/party token, or a DM repositioning a bare NPC
+      // token with nothing there to attack — is now a real click-time
+      // rejection, not the reachable-set's own silent exclusion further
+      // below (movement.ts's occupiedCells doc comment: excluded from the
+      // HIGHLIGHT, never previously enforced against an actual click).
+      if (occupant) {
+        setTokenError(OCCUPIED_CELL_MESSAGE);
+        return;
+      }
+      // Movement Collision & Gated Interaction Checks: a placed object that
+      // physically blocks this cell is never a plain move destination —
+      // it's either an interaction (an action is configured: gated behind
+      // a roll if a required check is set, fired immediately otherwise,
+      // exactly like a direct click would) or, with nothing configured at
+      // all to interact with, a flat rejection (a wall). Either way the
+      // mover's own token stays put, the same "this click means something
+      // other than moving there" shape click-to-attack's own interception
+      // above already established.
+      const blockingObject = blockingObjectByCellKey.get(cellKey(x, y));
+      if (blockingObject) {
+        const outcome = attemptObjectTrigger(blockingObject, "click_trigger", token.character_id);
+        if (outcome === "denied") {
+          setTokenError(BLOCKED_CELL_MESSAGE);
+          return;
+        }
+        setSelectedTokenId(null);
+        void publishTokenSelection(null);
         return;
       }
       if (cellIsVoid(current.cells, x, y)) {
@@ -4287,6 +4524,9 @@ export function GameRoom({
       selectedTokenId,
       tokenBusy,
       pendingAttack,
+      pendingInteraction,
+      blockingObjectByCellKey,
+      attemptObjectTrigger,
       reachableSetForSelection,
       publishTokenSelection,
       commitTokenMove,
@@ -5329,6 +5569,80 @@ export function GameRoom({
     campaignId,
   ]);
 
+  // Movement Collision & Gated Interaction Checks: pendingInteraction's own
+  // derived display label — a plain "<Skill> check required" title, rather
+  // than resolving an object/transition NAME (pendingAttackTargetName's own
+  // precedent resolves a token's name because attacks always have exactly
+  // one clear target; an object-vs-transition interaction has no single
+  // equally-obvious "who/what" to name, so this keeps the title simple and
+  // always available regardless of source).
+  const pendingInteractionSkill = pendingInteraction?.requiredSkill ?? null;
+
+  const handleCancelInteraction = useCallback(() => {
+    if (interactionBusy) return;
+    setPendingInteraction(null);
+    setInteractionRoll(null);
+    setInteractionError(null);
+  }, [interactionBusy]);
+
+  const handleRollInteraction = useCallback(async () => {
+    if (!pendingInteraction || interactionBusy) return;
+    if (!pendingInteraction.actorCharacterId) {
+      setInteractionError("No character available to make this check.");
+      return;
+    }
+    setInteractionBusy(true);
+    setInteractionError(null);
+    try {
+      const rollEntry = await postRoll(campaignId, {
+        kind: "skill",
+        characterId: pendingInteraction.actorCharacterId,
+        skill: pendingInteraction.requiredSkill,
+        mode: interactionMode,
+      });
+      // The roll lands in every connected client's dice log via
+      // DiceLogPanel's own roll_log subscription, the same "the DB write is
+      // the only source of truth this needs" reasoning pendingAttack's own
+      // handleRollAttack already relies on — this local mirror is only for
+      // the modal's own "Continue" gate below.
+      setInteractionRoll({ total: rollEntry.total });
+    } catch (err) {
+      setInteractionError(errorMessage(err) ?? "Could not roll that check.");
+    } finally {
+      setInteractionBusy(false);
+    }
+  }, [pendingInteraction, interactionBusy, campaignId, interactionMode]);
+
+  /**
+   * DM-only, by explicit design (see pendingInteraction's own doc comment):
+   * performs the underlying action regardless of the roll's pass/fail — the
+   * DC entered above is deliberately never compared against the roll here,
+   * a roleplay/table-fiction input for the DM to weigh, not a server-
+   * enforced gate (the roll route itself never even accepts a DC for a
+   * "skill" roll). An object trigger reuses performObjectTrigger directly;
+   * a transition hands off into setTransitionOffer, so the EXISTING
+   * transitionOffer Yes/No confirm modal takes over from here completely
+   * unmodified.
+   */
+  const handleContinueInteraction = useCallback(async () => {
+    if (!pendingInteraction || interactionBusy || !currentUserIsDM) return;
+    setInteractionBusy(true);
+    setInteractionError(null);
+    try {
+      if (pendingInteraction.kind === "object") {
+        await performObjectTrigger(pendingInteraction.object.id, pendingInteraction.actionType);
+      } else {
+        setTransitionOffer({ token: pendingInteraction.token, transition: pendingInteraction.transition });
+      }
+      setPendingInteraction(null);
+      setInteractionRoll(null);
+    } catch (err) {
+      setInteractionError(errorMessage(err) ?? "Could not continue.");
+    } finally {
+      setInteractionBusy(false);
+    }
+  }, [pendingInteraction, interactionBusy, currentUserIsDM, performObjectTrigger]);
+
   const monsterTemplateById = useMemo(
     () => new Map(initialMonsterTemplates.map((template) => [template.id, template])),
     [initialMonsterTemplates]
@@ -5812,11 +6126,18 @@ export function GameRoom({
     if (visibleSelections.size === 0 || !liveMap || !cellOverlay) return null;
     const combined = new Set<string>();
     for (const tokenId of visibleSelections.keys()) {
-      const reachable = reachableCellSetForToken({ tokenId, liveMap, cellOverlay, combat, characterRows });
+      const reachable = reachableCellSetForToken({
+        tokenId,
+        liveMap,
+        cellOverlay,
+        combat,
+        characterRows,
+        blockedCells: blockedCellsForMovement,
+      });
       if (reachable) for (const key of reachable) combined.add(key);
     }
     return combined.size > 0 ? combined : null;
-  }, [visibleSelections, liveMap, cellOverlay, combat, characterRows]);
+  }, [visibleSelections, liveMap, cellOverlay, combat, characterRows, blockedCellsForMovement]);
 
   // Map Art Generation E5 — same "sign the currently-accepted ref for
   // display" effect shape as the map editor's own signedMapArt effect
@@ -7435,7 +7756,9 @@ export function GameRoom({
           onRevealAll={() => void handleRevealAllPendingLiveObjects()}
           editingObjectId={editingLiveObjectId}
           onSelectEditing={setEditingLiveObjectId}
-          onSaveBehavior={(objectId, behavior) => void handleSaveLiveObjectBehavior(objectId, behavior)}
+          onSaveBehavior={(objectId, behavior, movement) =>
+            void handleSaveLiveObjectBehavior(objectId, behavior, movement)
+          }
           onSaveTag={(objectId, tag) => void handleSaveLiveObjectTag(objectId, tag)}
           busy={liveObjectBusy}
           error={liveObjectError}
@@ -7769,6 +8092,94 @@ export function GameRoom({
             {attackError ? (
               <p role="alert" className={styles.errorText} data-testid="attack-prompt-error">
                 {attackError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
+      {/* Movement Collision & Gated Interaction Checks: the "roll-then-DM-
+          continues" flow — a blocking object with a configured action, or a
+          transition, that ALSO has a required check configured offers this
+          instead of firing/offering immediately. Roll posts an ordinary
+          "skill" roll (the same roll route/dice log every other check
+          already goes through); Continue is DM-only and performs the
+          underlying action regardless of the roll's pass/fail — the DC
+          here is a DM-facing input only, never compared against the roll
+          by this app. */}
+      <Modal
+        open={pendingInteraction !== null}
+        onClose={handleCancelInteraction}
+        title={pendingInteractionSkill ? `${pendingInteractionSkill} check` : "Check required"}
+        footer={
+          pendingInteraction ? (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={interactionBusy}
+                onClick={handleCancelInteraction}
+                data-testid="interaction-prompt-cancel"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="teal"
+                disabled={interactionBusy || !pendingInteraction.actorCharacterId}
+                onClick={() => void handleRollInteraction()}
+                data-testid="interaction-prompt-roll"
+              >
+                {interactionBusy ? "Rolling…" : "Roll"}
+              </Button>
+              {currentUserIsDM ? (
+                <Button
+                  size="sm"
+                  variant="accent"
+                  disabled={interactionBusy || interactionRoll === null}
+                  onClick={() => void handleContinueInteraction()}
+                  data-testid="interaction-prompt-continue"
+                >
+                  Continue
+                </Button>
+              ) : null}
+            </>
+          ) : null
+        }
+      >
+        {pendingInteraction ? (
+          <div data-testid="interaction-prompt-modal">
+            <p className={styles.hint} data-testid="interaction-prompt-skill">
+              Requires <span className={styles.objectName}>{pendingInteraction.requiredSkill}</span>
+            </p>
+            <TextInput
+              label="DC"
+              type="number"
+              value={interactionDc}
+              onChange={(event) => setInteractionDc(event.target.value)}
+              disabled={interactionBusy}
+              data-testid="interaction-prompt-dc"
+            />
+            <AdvantageToggle
+              mode={interactionMode}
+              onChange={setInteractionMode}
+              disabled={interactionBusy}
+              testIdPrefix="interaction-prompt"
+            />
+            {!pendingInteraction.actorCharacterId ? (
+              <p role="alert" className={styles.errorText} data-testid="interaction-prompt-no-character">
+                No character available to make this check.
+              </p>
+            ) : null}
+            {interactionRoll !== null ? (
+              <p className={styles.hint} data-testid="interaction-prompt-result">
+                Rolled <span className={styles.objectName}>{interactionRoll.total}</span> against DC{" "}
+                {interactionDc || "?"}
+                {currentUserIsDM ? " — Continue applies the result either way." : ""}
+              </p>
+            ) : null}
+            {interactionError ? (
+              <p role="alert" className={styles.errorText} data-testid="interaction-prompt-error">
+                {interactionError}
               </p>
             ) : null}
           </div>

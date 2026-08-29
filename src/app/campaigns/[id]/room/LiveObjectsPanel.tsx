@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Button, Select } from "@/ui-components";
-import type { MapObject, MapObjectBehavior } from "@/data-access";
+import type { MapObject, MapObjectBehavior, ObjectMovementConfig } from "@/data-access";
 import { AssetPickerGrid } from "../maps/[mapId]/edit/AssetPickerGrid";
 import { BehaviorEditor } from "../maps/[mapId]/edit/BehaviorEditor";
 import { ObjectTagEditor } from "../maps/[mapId]/edit/ObjectTagEditor";
@@ -77,7 +77,11 @@ export function LiveObjectsPanel({
   /** Which object's behavior/tag editor is currently expanded, if any. */
   editingObjectId: string | null;
   onSelectEditing: (objectId: string | null) => void;
-  onSaveBehavior: (objectId: string, behavior: MapObjectBehavior | null) => void;
+  onSaveBehavior: (
+    objectId: string,
+    behavior: MapObjectBehavior | null,
+    movement: ObjectMovementConfig
+  ) => void;
   onSaveTag: (objectId: string, tag: string | null) => void;
   busy: boolean;
   error: string | null;
@@ -217,7 +221,7 @@ export function LiveObjectsPanel({
           <BehaviorEditor
             key={`live-behavior-${editingObject.id}`}
             object={editingObject}
-            onSave={(behavior) => onSaveBehavior(editingObject.id, behavior)}
+            onSave={(behavior, movement) => onSaveBehavior(editingObject.id, behavior, movement)}
           />
         </>
       ) : null}
