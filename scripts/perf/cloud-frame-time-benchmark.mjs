@@ -16,12 +16,13 @@
 // baseline to compare against within the running app — what this script
 // measures instead is the real cost RANGE across the feature's own
 // lightest and heaviest configurations: weather 'clear' (CLOUD_PRESETS.clear,
-// only 5 of 16 clusters — activeClusters — actually visible, the rest
+// only 5 of 32 clusters — activeClusters — actually visible, the rest
 // scaled to zero every frame) as the light baseline, vs weather
-// 'thunderstorm' (CLOUD_PRESETS.thunderstorm, 16 of 16 clusters, tied with
-// 'cloudy' for the densest coverage of any kind) as the heaviest real
+// 'thunderstorm' (CLOUD_PRESETS.thunderstorm, 32 of 32 clusters, the
+// densest coverage of any kind — double every other kind's own coverage,
+// including 'cloudy's 16, a deliberate heavy increase) as the heaviest real
 // configuration the app can ever actually render. The InstancedMesh itself
-// never resizes between these — same 96 total puffs, one draw call,
+// never resizes between these — same 192 total puffs, one draw call,
 // regardless of weatherKind (TOTAL_CLUSTERS * PUFFS_PER_CLUSTER,
 // CloudLayer.tsx) — so this range brackets the true cost of "the cloud
 // layer existing at all" (light) up to "every visual property it can ever
@@ -235,10 +236,10 @@ try {
   const initialCloud = await cloudState(page);
   console.log(`Weather starts 'clear'; cloud-state: ${JSON.stringify(initialCloud)}`);
 
-  console.log(`\nSampling ${FRAME_COUNT} frames with weather 'clear' (lightest cloud config — 5/16 clusters active)...`);
+  console.log(`\nSampling ${FRAME_COUNT} frames with weather 'clear' (lightest cloud config — 5/32 clusters active)...`);
   const light = await sampleFrameTimes(page, FRAME_COUNT);
 
-  console.log("Setting weather to 'thunderstorm' via direct DB write (same live-sync path a real DM's own click already uses) — the densest cloud coverage (16/16 clusters) of any kind, tied with 'cloudy', plus the fastest drift...");
+  console.log("Setting weather to 'thunderstorm' via direct DB write (same live-sync path a real DM's own click already uses) — the densest cloud coverage (32/32 clusters) of any kind, double every other kind including 'cloudy', plus the fastest drift...");
   const { error: stormError } = await admin.from("campaigns").update({ weather_kind: "thunderstorm" }).eq("id", campaignId);
   if (stormError) throw new Error(`setting weather to thunderstorm: ${stormError.message}`);
   const activeCloud = await waitForCloud(page, (state) => state.kind === "thunderstorm");
@@ -255,8 +256,8 @@ try {
   const deltaPct = (deltaMs / light.avgFrameTimeMs) * 100;
 
   console.log(`\nCloud layer frame-time benchmark (real Game Room scene, ${MAP_GRID}x${MAP_GRID} live map with ${MAP_OBJECT_COUNT} objects):`);
-  console.log(`  Clear (5/16 clusters)        — avg ${light.avgFrameTimeMs.toFixed(2)} ms, worst ${light.maxFrameTimeMs.toFixed(2)} ms (${(1000 / light.avgFrameTimeMs).toFixed(1)} fps)`);
-  console.log(`  Thunderstorm (16/16 clusters) — avg ${heavy.avgFrameTimeMs.toFixed(2)} ms, worst ${heavy.maxFrameTimeMs.toFixed(2)} ms (${(1000 / heavy.avgFrameTimeMs).toFixed(1)} fps)`);
+  console.log(`  Clear (5/32 clusters)               — avg ${light.avgFrameTimeMs.toFixed(2)} ms, worst ${light.maxFrameTimeMs.toFixed(2)} ms (${(1000 / light.avgFrameTimeMs).toFixed(1)} fps)`);
+  console.log(`  Thunderstorm (32/32 clusters) — avg ${heavy.avgFrameTimeMs.toFixed(2)} ms, worst ${heavy.maxFrameTimeMs.toFixed(2)} ms (${(1000 / heavy.avgFrameTimeMs).toFixed(1)} fps)`);
   console.log(`  Delta                         — ${deltaMs >= 0 ? "+" : ""}${deltaMs.toFixed(2)} ms/frame (${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%)`);
   console.log(`  Budget (render3d.maxAvgFrameTimeMs): ${budgetMs} ms`);
 

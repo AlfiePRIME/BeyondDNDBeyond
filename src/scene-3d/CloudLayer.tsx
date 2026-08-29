@@ -86,10 +86,15 @@ export interface CloudPreset {
 
 /** Total cloud formations always allocated (never resized — see
  * CloudPreset.activeClusters' own doc comment for how density actually
- * varies) and puffs per formation. 16 * 6 = 96 total instanced puffs, one
- * draw call regardless of weatherKind — see
- * scripts/perf/cloud-frame-time-benchmark.mjs for the measured real cost. */
-const TOTAL_CLUSTERS = 16;
+ * varies) and puffs per formation. Raised from 16 to 32 (96 -> 192 total
+ * instanced puffs) specifically so thunderstorm could get a genuinely
+ * heavier sky than the old shared 16-cluster ceiling allowed — every other
+ * kind's own activeClusters value is UNCHANGED, so their look is identical
+ * to before this increase; only thunderstorm actually uses the extra
+ * headroom. Still one draw call regardless of weatherKind — see
+ * scripts/perf/cloud-frame-time-benchmark.mjs for the measured real cost
+ * at this new size. */
+const TOTAL_CLUSTERS = 32;
 const PUFFS_PER_CLUSTER = 6;
 const TOTAL_PUFFS = TOTAL_CLUSTERS * PUFFS_PER_CLUSTER;
 
@@ -173,11 +178,14 @@ const PUFF_BRIGHTNESS_MAX = 1.15;
  * - thunderstorm: the darkest, most oppressive palette of any kind — a
  *   near-black charcoal with a faint purple cast (a deliberate nod to this
  *   room's own PURPLE accent light/lightning, without inventing an
- *   unrelated hue) — full coverage (16/16, tied with cloudy), the fastest
- *   drift of any kind (a storm system actively moving through), and the
- *   LOWEST altitude band of any kind — a heavy, low, fast-moving ceiling
- *   directly overhead, matching the synchronized LightningFlash overlay
- *   this same weatherKind already activates.
+ *   unrelated hue) — the DENSEST sky of any kind (32/32, double every other
+ *   kind's own coverage, including cloudy's 16 — a deliberate, heavy
+ *   increase specifically for thunderstorm's own oppressive/overwhelming
+ *   feel, using the extra headroom TOTAL_CLUSTERS was raised to provide),
+ *   the fastest drift of any kind (a storm system actively moving through),
+ *   and the LOWEST altitude band of any kind — a heavy, low, fast-moving
+ *   ceiling directly overhead, matching the synchronized LightningFlash
+ *   overlay this same weatherKind already activates.
  *
  * - firestorm: a burnt orange-brown, read as ash/smoke clouds lit from
  *   below by WeatherParticles' own rising embers — connects directly to
@@ -218,7 +226,7 @@ const CLOUD_PRESETS: Record<WeatherKind, CloudPreset> = {
   cloudy: { color: "#c9cdd9", opacity: 0.95, activeClusters: 16, minY: 6, maxY: 8.5, driftSpeed: 0.9 },
   fog: { color: "#9aa0ad", opacity: 0.7, activeClusters: 9, minY: 5, maxY: 7, driftSpeed: 0.4 },
   rain: { color: "#5b6675", opacity: 0.92, activeClusters: 14, minY: 5.5, maxY: 7.5, driftSpeed: 1.6 },
-  thunderstorm: { color: "#2b2733", opacity: 0.97, activeClusters: 16, minY: 4.5, maxY: 6.5, driftSpeed: 2.2 },
+  thunderstorm: { color: "#2b2733", opacity: 0.97, activeClusters: 32, minY: 4.5, maxY: 6.5, driftSpeed: 2.2 },
   firestorm: { color: "#8a3a1f", opacity: 0.88, activeClusters: 12, minY: 5.5, maxY: 7.5, driftSpeed: 1.2 },
   acid_storm: { color: "#5a7a3f", opacity: 0.88, activeClusters: 12, minY: 5.5, maxY: 7.5, driftSpeed: 1.0 },
 };

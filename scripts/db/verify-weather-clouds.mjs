@@ -92,7 +92,7 @@ const EXPECTED_CLOUD_PRESETS = {
   cloudy: { color: "#c9cdd9", opacity: 0.95, activeClusters: 16, minY: 6, maxY: 8.5, driftSpeed: 0.9 },
   fog: { color: "#9aa0ad", opacity: 0.7, activeClusters: 9, minY: 5, maxY: 7, driftSpeed: 0.4 },
   rain: { color: "#5b6675", opacity: 0.92, activeClusters: 14, minY: 5.5, maxY: 7.5, driftSpeed: 1.6 },
-  thunderstorm: { color: "#2b2733", opacity: 0.97, activeClusters: 16, minY: 4.5, maxY: 6.5, driftSpeed: 2.2 },
+  thunderstorm: { color: "#2b2733", opacity: 0.97, activeClusters: 32, minY: 4.5, maxY: 6.5, driftSpeed: 2.2 },
   firestorm: { color: "#8a3a1f", opacity: 0.88, activeClusters: 12, minY: 5.5, maxY: 7.5, driftSpeed: 1.2 },
   acid_storm: { color: "#5a7a3f", opacity: 0.88, activeClusters: 12, minY: 5.5, maxY: 7.5, driftSpeed: 1.0 },
 };
