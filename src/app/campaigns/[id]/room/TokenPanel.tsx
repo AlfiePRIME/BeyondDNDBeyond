@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { Badge, Button, TextInput, type BadgeTone } from "@/ui-components";
 import { TOKEN_ALLEGIANCES, type Character, type MapToken, type TokenAllegiance } from "@/data-access";
 import styles from "./room.module.css";
@@ -46,6 +47,7 @@ function armedLabel(armed: TokenArm): string {
  * MapPanel's DM-vs-player gating pattern on the opposite side of the room.
  */
 export function TokenPanel({
+  campaignId,
   isDM,
   currentUserId,
   characters,
@@ -58,6 +60,7 @@ export function TokenPanel({
   onRemove,
   onSetAllegiance,
 }: {
+  campaignId: string;
   isDM: boolean;
   currentUserId: string;
   /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
@@ -100,6 +103,14 @@ export function TokenPanel({
     return character?.owner_id === currentUserId;
   }
 
+  /** The Character behind a PC token, only when the viewer can actually
+   * read it — `characters` is already RLS-filtered per viewer (see above),
+   * so a hit here means a sheet link is safe to render. NPC tokens
+   * (character_id null) never resolve. */
+  function characterForToken(token: MapToken): Character | null {
+    return token.character_id ? (characterById.get(token.character_id) ?? null) : null;
+  }
+
   return (
     <aside className={styles.tokenPanel} data-testid="token-panel">
       <span className={styles.panelLabel}>Tokens</span>
@@ -138,7 +149,9 @@ export function TokenPanel({
         <p className={styles.hint}>No tokens on the table yet.</p>
       ) : (
         <div className={styles.tokenSection}>
-          {tokens.map((token) => (
+          {tokens.map((token) => {
+            const owner = characterForToken(token);
+            return (
             <div key={token.id} className={styles.objectRow} data-testid={`token-${token.id}`}>
               <div className={styles.objectHeader}>
                 <span className={styles.objectName}>{tokenLabel(token)}</span>
@@ -148,6 +161,15 @@ export function TokenPanel({
                 <span className={styles.tokenPos} data-testid={`token-pos-${token.id}`}>
                   ({token.x}, {token.y})
                 </span>
+                {owner ? (
+                  <Link
+                    href={`/campaigns/${campaignId}/characters/${owner.id}`}
+                    className={styles.characterLink}
+                    data-testid={`view-sheet-${token.id}`}
+                  >
+                    View sheet
+                  </Link>
+                ) : null}
               </div>
               {canControl(token) ? (
                 <div className={styles.objectHeader}>
@@ -188,7 +210,8 @@ export function TokenPanel({
                 </div>
               ) : null}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

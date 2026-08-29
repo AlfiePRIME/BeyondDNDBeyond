@@ -59,7 +59,7 @@ export {
 } from "./srd/conditions";
 
 export { abilityModifier, proficiencyBonus } from "./abilityScores";
-export { levelOneHitPoints } from "./hitPoints";
+export { levelOneHitPoints, levelUpHitPointGain } from "./hitPoints";
 export { savingThrowBonus, skillCheckBonus, passiveScore } from "./checks";
 export {
   getSpellSlots,
