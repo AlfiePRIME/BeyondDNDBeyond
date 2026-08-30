@@ -259,6 +259,7 @@ import type { ResolvedCharacterPawn } from "./pawn-url";
 import { resolveHandout, type RoomHandout } from "./handout-url";
 import { postRoll } from "../roll/api";
 import { buildDiceTumbleSpec } from "../roll/tumble";
+import { AllegianceBanner, type AllegianceBannerEvent } from "./AllegianceBanner";
 import { ChatDock } from "./ChatDock";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { ChatLogPanel } from "./ChatLogPanel";
@@ -463,6 +464,15 @@ const WHITEBOARD_HEIGHT_SAVE_DEBOUNCE_MS = 300;
 // room to narrate between ticks and players a real chance to react (e.g.
 // retreat off the map) before the next one lands.
 const WEATHER_TICK_INTERVAL_MS = 30_000;
+
+// Global Party Members: a hard cap on how many pending allegiance-change
+// banners (AllegianceBanner.tsx) can queue up at once — a defensive bound
+// only; a DM flipping a realistic handful of tokens in quick succession
+// during setup will never come close to it. Overflow drops the OLDEST
+// still-queued banner rather than the newest, so the queue always reflects
+// the most RECENT handful of changes rather than getting stuck forever
+// replaying a stale backlog.
+const MAX_QUEUED_ALLEGIANCE_BANNERS = 5;
 
 // Prompt: doubling the table along its long edge (table.ts's
 // COMBINED_TABLE_TOP/TABLE_UNITS_LONG_EDGE) made seating.ts's ellipse fit
@@ -1012,6 +1022,46 @@ function errorMessage(err: unknown): string | null {
   return err && typeof err === "object" && "message" in err && typeof err.message === "string"
     ? err.message
     : null;
+}
+
+/**
+ * Global Party Members (AllegianceBanner): REUSES the exact two-tier
+ * character-then-roster-fallback name resolution the token hover-label
+ * block (this file's per-render token-building callback, further down)
+ * already established for "another player's PC token I can't read via
+ * `characters` RLS (0008), but CAN read via the broader
+ * character_roster_names view (0103)" — rather than re-deriving a second
+ * copy of the same fallback chain. Callers pass plain snapshot maps (ref
+ * `.current` reads from pushAllegianceBannerIfNeeded below), so this stays
+ * a synchronous pure function with no closure surprises. Falls through to
+ * "Party member" only in the same should-never-happen combination
+ * TokenPanel.tsx's own tokenLabel already defends against (npc_name null
+ * AND no resolvable character name) — every real token has one of the two
+ * by construction (0019's character_id XOR npc_name constraint).
+ */
+function resolveTokenDisplayName(
+  token: MapToken,
+  characterById: ReadonlyMap<string, Character>,
+  characterRosterNames: ReadonlyMap<string, CharacterRosterName>
+): string {
+  const character = token.character_id ? characterById.get(token.character_id) : undefined;
+  const rosterFallback =
+    character === undefined && token.character_id ? characterRosterNames.get(token.character_id) : undefined;
+  return character?.name ?? rosterFallback?.name ?? token.npc_name ?? "Party member";
+}
+
+/**
+ * Global Party Members: the exact wording for a token's allegiance change,
+ * for the ONLY transitions AllegianceBanner ever announces — anything
+ * involving 'party' in either direction. A bare hostile<->neutral flip (or
+ * no real change at all) returns null, matching the project owner's own
+ * framing: always relative to party status, never between the other two.
+ */
+function allegianceBannerText(name: string, from: TokenAllegiance, to: TokenAllegiance): string | null {
+  if (from === to) return null;
+  if (to === "party") return `${name} has joined the party.`;
+  if (from !== "party") return null;
+  return to === "hostile" ? `${name} has turned hostile.` : `${name} has become neutral.`;
 }
 
 /**
@@ -2345,6 +2395,29 @@ export function GameRoom({
     setPrevCharacterRosterNames(initialCharacterRosterNames);
     setCharacterRosterNames(new Map(initialCharacterRosterNames));
   }
+  // Global Party Members: ref mirrors of characterRosterNames/characterById,
+  // the SAME "read from a stable, near-empty-deps callback declared far
+  // below without forcing it (or the campaign-channel effect its own
+  // handler lives inside) to depend on this directly" reasoning as
+  // ownCharacterIdsRef just below — pushAllegianceBannerIfNeeded (declared
+  // near handleSetAllegiance) and the TOKEN_EVENT handler (inside the
+  // campaign-channel effect) both resolve a changed token's display name
+  // from these on every call, local and remote alike, but characterById/
+  // characterRosterNames change too often (every mid-combat HP/condition
+  // refresh) to safely sit in either's own dependency array. Both `useRef`
+  // calls are declared HERE, up front — characterById itself isn't
+  // computed until much further down this file (it needs characterRows),
+  // but the ref object it will eventually mirror must exist before
+  // pushAllegianceBannerIfNeeded's own closure (declared next, and reading
+  // characterByIdRef.current) is created; only the actual sync effect that
+  // keeps it fresh needs to wait for characterById's real declaration —
+  // see characterByIdRef's own sync effect, right after characterById
+  // further down.
+  const characterRosterNamesRef = useRef<ReadonlyMap<string, CharacterRosterName>>(new Map());
+  const characterByIdRef = useRef<ReadonlyMap<string, Character>>(new Map());
+  useEffect(() => {
+    characterRosterNamesRef.current = new Map(characterRosterNames);
+  }, [characterRosterNames]);
   // Sound Effects SP6 — plays SOUND_KEYS.DEATH the moment a character's
   // is_dead genuinely flips false -> true, live, for every client connected
   // to this room. characterRows already carries is_dead updates live (every
@@ -3142,6 +3215,38 @@ export function GameRoom({
   const [armedToken, setArmedToken] = useState<TokenArm | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  // Global Party Members: the pending AllegianceBanner queue — a plain
+  // FIFO array, oldest first. AllegianceBanner.tsx always renders only
+  // banners[0] and calls handleDismissAllegianceBanner (below) once its own
+  // auto-dismiss timer elapses, which drops that entry and lets the next
+  // one take its place; see that component's own doc comment for why
+  // queuing (not stacking, not "newest replaces current") is the right
+  // shape for rapid-fire changes.
+  const [allegianceBanners, setAllegianceBanners] = useState<AllegianceBannerEvent[]>([]);
+  // `previous`/`next` are the token's own rows immediately before/after a
+  // genuine allegiance change — never looked up again here, always passed
+  // in already-resolved by the ONE local call site (handleSetAllegiance)
+  // and the ONE remote call site (the TOKEN_EVENT handler in the campaign-
+  // channel effect) where an allegiance change can ever actually reach this
+  // client. `[]` deps: only ever reads the two ref mirrors above (kept
+  // fresh independently) and a stable setState — so this callback itself
+  // never needs to change, and adding it to either call site's own
+  // dependency array below never forces THEM to change either.
+  const pushAllegianceBannerIfNeeded = useCallback((previous: MapToken | null, next: MapToken | null) => {
+    if (!previous || !next || previous.allegiance === next.allegiance) return;
+    const text = allegianceBannerText(
+      resolveTokenDisplayName(next, characterByIdRef.current, characterRosterNamesRef.current),
+      previous.allegiance,
+      next.allegiance
+    );
+    if (!text) return;
+    setAllegianceBanners((current) =>
+      [...current, { id: crypto.randomUUID(), text, tone: next.allegiance }].slice(-MAX_QUEUED_ALLEGIANCE_BANNERS)
+    );
+  }, []);
+  const handleDismissAllegianceBanner = useCallback((id: string) => {
+    setAllegianceBanners((current) => current.filter((banner) => banner.id !== id));
+  }, []);
   // Click-to-attack: moving a PC's token onto a non-party-occupied cell
   // offers this instead of the move (see handleSelectedTokenCellClick's own
   // occupant check below) — a Roll!/Cancel prompt, never an actual move
@@ -4036,6 +4141,15 @@ export function GameRoom({
       const previous =
         campaignTokensRef.current.find((candidate) => candidate.id === payload.tokenId) ?? null;
       applyTokenChange(payload.tokenId, payload.token);
+      // Global Party Members: this is the ONLY point every OTHER already-
+      // connected client (the DM's own action already ran this same check
+      // directly in handleSetAllegiance — broadcasts aren't echoed back to
+      // their own sender) ever learns a token's allegiance changed, so
+      // hooking in here (rather than a second, parallel subscription to
+      // TOKEN_EVENT) is what makes a second, idle client see the banner
+      // live. `previous` is already exactly what's needed — the pre-update
+      // row this handler computed above for handleTokenLanded's own sake.
+      pushAllegianceBannerIfNeeded(previous, payload.token);
       const token = payload.token;
       if (token && previous && (previous.x !== token.x || previous.y !== token.y)) {
         void handleTokenLanded(token, previous.elevation, { x: previous.x, y: previous.y });
@@ -4359,6 +4473,7 @@ export function GameRoom({
     applyHandoutChange,
     handleTokenLanded,
     refreshCombat,
+    pushAllegianceBannerIfNeeded,
   ]);
 
   /**
@@ -5381,6 +5496,12 @@ export function GameRoom({
       try {
         const updated = await setTokenAllegiance(createBrowserSupabaseClient(), token.id, allegiance);
         applyTokenChange(updated.id, updated);
+        // Global Party Members: the local half of the banner trigger — the
+        // acting DM's own client never receives its own TOKEN_EVENT
+        // broadcast back (see publishTokenChange's own doc comment just
+        // below), so without this call the DM who actually made the change
+        // would be the one client that never sees the announcement.
+        pushAllegianceBannerIfNeeded(token, updated);
         await publishTokenChange(updated.id, updated);
       } catch (err) {
         setTokenError(errorMessage(err) ?? "Could not change that token's allegiance.");
@@ -5388,7 +5509,7 @@ export function GameRoom({
         setTokenBusy(false);
       }
     },
-    [tokenBusy, applyTokenChange, publishTokenChange]
+    [tokenBusy, applyTokenChange, publishTokenChange, pushAllegianceBannerIfNeeded]
   );
 
   // Persist first, refresh from the DB, broadcast last — the same ordering
@@ -6538,6 +6659,15 @@ export function GameRoom({
     () => new Map(characterRows.map((character) => [character.id, character])),
     [characterRows]
   );
+  // Global Party Members: keeps characterByIdRef (declared alongside
+  // characterRosterNamesRef, much earlier in this file — see its own doc
+  // comment for the full reasoning) fresh now that characterById actually
+  // exists. The `useRef` call itself had to happen earlier so
+  // pushAllegianceBannerIfNeeded's closure could reference the ref object;
+  // this effect is the part that genuinely needs characterById in scope.
+  useEffect(() => {
+    characterByIdRef.current = new Map(characterById);
+  }, [characterById]);
 
   // Pawn Customization P1: every roster member's own account-wide default
   // pawn color (0079), id-keyed by user_id — sourced from `roster` (not
@@ -8070,6 +8200,28 @@ export function GameRoom({
           ChatDock.tsx's own doc comment for why this isn't a DraggablePanel
           entry (B4 supersedes it outright). */}
       <ChatDock onSend={handleSendChat} />
+      {/* Global Party Members: the announcement banner for a token's
+          allegiance changing to/from 'party' — see AllegianceBanner.tsx's
+          own doc comment for the full design (queuing behavior, why it's
+          fed here rather than subscribing to TOKEN_EVENT a second time,
+          auto-dismiss duration). A plain DOM overlay like ChatDock/
+          LightningFlash above, not a 3D scene element, since the message is
+          the same for every viewer regardless of camera. */}
+      <AllegianceBanner banners={allegianceBanners} onDismiss={handleDismissAllegianceBanner} />
+      {/* Hidden render-state mirror for a real Playwright verification of
+          the allegiance banner queue — same "assert the actual internal
+          state, not just what's painted, to avoid racing the real 4-second
+          auto-dismiss timer" reasoning as chat-bubble-state below. Exposes
+          the full pending queue (not just the one currently showing), so a
+          rapid-fire multi-change check can confirm nothing was silently
+          dropped without waiting out every banner's own display time. */}
+      <div data-testid="allegiance-banner-state" hidden>
+        {JSON.stringify({
+          queueLength: allegianceBanners.length,
+          currentText: allegianceBanners[0]?.text ?? null,
+          queuedTexts: allegianceBanners.map((banner) => banner.text),
+        })}
+      </div>
       {/* Hidden render-state mirror for a real Playwright verification of
           the floating chat bubble feature — same "WebGL has no DOM of its
           own" reasoning as every other mirror on this page. Exposes exactly

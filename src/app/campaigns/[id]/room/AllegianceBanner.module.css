@@ -1,0 +1,61 @@
+/*
+ * Global Party Members: a full-width (not full-screen), auto-dismissing
+ * announcement banner for a token's allegiance changing to/from 'party'.
+ * Reuses this app's own CRT/scanline entrance vocabulary (tokens.css's
+ * `fade-up` keyframe) rather than inventing a new animation style — and
+ * that same file's `prefers-reduced-motion` block already collapses every
+ * animation's duration to ~0.01ms globally, so reduced-motion users still
+ * get the banner (with its real text), just without the slide/fade — no
+ * separate media query needed in this file at all.
+ */
+
+.banner {
+  position: fixed;
+  /* Below the top nav-ish chrome, centered, well clear of the DM's/dice
+     trays' usual screen furniture. */
+  top: 76px;
+  left: 50%;
+  translate: -50% 0;
+  /* Below Modal (ui.module.css, 10000) and the handout lightbox
+     (room.module.css's .lightboxOverlay, 10050) — an actual blocking
+     dialog the viewer is already engaging with should still win visually.
+     Above the 3D canvas and every ordinary docked panel (DraggablePanel.
+     module.css's BASE_Z_INDEX/ELEVATED_Z_INDEX top out at 15, its dock bar
+     at 30), so the announcement is never hidden behind normal room chrome. */
+  z-index: 9990;
+  width: min(640px, 92vw);
+  max-width: 92vw;
+  padding: 14px 26px;
+  border-radius: var(--r);
+  border: 1px solid color-mix(in srgb, var(--banner-tone, var(--accent)) 55%, transparent);
+  background: color-mix(in srgb, var(--surface2) 88%, var(--banner-tone, var(--accent)) 12%);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--banner-tone, var(--accent)) 35%, transparent);
+  text-align: center;
+  /* An announcement, not a dialog — nothing inside it is interactive, and
+     it must never intercept a click/drag meant for the 3D scene or a panel
+     underneath it. */
+  pointer-events: none;
+  animation: fade-up 0.35s ease both;
+}
+
+/* Accent color follows the token's NEW allegiance, matching TokenPanel.tsx's
+   own ALLEGIANCE_TONE convention (party/hostile/neutral = teal/red/orange)
+   rather than inventing a separate palette for this one component. */
+.banner[data-tone="party"] {
+  --banner-tone: var(--teal);
+}
+
+.banner[data-tone="hostile"] {
+  --banner-tone: var(--red);
+}
+
+.banner[data-tone="neutral"] {
+  --banner-tone: var(--orange);
+}
+
+.text {
+  font-family: var(--font-h);
+  font-size: 17px;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
