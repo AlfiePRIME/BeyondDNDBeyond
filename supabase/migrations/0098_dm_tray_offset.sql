@@ -1,0 +1,64 @@
+-- Movable DM dice tray (the seat_offset/0044 and dm_book_offset/0094
+-- precedent, adapted a second time): "the dm cant move their dive tray"
+-- [sic] bug report. Root cause: a member's personal dice tray position is
+-- ALWAYS a pure derived value computed from their seat (seating.ts's
+-- computeMemberTrayPosition/resolveMemberTrayLayout) — there has never been
+-- an independent tray offset for anyone. Players' chairs are draggable, and
+-- since a player's tray rides along with their chair, dragging a player's
+-- chair already moves their tray too. The DM's own seat (their throne) is
+-- deliberately NOT draggable (GameTableScene.tsx's draggableUserId is
+-- restricted to role === "player" — out of scope for that earlier prompt,
+-- and the project owner does not want that changed now: the throne should
+-- stay fixed in place, unlike a player's chair), so the DM's tray — being
+-- derived from an undraggable seat — could never move either. Chosen fix
+-- (the project owner's own explicit call, offered a choice of three): add
+-- INDEPENDENT tray-only dragging, scoped to the DM alone. Players keep their
+-- existing tray-follows-chair behavior completely unchanged; this column is
+-- never read or written for a player's row in practice.
+--
+-- Stores the DM's own persisted override for where their personal tray
+-- actually sits, as an OFFSET from GameRoom.tsx's own computed default
+-- position for it (memberTrayPositions' DM entry — computeMemberTrayPosition
+-- + resolveMemberTrayLayout's collision-nudged result) — never an absolute
+-- world coordinate, for the identical reason 0044_seat_offsets.sql and
+-- 0094_dm_book_offset.sql both give: that computed default reshapes as party
+-- size/table arrangement changes (seating.ts's own seat-angle recompute), so
+-- a stored absolute coordinate would silently go stale the moment that
+-- happens — a tray left floating over empty space, or now overlapping a
+-- newly-appended table.
+--
+-- A plain column on campaign_members, the seat_offset/dm_book_offset
+-- precedent exactly — keyed by the DM's OWN (campaign_id, user_id) row, even
+-- though there is only ever one DM per campaign and therefore only ever one
+-- row that will ever have this column non-null. Lives on campaign_members
+-- (not campaigns) for the identical reason dm_book_offset does: RLS
+-- ownership (the self-only UPDATE policy below) and dm-transfer semantics (a
+-- former DM losing this override, a promoted DM starting without one) both
+-- fall out for free by keeping it exactly where seat_offset/dm_book_offset
+-- already live, one column over.
+--
+-- jsonb, { dx, dz } only — the dm_book_offset precedent again, not
+-- seat_offset's three-field shape: confirmed by reading
+-- computeMemberTrayPosition's own return type (seating.ts) before assuming —
+-- it returns a plain [x, y, z] world position with no rotation component at
+-- all (a tray, unlike a chair, has no facing to preserve; DiceTumble.tsx's
+-- own <group position={trayPosition}> render has no rotation prop either).
+-- So there is no dRotationY field to carry, exactly like the book.
+-- data-access/dmTrayOffset.ts's DmTrayOffset interface is the real schema,
+-- the same "app layer owns the shape" convention as seat_offset/
+-- dm_book_offset/ui_preferences.
+--
+-- No new RLS: campaign_members' existing "a member can update their own
+-- membership row" policy (0004) is a blanket
+-- USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid()) with no
+-- column-level restriction — re-confirmed here, not just assumed, by reading
+-- that policy's actual SQL directly (0004_campaign_rls_policies.sql) — the
+-- exact seat_offset/dm_book_offset precedent of an existing blanket
+-- self-only UPDATE policy already covering a brand new column on the same
+-- row. The existing "members can read their campaign's roster" SELECT
+-- policy already covers every other member reading the DM's current tray
+-- position back too — shared, visible table state (every player at the
+-- table sees where the DM's tray actually sits, exactly as they already see
+-- every other connected member's own tray), not private data.
+alter table public.campaign_members
+  add column if not exists dm_tray_offset jsonb null default null;

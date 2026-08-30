@@ -41,6 +41,7 @@ import {
   getCharacter,
   getDiceTrayPreferencesForCampaign,
   getDmBookOffset,
+  getDmTrayOffset,
   getMap,
   getMapArt,
   getMapArtSignedUrl,
@@ -81,6 +82,7 @@ import {
   setDayNightMode,
   setDiceTrayPreference,
   setDmBookOffset,
+  setDmTrayOffset,
   setHandoutRevealed,
   setLiveMap,
   setMapObjectBehavior,
@@ -117,6 +119,7 @@ import {
   type DmBookOffset,
   type DmBookSize,
   type DmNote,
+  type DmTrayOffset,
   type Handout,
   type InteractionEvent,
   type LightSource,
@@ -378,6 +381,18 @@ const DICE_TRAY_PREFERENCE_EVENT = "dice-tray-preference-changed";
 // doc comment): there's only ever one DM's one offset, not a per-member map,
 // so the payload/state below are a single value, never keyed by userId.
 const DM_BOOK_MOVED_EVENT = "dm-book-moved";
+// DM tray move ("the dm cant move their dive tray" [sic]): the exact
+// DM_BOOK_MOVED_EVENT shape/reasoning immediately above, reused for
+// campaign_members.dm_tray_offset instead of dm_book_offset — genuinely
+// persisted state (setDmTrayOffset writes the DB first), broadcast so every
+// already-connected client's own dmTrayPosition (and therefore what
+// ConnectedMemberDiceTray renders for the DM's own tray on every viewer's
+// screen — this tray, unlike the book, is NOT DM-only rendered) updates
+// immediately without an extra read, with the same onReconnect-refetch
+// pairing for a dropped broadcast. There is only ever one DM's one tray
+// offset, never a per-member map (a player's OWN tray still only ever moves
+// by riding along their draggable chair, completely unaffected by this).
+const DM_TRAY_MOVED_EVENT = "dm-tray-moved";
 
 // Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md §5,
 // Prompt 3) — the two-tier sync design §3 concluded this feature needs
@@ -735,6 +750,12 @@ interface DmBookMovedPayload {
   offset: DmBookOffset;
 }
 
+/** DM_TRAY_MOVED_EVENT's payload — the exact DmBookMovedPayload shape,
+ * reused for the DM's personal dice tray instead of their book. */
+interface DmTrayMovedPayload {
+  offset: DmTrayOffset;
+}
+
 /** The live map plus everything needed to render/interact with it. */
 export interface LiveMapData {
   map: CampaignMap;
@@ -1051,6 +1072,7 @@ export function GameRoom({
   initialLorePageLinks,
   initialSeatOffsets,
   initialDmBookOffset,
+  initialDmTrayOffset,
   initialDiceTrayPreferences,
   initialInteractionEvents,
 }: {
@@ -1219,6 +1241,16 @@ export function GameRoom({
    * (handleChairDragEnd below), so a player who joins/reloads after the DM
    * has moved the book must still avoid dropping their chair on top of it. */
   initialDmBookOffset: DmBookOffset | null;
+  /** DM tray move ("the dm cant move their dive tray" [sic]): the DM's own
+   * stored dm_tray_offset at load time (data-access's getDmTrayOffset), or
+   * null if it's never been dragged — the exact initialDmBookOffset
+   * reasoning immediately above, just for the DM's personal dice tray
+   * instead of their book. Read (and needed) by EVERY viewer, not just the
+   * DM's own client — ConnectedMemberDiceTray renders the DM's own tray for
+   * every connected member, not just the DM (unlike the book, which is
+   * DM-only rendered), so a player who joins/reloads after the DM has moved
+   * their tray must still see it in its current, already-moved spot. */
+  initialDmTrayOffset: DmTrayOffset | null;
   /** Per-member dice-tray-model preference (diceTrayPreference.ts) at load
    * time — the same serializable-array-of-pairs shape as
    * initialSeatOffsets, and for the identical reason (a Map can't cross the
@@ -1256,6 +1288,12 @@ export function GameRoom({
   const [dmBookOffset, setDmBookOffsetState] = useState<DmBookOffset | null>(initialDmBookOffset);
   const [dmBookMoveError, setDmBookMoveError] = useState<string | null>(null);
   const dmBookMoveBusyRef = useRef(false);
+  // DM tray move ("the dm cant move their dive tray" [sic]): the exact
+  // dmBookOffset precedent immediately above, for the DM's own personal dice
+  // tray instead of their book. Kept live via DM_TRAY_MOVED_EVENT below.
+  const [dmTrayOffset, setDmTrayOffsetState] = useState<DmTrayOffset | null>(initialDmTrayOffset);
+  const [dmTrayMoveError, setDmTrayMoveError] = useState<string | null>(null);
+  const dmTrayMoveBusyRef = useRef(false);
   const channelRef = useRef<PresenceChannel | null>(null);
   const campaignChannelRef = useRef<PresenceChannel | null>(null);
   // One connected member per personal dice tray (replacing the old single
@@ -1368,6 +1406,15 @@ export function GameRoom({
   // case dmBookPosition below falls back to the already-persisted
   // dmBookOffset exactly as before this feature existed.
   const [liveDmBookOffset, setLiveDmBookOffset] = useState<DmBookOffset | null>(null);
+  // DM tray move: the exact liveDmBookOffset precedent immediately above,
+  // for the DM's own personal dice tray instead of their book —
+  // GameTableScene's own onDmTrayDragMove fires with the world-space delta
+  // since drag start, computed relative to `dmTrayOffset` (the last
+  // PERSISTED offset) each time, the same way handleDmTrayDragMove below
+  // derives it. null whenever nothing is actively being dragged, in which
+  // case dmTrayPosition below falls back to the already-persisted
+  // dmTrayOffset exactly as before this feature existed.
+  const [liveDmTrayOffset, setLiveDmTrayOffset] = useState<DmTrayOffset | null>(null);
   // Per-member dice-tray-model preference (diceTrayPreference.ts), keyed by
   // user_id — the exact seatOffsets shape/reasoning above, reconstructed
   // from page.tsx's serializable array prop, kept live via
@@ -1612,18 +1659,40 @@ export function GameRoom({
     return resolveMemberTrayLayout(seeds, PERSONAL_TRAY_RADIUS, chairObstaclesForTrays);
   }, [connectedMemberIds, layout, liveSeatOffsets, chairObstaclesForTrays]);
   // Hidden-mirror/obstacle-list convenience: the DM's own resolved tray
-  // position specifically — every connected member (the DM included) has an
-  // entry in memberTrayPositions above, so this is just that one lookup,
-  // kept as its own memo purely so the dm-private-tray-state debug mirror
-  // (verify-dm-book.mjs/verify-table-geometry.mjs's own pre-existing
-  // "book vs. tray" checks) and DmBookProp's own obstacle spacing keep
-  // reading from one stable place.
-  const dmTrayPosition = useMemo<[number, number, number]>(() => {
+  // DEFAULT position specifically (before any DM-tray-drag offset is
+  // applied) — every connected member (the DM included) has an entry in
+  // memberTrayPositions above, so this is just that one lookup, kept as its
+  // own memo purely so DmBookProp's own obstacle spacing (and dmTrayPosition
+  // just below) keep reading from one stable place.
+  const dmTrayDefaultPosition = useMemo<[number, number, number]>(() => {
     if (!dmSeat) return [0, TABLE_SURFACE_Y + 0.01, 0];
     return memberTrayPositions.get(dmSeat.member.user_id) ?? [0, TABLE_SURFACE_Y + 0.01, 0];
   }, [dmSeat, memberTrayPositions]);
+  // DM tray move ("the dm cant move their dive tray" [sic]): the tray's
+  // ACTUAL current position — dmTrayDefaultPosition above, translated by
+  // whichever offset is currently in effect (this client's own in-progress
+  // drag if any, else the last persisted one) — the dmBookPosition precedent
+  // immediately below, generalized to the tray. Every reader of "where is
+  // the DM's own tray right now" in this file (the connectedMemberIds render
+  // loop's own trayPosition lookup for the DM's row, the dm-private-tray-state/
+  // dm-tray-offset-state debug mirrors, GameTableScene's own dmTrayPosition
+  // prop) reads THIS, never dmTrayDefaultPosition directly, for the identical
+  // "never a computed value in some call sites and an overridden one in
+  // others" reason seating.ts's own applySeatOffset doc comment gives.
+  const dmTrayPosition = useMemo<[number, number, number]>(() => {
+    const offset = liveDmTrayOffset ?? dmTrayOffset;
+    if (!offset) return dmTrayDefaultPosition;
+    return [
+      dmTrayDefaultPosition[0] + offset.dx,
+      dmTrayDefaultPosition[1],
+      dmTrayDefaultPosition[2] + offset.dz,
+    ];
+  }, [dmTrayDefaultPosition, dmTrayOffset, liveDmTrayOffset]);
   // Phase 5: the DM's book prop's position — same outward-from-origin
-  // direction as the DM's own personal tray (dmTrayPosition above), PLUS a
+  // direction as the DM's own personal tray's DEFAULT spot
+  // (dmTrayDefaultPosition above — the book's own placement is anchored to
+  // the seat's own geometry, not wherever the tray has since been manually
+  // dragged to), PLUS a
   // lateral component (perpendicular to that direction: (-outZ, outX)
   // instead of (outX, outZ)) so the book sits to one side of the tray
   // rather than dead-center on top of it. The lateral magnitude (1.7)
@@ -1675,6 +1744,12 @@ export function GameRoom({
   // "WebGL has no DOM of its own for a test to find a click target"
   // reasoning as bookScreenPosition above.
   const [ownChairScreenPosition, setOwnChairScreenPosition] = useState<[number, number] | null>(null);
+  // DM tray move ("the dm cant move their dive tray" [sic]): this client's
+  // own draggable tray's live screen projection — GameTableScene's
+  // onDmTrayProjectedPosition, the exact bookScreenPosition/
+  // ownChairScreenPosition reasoning above (WebGL has no DOM of its own for
+  // a test to find a click target).
+  const [dmTrayScreenPosition, setDmTrayScreenPosition] = useState<[number, number] | null>(null);
   // Movable chairs: this client's own seated camera position, live —
   // GameTableScene's onOwnCameraDebug's own doc comment. Camera-follow-
   // during-drag was removed (project owner's explicit ask), so this now
@@ -1764,7 +1839,13 @@ export function GameRoom({
           }
           for (const [trayUserId, trayPosition] of memberTrayPositions) {
             if (trayUserId === userId) continue;
-            obstacles.push({ x: trayPosition[0], z: trayPosition[2], radius: PERSONAL_TRAY_RADIUS });
+            // DM tray move: the DM's own entry in memberTrayPositions is
+            // always the pre-drag DEFAULT spot (dmTrayDefaultPosition) — a
+            // dropped chair must avoid wherever the DM's tray has ACTUALLY
+            // been dragged to (dmTrayPosition), the same "current, not
+            // default" substitution dmBookPosition already gets below.
+            const position = trayUserId === dmSeat?.member.user_id ? dmTrayPosition : trayPosition;
+            obstacles.push({ x: position[0], z: position[2], radius: PERSONAL_TRAY_RADIUS });
           }
           obstacles.push({ x: dmBookPosition[0], z: dmBookPosition[2], radius: DM_BOOK_FOOTPRINT_RADIUS });
 
@@ -1793,7 +1874,7 @@ export function GameRoom({
         }
       })();
     },
-    [currentUserId, layout.seats, seats, appendedTables, campaignId, memberTrayPositions, dmBookPosition]
+    [currentUserId, layout.seats, seats, appendedTables, campaignId, memberTrayPositions, dmBookPosition, dmSeat, dmTrayPosition]
   );
 
   // DM book move: DmBookProp's own onDragMove fires with the world-space
@@ -1858,6 +1939,70 @@ export function GameRoom({
       })();
     },
     [dmBookOffset, dmBookDefaultPosition, appendedTables, campaignId, currentUserId]
+  );
+
+  // DM tray move ("the dm cant move their dive tray" [sic]): the exact
+  // handleBookDragMove precedent immediately above, for the DM's own
+  // personal dice tray instead of their book — GameTableScene's own
+  // onDmTrayDragMove fires with the world-space delta since drag START, so
+  // the LIVE offset this client should render is whatever was already
+  // persisted (`dmTrayOffset`) plus that delta. Purely a local, optimistic
+  // visual update: nothing is written to the database or broadcast until the
+  // drag actually ends (handleDmTrayDragEnd below).
+  const handleDmTrayDragMove = useCallback(
+    (delta: { dx: number; dz: number }) => {
+      const base = dmTrayOffset ?? { dx: 0, dz: 0 };
+      setLiveDmTrayOffset({ dx: base.dx + delta.dx, dz: base.dz + delta.dz });
+    },
+    [dmTrayOffset]
+  );
+
+  // DM tray move: the one place a dragged tray's position actually gets
+  // persisted — the handleBookDragEnd precedent immediately above (the
+  // "simpler than the per-member chair case" reasoning applies here too:
+  // there's only one DM tray, so no other member's chair/tray this drop
+  // needs to avoid — matching the existing bar the book already set rather
+  // than exceeding it unprompted). Still clamped to the table arrangement
+  // (clampToTableArrangement) as a plain safety net against dragging the
+  // tray off into empty space — not obstacle-avoidance, just "stay on some
+  // real table". Persist-then-broadcast, the same ordering every other
+  // mutation in this file uses.
+  const handleDmTrayDragEnd = useCallback(
+    (delta: { dx: number; dz: number }) => {
+      if (dmTrayMoveBusyRef.current) return;
+      dmTrayMoveBusyRef.current = true;
+      setDmTrayMoveError(null);
+      void (async () => {
+        try {
+          const supabase = createBrowserSupabaseClient();
+          const base = dmTrayOffset ?? { dx: 0, dz: 0 };
+          const candidateX = dmTrayDefaultPosition[0] + base.dx + delta.dx;
+          const candidateZ = dmTrayDefaultPosition[2] + base.dz + delta.dz;
+          const clamped = clampToTableArrangement(candidateX, candidateZ, appendedTables);
+          const finalOffset: DmTrayOffset = {
+            dx: clamped.x - dmTrayDefaultPosition[0],
+            dz: clamped.z - dmTrayDefaultPosition[2],
+          };
+          await setDmTrayOffset(supabase, campaignId, currentUserId, finalOffset);
+          setDmTrayOffsetState(finalOffset);
+          await campaignChannelRef.current?.publish<DmTrayMovedPayload>(DM_TRAY_MOVED_EVENT, {
+            offset: finalOffset,
+          });
+        } catch (err) {
+          setDmTrayMoveError(errorMessage(err) ?? "Could not save the dice tray's new position.");
+        } finally {
+          // Clears the local optimistic override regardless of success or
+          // failure — on success, `dmTrayOffset` itself now already holds
+          // this exact value (set just above), so dmTrayPosition's own memo
+          // renders identically either way; on failure, this correctly
+          // snaps the tray back to its last known-good persisted spot rather
+          // than leaving it stuck wherever the failed drag left it.
+          setLiveDmTrayOffset(null);
+          dmTrayMoveBusyRef.current = false;
+        }
+      })();
+    },
+    [dmTrayOffset, dmTrayDefaultPosition, appendedTables, campaignId, currentUserId]
   );
 
   // A member's own dice-tray-model choice (DiceTrayPicker, embedded in
@@ -3849,6 +3994,22 @@ export function GameRoom({
       const fresh = await getDmBookOffset(supabase, campaignId).catch(() => undefined);
       if (fresh !== undefined) setDmBookOffsetState(fresh);
     });
+    // DM tray move ("the dm cant move their dive tray" [sic]): the exact
+    // DM_BOOK_MOVED_EVENT doc comment above, reused for the DM's own
+    // personal dice tray — the payload IS the already-persisted value, so a
+    // receiver applies it directly (every client, DM or player, since
+    // ConnectedMemberDiceTray renders the DM's own tray for every connected
+    // member, not just the DM).
+    const unsubscribeDmTrayMoved = channel.subscribe<DmTrayMovedPayload>(DM_TRAY_MOVED_EVENT, (payload) => {
+      setDmTrayOffsetState(payload.offset);
+    });
+    // Same dropped-broadcast reasoning as DM_BOOK_MOVED_EVENT's own
+    // reconnect immediately above — a tray moved while disconnected is gone
+    // from the wire, so re-read the current offset from the DB.
+    const unsubscribeDmTrayMovedReconnect = channel.onReconnect(async () => {
+      const fresh = await getDmTrayOffset(supabase, campaignId).catch(() => undefined);
+      if (fresh !== undefined) setDmTrayOffsetState(fresh);
+    });
     // A member's own dice-tray-model choice — the exact SEAT_MOVED_EVENT
     // shape/reasoning above, reused for diceTrayPreferences instead of
     // seatOffsets.
@@ -3951,6 +4112,8 @@ export function GameRoom({
       unsubscribeSeatMovedReconnect();
       unsubscribeDmBookMoved();
       unsubscribeDmBookMovedReconnect();
+      unsubscribeDmTrayMoved();
+      unsubscribeDmTrayMovedReconnect();
       unsubscribeDiceTrayPreference();
       unsubscribeDiceTrayPreferenceReconnect();
       unsubscribeWhiteboardStrokeStart();
@@ -7424,6 +7587,11 @@ export function GameRoom({
           onChairDraggingChange={handleChairDraggingChange}
           turnCameraActive={turnCameraActive}
           onLiveChairOffset={handleLiveChairOffset}
+          dmTrayPosition={dmTrayPosition}
+          dmTrayDraggable={currentUserIsDM}
+          onDmTrayDragMove={handleDmTrayDragMove}
+          onDmTrayDragEnd={handleDmTrayDragEnd}
+          onDmTrayProjectedPosition={setDmTrayScreenPosition}
           onLookAroundDebug={setLookAroundDebug}
           whiteboardInteractive={currentUserIsDM && drawMode}
           whiteboardHeight={whiteboardHeight}
@@ -7452,7 +7620,13 @@ export function GameRoom({
             different members' rolls animate fully independently since each
             has their own queue. */}
         {connectedMemberIds.map((userId) => {
-          const trayPosition = memberTrayPositions.get(userId);
+          // DM tray move ("the dm cant move their dive tray" [sic]): the
+          // DM's own row reads through dmTrayPosition (the DEFAULT spot PLUS
+          // any persisted/live drag offset), not the raw memberTrayPositions
+          // lookup every other member's row still uses unchanged — a
+          // player's own tray keeps following their draggable chair exactly
+          // as before, with no drag offset of its own ever applied here.
+          const trayPosition = userId === dmSeat?.member.user_id ? dmTrayPosition : memberTrayPositions.get(userId);
           if (!trayPosition) return null;
           const preference = diceTrayPreferences.get(userId) ?? DEFAULT_DICE_TRAY_PREFERENCE;
           const modelUrl =
@@ -7859,12 +8033,19 @@ export function GameRoom({
           seat-layout-state below; a PRIVATE roll still only ever reaches
           the ROLLER's own client's queue entry (handleRollLanded's own
           visibility branch), so a player's own copy of this mirror never
-          shows a DM's private roll queued anywhere. */}
+          shows a DM's private roll queued anywhere. DM tray move ("the dm
+          cant move their dive tray" [sic]): the DM's own entry reads through
+          dmTrayPosition (the DEFAULT spot PLUS any persisted/live drag
+          offset), the exact same substitution the connectedMemberIds render
+          loop above and handleChairDragEnd's own obstacle list already make
+          — otherwise this mirror would keep showing the DM's stale,
+          pre-drag default forever, disagreeing with what's actually
+          rendered and with dm-private-tray-state/dm-tray-offset-state. */}
       <div data-testid="dice-tray-layout-state" hidden>
         {JSON.stringify({
           radius: PERSONAL_TRAY_RADIUS,
           trays: connectedMemberIds.flatMap((userId) => {
-            const position = memberTrayPositions.get(userId);
+            const position = userId === dmSeat?.member.user_id ? dmTrayPosition : memberTrayPositions.get(userId);
             if (!position) return [];
             return [
               {
@@ -7965,10 +8146,33 @@ export function GameRoom({
           never land on the same spot, without either script needing to
           re-derive the seat trigonometry itself. Kept under this same,
           pre-existing test id (rather than renamed) so those two scripts'
-          own "book vs. tray" checks keep working unchanged. */}
+          own "book vs. tray" checks keep working unchanged. `screen` is new
+          (DM tray move, "the dm cant move their dive tray" [sic]) —
+          GameTableScene's onDmTrayProjectedPosition callback, the
+          dm-book-state precedent, so a Playwright drag simulation has real
+          pixel coordinates to press down on. */}
       {currentUserIsDM ? (
         <div data-testid="dm-private-tray-state" hidden>
-          {JSON.stringify({ position: dmTrayPosition })}
+          {JSON.stringify({ position: dmTrayPosition, screen: dmTrayScreenPosition })}
+        </div>
+      ) : null}
+      {/* DM tray move: unlike dm-private-tray-state above, this mirror is
+          NOT gated on currentUserIsDM — the exact dm-book-offset-state
+          precedent, for the identical reason: dmTrayOffset/dmTrayPosition
+          are tracked (and matter) for EVERY client regardless of role, since
+          ConnectedMemberDiceTray renders the DM's own tray for every
+          connected member (not just the DM — unlike the book, this prop is
+          NOT DM-only rendered, so a player's client could in principle read
+          the tray's position from its own real WebGL render position too,
+          but this hidden mirror is still the only DOM-readable way to
+          confirm the DM_TRAY_MOVED_EVENT broadcast itself actually reached a
+          second client without re-deriving screen-space geometry). */}
+      <div data-testid="dm-tray-offset-state" hidden>
+        {JSON.stringify({ offset: dmTrayOffset, position: dmTrayPosition })}
+      </div>
+      {dmTrayMoveError ? (
+        <div data-testid="dm-tray-move-error" hidden>
+          {dmTrayMoveError}
         </div>
       ) : null}
       {/* Hidden render-state mirror for verify-void-terrain.mjs — see the

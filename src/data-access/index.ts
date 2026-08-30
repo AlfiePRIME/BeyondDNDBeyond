@@ -127,6 +127,11 @@ export {
   type DmBookOffset,
 } from "./dmBookOffset";
 export {
+  getDmTrayOffset,
+  setDmTrayOffset,
+  type DmTrayOffset,
+} from "./dmTrayOffset";
+export {
   getDiceTrayPreference,
   getDiceTrayPreferencesForCampaign,
   setDiceTrayPreference,

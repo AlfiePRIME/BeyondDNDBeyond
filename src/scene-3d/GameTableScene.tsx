@@ -35,6 +35,11 @@ import {
 } from "./seating";
 import { SeatAvatar } from "./SeatAvatar";
 import { Chair, SEAT_TOP_Y } from "./Chair";
+// DM tray drag: only needed to size the tray's own invisible grab-handle hit
+// box proportionally to its real footprint (PERSONAL_TRAY_RADIUS) — no
+// circular import risk, DiceTumble.tsx does not import anything from this
+// file.
+import { PERSONAL_TRAY_RADIUS } from "./DiceTumble";
 import {
   MapSurface,
   type MapSurfaceCell,
@@ -349,21 +354,41 @@ const chairDragRaycaster = new Raycaster();
 const chairDragNdc = new Vector2();
 const chairDragHit = new Vector3();
 
-/** Projects a raw pointer event's canvas-relative client coordinates onto
- * the floor plane (see the block comment above) — null only if the ray is
- * parallel to that plane (looking exactly along the horizon), in which case
- * callers simply skip that update and keep whatever position they already
- * had. */
+/** Projects a raw pointer event's canvas-relative client coordinates onto a
+ * horizontal plane at world height `planeY` (see the block comment above) —
+ * null only if the ray is parallel to that plane (looking exactly along the
+ * horizon), in which case callers simply skip that update and keep whatever
+ * position they already had.
+ *
+ * `planeY` defaults to 0 — the floor every dragged CHAIR travels along — so
+ * every pre-existing call site (all of which omit it) is byte-for-byte
+ * unchanged. DM tray drag (below) is the one caller that passes a non-zero
+ * height: the tray sits at table-surface height, not the floor, and
+ * DmBookProp.tsx's own `floorPointAtHeight` establishes why that distinction
+ * matters for a prop that isn't the floor-anchored chair this raycast was
+ * originally built for — raycasting the FLOOR plane for an object that
+ * actually sits much higher up would make its drag track the cursor at the
+ * wrong rate (a low, near-horizon floor-plane intersection is far more
+ * sensitive to camera angle than one much closer to the camera's own
+ * height). Reused (not re-implemented a third time) rather than duplicated
+ * the way DmBookProp.tsx duplicates it: that file is a separate component
+ * with no existing raycast helper of its own to extend, while this one
+ * already has this exact helper right here in the same module. */
 function floorPointFromClientXY(
   camera: Camera,
   canvas: HTMLCanvasElement,
   clientX: number,
-  clientY: number
+  clientY: number,
+  planeY = 0
 ): { x: number; z: number } | null {
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
   chairDragNdc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   chairDragRaycaster.setFromCamera(chairDragNdc, camera);
+  // Plane: normal·point + constant = 0, normal = (0,1,0) ⇒ point.y =
+  // -constant — set fresh per call (DmBookProp.tsx's own floorPointAtHeight
+  // precedent) since this scratch plane is shared across every call site.
+  chairDragPlane.constant = -planeY;
   const hit = chairDragRaycaster.ray.intersectPlane(chairDragPlane, chairDragHit);
   return hit ? { x: chairDragHit.x, z: chairDragHit.z } : null;
 }
@@ -541,6 +566,40 @@ const ownChairPoint = new Vector3();
 const ownChairCameraPos = new Vector3();
 const ownChairForward = new Vector3();
 const ownChairDelta = new Vector3();
+
+// DM tray drag ("the dm cant move their dive tray" [sic] bug report): an
+// independent drag gesture scoped to the DM's own PERSONAL DICE TRAY only —
+// never the DM's throne (that stays fixed, exactly as before; draggableUserId
+// above is still restricted to role === "player" and is completely untouched
+// by any of this) and never a player's own tray (a player's tray keeps
+// riding along with their draggable chair exactly as before — this gesture
+// is additive, not a replacement). The CHAIR_DRAG_HIT_BOX precedent, sized
+// down to this much smaller prop's own real footprint (PERSONAL_TRAY_RADIUS,
+// DiceTumble.tsx) instead of a seated chair-plus-avatar silhouette — bigger
+// than the tray on every side so a grab doesn't need pixel-perfect aim, the
+// same "generous, not exact" hit-box reasoning every other grab handle in
+// this codebase (CHAIR_DRAG_HIT_BOX, DmBookProp's own HIT_BOX) already uses.
+const DM_TRAY_DRAG_HIT_BOX: [number, number, number] = [
+  PERSONAL_TRAY_RADIUS * 2 + 0.3,
+  0.5,
+  PERSONAL_TRAY_RADIUS * 2 + 0.3,
+];
+// Centered a little above the tray's own low rim (DiceTumble.tsx's
+// TRAY_RIM_HEIGHT is 0.075) so the hit box comfortably straddles the whole
+// visible prop, tumbling dice included, without needing to reach all the way
+// down to the felt floor itself.
+const DM_TRAY_DRAG_HANDLE_Y = 0.22;
+
+// Scratch vectors for the DM-tray screen-projection debug callback below —
+// the ownChairPoint/ownChairCameraPos/ownChairForward/ownChairDelta
+// precedent immediately above, kept as its own separate set (rather than
+// reused) since a future refactor to run both projections inside the same
+// useFrame callback should never have to reason about one call site's
+// mutation leaking into the other's.
+const dmTrayProjPoint = new Vector3();
+const dmTrayProjCameraPos = new Vector3();
+const dmTrayProjForward = new Vector3();
+const dmTrayProjDelta = new Vector3();
 
 // The directional light's shadow-camera frustum must cover every
 // shadow-casting seat/chair around the table — whose furthest possible
@@ -1212,6 +1271,57 @@ export interface GameTableSceneProps {
    * `currentUserId`'s own seat — nothing else can ever be mid-drag on this
    * client (draggableUserId's own doc comment). */
   onLiveChairOffset?: (override: { userId: string; offset: SeatOffset } | null) => void;
+  /** DM tray drag ("the dm cant move their dive tray" [sic]): this viewer's
+   * own resolved personal-tray world position — GameRoom.tsx's dmTrayPosition,
+   * the computed default spot (memberTrayPositions' DM entry) PLUS any
+   * persisted/live drag offset already folded in, the exact dmBookPosition
+   * precedent. GameTableScene renders an invisible grab handle at this exact
+   * spot whenever `dmTrayDraggable` is true — never used to render the tray
+   * ITSELF (that's ConnectedMemberDiceTray/DiceTumble, a Canvas sibling of
+   * this component in GameRoom.tsx; this is only the grab handle riding on
+   * top of it). null/undefined renders no grab handle at all (no DM seated
+   * yet — dmSeat is null). */
+  dmTrayPosition?: readonly [number, number, number] | null;
+  /** True only for the current viewer's OWN client while they are this
+   * campaign's DM (GameRoom's own currentUserIsDM — the exact prop name that
+   * file already uses for every other "am I the DM" check). Gates ONLY the
+   * tray grab handle below; draggableUserId above (a player's own chair) is
+   * completely independent of this and never affected by it. This does NOT
+   * make the DM's own THRONE draggable — the project owner explicitly chose
+   * NOT to extend chair/throne dragging to the DM, only to add this
+   * separate, tray-only gesture. */
+  dmTrayDraggable?: boolean;
+  /** DM tray drag: fires continuously (every "pointermove" tick past
+   * pointerdown) with the world-space (x, z) delta from wherever the drag
+   * started — DmBookPropProps.onDragMove's own precedent, reused here
+   * instead of duplicated as a separate component (see this file's own
+   * handleDmTrayPointerDown for why the mechanics live here, next to the
+   * proven chair-drag raycast/session machinery, rather than in a new
+   * standalone file the way DmBookProp.tsx is). No rotation to carry along,
+   * the same "a tray has no facing" reasoning DmTrayOffset (data-access)
+   * documents. GameRoom.tsx adds this to whatever offset was already in
+   * effect before the drag started to get this client's own live,
+   * optimistic tray position. */
+  onDmTrayDragMove?: (delta: { dx: number; dz: number }) => void;
+  /** DM tray drag: fires once, on release, with the FINAL world-space
+   * (x, z) delta from drag start — but only if the gesture actually moved
+   * (ChairDragSession.moved's own "a plain click-and-release with no real
+   * movement fires nothing" convention). Unlike DmBookProp's own onDragEnd,
+   * there is no competing click gesture to fall back to here at all (this
+   * file's own investigation, and the task this was built under, both
+   * confirmed DiceTumble.tsx/ConnectedMemberDiceTray wire up no pointer
+   * handlers of their own for the tray to conflict with) — a zero-movement
+   * press-and-release simply does nothing, the same as a chair's own
+   * ChairDragSession.moved gate. GameRoom.tsx's own onDmTrayDragEnd is where
+   * this delta actually gets persisted (setDmTrayOffset) and broadcast. */
+  onDmTrayDragEnd?: (delta: { dx: number; dz: number }) => void;
+  /** Verification-only: this client's own draggable tray's current on-screen
+   * projection (canvas-relative CSS pixels), or null while it isn't visible
+   * or doesn't exist — the onOwnChairProjectedPosition/DmBookPropProps.
+   * onProjectedPosition precedent, so a Playwright drag simulation has real
+   * pixel coordinates to press down on and drag from. Not read by
+   * GameTableScene itself. */
+  onDmTrayProjectedPosition?: (point: [number, number] | null) => void;
   /** Verification-only: this client's own look-around yaw/pitch offset (see
    * the "Seated look-around" block comment above), in radians, fired
    * whenever it genuinely changes — the same "WebGL has no DOM of its own
@@ -1300,6 +1410,25 @@ interface ChairDragSession {
   latestOffset: SeatOffset | null;
 }
 
+/** One in-progress DM-tray drag's own fixed, per-session parameters — the
+ * ChairDragSession precedent immediately above, adapted the way DmBookProp's
+ * own drag session already adapts it for a single delta-tracked prop: no
+ * grabOffsetX/Z (the tray is dragged by its DELTA from press to release, not
+ * "where under the cursor was it grabbed"), no defaultRotationY/userId (only
+ * ever the current DM's one tray, never keyed). Captured once at
+ * "pointerdown" and read (never re-derived) by the window "pointermove"/
+ * "pointerup" listeners for the rest of that same drag. */
+interface DmTrayDragSession {
+  startFloorX: number;
+  startFloorZ: number;
+  planeY: number;
+  /** False for a plain click-and-release with no real movement in between —
+   * see GameTableSceneProps.onDmTrayDragEnd's own doc comment for why that
+   * fires nothing at all in this case. */
+  moved: boolean;
+  lastDelta: { dx: number; dz: number };
+}
+
 export function GameTableScene({
   members = [],
   currentUserId = null,
@@ -1332,6 +1461,11 @@ export function GameTableScene({
   onChairDraggingChange,
   turnCameraActive = false,
   onLiveChairOffset,
+  dmTrayPosition = null,
+  dmTrayDraggable = false,
+  onDmTrayDragMove,
+  onDmTrayDragEnd,
+  onDmTrayProjectedPosition,
   onLookAroundDebug,
   whiteboardInteractive = false,
   whiteboardHeight = DEFAULT_WHITEBOARD_HEIGHT,
@@ -1533,6 +1667,96 @@ export function GameTableScene({
       window.removeEventListener("pointerup", handleUp);
     };
   }, [isDraggingChair, camera, gl]);
+
+  // DM tray drag ("the dm cant move their dive tray" [sic]): a wholly
+  // separate drag session from the chair one above — completely independent
+  // state, its own ref, never touching draggableUserId/chairDragSessionRef/
+  // localChairOverride in any way. Mirrors DmBookProp.tsx's own drag-session
+  // shape (delta-from-press, not grab-offset-from-anchor — there's only ever
+  // one tray to drag, the DM's own) rather than the chair's, since this
+  // gesture has the book's shape (one singular DM-owned prop), not the
+  // per-seat chair's. Ref-mirrored callbacks (onDmTrayDragMoveRef/
+  // onDmTrayDragEndRef) for the identical reason onChairDragEndRef exists
+  // above: the window "pointermove"/"pointerup" listeners registered inside
+  // handleDmTrayPointerDown below must see the LATEST callback, not whatever
+  // was current at the moment the drag started.
+  const dmTrayDragSessionRef = useRef<DmTrayDragSession | null>(null);
+  const onDmTrayDragMoveRef = useRef(onDmTrayDragMove);
+  useEffect(() => {
+    onDmTrayDragMoveRef.current = onDmTrayDragMove;
+  }, [onDmTrayDragMove]);
+  const onDmTrayDragEndRef = useRef(onDmTrayDragEnd);
+  useEffect(() => {
+    onDmTrayDragEndRef.current = onDmTrayDragEnd;
+  }, [onDmTrayDragEnd]);
+  // Detaches whatever drag's own window listeners are currently attached, if
+  // any — DmBookProp.tsx's own dragCleanupRef precedent: invoked both by
+  // that same drag's own "pointerup" (the ordinary path) and by this
+  // component's unmount cleanup below (the only extraordinary one: a drag
+  // still in flight when this scene itself goes away, e.g. a live map switch
+  // mid-drag).
+  const dmTrayDragCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => dmTrayDragCleanupRef.current?.(), []);
+
+  // Registered SYNCHRONOUSLY inside the handler itself (DmBookProp.tsx's own
+  // handlePointerDown precedent), not via a useEffect keyed off a React
+  // "dragging" state flag — a state update's own effect-commit is
+  // asynchronous, so a genuine zero-travel press-and-release could see
+  // "pointerup" fire on window before an effect-gated listener ever attached
+  // one, silently swallowing the release. There's no competing click gesture
+  // on the tray to lose that way (unlike the book), but the same
+  // synchronous-registration discipline still avoids ever leaking an
+  // attached-but-never-detached listener from a missed release.
+  const handleDmTrayPointerDown = useCallback(
+    (event: ThreeEvent<PointerEvent>) => {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      if (!dmTrayPosition) return;
+      const canvas = gl.domElement;
+      const planeY = dmTrayPosition[1];
+      const floorPoint = floorPointFromClientXY(camera, canvas, event.clientX, event.clientY, planeY);
+      dmTrayDragSessionRef.current = {
+        // A degenerate ray (looking exactly along the horizon — vanishingly
+        // unlikely for this scene's own seated/orbit cameras) falls back to
+        // the tray's own current world (x, z) rather than leaving this
+        // session without a start point at all — DmBookProp.tsx's own
+        // identical fallback.
+        startFloorX: floorPoint?.x ?? dmTrayPosition[0],
+        startFloorZ: floorPoint?.z ?? dmTrayPosition[2],
+        planeY,
+        moved: false,
+        lastDelta: { dx: 0, dz: 0 },
+      };
+
+      function handleMove(moveEvent: PointerEvent) {
+        const session = dmTrayDragSessionRef.current;
+        if (!session) return;
+        const point = floorPointFromClientXY(camera, canvas, moveEvent.clientX, moveEvent.clientY, session.planeY);
+        if (!point) return;
+        const delta = { dx: point.x - session.startFloorX, dz: point.z - session.startFloorZ };
+        session.moved = true;
+        session.lastDelta = delta;
+        onDmTrayDragMoveRef.current?.(delta);
+      }
+      function handleUp() {
+        const session = dmTrayDragSessionRef.current;
+        dmTrayDragSessionRef.current = null;
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+        dmTrayDragCleanupRef.current = null;
+        if (session?.moved) {
+          onDmTrayDragEndRef.current?.(session.lastDelta);
+        }
+      }
+      dmTrayDragCleanupRef.current = () => {
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+      };
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleUp);
+    },
+    [dmTrayPosition, camera, gl]
+  );
 
   const mySeat = seats.find((seat) => seat.member.user_id === currentUserId);
   // Camera-follow-during-drag REMOVED (project owner's explicit ask:
@@ -1809,6 +2033,47 @@ export function GameTableScene({
     if (!last || Math.abs(last[0] - x) > 0.5 || Math.abs(last[1] - y) > 0.5) {
       lastOwnChairScreen.current = [x, y];
       onOwnChairProjectedPosition([x, y]);
+    }
+  });
+
+  // DM tray drag, verification-only: this client's own draggable tray's live
+  // screen projection — the onOwnChairProjectedPosition useFrame immediately
+  // above, generalized from a seat to dmTrayPosition. A SEPARATE useFrame
+  // subscription (not folded into the one above) deliberately: that one's
+  // own early `return`s the moment there's no draggable chair seat would
+  // otherwise skip this logic entirely for a DM with no player chair of
+  // their own — keeping this independent means it always runs exactly when
+  // its own inputs (dmTrayDraggable, dmTrayPosition) say it should, with no
+  // coupling to the chair projection's own control flow.
+  const lastDmTrayScreen = useRef<[number, number] | null>(null);
+  useFrame(() => {
+    if (!onDmTrayProjectedPosition) return;
+    if (!dmTrayDraggable || !dmTrayPosition) {
+      if (lastDmTrayScreen.current !== null) {
+        lastDmTrayScreen.current = null;
+        onDmTrayProjectedPosition(null);
+      }
+      return;
+    }
+    dmTrayProjPoint.set(dmTrayPosition[0], dmTrayPosition[1] + DM_TRAY_DRAG_HANDLE_Y, dmTrayPosition[2]);
+    camera.updateMatrixWorld();
+    dmTrayProjCameraPos.setFromMatrixPosition(camera.matrixWorld);
+    dmTrayProjDelta.copy(dmTrayProjPoint).sub(dmTrayProjCameraPos);
+    camera.getWorldDirection(dmTrayProjForward);
+    if (dmTrayProjDelta.angleTo(dmTrayProjForward) > Math.PI / 2) {
+      if (lastDmTrayScreen.current !== null) {
+        lastDmTrayScreen.current = null;
+        onDmTrayProjectedPosition(null);
+      }
+      return;
+    }
+    dmTrayProjPoint.project(camera);
+    const x = (dmTrayProjPoint.x * size.width) / 2 + size.width / 2;
+    const y = -((dmTrayProjPoint.y * size.height) / 2) + size.height / 2;
+    const last = lastDmTrayScreen.current;
+    if (!last || Math.abs(last[0] - x) > 0.5 || Math.abs(last[1] - y) > 0.5) {
+      lastDmTrayScreen.current = [x, y];
+      onDmTrayProjectedPosition([x, y]);
     }
   });
 
@@ -2128,6 +2393,29 @@ export function GameTableScene({
           own gesture), so there's no per-seat keying needed here. */}
       {isDraggingChair ? (
         <ChairDragGhost targetRef={chairDragGhostTargetRef} onDebug={onChairDragGhostDebug} />
+      ) : null}
+      {/* DM tray drag ("the dm cant move their dive tray" [sic]): an
+          invisible grab handle riding on top of the DM's own personal tray
+          (ConnectedMemberDiceTray/DiceTumble render the actual visible tray
+          — a Canvas sibling of this whole component in GameRoom.tsx; this is
+          only the pointer target). Rendered ONLY for the DM's own client
+          (dmTrayDraggable) and only once dmSeat actually exists
+          (dmTrayPosition non-null) — never for a player, whose own tray
+          keeps its pre-existing chair-follow behavior completely unchanged
+          with no grab handle of its own. This does NOT touch draggableUserId
+          or TableSeat's own chair grab handle above in any way: the DM's
+          throne still renders no grab handle at all, exactly as before. */}
+      {dmTrayDraggable && dmTrayPosition ? (
+        <mesh
+          position={[dmTrayPosition[0], dmTrayPosition[1] + DM_TRAY_DRAG_HANDLE_Y, dmTrayPosition[2]]}
+          onPointerDown={handleDmTrayPointerDown}
+        >
+          <boxGeometry args={DM_TRAY_DRAG_HIT_BOX} />
+          {/* opacity-0, not visible={false} — an invisible mesh is skipped
+              by the raycaster, which would defeat the hit box entirely
+              (CHAIR_DRAG_HIT_BOX/DmBookProp's own precedent). */}
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
       ) : null}
     </>
   );

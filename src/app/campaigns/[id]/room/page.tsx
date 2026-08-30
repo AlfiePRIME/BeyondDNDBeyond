@@ -4,6 +4,7 @@ import {
   getActiveCombatEncounter,
   getDiceTrayPreferencesForCampaign,
   getDmBookOffset,
+  getDmTrayOffset,
   getMap,
   getMapArt,
   getProfile,
@@ -134,6 +135,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     initialLorePageLinks,
     seatOffsetsMap,
     initialDmBookOffset,
+    initialDmTrayOffset,
     diceTrayPreferencesMap,
     initialCampaignTokens,
     initialInteractionEvents,
@@ -215,6 +217,12 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // not gated by currentUserIsDM — see GameRoom's own initialDmBookOffset
     // doc comment for why every client needs this, not just the DM's.
     safe(getDmBookOffset(supabase, campaignId), null, "getDmBookOffset"),
+    // DM tray move ("the dm cant move their dive tray" [sic]): the DM's own
+    // stored dm_tray_offset, the exact getDmBookOffset reasoning immediately
+    // above — fetched for every viewer, not gated by currentUserIsDM, since
+    // ConnectedMemberDiceTray renders the DM's own tray for every connected
+    // member (ungated by role, unlike the DM-only-rendered book).
+    safe(getDmTrayOffset(supabase, campaignId), null, "getDmTrayOffset"),
     // Per-member dice-tray-model preference (Prompt 8a/8b) — same DB-read-
     // not-broadcast reasoning as seatOffsetsMap above: a fresh join or
     // reload must render every connected member's own chosen tray model
@@ -378,6 +386,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       // as a plain array of pairs instead, reconstructed into a Map there.
       initialSeatOffsets={[...seatOffsetsMap.entries()]}
       initialDmBookOffset={initialDmBookOffset}
+      initialDmTrayOffset={initialDmTrayOffset}
       initialDiceTrayPreferences={[...diceTrayPreferencesMap.entries()]}
     />
   );
