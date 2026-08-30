@@ -33,6 +33,13 @@ export interface MapToken {
    * combatants.npc_current_hp from both directions — see
    * resolve_pc_attack_on_npc_damage and apply_npc_hp_delta. */
   current_hp: number | null;
+  /** Press-R-to-rotate (0097_map_token_rotation.sql): degrees, matching
+   * map_objects.rotation's own shape exactly (real, not integer — see that
+   * migration's own doc comment). 0 is the pawn/model's own unrotated
+   * orientation; MapSurface's TokenMarker applies this as a static Y-axis
+   * rotation, composed with (never replacing) forwardOffsetDeg and the
+   * stairs-tilt system — see TokenMarker's own rotationDeg doc comment. */
+  rotation: number;
   created_at: string;
 }
 
@@ -94,6 +101,7 @@ export async function listMapTokensForCampaign(
     elevation: row.elevation,
     allegiance: row.allegiance,
     current_hp: row.current_hp,
+    rotation: row.rotation,
     created_at: row.created_at,
   }));
 }
@@ -312,6 +320,33 @@ export async function setTokenAllegiance(
   const { data, error } = await supabase
     .from("map_tokens")
     .update({ allegiance })
+    .eq("id", tokenId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Press-R-to-rotate: same shape as setTokenAllegiance (a plain single-column
+ * update), allowed for the DM or the token's own owning player under the
+ * SAME "DM, or the owning player, can move a token" UPDATE policy
+ * (0019_map_tokens.sql) moveMapToken already relies on — no new RLS was
+ * needed for this column (0097_map_token_rotation.sql's own doc comment).
+ * Callers pass the already-wrapped 0/90/180/270 target, not a delta —
+ * GameRoom's handleRotateSelectedToken computes `(current + 90) % 360`
+ * before calling this, the same "caller decides the next value" shape
+ * moveMapToken's own position argument already has.
+ */
+export async function rotateMapToken(
+  supabase: SupabaseClient,
+  tokenId: string,
+  rotation: number
+): Promise<MapToken> {
+  const { data, error } = await supabase
+    .from("map_tokens")
+    .update({ rotation })
     .eq("id", tokenId)
     .select()
     .single();

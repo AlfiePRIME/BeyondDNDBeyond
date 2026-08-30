@@ -1,0 +1,22 @@
+-- Token rotation (the project owner's "press R to rotate the selected
+-- token 90 degrees" ask): a same-shaped column to map_objects' own
+-- `rotation` (0014_maps.sql) — `real not null default 0`, not `integer`,
+-- matching that exact precedent rather than a narrower type just because
+-- this feature only ever writes multiples of 90; degrees, not radians,
+-- same as map_objects.rotation, so the render layer's `(rotation * Math.PI)
+-- / 180` conversion is identical for both. `default 0` (map_objects has no
+-- default at all — every insert there always supplies one) because every
+-- EXISTING map_tokens row, and every future placeCharacterToken/
+-- placeNpcToken insert, never sets this column explicitly: 0 is "facing
+-- whatever the pawn's own unrotated orientation already is today", so
+-- backfilling every pre-existing token to 0 is exactly a no-op for how it
+-- already renders.
+--
+-- No new RLS: the existing "DM, or the owning player, can move a token"
+-- UPDATE policy (0019_map_tokens.sql, can_write_map_token) already covers
+-- this — it's a plain per-row USING/WITH CHECK predicate with no
+-- column-level restriction, so it already allows a DM or the token's own
+-- owning player to update ANY column on their own token row, this new one
+-- included, with zero changes needed.
+alter table public.map_tokens
+  add column if not exists rotation real not null default 0;

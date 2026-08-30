@@ -212,6 +212,7 @@ export {
   moveCombatToken,
   transitionMapToken,
   setTokenAllegiance,
+  rotateMapToken,
   deleteMapToken,
   TOKEN_ALLEGIANCES,
   type MapToken,

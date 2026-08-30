@@ -72,6 +72,7 @@ import {
   recordSeenCells,
   removeCondition,
   revealAllPendingMapObjects,
+  rotateMapToken,
   setActionEconomyStrict,
   setCalmMusicEnabled,
   setCombatMusicEnabled,
@@ -4562,6 +4563,67 @@ export function GameRoom({
   }, [selectedTokenId, publishTokenSelection]);
 
   /**
+   * Press-R-to-rotate (the project owner's own ask): rotates the CURRENTLY
+   * SELECTED token 90 degrees, wrapping 0 -> 90 -> 180 -> 270 -> 0. No
+   * separate ownership/DM check here — `selectedTokenId` can only ever be a
+   * token THIS client selected via handleTokenSelect above, which itself
+   * only ever fires for a token MapSurface rendered as `draggable` (the
+   * DM, or the owner of the token's own linked character — see
+   * handleTokenSelect's own doc comment and MapSurfaceToken.draggable's).
+   * A viewer who may select a token has already proven the exact same
+   * permission moving/rotating it needs, so trusting the existing
+   * selection gate here (rather than re-deriving a second, parallel check)
+   * can't let anyone rotate a token they couldn't otherwise touch — and the
+   * "DM, or the owning player, can move a token" UPDATE policy
+   * (0019_map_tokens.sql) enforces the identical rule server-side
+   * regardless of what this client thinks it's allowed to do. Same
+   * persist-then-broadcast-then-apply-locally shape as handleSetAllegiance
+   * just below (a plain single-column update, not a new sync mechanism).
+   */
+  const handleRotateSelectedToken = useCallback(async () => {
+    const current = liveMapRef.current;
+    if (!current || !selectedTokenId || tokenBusy) return;
+    const token = current.tokens.find((candidate) => candidate.id === selectedTokenId);
+    if (!token) return;
+    setTokenBusy(true);
+    setTokenError(null);
+    try {
+      const nextRotation = (token.rotation + 90) % 360;
+      const updated = await rotateMapToken(createBrowserSupabaseClient(), token.id, nextRotation);
+      applyTokenChange(updated.id, updated);
+      await publishTokenChange(updated.id, updated);
+    } catch (err) {
+      setTokenError(errorMessage(err) ?? "Could not rotate that token.");
+    } finally {
+      setTokenBusy(false);
+    }
+  }, [selectedTokenId, tokenBusy, applyTokenChange, publishTokenChange]);
+
+  // The keyboard half of press-R-to-rotate — same window-level-listener/
+  // typing-target-guard shape as MapEditor.tsx's own undo/redo and
+  // number-key tool shortcuts, and GameTableScene's own arrow-key
+  // look-around (`isTypingTarget`) — reused verbatim here for consistency
+  // rather than a differently-shaped check: a naive listener bound straight
+  // to "r" would also fire while the user is typing in the DM's notes, a
+  // chat box, a character name field, or any other text input elsewhere on
+  // the page. Scoped to selection only (the handleSelectionEscape
+  // precedent immediately above), so this listener isn't even attached
+  // while nothing is selected.
+  useEffect(() => {
+    if (!selectedTokenId) return;
+    function handleRotateKey(event: KeyboardEvent) {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key.toLowerCase() !== "r") return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable]")) return;
+      event.preventDefault();
+      void handleRotateSelectedToken();
+    }
+    window.addEventListener("keydown", handleRotateKey);
+    return () => window.removeEventListener("keydown", handleRotateKey);
+  }, [selectedTokenId, handleRotateSelectedToken]);
+
+  /**
    * The one place a token's position actually changes for a real move (not
    * a placement) — cost/budget/void-path/opportunity-attack handling, all
    * in one place so the click-to-confirm flow below can never drift from
@@ -6951,6 +7013,10 @@ export function GameRoom({
           // MapSurface entirely once modelUrl is set — a custom upload or
           // NPC preset model already fully replaces the pawn's shape.
           bodyType: pawnBodyTypeForRace(character?.race),
+          // Press-R-to-rotate: this token's own persisted facing, straight
+          // through from the row — every viewer sees the same rotation,
+          // unlike `raised`/`selected` above, which are per-viewer.
+          rotation: token.rotation,
         }];
       }),
     };
@@ -7845,6 +7911,22 @@ export function GameRoom({
           hasn't settled its first frame yet. */}
       <div data-testid="token-transform-state" hidden>
         {JSON.stringify(tokenTransformDebug)}
+      </div>
+      {/* Hidden render-state mirror for scripts/db/verify-token-rotation.mjs
+          (press-R-to-rotate) — the same "WebGL has no DOM" reasoning as
+          every other mirror on this page, needed specifically to prove a
+          SECOND client's own render state actually updated via the
+          TOKEN_EVENT broadcast (not just that the DB row changed, which a
+          direct admin-client query already shows regardless of whether the
+          broadcast itself ever arrived). Read straight from `liveMap.tokens`
+          — this client's own applyTokenChange target — rather than the
+          heavier derivedTokens memo, since rotation is the only thing this
+          mirror needs. Keyed by map_tokens.id; absent entirely while no map
+          is loaded. */}
+      <div data-testid="token-rotation-state" hidden>
+        {JSON.stringify(
+          Object.fromEntries((liveMap?.tokens ?? []).map((candidate) => [candidate.id, candidate.rotation]))
+        )}
       </div>
       {/* Hidden render-state mirror for the DM's book prop (Phase 5) — same
           "WebGL has no DOM" reasoning as every other mirror on this page.

@@ -823,6 +823,22 @@ const DIMMED_ALLEGIANCE_COLOR: Record<MapTokenAllegiance, string> = {
   neutral: dimmedHex(ALLEGIANCE_COLOR.neutral),
 };
 
+// Press-R-to-rotate's own facing indicator (a plain disc-fallback pawn is
+// rotationally symmetric — disc/stem/head, all centered on the vertical
+// axis — so rotating one is otherwise completely invisible; a model token,
+// modelUrl set, already has its own asymmetric geometry and never renders
+// this). A fixed, neutral parchment/ivory tone used for EVERY allegiance —
+// not a per-allegiance tint (an earlier version of this lightened each
+// ALLEGIANCE_COLOR in HSL space, the dimmedHex shape run in reverse; a real
+// screenshot taken against this exact deployed build showed that a
+// same-hue tint reads as near-invisible low-contrast against the pawn's own
+// body, and worse, an emissive teal-on-teal/red-on-red marker can visually
+// merge with the disc/stem's own glow at this tabletop-mini scale). A
+// clearly different hue reads as "a marker," not "a fourth allegiance
+// color," precisely because every allegiance color (TEAL/red/orange) is
+// saturated while this is a deliberately pale, low-saturation neutral.
+const FACING_INDICATOR_COLOR = "#f5ecd9";
+
 export interface MapSurfaceToken {
   id: string;
   x: number;
@@ -965,6 +981,12 @@ export interface MapSurfaceToken {
    * shape unchanged. Ignored entirely once modelUrl is set — a custom
    * upload or NPC preset model already fully replaces the pawn's shape. */
   bodyType?: PawnBodyType;
+  /** Press-R-to-rotate (map_tokens.rotation, 0097): degrees, the token-side
+   * equivalent of ObjectMarker's own `rotation` placement prop — see
+   * TokenMarker's own `rotationDeg` doc comment for how this composes with
+   * `forwardOffsetDeg` and the stairs-tilt system. undefined/0 (every token
+   * before this feature) renders at exactly today's unrotated orientation. */
+  rotation?: number;
 }
 
 const HP_BAR_WIDTH = 0.7;
@@ -1283,6 +1305,43 @@ const PAWN_BODY_GEOMETRY: Record<PawnBodyType, PawnBodyGeometry> = {
   },
 };
 
+// Press-R-to-rotate's facing indicator: a small vertical SPIKE mounted at
+// the TOP of the pawn's own head, tilted forward (off-center toward local
+// -Z, rotationDeg 0's "front") — deliberately given real vertical height,
+// not just a flat marking painted on the disc's top face, because a flat
+// marking would suffer the exact same "all but disappears at the seat
+// camera's shallow viewing angle" problem this file's own pawn-silhouette
+// comment (just above PAWN_BODY_GEOMETRY) already describes for a bare flat
+// disc.
+//
+// An EARLIER version of this mounted the spike on the DISC's own rim
+// instead (near the stem's own height) — confirmed, via a real screenshot
+// taken against this exact deployed build, to be effectively invisible from
+// the default spectator camera: at x=0 (same as the stem's own central
+// axis), it projected to nearly the same screen column as the opaque stem/
+// head silhouette from a camera looking roughly down the Z axis, hiding
+// behind geometry that was never actually touching it in world space.
+// Mounting it ABOVE the head instead means NOTHING in the model can ever be
+// taller — it always reads as a small "horn"/antenna silhouetted directly
+// against the room background, from any camera azimuth, immune to the
+// occlusion the disc-rim placement suffered.
+//
+// Sized/positioned as a fraction of the "standard" pawn's own head radius
+// and applied uniformly across every PawnBodyType via pawnGeometry.headY/
+// headRadius below, so it sits proportionally in the same place on every
+// build. The direction cue comes from the Z tilt/offset, not the spike's
+// own shape, so a plain upright cone suffices.
+const FACING_INDICATOR_RADIUS = 0.045;
+const FACING_INDICATOR_HEIGHT = 0.18;
+// Fraction of the head's own radius the spike's BASE sinks into the head
+// sphere by (a natural "sprouting from the head" look, rather than
+// balancing tangentially on top of it).
+const FACING_INDICATOR_HEAD_SINK_FRACTION = 0.55;
+// Fraction of the head's own radius the spike is tilted forward (local -Z)
+// by — enough to clearly read as "the front", not so much that it drifts
+// out from directly above the head's own silhouette.
+const FACING_INDICATOR_FORWARD_FRACTION = 0.55;
+
 const TokenMarker = memo(function TokenMarker({
   id,
   gridX,
@@ -1316,6 +1375,7 @@ const TokenMarker = memo(function TokenMarker({
   crossingRotationDeg,
   crossingTiltPitchMagnitude,
   bodyType,
+  rotationDeg,
   onPointerDown,
   onSlideDebug,
   onMeasureDebug,
@@ -1370,6 +1430,24 @@ const TokenMarker = memo(function TokenMarker({
   /** Race-variant pawns: see MapSurfaceToken.bodyType's own doc comment.
    * Only ever read in the disc-fallback (no modelUrl) branch below. */
   bodyType: PawnBodyType;
+  /** Press-R-to-rotate: degrees, applied as a STATIC (never animated) Y-axis
+   * rotation on a group wrapping ONLY the model/pawn visual (not the HP
+   * bar/condition badges/hitbox/selection ring, which stay put — a real
+   * tabletop mini's health doesn't move when you spin it) — deliberately
+   * NOT applied to the `ref={slideRef}` group useTokenSlide owns: that
+   * group's own `.rotation` is overwritten every frame by useTokenSlide's
+   * useFrame (pitch/tiltYaw for the stairs-tilt system), so a rotation set
+   * there via JSX would be clobbered the very next frame. Composes with
+   * `forwardOffsetDeg` and the stairs tilt the exact same way ObjectMarker's
+   * own `rotation` prop already composes with PlacedObject's own
+   * `forwardOffsetDeg` inner rotation for placed objects — two nested
+   * Y-axis rotations, not one blended value — rather than folding this into
+   * either of those existing mechanisms. A snap (never eased/tweened): "set
+   * facing" is a discrete pose change, not a move, so this deliberately
+   * doesn't ride useTokenSlide's tween the way a real position/tilt change
+   * does. 0/undefined (every token before this feature) renders at exactly
+   * today's orientation. */
+  rotationDeg: number;
   onPointerDown: (id: string, event: ThreeEvent<PointerEvent>) => void;
   onSlideDebug?: (id: string, phase: TokenSlidePhase) => void;
   /** Verification-only: see MapSurfaceProps.onTokenMeasureDebug's doc
@@ -1481,74 +1559,106 @@ const TokenMarker = memo(function TokenMarker({
   return (
     <group ref={slideRef} scale={scale}>
       <group position={[0, raised ? RAISE_HEIGHT : 0, 0]}>
-        {modelUrl ? (
-          // Weather & Enemies C6: a template-linked NPC token — a distinct
-          // generated model (see generate-monster-presets.mjs) through the
-          // SAME PlacedObject/PropModel component MapSurfaceObject already
-          // renders decorative props with (same maxDim-based single-cell
-          // normalization, no bespoke scaling logic here). A thin allegiance-
-          // colored "miniature base" plinth sits under it — the real
-          // tabletop-mini convention — so a DM can still read
-          // party/hostile/neutral at a glance even though the model itself
-          // isn't allegiance-tinted (deliberate: these creature types
-          // already have a strong, fixed identity color of their own; see
-          // this prompt's own final report for the reasoning).
-          <>
-            <mesh position={[0, PLINTH_HEIGHT / 2, 0]}>
-              <cylinderGeometry args={[0.28, 0.32, PLINTH_HEIGHT, 20]} />
-              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
-            </mesh>
-            <group position={[0, PLINTH_HEIGHT, 0]}>
-              <PlacedObject
-                url={modelUrl}
-                forwardOffsetDeg={forwardOffsetDeg}
-                onMeasureDebug={onMeasureDebug ? (measurement) => onMeasureDebug(id, measurement) : undefined}
-              />
-            </group>
-            {dimmed ? (
-              // Same translucent shroud ObjectMarker overlays on a dimmed
-              // placed object (DIM_SHROUD_COLOR) — a model can't be
-              // recolored the disc's dimmed-hex way (PlacedObject has no
-              // per-material-swap hook for that), so this is the model
-              // path's own equivalent "you only dimly perceive this"
-              // treatment.
-              <mesh position={[0, PLINTH_HEIGHT + HIT_BOX_HEIGHT / 2, 0]}>
-                <boxGeometry args={[PLACED_OBJECT_SIZE, HIT_BOX_HEIGHT, PLACED_OBJECT_SIZE]} />
-                <meshBasicMaterial color={DIM_SHROUD_COLOR} transparent opacity={0.6} depthWrite={false} />
+        {
+          // Press-R-to-rotate: a static Y-axis rotation wrapping ONLY the
+          // model/pawn visual below — see TokenMarker's own `rotationDeg`
+          // doc comment for why this is a separate group rather than a prop
+          // on either the slide-driven group above or PlacedObject's own
+          // forwardOffsetDeg rotation.
+        }
+        <group rotation={[0, (rotationDeg * Math.PI) / 180, 0]}>
+          {modelUrl ? (
+            // Weather & Enemies C6: a template-linked NPC token — a distinct
+            // generated model (see generate-monster-presets.mjs) through the
+            // SAME PlacedObject/PropModel component MapSurfaceObject already
+            // renders decorative props with (same maxDim-based single-cell
+            // normalization, no bespoke scaling logic here). A thin allegiance-
+            // colored "miniature base" plinth sits under it — the real
+            // tabletop-mini convention — so a DM can still read
+            // party/hostile/neutral at a glance even though the model itself
+            // isn't allegiance-tinted (deliberate: these creature types
+            // already have a strong, fixed identity color of their own; see
+            // this prompt's own final report for the reasoning).
+            <>
+              <mesh position={[0, PLINTH_HEIGHT / 2, 0]}>
+                <cylinderGeometry args={[0.28, 0.32, PLINTH_HEIGHT, 20]} />
+                <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
               </mesh>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <mesh position={[0, pawnGeometry.discY, 0]}>
-              <cylinderGeometry args={pawnGeometry.discArgs} />
-              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
-            </mesh>
-            <mesh position={[0, pawnGeometry.stemY, 0]}>
-              <cylinderGeometry args={pawnGeometry.stemArgs} />
-              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
-            </mesh>
-            {pawnGeometry.shoulders ? (
-              // The "bulky" build's own detail — a pair of small shoulder
-              // spheres flanking the stem, the one variant a uniform resize
-              // alone couldn't sell as visibly broader at this tiny scale.
-              <>
-                <mesh position={[-pawnGeometry.shoulders.x, pawnGeometry.shoulders.y, 0]}>
-                  <sphereGeometry args={[pawnGeometry.shoulders.radius, 12, 12]} />
-                  <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+              <group position={[0, PLINTH_HEIGHT, 0]}>
+                <PlacedObject
+                  url={modelUrl}
+                  forwardOffsetDeg={forwardOffsetDeg}
+                  onMeasureDebug={onMeasureDebug ? (measurement) => onMeasureDebug(id, measurement) : undefined}
+                />
+              </group>
+              {dimmed ? (
+                // Same translucent shroud ObjectMarker overlays on a dimmed
+                // placed object (DIM_SHROUD_COLOR) — a model can't be
+                // recolored the disc's dimmed-hex way (PlacedObject has no
+                // per-material-swap hook for that), so this is the model
+                // path's own equivalent "you only dimly perceive this"
+                // treatment.
+                <mesh position={[0, PLINTH_HEIGHT + HIT_BOX_HEIGHT / 2, 0]}>
+                  <boxGeometry args={[PLACED_OBJECT_SIZE, HIT_BOX_HEIGHT, PLACED_OBJECT_SIZE]} />
+                  <meshBasicMaterial color={DIM_SHROUD_COLOR} transparent opacity={0.6} depthWrite={false} />
                 </mesh>
-                <mesh position={[pawnGeometry.shoulders.x, pawnGeometry.shoulders.y, 0]}>
-                  <sphereGeometry args={[pawnGeometry.shoulders.radius, 12, 12]} />
-                  <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
-                </mesh>
-              </>
-            ) : null}
-            <mesh position={[0, pawnGeometry.headY, 0]}>
-              <sphereGeometry args={[pawnGeometry.headRadius, 16, 16]} />
-              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5 * emissiveScale} roughness={0.35} />
-            </mesh>
-          </>
-        )}
+              ) : null}
+            </>
+          ) : (
+            <>
+              <mesh position={[0, pawnGeometry.discY, 0]}>
+                <cylinderGeometry args={pawnGeometry.discArgs} />
+                <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+              </mesh>
+              <mesh position={[0, pawnGeometry.stemY, 0]}>
+                <cylinderGeometry args={pawnGeometry.stemArgs} />
+                <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+              </mesh>
+              {pawnGeometry.shoulders ? (
+                // The "bulky" build's own detail — a pair of small shoulder
+                // spheres flanking the stem, the one variant a uniform resize
+                // alone couldn't sell as visibly broader at this tiny scale.
+                <>
+                  <mesh position={[-pawnGeometry.shoulders.x, pawnGeometry.shoulders.y, 0]}>
+                    <sphereGeometry args={[pawnGeometry.shoulders.radius, 12, 12]} />
+                    <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+                  </mesh>
+                  <mesh position={[pawnGeometry.shoulders.x, pawnGeometry.shoulders.y, 0]}>
+                    <sphereGeometry args={[pawnGeometry.shoulders.radius, 12, 12]} />
+                    <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
+                  </mesh>
+                </>
+              ) : null}
+              <mesh position={[0, pawnGeometry.headY, 0]}>
+                <sphereGeometry args={[pawnGeometry.headRadius, 16, 16]} />
+                <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5 * emissiveScale} roughness={0.35} />
+              </mesh>
+              {
+                // Press-R-to-rotate's facing indicator — see this file's own
+                // FACING_INDICATOR_RADIUS/HEIGHT doc comment for why this
+                // needs real height rather than a flat marking, and why a
+                // model token (the other branch above) never renders one.
+              }
+              <mesh
+                position={[
+                  0,
+                  pawnGeometry.headY +
+                    pawnGeometry.headRadius * FACING_INDICATOR_HEAD_SINK_FRACTION +
+                    FACING_INDICATOR_HEIGHT / 2,
+                  -(pawnGeometry.headRadius * FACING_INDICATOR_FORWARD_FRACTION),
+                ]}
+              >
+                <coneGeometry args={[FACING_INDICATOR_RADIUS, FACING_INDICATOR_HEIGHT, 10]} />
+                <meshStandardMaterial
+                  color={FACING_INDICATOR_COLOR}
+                  emissive={FACING_INDICATOR_COLOR}
+                  emissiveIntensity={0.6 * emissiveScale}
+                  roughness={0.35}
+                />
+              </mesh>
+            </>
+          )}
+        </group>
         {hpCurrent !== null && hpMax !== null ? <TokenHpBar current={hpCurrent} max={hpMax} /> : null}
         {conditionLabels !== "" ? <TokenConditionBadges labels={conditionLabels} /> : null}
         {deathSaveLabel !== "" ? <TokenDeathSaveBadge label={deathSaveLabel} /> : null}
@@ -1995,6 +2105,7 @@ export function MapSurface({
           }
           crossingTiltPitchMagnitude={crossingTiltPitchRadians(token.crossingSurface)}
           bodyType={token.bodyType ?? "standard"}
+          rotationDeg={token.rotation ?? 0}
           onPointerDown={onTokenPointerDown ?? NOOP_SELECT}
           onSlideDebug={onTokenSlideDebug}
           onMeasureDebug={onTokenMeasureDebug}

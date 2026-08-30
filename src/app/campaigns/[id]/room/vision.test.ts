@@ -29,6 +29,7 @@ function token(overrides: Partial<MapToken>): MapToken {
     elevation: 0,
     allegiance: "party",
     current_hp: null,
+    rotation: 0,
     created_at: "2026-08-24T10:00:00.000Z",
     ...overrides,
   };
