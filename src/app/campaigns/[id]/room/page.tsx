@@ -11,6 +11,7 @@ import {
   getSeatOffsetsForCampaign,
   listAssetsForCampaign,
   listCampaignMembers,
+  listCharacterRosterNames,
   listCharactersForCampaign,
   listChatMessages,
   listCombatCombatants,
@@ -133,6 +134,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     assets,
     availableMaps,
     characters,
+    characterRosterNamesMap,
     handoutRows,
     initialRolls,
     initialChatMessages,
@@ -162,6 +164,12 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
     // Characters RLS trims this per viewer: a player gets only their own,
     // the DM gets every campaign character — exactly who each may place.
     safe(listCharactersForCampaign(supabase, campaignId), [], "listCharactersForCampaign"),
+    // Token hover-name fallback: character_roster_names (0103) is readable
+    // by EVERY campaign member (is_campaign_member), unlike `characters`
+    // immediately above — fetched for every viewer so a player's own client
+    // can label ANOTHER player's token, not just their own/the DM's full
+    // rows. See GameRoom.tsx's own initialCharacterRosterNames doc comment.
+    safe(listCharacterRosterNames(supabase, campaignId), new Map(), "listCharacterRosterNames"),
     // Handouts RLS trims per viewer too: every row for the DM, revealed
     // rows only for a player.
     safe(listHandouts(supabase, campaignId), [], "listHandouts"),
@@ -370,6 +378,10 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       availableMaps={availableMaps}
       assets={paletteAssets}
       characters={characters}
+      // A Map isn't a serializable Server → Client component prop — same
+      // reasoning/shape as initialSeatOffsets below: a plain array of
+      // [id, {id, name, level}] pairs, reconstructed into a Map in GameRoom.
+      initialCharacterRosterNames={[...characterRosterNamesMap.entries()]}
       initialStatBlocks={initialStatBlocks}
       initialMonsterTemplates={initialMonsterTemplates}
       initialTemplateOverrides={initialTemplateOverrides}

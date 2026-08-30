@@ -46,6 +46,7 @@ import {
   getMapArt,
   getMapArtSignedUrl,
   getSeatOffsetsForCampaign,
+  listCharacterRosterNames,
   listCharactersForCampaign,
   listCombatCombatants,
   listCombatantHiddenFrom,
@@ -111,6 +112,7 @@ import {
   type CampaignMap,
   type ChatMessage,
   type Character,
+  type CharacterRosterName,
   type CombatCombatant,
   type CombatantEconomyFlag,
   type ConcealedPit,
@@ -1079,6 +1081,7 @@ export function GameRoom({
   availableMaps,
   assets,
   characters,
+  initialCharacterRosterNames,
   initialStatBlocks,
   initialMonsterTemplates,
   initialTemplateOverrides,
@@ -1152,6 +1155,24 @@ export function GameRoom({
   assets: PaletteAsset[];
   /** RLS-filtered per viewer: a player's own characters, or all for the DM. */
   characters: Character[];
+  /** Token hover-name fallback (fixing "enemy tokens show a hover name, but
+   * party ones from another player don't"): character_roster_names (0103),
+   * a narrow view readable by ANY campaign member (is_campaign_member),
+   * unlike `characters` immediately above (owner-or-DM-only, 0008) — id/
+   * name/level only, nothing else. A plain array of [id, {id, name, level}]
+   * pairs at the Server → Client boundary (same reasoning as
+   * initialSeatOffsets further below), reconstructed into a Map just below.
+   * Kept fresh alongside combat refreshes (refreshCombat), the SAME
+   * "campaign-wide character data" refetch trigger `characters` itself
+   * rides via listCharactersForCampaign — a level-up on the DM's party
+   * dashboard (a different route, with no push into an open Game Room
+   * today for ANY character field, own or otherwise) reaches this on the
+   * next combat-changed poke or reload, not instantly; genuinely instant
+   * cross-route sync would need new plumbing this fix deliberately doesn't
+   * add. The existing "my own or the DM's full row" path (`characterById`)
+   * always takes priority over this when it has data — this only fills the
+   * gap for another player's token. */
+  initialCharacterRosterNames: readonly (readonly [string, CharacterRosterName])[];
   /** Member-readable (0038): the campaign's monster stat blocks at load
    * time — kept fresh alongside combat refreshes below. */
   initialStatBlocks: MonsterStatBlock[];
@@ -2311,6 +2332,19 @@ export function GameRoom({
     setPrevCharacters(characters);
     setCharacterRows(characters);
   }
+  // Token hover-name fallback: character_roster_names (0103), campaign-wide
+  // for every viewer (unlike characterRows above) — see
+  // initialCharacterRosterNames' own doc comment. Same render-time prop-sync
+  // pattern as characterRows immediately above, and kept fresh the same way
+  // (refreshCombat, further below).
+  const [characterRosterNames, setCharacterRosterNames] = useState<Map<string, CharacterRosterName>>(
+    () => new Map(initialCharacterRosterNames)
+  );
+  const [prevCharacterRosterNames, setPrevCharacterRosterNames] = useState(initialCharacterRosterNames);
+  if (prevCharacterRosterNames !== initialCharacterRosterNames) {
+    setPrevCharacterRosterNames(initialCharacterRosterNames);
+    setCharacterRosterNames(new Map(initialCharacterRosterNames));
+  }
   // Sound Effects SP6 — plays SOUND_KEYS.DEATH the moment a character's
   // is_dead genuinely flips false -> true, live, for every client connected
   // to this room. characterRows already carries is_dead updates live (every
@@ -2692,11 +2726,24 @@ export function GameRoom({
       // is also how an HP change reaches every open room, and the rows come
       // back RLS-filtered per viewer exactly like the initial server load.
       // Stat blocks ride the same read (Prompt 61) so a quick-added
-      // monster's AC/HP data lands with its combatant.
-      const [encounter, rows, blocks] = await Promise.all([
+      // monster's AC/HP data lands with its combatant. Roster names (0103)
+      // ride the same poke too — the same "campaign-wide character data
+      // stays fresh on every combat-changed event" reasoning, just via the
+      // is_campaign_member-scoped view instead of the owner-or-DM one, so a
+      // mid-session level-up or rename is reasonably fresh for a token-
+      // hover label even though it isn't broadcast instantly. Guarded with
+      // its own .catch (unlike the other three reads here): several
+      // refreshCombat call sites below await it with NO .catch of their
+      // own, so this one query rejecting (e.g. character_roster_names not
+      // existing yet, before a human applies 0103) must never take down the
+      // WHOLE combat/HP/stat-block refresh for every action in the room —
+      // page.tsx's own `safe()` wrapper reasoning, applied here since this
+      // read has no such wrapper around it.
+      const [encounter, rows, blocks, rosterNames] = await Promise.all([
         getActiveCombatEncounter(supabase, campaignId),
         listCharactersForCampaign(supabase, campaignId),
         listMonsterStatBlocks(supabase, campaignId),
+        listCharacterRosterNames(supabase, campaignId).catch(() => null),
       ]);
       const combatants = encounter ? await listCombatCombatants(supabase, encounter.id) : [];
       const combatantIds = combatants.map((combatant) => combatant.id);
@@ -2710,6 +2757,10 @@ export function GameRoom({
       setCombat(encounter ? { encounter, combatants, conditions, hiddenFrom } : null);
       setCharacterRows(rows);
       setStatBlocks(blocks);
+      // null (the query failed — most likely 0103 not applied yet) leaves
+      // characterRosterNames exactly as it was, never wiping out a good
+      // value with an empty one just because THIS particular refresh failed.
+      if (rosterNames) setCharacterRosterNames(rosterNames);
     },
     [campaignId]
   );
@@ -7268,6 +7319,20 @@ export function GameRoom({
         // crossing_type), so unlike the objects loop above there's no
         // self-exclusion to apply here.
         const crossingHere = crossingObjectByCell.get(cellKey(token.x, token.y));
+        // Token hover-name fallback (fixing "enemy tokens show a hover name,
+        // but party ones from another player don't"): only consulted when
+        // `character` above came back undefined for a token that DOES carry
+        // a character_id — i.e. exactly the "another player's PC, unreadable
+        // under characters' owner-or-DM RLS" case the name/level doc comment
+        // just below describes. characterRosterNames is sourced from the
+        // campaign-member-readable character_roster_names view (0103), so it
+        // has a row here even when `character` doesn't. Never consulted for
+        // an NPC/enemy token (character_id null) or for a token this viewer
+        // already has full data for (character defined) — the existing
+        // owner-or-DM path always wins when it has data, this only fills
+        // the gap.
+        const rosterFallback =
+          character === undefined && token.character_id ? characterRosterNames.get(token.character_id) : undefined;
         return [{
           id: token.id,
           x: token.x,
@@ -7284,17 +7349,25 @@ export function GameRoom({
           // `character` came back undefined is another player's PC the
           // current viewer can't read under characters RLS (0008), and
           // token.npc_name is always null for a PC token (0019's XOR
-          // constraint) — there is no real name to show in that case, so
-          // this stays undefined and MapSurface renders no label at all,
-          // the same omit-rather-than-guess treatment `hp` already gets for
-          // that identical combination. An NPC/enemy token (character
-          // always undefined) falls straight through to its own npc_name.
-          name: character?.name ?? token.npc_name ?? undefined,
-          // Paired with `name` above — only ever set alongside a resolved
-          // `character`, so an NPC/enemy token (no meaningful "level" the
-          // way a PC has one) never carries it; MapSurface renders no
-          // "· Level N" suffix when this is absent.
-          level: character?.level ?? undefined,
+          // constraint) — so npc_name itself is never a useful fallback
+          // here. rosterFallback (just above) is: the SAME name/level, just
+          // sourced from the campaign-member-readable character_roster_names
+          // view (0103) instead of the owner-or-DM-only `characters` table,
+          // fixing the exact "party tokens don't show their name" bug this
+          // migration exists for. Only when NEITHER resolves (npc_name is
+          // also absent — shouldn't happen for a real token, but keeps this
+          // total) does this fall through to undefined, the same
+          // omit-rather-than-guess treatment `hp` already gets for the
+          // "no real character data at all" combination. An NPC/enemy token
+          // (character and rosterFallback both always undefined) falls
+          // straight through to its own npc_name, completely unchanged.
+          name: character?.name ?? rosterFallback?.name ?? token.npc_name ?? undefined,
+          // Paired with `name` above — level rides the SAME two-tier
+          // character-then-roster-fallback resolution, so another player's
+          // token gets the "· Level N" suffix too, not just its name. An
+          // NPC/enemy token (no meaningful "level" the way a PC has one)
+          // never carries it; MapSurface renders no suffix when absent.
+          level: character?.level ?? rosterFallback?.level ?? undefined,
           modelUrl,
           forwardOffsetDeg,
           colorOverride,
@@ -7351,7 +7424,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId, currentMapArtUrl, characterPawnByCharacterId, pawnColorByUserId]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId, currentMapArtUrl, characterPawnByCharacterId, pawnColorByUserId, characterRosterNames]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright

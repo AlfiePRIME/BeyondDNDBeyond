@@ -91,6 +91,7 @@ export {
   createCharacter,
   listCharactersForCampaign,
   listCharactersForUser,
+  listCharacterRosterNames,
   getCharacter,
   updateCharacter,
   deleteCharacter,
@@ -108,6 +109,7 @@ export {
   type UpdateCharacterPatch,
   type InventoryItem,
   type KnownSpell,
+  type CharacterRosterName,
 } from "./characters";
 export {
   listAssetsForCampaign,
@@ -175,6 +177,7 @@ export {
   getMapReferenceImageSignedUrl,
   setMapReferenceImage,
   clearMapReferenceImage,
+  setMapWhiteboardHeight,
   getMapArt,
   uploadMapArtFile,
   deleteMapArtFile,

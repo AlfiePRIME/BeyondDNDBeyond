@@ -470,3 +470,37 @@ export async function listCharactersForCampaign(
   if (error) throw error;
   return (data ?? []) as Character[];
 }
+
+/** Just enough to label a token that belongs to a character this viewer
+ * cannot otherwise read. Sourced from character_roster_names (0103), a
+ * narrow view over `characters` readable by ANY campaign member
+ * (is_campaign_member) — deliberately broader than characters' own
+ * owner-or-DM-only RLS (0008), but exposing nothing beyond these three
+ * columns: no ability scores, HP, inventory, or spells leak through it. */
+export interface CharacterRosterName {
+  id: string;
+  name: string;
+  level: number;
+}
+
+/**
+ * Every character in the campaign's name/level, keyed by character id —
+ * GameRoom.tsx's fallback for a PC token whose `character_id` isn't in the
+ * caller's own RLS-filtered `characters` array (another player's token):
+ * the existing "my own or the DM's full row" path always takes priority
+ * when it has data, this only fills the gap. Unlike listCharactersForCampaign,
+ * this NEVER comes back trimmed to "just mine" for a player — that's the
+ * entire point of the underlying view's broader is_campaign_member policy.
+ */
+export async function listCharacterRosterNames(
+  supabase: SupabaseClient,
+  campaignId: string
+): Promise<Map<string, CharacterRosterName>> {
+  const { data, error } = await supabase
+    .from("character_roster_names")
+    .select("id, name, level")
+    .eq("campaign_id", campaignId);
+
+  if (error) throw error;
+  return new Map((data ?? []).map((row) => [row.id, row as CharacterRosterName]));
+}
