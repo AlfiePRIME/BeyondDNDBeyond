@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Badge, Panel, SectionHeader } from "@/ui-components";
+import { Panel, SectionHeader } from "@/ui-components";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { getProfile, listCampaignsForUser, listCharactersForUser } from "@/data-access";
 import { AppNav } from "../AppNav";
@@ -9,6 +9,7 @@ import { PawnColorPicker } from "./PawnColorPicker";
 import { NameLabelPicker } from "./NameLabelPicker";
 import { DisplayNameForm } from "./DisplayNameForm";
 import { CharacterCreateLauncher } from "./CharacterCreateLauncher";
+import { CharacterLibraryRow } from "./CharacterLibraryRow";
 import { CampaignManageRow } from "./CampaignManageRow";
 import styles from "./account.module.css";
 
@@ -72,24 +73,7 @@ export default async function AccountPage() {
           ) : (
             <ul className={styles.rowList}>
               {characters.map((character) => (
-                <li key={character.id} className={styles.row}>
-                  {character.campaign ? (
-                    <Link
-                      href={`/campaigns/${character.campaign.id}/characters/${character.id}`}
-                      className={styles.characterLink}
-                    >
-                      {character.name}
-                    </Link>
-                  ) : (
-                    <span>{character.name}</span>
-                  )}
-                  <span className={styles.characterMeta}>
-                    <Badge tone="teal">
-                      {character.class} {character.level}
-                    </Badge>
-                    <Badge tone="purple">{character.campaign?.name ?? "No campaign"}</Badge>
-                  </span>
-                </li>
+                <CharacterLibraryRow key={character.id} character={character} />
               ))}
             </ul>
           )}

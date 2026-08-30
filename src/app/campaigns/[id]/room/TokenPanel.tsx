@@ -129,6 +129,13 @@ export function TokenPanel({
           {placeable.map((character) => (
             <div key={character.id} className={styles.objectHeader}>
               <span className={styles.objectName}>{character.name}</span>
+              <Link
+                href={`/campaigns/${campaignId}/characters/${character.id}`}
+                className={styles.characterLink}
+                data-testid={`view-sheet-placeable-${character.id}`}
+              >
+                View sheet
+              </Link>
               <Button
                 size="sm"
                 variant="teal"

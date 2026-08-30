@@ -15,17 +15,26 @@ import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import { getProfile, DEFAULT_SOUND_SETTINGS } from "@/data-access";
 
 // Suppressed only in the Game Room (its own calm_music/combat_music take
-// over — GameRoom.tsx's own applyGameMusic effect) and the map editor (a
+// over — GameRoom.tsx's own applyGameMusic effect), the map editor (a
 // focused editing task, not somewhere ambient menu music should keep
-// playing) — everywhere else (Lobby, campaigns list, account, character
+// playing), and the DM party dashboard (its own separate tab the DM opens
+// alongside a live session — ambient lobby music playing there while
+// calm/combat music is also playing in the Game Room tab is a jarring
+// double-track, not a deliberate atmosphere choice the way either single
+// track is) — everywhere else (Lobby, campaigns list, account, character
 // pages, login/signup, etc) plays lobby_music, per the project owner's own
 // explicit brief.
 const GAME_ROOM_PATTERN = /^\/campaigns\/[^/]+\/room(\/|$)/;
 const MAP_EDITOR_PATTERN = /^\/campaigns\/[^/]+\/maps\/[^/]+\/edit(\/|$)/;
+const PARTY_DASHBOARD_PATTERN = /^\/campaigns\/[^/]+\/party(\/|$)/;
 
 function shouldPlayLobbyMusic(pathname: string | null): boolean {
   if (!pathname) return false;
-  return !GAME_ROOM_PATTERN.test(pathname) && !MAP_EDITOR_PATTERN.test(pathname);
+  return (
+    !GAME_ROOM_PATTERN.test(pathname) &&
+    !MAP_EDITOR_PATTERN.test(pathname) &&
+    !PARTY_DASHBOARD_PATTERN.test(pathname)
+  );
 }
 
 /**
