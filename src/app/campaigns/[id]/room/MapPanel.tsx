@@ -141,6 +141,21 @@ export function MapPanel({
   onWhiteboardRedo: () => void;
   onWhiteboardClear: () => void;
 }) {
+  // A non-DM viewer never sees an UNTRIGGERED reveal_text/reveal_image
+  // entry here at all — not even its bare name/badge — since that alone
+  // spoils "something's hidden at this object" before it's found naturally.
+  // The DM always sees every entry (this panel is their own authoring/prep
+  // view too); a toggle_state/toggle_visibility mechanism is never hidden,
+  // triggered or not, since it was never a secret to begin with. See
+  // `canTrigger` further below for the matching per-row button gate this
+  // mirrors.
+  const visibleEntries = isDM
+    ? entries
+    : entries.filter(({ behavior }) => {
+        const isSpoilerProne = behavior.action === "reveal_text" || behavior.action === "reveal_image";
+        return !isSpoilerProne || behavior.triggered;
+      });
+
   return (
     <aside className={styles.sidePanel} data-testid="map-panel">
       <span className={styles.panelLabel}>{isDM ? "You're viewing" : "Live map"}</span>
@@ -342,11 +357,21 @@ export function MapPanel({
               table it belongs). It now floats above the object's own real
               spot instead — GameRoom.tsx mounts an ObjectRevealCard
               (@/scene-3d) per currently-revealed entry, reading this exact
-              same `entries` list. */}
-          {entries.length === 0 ? (
+              same `entries` list.
+              For a non-DM viewer, an untriggered reveal_text/reveal_image
+              entry is skipped ENTIRELY here — not just its trigger button
+              (a real follow-up report: even the bare name + "Unrevealed"
+              badge alone tells a player "something's hidden at this object"
+              before they've found it naturally, the exact spoiler this was
+              already trying to avoid). Once triggered, showing it here is
+              fine — the player already found it in the 3D scene by then, so
+              there's nothing left to spoil. An ordinary toggle_state
+              switch/lever is never hidden, triggered or not — it was never
+              a secret in the first place. */}
+          {visibleEntries.length === 0 ? (
             <p className={styles.hint}>Nothing to interact with here — yet.</p>
           ) : (
-            entries.map(({ object, behavior }) => {
+            visibleEntries.map(({ object, behavior }) => {
               const badge = stateBadge(behavior);
               // A player-visible "Switch on"/"Show" button for a lever or
               // light switch is fine — a known mechanism, not a secret — but
