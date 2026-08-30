@@ -506,6 +506,40 @@ const DM_BOOK_FORWARD_OFFSET = 0.3;
 // one of the book's 6 tabs.
 const DM_BOOK_LATERAL_OFFSET = 1.0;
 
+// Bug report (2026-08-26, filed together with the "larger maps should
+// display bigger" one — both coupled through this same cellSize-derived
+// geometry): "when the text/image is revealed it reveals too low, it should
+// show above the object like the DM's book does to the DM."
+//
+// The reveal card's own anchorY (below) needs to clear TWO independent
+// things: (1) the object's own modeled geometry, which genuinely DOES scale
+// with this map's cellSize (PlacedObject.tsx normalizes every model's own
+// tallest dimension to PLACED_OBJECT_SIZE (0.92) of cellSize — see that
+// constant's own doc comment) — the existing `cellSize * 1.15` term already
+// clears that with real margin to spare, on every map, and still does; and
+// (2) staying PERCEPTIBLY well above the object once projected to the
+// screen, which that same proportional term quietly stops doing once
+// cellSize gets small: ObjectRevealCard's own `<Html transform={false}>`
+// renders a fixed, real-CSS-pixel-sized DOM panel that never shrinks with
+// distance or cellSize the way the object's own 3D geometry does (unlike
+// DmBookProp's own book, whose HTML_ANCHOR_Y clearance is ALSO a flat,
+// non-scaling absolute number for exactly this reason — see that constant's
+// own doc comment). A purely cellSize-proportional world-space gap above the
+// object shrinks right along with cellSize, so on the smaller cellSize even
+// a FIXED, grown table (mapFit.ts's computeTableFootprint) can still
+// legitimately produce for a large enough map, that gap projects to only a
+// handful of screen pixels — reading as "reveals too low, right on top of
+// the object" (the reported bug), even though it's technically still
+// clearing the model's own top by the same generous relative margin as
+// ever.
+//
+// REVEAL_CARD_FIXED_CLEARANCE is a flat, non-scaling addition on top of the
+// existing proportional term — so the card keeps a real, visible gap above
+// the object on every map size, from a single small room to a large grown
+// table, not just ones with a big enough cellSize for the old, purely-
+// proportional term to still read as "above" rather than "on".
+const REVEAL_CARD_FIXED_CLEARANCE = 0.35;
+
 interface LiveMapPayload {
   mapId: string | null;
 }
@@ -7489,14 +7523,17 @@ export function GameRoom({
               const worldX = object.x * cellSize - offsetX;
               const worldZ = object.y * cellSize - offsetZ;
               const topY = baseHeight + object.elevation * elevationStepHeight;
-              // How far above the object's own base this card floats, in
-              // units of this map's own cellSize — clear of most placed
-              // props' modeled height (PLACED_OBJECT_SIZE normalizes every
-              // model to roughly fit within one cell's footprint) without
-              // needing real per-asset height data, the same "generous, not
-              // exact" reasoning ObjectMarker's own oversized hit box
-              // already accepts.
-              const anchorY = topY + cellSize * 1.15;
+              // How far above the object's own base this card floats: a
+              // cellSize-proportional term (clear of most placed props'
+              // modeled height — PLACED_OBJECT_SIZE normalizes every model
+              // to roughly fit within one cell's footprint — without needing
+              // real per-asset height data, the same "generous, not exact"
+              // reasoning ObjectMarker's own oversized hit box already
+              // accepts) PLUS a flat, non-scaling clearance
+              // (REVEAL_CARD_FIXED_CLEARANCE's own doc comment) so the card
+              // still reads as clearly floating above the object even on a
+              // map whose cellSize is small.
+              const anchorY = topY + cellSize * 1.15 + REVEAL_CARD_FIXED_CLEARANCE;
               return [
                 <ObjectRevealCard
                   key={object.id}

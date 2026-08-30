@@ -17,7 +17,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
 import { Box3, DoubleSide, Plane, Raycaster, SRGBColorSpace, TextureLoader, Vector2, Vector3 } from "three";
 import type { Camera, Group, Object3D, Texture } from "three";
-import { LEG, TABLE_TOP, TABLE_SURFACE_Y, TABLE_TOP_JOIN_DEPTH } from "./table";
+import { COMBINED_TABLE_TOP, LEG, TABLE_TOP, TABLE_SURFACE_Y, TABLE_TOP_JOIN_DEPTH } from "./table";
 import {
   applySeatOffset,
   clampToTableArrangement,
@@ -41,7 +41,7 @@ import {
   type MapSurfaceObject,
   type MapSurfaceToken,
 } from "./MapSurface";
-import { computeTableMapMetrics } from "./mapFit";
+import { computeTableFootprint, computeTableMapMetrics } from "./mapFit";
 import { computeMapArtFit } from "./mapArtFit";
 import type { TokenSlidePhase } from "./useTokenSlide";
 import {
@@ -703,6 +703,62 @@ function CombinedTable() {
         <Table />
       </group>
     </>
+  );
+}
+
+// A hair below TABLE_SURFACE_Y so TableExtension's own slab never z-fights
+// the real table.glb model in the region where they overlap (always at
+// least COMBINED_TABLE_TOP's own footprint — mapFit.ts's
+// computeTableFootprint never returns anything smaller). The real model's
+// own textured top wins there; this slab is only actually VISIBLE in the
+// ring where a large map's grid has grown the footprint past the real
+// model's edges, exactly (and only) where it needs to cover.
+const TABLE_EXTENSION_THICKNESS = 0.06;
+const TABLE_EXTENSION_SURFACE_EPSILON = 0.003;
+
+/**
+ * A plain, flat wood-colored slab extending the physical playing surface
+ * past table.glb's own modeled edges — GameTableScene's answer to a live
+ * map whose grid (mapFit.ts's computeTableFootprint) needs more room than
+ * even the doubled head-square table (CombinedTable) actually provides. Bug
+ * report (2026-08-26): "this is a 20x40 map, it is very small in game,
+ * please make it so larger maps display bigger."
+ *
+ * Deliberately NOT another table.glb instance: CombinedTable's own real
+ * edge-to-edge join was already hard enough to get right for exactly TWO
+ * copies at one FIXED relative offset (table.ts's TABLE_TOP_JOIN_DEPTH); an
+ * arbitrary, continuously-variable extra width/depth has no such fixed
+ * offset to reuse. No legs, either — nothing below table height (a chair's
+ * own floor-level Y=0 anchor, seating.ts's own doc comment on Seat.position)
+ * ever interacts with what's visible on top, so a flat, legless slab reads
+ * completely fine from every camera angle this scene's normal seated/orbit
+ * range ever uses. Only ever rendered when computeTableFootprint actually
+ * grew past COMBINED_TABLE_TOP (see this component's own call site below) —
+ * every map that already fit comfortably renders exactly as it always has,
+ * with no extra slab at all.
+ */
+function TableExtension({ width, depth }: { width: number; depth: number }) {
+  return (
+    // A plain box, not RoundedBox: ProceduralTable's own RoundedBox usage
+    // (radius 0.06 against a 0.35-thick slab, comfortably under half that
+    // thickness) is safe, but THIS slab's own thickness is thinner than
+    // that same 0.06 radius would need — a rounded-corner bevel deeper than
+    // half a mesh's own thickness produces degenerate/inverted geometry in
+    // drei's RoundedBox, confirmed as the real cause of a badly broken
+    // render (a real screenshot showed a flat, textureless plane swallowing
+    // the whole scene) while verifying this feature. Square corners are a
+    // non-issue here: this slab is only ever visible as a thin sliver
+    // peeking past table.glb's own (rounded, real) edges — this component's
+    // own call site only mounts it when the map's footprint has grown past
+    // COMBINED_TABLE_TOP at all.
+    <mesh
+      position={[0, TABLE_SURFACE_Y - TABLE_EXTENSION_SURFACE_EPSILON - TABLE_EXTENSION_THICKNESS / 2, 0]}
+      castShadow
+      receiveShadow
+    >
+      <boxGeometry args={[width, TABLE_EXTENSION_THICKNESS, depth]} />
+      <meshStandardMaterial color={WOOD_TOP} roughness={0.72} />
+    </mesh>
   );
 }
 
@@ -1812,6 +1868,18 @@ export function GameTableScene({
     [liveMap]
   );
 
+  // Same grid, the OTHER half of computeTableFootprint/computeTableMapMetrics's
+  // shared derivation — whether (and how big) a TableExtension slab needs to
+  // render below. null (no extension) whenever the footprint hasn't grown
+  // past COMBINED_TABLE_TOP, the common case for anything but a large map.
+  const tableFootprint = useMemo(() => {
+    if (!liveMap) return null;
+    const footprint = computeTableFootprint(liveMap.gridWidth, liveMap.gridHeight);
+    const grown =
+      footprint.width > COMBINED_TABLE_TOP.width + 1e-6 || footprint.depth > COMBINED_TABLE_TOP.depth + 1e-6;
+    return grown ? footprint : null;
+  }, [liveMap]);
+
   // Map Art Generation E5: true only once MapArtPlane's own texture has
   // actually finished loading — see its onReadyChange doc comment for why
   // this gate exists (avoids a flash of transparent floor with nothing
@@ -1986,6 +2054,7 @@ export function GameTableScene({
       </mesh>
 
       <CombinedTable />
+      {tableFootprint ? <TableExtension width={tableFootprint.width} depth={tableFootprint.depth} /> : null}
 
       {/* Extra plain single tables (never the head square's own two-table
           model), appended one per exceeded HEAD_SQUARE_SEAT_CAPACITY/
