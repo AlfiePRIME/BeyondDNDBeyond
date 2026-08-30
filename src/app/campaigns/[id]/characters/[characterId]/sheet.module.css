@@ -7,11 +7,53 @@
 
 .main {
   width: 100%;
-  max-width: 760px;
+  /* Live-play layout: the sheet uses the whole viewport instead of the old
+     760px centered column. The generous cap only exists so ultra-wide
+     monitors don't stretch panel internals past legibility. */
+  max-width: 2200px;
   display: flex;
   flex-direction: column;
   gap: 20px;
   padding-top: 40px;
+}
+
+/* Below the full-width Vitals strip: three side-by-side panel stacks
+   (play / roll sources / reference — see the JSX comment in
+   CharacterSheet.tsx). align-items: start keeps each stack packed to the
+   top instead of stretching to the tallest neighbor. */
+.columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Mid-width: the play and roll stacks stay side by side; the reference
+   stack (Inventory, Spells, Map token) drops to a full-width row below —
+   its rows were designed for full width originally. */
+@media (max-width: 1280px) {
+  .columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .column:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Narrow: back to the single vertical stack, now ordered by mid-turn
+   urgency (dice/conditions/resources first, reference last). */
+@media (max-width: 860px) {
+  .columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .backLink {
@@ -117,11 +159,14 @@
   font-family: var(--font-m);
   font-size: 13px;
   color: var(--muted);
+  /* "/ 31" and "ft" must never wrap mid-token in a narrow grid cell. */
+  white-space: nowrap;
 }
 
 .hpControls {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
 }
 

@@ -866,602 +866,617 @@ export function CharacterSheet({
           </div>
         </Panel>
 
-        {canEdit ? (
-          <Panel title="Map token" tone="teal">
-            <PawnModelPicker characterId={character.id} initialPawnModelRef={initialPawnModelRef} />
-          </Panel>
-        ) : null}
-
-        <Panel title="Conditions" tone="pink">
-          {conditions.length === 0 ? (
-            <p className={styles.emptyHint} data-testid="sheet-conditions-empty">
-              No active conditions.
-            </p>
-          ) : (
-            <ul className={styles.rowList} data-testid="sheet-conditions">
-              {conditions.map((condition) => {
-                const exhaustion = condition.condition_key === EXHAUSTION_KEY;
-                const definition = exhaustion
-                  ? null
-                  : CONDITION_BY_KEY.get(condition.condition_key as ConditionKey);
-                return (
-                  <li
-                    key={condition.condition_key}
-                    className={styles.itemRow}
-                    data-testid={`sheet-condition-${condition.condition_key}`}
-                  >
-                    <span className={styles.itemName}>
-                      <Badge tone="orange">
-                        {exhaustion
-                          ? `Exhaustion ${condition.level}`
-                          : (definition?.name ?? condition.condition_key)}
-                      </Badge>
-                    </span>
-                    <span className={styles.conditionDescription}>
-                      {exhaustion
-                        ? (EXHAUSTION_LEVEL_DESCRIPTIONS[condition.level ?? 0] ?? "")
-                        : (definition?.description ?? "")}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Panel>
-
-        <Panel
-          title="Dice"
-          tone="teal"
-          headerActions={
-            <AdvantageToggle
-              mode={rollMode}
-              onChange={setRollMode}
-              disabled={rolling}
-              testIdPrefix="sheet"
-            />
-          }
-        >
-          {rollError ? (
-            <p className={styles.saveError} role="alert" data-testid="sheet-roll-error">
-              {rollError}
-            </p>
-          ) : null}
-          {canEdit &&
-          character.current_hp === 0 &&
-          !character.is_stable &&
-          !character.is_dead ? (
-            // Surfaced regardless of whose combat turn it is — a dying
-            // player may have only the sheet open. The server rolls a
-            // plain d20 (no modifiers, no advantage) and applies the
-            // outcome via apply_death_save_roll.
-            <div className={styles.deathSaveRow} data-testid="sheet-death-save-prompt">
-              <span className={styles.deathSavePromptText}>
-                {character.name} is dying — a plain d20, no modifiers.
-              </span>
-              <Button
-                variant="danger"
-                size="sm"
-                disabled={rolling}
-                onClick={() => doRoll({ kind: "death_save", characterId: character.id })}
-                data-testid="sheet-roll-death-save"
-              >
-                Roll death save
-              </Button>
-            </div>
-          ) : null}
-          {canEdit && character.pending_concentration_dc !== null ? (
-            // The death-save prompt's shape for the damage-triggered
-            // concentration check — server-authoritative (the stored
-            // pending DC, live-synced via the row subscription), so it
-            // persists here until resolved no matter whose click dealt
-            // the damage.
-            <div className={styles.concentrationPromptRow} data-testid="sheet-concentration-prompt">
-              <span className={styles.deathSavePromptText}>
-                {character.name} took damage while concentrating
-                {character.concentrating_on ? ` on ${character.concentrating_on}` : ""} — roll a
-                Constitution save (DC {character.pending_concentration_dc}).
-              </span>
-              <Button
-                variant="accent"
-                size="sm"
-                disabled={rolling}
-                onClick={() => doRoll({ kind: "concentration_save", characterId: character.id })}
-                data-testid="sheet-roll-concentration-save"
-              >
-                Roll concentration save
-              </Button>
-            </div>
-          ) : null}
-          {overrideNotice ? (
-            // A DM ruling (or a spent DM-approved use) in the recent-roll
-            // area — visually distinct from a dice roll (no die results);
-            // the shared table log carries the same event for everyone.
-            <p className={styles.overrideNotice} data-testid="sheet-override-notice">
-              {overrideNotice}
-            </p>
-          ) : null}
-          {lastRoll ? (
-            <div className={styles.rollResult} data-testid="sheet-roll-result">
-              <span className={styles.rollHeadline} data-testid="sheet-roll-headline">
-                {rollHeadline(lastRoll)}
-              </span>
-              <span className={styles.rollDetail} data-testid="sheet-roll-detail">
-                {rollDetail(lastRoll)}
-              </span>
-            </div>
-          ) : (
-            <p className={styles.emptyHint}>
-              Roll a check, save, or skill below — every roll lands in the table&apos;s shared log.
-            </p>
-          )}
-        </Panel>
-
-        <Panel title="Abilities & Saves" tone="teal">
-          <div className={styles.abilityGrid}>
-            {ABILITIES.map((ability) => (
-              <div key={ability} className={styles.abilityCard}>
-                <span className={styles.vitalLabel}>{ABILITY_LABEL[ability]}</span>
-                {canEdit ? (
-                  <input
-                    className={styles.vitalInput}
-                    type="number"
-                    min={1}
-                    max={30}
-                    value={scoreDrafts[ability]}
-                    onChange={(e) =>
-                      setScoreDrafts((d) => ({ ...d, [ability]: e.target.value }))
-                    }
-                    onBlur={() => commitScore(ability)}
-                    aria-label={`${ABILITY_LABEL[ability]} score`}
-                  />
-                ) : (
-                  <span className={styles.vitalValue}>{abilityScores[ability]}</span>
-                )}
-                <span className={styles.abilityModifier}>
-                  {formatModifier(abilityModifier(abilityScores[ability]))}
-                </span>
-                <span className={styles.abilitySave}>
-                  Save{" "}
-                  {formatModifier(
-                    savingThrowBonus(
-                      ability,
-                      abilityScores,
-                      character.level,
-                      saveProficient(ability)
-                    )
-                  )}
-                  {saveProficient(ability) ? <Badge tone="orange">Prof</Badge> : null}
-                </span>
-                <span className={styles.rollRow}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={rolling}
-                    onClick={() =>
-                      doRoll({ kind: "check", characterId: character.id, ability, mode: rollMode })
-                    }
-                    data-testid={`roll-check-${ability}`}
-                  >
-                    Check
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={rolling}
-                    onClick={() =>
-                      doRoll({ kind: "save", characterId: character.id, ability, mode: rollMode })
-                    }
-                    data-testid={`roll-save-${ability}`}
-                  >
-                    Save
-                  </Button>
-                </span>
-              </div>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel
-          title="Skills"
-          tone="purple"
-          headerActions={
-            <Badge tone="teal">
-              Passive Perception{" "}
-              {passiveScore("Perception", abilityScores, character.level, skillProficient("Perception"))}
-            </Badge>
-          }
-        >
-          <ul className={styles.rowList}>
-            {SKILLS.map((skill) => (
-              <li key={skill.name} className={styles.skillRow}>
-                <label className={styles.skillToggle}>
-                  <input
-                    type="checkbox"
-                    className={styles.skillCheckbox}
-                    checked={skillProficient(skill.name)}
-                    onChange={() => toggleSkill(skill.name)}
-                    disabled={!canEdit}
-                  />
-                  <span>{skill.name}</span>
-                  <span className={styles.skillAbility}>
-                    {ABILITY_LABEL[skill.ability].slice(0, 3)}
-                  </span>
-                </label>
-                <span className={styles.skillBonus}>
-                  {formatModifier(
-                    skillCheckBonus(
-                      skill.name,
-                      abilityScores,
-                      character.level,
-                      skillProficient(skill.name)
-                    )
-                  )}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
+        {/* Live-play layout: below the full-width Vitals strip, three
+            side-by-side stacks on a wide viewport (collapsing to two,
+            then one — sheet.module.css .columns). Ordered by mid-turn
+            urgency: the play stack (Dice, Conditions, Resources) a
+            player touches every round, the roll sources (Abilities &
+            Saves, Skills) beside it, and the reference stack
+            (Inventory, Spells, Map token) last. */}
+        <div className={styles.columns}>
+          <div className={styles.column}>
+            <Panel
+              title="Dice"
+              tone="teal"
+              headerActions={
+                <AdvantageToggle
+                  mode={rollMode}
+                  onChange={setRollMode}
                   disabled={rolling}
-                  onClick={() =>
-                    doRoll({
-                      kind: "skill",
-                      characterId: character.id,
-                      skill: skill.name,
-                      mode: rollMode,
-                    })
-                  }
-                  data-testid={`roll-skill-${skillTestId(skill.name)}`}
-                >
-                  Roll
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-
-        <Panel title="Inventory" tone="pink">
-          {character.inventory.length === 0 ? (
-            <p className={styles.emptyHint}>Nothing carried yet.</p>
-          ) : (
-            <ul className={styles.rowList}>
-              {character.inventory.map((item, index) => (
-                <li key={`${item.name}-${index}`} className={styles.itemRow}>
-                  <span className={styles.itemName}>
-                    {item.name}
-                    {item.attackKind && item.damageNotation ? (
-                      <Badge tone="teal" data-testid={`weapon-badge-${index}`}>
-                        {WEAPON_KIND_LABEL[item.attackKind]} · {item.damageNotation} ·{" "}
-                        {weaponRangeFeet({ attackKind: item.attackKind, rangeFeet: item.rangeFeet })}{" "}
-                        ft
-                      </Badge>
-                    ) : null}
+                  testIdPrefix="sheet"
+                />
+              }
+            >
+              {rollError ? (
+                <p className={styles.saveError} role="alert" data-testid="sheet-roll-error">
+                  {rollError}
+                </p>
+              ) : null}
+              {canEdit &&
+              character.current_hp === 0 &&
+              !character.is_stable &&
+              !character.is_dead ? (
+                // Surfaced regardless of whose combat turn it is — a dying
+                // player may have only the sheet open. The server rolls a
+                // plain d20 (no modifiers, no advantage) and applies the
+                // outcome via apply_death_save_roll.
+                <div className={styles.deathSaveRow} data-testid="sheet-death-save-prompt">
+                  <span className={styles.deathSavePromptText}>
+                    {character.name} is dying — a plain d20, no modifiers.
                   </span>
-                  <span className={styles.itemControls}>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    disabled={rolling}
+                    onClick={() => doRoll({ kind: "death_save", characterId: character.id })}
+                    data-testid="sheet-roll-death-save"
+                  >
+                    Roll death save
+                  </Button>
+                </div>
+              ) : null}
+              {canEdit && character.pending_concentration_dc !== null ? (
+                // The death-save prompt's shape for the damage-triggered
+                // concentration check — server-authoritative (the stored
+                // pending DC, live-synced via the row subscription), so it
+                // persists here until resolved no matter whose click dealt
+                // the damage.
+                <div className={styles.concentrationPromptRow} data-testid="sheet-concentration-prompt">
+                  <span className={styles.deathSavePromptText}>
+                    {character.name} took damage while concentrating
+                    {character.concentrating_on ? ` on ${character.concentrating_on}` : ""} — roll a
+                    Constitution save (DC {character.pending_concentration_dc}).
+                  </span>
+                  <Button
+                    variant="accent"
+                    size="sm"
+                    disabled={rolling}
+                    onClick={() => doRoll({ kind: "concentration_save", characterId: character.id })}
+                    data-testid="sheet-roll-concentration-save"
+                  >
+                    Roll concentration save
+                  </Button>
+                </div>
+              ) : null}
+              {overrideNotice ? (
+                // A DM ruling (or a spent DM-approved use) in the recent-roll
+                // area — visually distinct from a dice roll (no die results);
+                // the shared table log carries the same event for everyone.
+                <p className={styles.overrideNotice} data-testid="sheet-override-notice">
+                  {overrideNotice}
+                </p>
+              ) : null}
+              {lastRoll ? (
+                <div className={styles.rollResult} data-testid="sheet-roll-result">
+                  <span className={styles.rollHeadline} data-testid="sheet-roll-headline">
+                    {rollHeadline(lastRoll)}
+                  </span>
+                  <span className={styles.rollDetail} data-testid="sheet-roll-detail">
+                    {rollDetail(lastRoll)}
+                  </span>
+                </div>
+              ) : (
+                <p className={styles.emptyHint}>
+                  Roll a check, save, or skill below — every roll lands in the table&apos;s shared log.
+                </p>
+              )}
+            </Panel>
+
+            <Panel title="Conditions" tone="pink">
+              {conditions.length === 0 ? (
+                <p className={styles.emptyHint} data-testid="sheet-conditions-empty">
+                  No active conditions.
+                </p>
+              ) : (
+                <ul className={styles.rowList} data-testid="sheet-conditions">
+                  {conditions.map((condition) => {
+                    const exhaustion = condition.condition_key === EXHAUSTION_KEY;
+                    const definition = exhaustion
+                      ? null
+                      : CONDITION_BY_KEY.get(condition.condition_key as ConditionKey);
+                    return (
+                      <li
+                        key={condition.condition_key}
+                        className={styles.itemRow}
+                        data-testid={`sheet-condition-${condition.condition_key}`}
+                      >
+                        <span className={styles.itemName}>
+                          <Badge tone="orange">
+                            {exhaustion
+                              ? `Exhaustion ${condition.level}`
+                              : (definition?.name ?? condition.condition_key)}
+                          </Badge>
+                        </span>
+                        <span className={styles.conditionDescription}>
+                          {exhaustion
+                            ? (EXHAUSTION_LEVEL_DESCRIPTIONS[condition.level ?? 0] ?? "")
+                            : (definition?.description ?? "")}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </Panel>
+
+            <Panel
+              title="Resources"
+              tone="teal"
+              headerActions={
+                canEdit ? (
+                  <span className={styles.headerBadges}>
+                    <Button variant="ghost" size="sm" onClick={takeShortRest}>
+                      Short rest
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={takeLongRest}>
+                      Long rest
+                    </Button>
+                  </span>
+                ) : null
+              }
+            >
+              {resources.length === 0 ? (
+                <p className={styles.emptyHint}>No limited-use resources tracked.</p>
+              ) : (
+                <ul className={styles.rowList}>
+                  {resources.map((resource) => {
+                    // The Prompt 52 override affordance: an exhausted resource
+                    // says WHY Spend is disabled and offers the flag/approved
+                    // cycle. Only the owner (or DM) sees the sheet at all, so
+                    // canEdit is the right gate for the controls.
+                    const exhausted = resource.current_uses <= 0;
+                    const slug = resource.name.toLowerCase().replace(/\s+/g, "-");
+                    const override = exhausted ? activeOverrideForResource(resource.name) : null;
+                    return (
+                      <li key={resource.id} className={styles.itemRow}>
+                        <span className={styles.itemName}>
+                          {resource.name}{" "}
+                          <Badge tone="neutral">{RECHARGE_LABEL[resource.recharge]}</Badge>
+                        </span>
+                        <span className={styles.itemControls}>
+                          {canEdit && exhausted ? (
+                            <span
+                              className={styles.blockedReason}
+                              data-testid={`resource-blocked-${slug}`}
+                            >
+                              No uses remaining
+                            </span>
+                          ) : null}
+                          <span className={styles.resourceUses}>
+                            {resource.current_uses} / {resource.max_uses}
+                          </span>
+                          {canEdit ? (
+                            <>
+                              <Button
+                                variant="accent"
+                                size="sm"
+                                onClick={() => setResourceUses(resource, resource.current_uses - 1)}
+                                disabled={resource.current_uses <= 0}
+                              >
+                                Spend
+                              </Button>
+                              <Button
+                                variant="teal"
+                                size="sm"
+                                onClick={() => setResourceUses(resource, resource.current_uses + 1)}
+                                disabled={resource.current_uses >= resource.max_uses}
+                              >
+                                Restore
+                              </Button>
+                              {exhausted && override?.status === "approved" ? (
+                                // One-time, DM-granted: consumes the override
+                                // only — never setCharacterResourceUses (see
+                                // spendApprovedOverride).
+                                <Button
+                                  variant="teal"
+                                  size="sm"
+                                  onClick={() => void spendApprovedOverride(override)}
+                                  data-testid={`resource-use-anyway-${slug}`}
+                                >
+                                  Use anyway (DM-approved)
+                                </Button>
+                              ) : exhausted && override ? (
+                                <span
+                                  className={styles.spellMeta}
+                                  data-testid={`resource-flagged-${slug}`}
+                                >
+                                  Flagged — waiting for the DM
+                                </span>
+                              ) : exhausted ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => void flagResource(resource)}
+                                  data-testid={`resource-flag-${slug}`}
+                                >
+                                  Flag to DM
+                                </Button>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </Panel>
+          </div>
+
+          <div className={styles.column}>
+            <Panel title="Abilities & Saves" tone="teal">
+              <div className={styles.abilityGrid}>
+                {ABILITIES.map((ability) => (
+                  <div key={ability} className={styles.abilityCard}>
+                    <span className={styles.vitalLabel}>{ABILITY_LABEL[ability]}</span>
                     {canEdit ? (
+                      <input
+                        className={styles.vitalInput}
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={scoreDrafts[ability]}
+                        onChange={(e) =>
+                          setScoreDrafts((d) => ({ ...d, [ability]: e.target.value }))
+                        }
+                        onBlur={() => commitScore(ability)}
+                        aria-label={`${ABILITY_LABEL[ability]} score`}
+                      />
+                    ) : (
+                      <span className={styles.vitalValue}>{abilityScores[ability]}</span>
+                    )}
+                    <span className={styles.abilityModifier}>
+                      {formatModifier(abilityModifier(abilityScores[ability]))}
+                    </span>
+                    <span className={styles.abilitySave}>
+                      Save{" "}
+                      {formatModifier(
+                        savingThrowBonus(
+                          ability,
+                          abilityScores,
+                          character.level,
+                          saveProficient(ability)
+                        )
+                      )}
+                      {saveProficient(ability) ? <Badge tone="orange">Prof</Badge> : null}
+                    </span>
+                    <span className={styles.rollRow}>
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => adjustItemQuantity(index, -1)}
-                        disabled={item.quantity <= 1}
-                        aria-label={`Remove one ${item.name}`}
-                      >
-                        −
-                      </Button>
-                    ) : null}
-                    <span className={styles.itemQty}>×{item.quantity}</span>
-                    {canEdit ? (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => adjustItemQuantity(index, 1)}
-                          aria-label={`Add one ${item.name}`}
-                        >
-                          +
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            weaponEditIndex === index
-                              ? setWeaponEditIndex(null)
-                              : openWeaponEditor(index)
-                          }
-                          aria-label={`Edit weapon tagging for ${item.name}`}
-                          data-testid={`weapon-toggle-${index}`}
-                        >
-                          {item.attackKind ? "Edit weapon" : "Tag weapon"}
-                        </Button>
-                        <Button
-                          variant="danger"
-                          size="sm"
-                          onClick={() => removeItem(index)}
-                          aria-label={`Drop ${item.name}`}
-                        >
-                          Drop
-                        </Button>
-                      </>
-                    ) : null}
-                  </span>
-                  {canEdit && weaponEditIndex === index ? (
-                    // Tags this item as a weapon the quick-actions panel
-                    // can offer: kind, damage dice, and an optional range
-                    // override (defaults: 5 ft melee/finesse, 60 ft
-                    // ranged).
-                    <span className={styles.weaponEditor} data-testid={`weapon-editor-${index}`}>
-                      <Select
-                        label="Weapon kind"
-                        value={weaponKindDraft}
-                        onChange={(e) =>
-                          setWeaponKindDraft(e.target.value as "" | WeaponAttackKind)
+                        disabled={rolling}
+                        onClick={() =>
+                          doRoll({ kind: "check", characterId: character.id, ability, mode: rollMode })
                         }
-                        data-testid="weapon-kind-select"
+                        data-testid={`roll-check-${ability}`}
                       >
-                        <option value="">Not a weapon</option>
-                        {WEAPON_KINDS.map((kind) => (
-                          <option key={kind} value={kind}>
-                            {WEAPON_KIND_LABEL[kind]}
-                          </option>
-                        ))}
-                      </Select>
-                      {weaponKindDraft !== "" ? (
-                        <>
-                          <TextInput
-                            label="Damage dice"
-                            value={weaponDamageDraft}
-                            onChange={(e) => setWeaponDamageDraft(e.target.value)}
-                            placeholder="e.g. 1d8"
-                            data-testid="weapon-damage-input"
-                          />
-                          <TextInput
-                            label={`Range ft (default ${weaponKindDraft === "ranged" ? 60 : 5})`}
-                            type="number"
-                            min={5}
-                            value={weaponRangeDraft}
-                            onChange={(e) => setWeaponRangeDraft(e.target.value)}
-                            data-testid="weapon-range-input"
-                          />
-                        </>
-                      ) : null}
+                        Check
+                      </Button>
                       <Button
-                        variant="teal"
+                        variant="ghost"
                         size="sm"
-                        onClick={() => saveWeaponTag(index)}
-                        disabled={!weaponDraftValid}
-                        data-testid="weapon-save"
+                        disabled={rolling}
+                        onClick={() =>
+                          doRoll({ kind: "save", characterId: character.id, ability, mode: rollMode })
+                        }
+                        data-testid={`roll-save-${ability}`}
                       >
                         Save
                       </Button>
                     </span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-          {canEdit ? (
-            <div className={styles.addRow}>
-              <TextInput
-                label="Item"
-                value={newItemName}
-                onChange={(e) => setNewItemName(e.target.value)}
-                placeholder="e.g. Rope (50 ft)"
-                className={styles.addName}
-              />
-              <TextInput
-                label="Qty"
-                type="number"
-                min={1}
-                value={newItemQty}
-                onChange={(e) => setNewItemQty(e.target.value)}
-                className={styles.addQty}
-              />
-              <Button
-                variant="teal"
-                onClick={addItem}
-                disabled={!newItemName.trim() || parseIntIn(newItemQty, 1, 999) === null}
-              >
-                Add item
-              </Button>
-            </div>
-          ) : null}
-        </Panel>
-
-        {isCaster ? (
-          <Panel
-            title="Spells"
-            tone="purple"
-            headerActions={
-              klass?.spellcastingAbility ? (
-                <Badge tone="purple">
-                  Spellcasting: {ABILITY_LABEL[klass.spellcastingAbility]}
-                </Badge>
-              ) : null
-            }
-          >
-            {character.spells.length === 0 ? (
-              <p className={styles.emptyHint}>No spells known yet.</p>
-            ) : (
-              spellLevels.map((level) => (
-                <div key={level} className={styles.spellGroup}>
-                  <span className={styles.groupLabel}>{spellLevelLabel(level)}</span>
-                  <ul className={styles.rowList}>
-                    {character.spells
-                      .filter((s) => s.level === level)
-                      .map((known) => {
-                        const spell = SPELLS.find((s) => s.name === known.name);
-                        return (
-                          <li key={known.name} className={styles.itemRow}>
-                            <span className={styles.itemName}>{known.name}</span>
-                            <span className={styles.itemControls}>
-                              {spell ? (
-                                <span className={styles.spellMeta}>
-                                  {spell.school} · {formatRange(spell.range)}
-                                  {spell.concentration ? " · conc." : ""}
-                                  {spell.attack
-                                    ? ` · ${spell.attack.kind} spell attack, ${spell.attack.damageNotation}`
-                                    : ""}
-                                </span>
-                              ) : null}
-                              {canEdit && spell?.concentration ? (
-                                // The Prompt 50 "casting" surface: a manual
-                                // toggle only — no slot spend, no action
-                                // economy (Prompts 51/53). Starting while
-                                // already concentrating silently replaces
-                                // the old spell.
-                                <Button
-                                  variant="teal"
-                                  size="sm"
-                                  disabled={character.concentrating_on === known.name}
-                                  onClick={() => handleStartConcentrating(known.name)}
-                                  data-testid={`start-concentrating-${known.name.toLowerCase().replace(/\s+/g, "-")}`}
-                                >
-                                  {character.concentrating_on === known.name
-                                    ? "Concentrating"
-                                    : "Start concentrating"}
-                                </Button>
-                              ) : null}
-                              {canEdit ? (
-                                <Button
-                                  variant="danger"
-                                  size="sm"
-                                  onClick={() => removeSpell(known.name)}
-                                  aria-label={`Forget ${known.name}`}
-                                >
-                                  Forget
-                                </Button>
-                              ) : null}
-                            </span>
-                          </li>
-                        );
-                      })}
-                  </ul>
-                </div>
-              ))
-            )}
-            {canEdit ? (
-              <div className={styles.addRow}>
-                <Select
-                  label="Add a spell"
-                  value={spellToAdd}
-                  onChange={(e) => setSpellToAdd(e.target.value)}
-                  className={styles.addName}
-                >
-                  <option value="">Choose a spell…</option>
-                  {addableSpells.map((spell) => (
-                    <option key={spell.name} value={spell.name}>
-                      {spell.name} ({spell.level === 0 ? "cantrip" : `level ${spell.level}`})
-                    </option>
-                  ))}
-                </Select>
-                <Button variant="teal" onClick={addSpell} disabled={!spellToAdd}>
-                  Learn spell
-                </Button>
+                  </div>
+                ))}
               </div>
-            ) : null}
-          </Panel>
-        ) : null}
+            </Panel>
 
-        <Panel
-          title="Resources"
-          tone="teal"
-          headerActions={
-            canEdit ? (
-              <span className={styles.headerBadges}>
-                <Button variant="ghost" size="sm" onClick={takeShortRest}>
-                  Short rest
-                </Button>
-                <Button variant="ghost" size="sm" onClick={takeLongRest}>
-                  Long rest
-                </Button>
-              </span>
-            ) : null
-          }
-        >
-          {resources.length === 0 ? (
-            <p className={styles.emptyHint}>No limited-use resources tracked.</p>
-          ) : (
-            <ul className={styles.rowList}>
-              {resources.map((resource) => {
-                // The Prompt 52 override affordance: an exhausted resource
-                // says WHY Spend is disabled and offers the flag/approved
-                // cycle. Only the owner (or DM) sees the sheet at all, so
-                // canEdit is the right gate for the controls.
-                const exhausted = resource.current_uses <= 0;
-                const slug = resource.name.toLowerCase().replace(/\s+/g, "-");
-                const override = exhausted ? activeOverrideForResource(resource.name) : null;
-                return (
-                  <li key={resource.id} className={styles.itemRow}>
-                    <span className={styles.itemName}>
-                      {resource.name}{" "}
-                      <Badge tone="neutral">{RECHARGE_LABEL[resource.recharge]}</Badge>
-                    </span>
-                    <span className={styles.itemControls}>
-                      {canEdit && exhausted ? (
-                        <span
-                          className={styles.blockedReason}
-                          data-testid={`resource-blocked-${slug}`}
-                        >
-                          No uses remaining
-                        </span>
-                      ) : null}
-                      <span className={styles.resourceUses}>
-                        {resource.current_uses} / {resource.max_uses}
+            <Panel
+              title="Skills"
+              tone="purple"
+              headerActions={
+                <Badge tone="teal">
+                  Passive Perception{" "}
+                  {passiveScore("Perception", abilityScores, character.level, skillProficient("Perception"))}
+                </Badge>
+              }
+            >
+              <ul className={styles.rowList}>
+                {SKILLS.map((skill) => (
+                  <li key={skill.name} className={styles.skillRow}>
+                    <label className={styles.skillToggle}>
+                      <input
+                        type="checkbox"
+                        className={styles.skillCheckbox}
+                        checked={skillProficient(skill.name)}
+                        onChange={() => toggleSkill(skill.name)}
+                        disabled={!canEdit}
+                      />
+                      <span>{skill.name}</span>
+                      <span className={styles.skillAbility}>
+                        {ABILITY_LABEL[skill.ability].slice(0, 3)}
                       </span>
-                      {canEdit ? (
-                        <>
+                    </label>
+                    <span className={styles.skillBonus}>
+                      {formatModifier(
+                        skillCheckBonus(
+                          skill.name,
+                          abilityScores,
+                          character.level,
+                          skillProficient(skill.name)
+                        )
+                      )}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={rolling}
+                      onClick={() =>
+                        doRoll({
+                          kind: "skill",
+                          characterId: character.id,
+                          skill: skill.name,
+                          mode: rollMode,
+                        })
+                      }
+                      data-testid={`roll-skill-${skillTestId(skill.name)}`}
+                    >
+                      Roll
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          </div>
+
+          <div className={styles.column}>
+            <Panel title="Inventory" tone="pink">
+              {character.inventory.length === 0 ? (
+                <p className={styles.emptyHint}>Nothing carried yet.</p>
+              ) : (
+                <ul className={styles.rowList}>
+                  {character.inventory.map((item, index) => (
+                    <li key={`${item.name}-${index}`} className={styles.itemRow}>
+                      <span className={styles.itemName}>
+                        {item.name}
+                        {item.attackKind && item.damageNotation ? (
+                          <Badge tone="teal" data-testid={`weapon-badge-${index}`}>
+                            {WEAPON_KIND_LABEL[item.attackKind]} · {item.damageNotation} ·{" "}
+                            {weaponRangeFeet({ attackKind: item.attackKind, rangeFeet: item.rangeFeet })}{" "}
+                            ft
+                          </Badge>
+                        ) : null}
+                      </span>
+                      <span className={styles.itemControls}>
+                        {canEdit ? (
                           <Button
-                            variant="accent"
+                            variant="ghost"
                             size="sm"
-                            onClick={() => setResourceUses(resource, resource.current_uses - 1)}
-                            disabled={resource.current_uses <= 0}
+                            onClick={() => adjustItemQuantity(index, -1)}
+                            disabled={item.quantity <= 1}
+                            aria-label={`Remove one ${item.name}`}
                           >
-                            Spend
+                            −
                           </Button>
-                          <Button
-                            variant="teal"
-                            size="sm"
-                            onClick={() => setResourceUses(resource, resource.current_uses + 1)}
-                            disabled={resource.current_uses >= resource.max_uses}
-                          >
-                            Restore
-                          </Button>
-                          {exhausted && override?.status === "approved" ? (
-                            // One-time, DM-granted: consumes the override
-                            // only — never setCharacterResourceUses (see
-                            // spendApprovedOverride).
-                            <Button
-                              variant="teal"
-                              size="sm"
-                              onClick={() => void spendApprovedOverride(override)}
-                              data-testid={`resource-use-anyway-${slug}`}
-                            >
-                              Use anyway (DM-approved)
-                            </Button>
-                          ) : exhausted && override ? (
-                            <span
-                              className={styles.spellMeta}
-                              data-testid={`resource-flagged-${slug}`}
-                            >
-                              Flagged — waiting for the DM
-                            </span>
-                          ) : exhausted ? (
+                        ) : null}
+                        <span className={styles.itemQty}>×{item.quantity}</span>
+                        {canEdit ? (
+                          <>
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => void flagResource(resource)}
-                              data-testid={`resource-flag-${slug}`}
+                              onClick={() => adjustItemQuantity(index, 1)}
+                              aria-label={`Add one ${item.name}`}
                             >
-                              Flag to DM
+                              +
                             </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                weaponEditIndex === index
+                                  ? setWeaponEditIndex(null)
+                                  : openWeaponEditor(index)
+                              }
+                              aria-label={`Edit weapon tagging for ${item.name}`}
+                              data-testid={`weapon-toggle-${index}`}
+                            >
+                              {item.attackKind ? "Edit weapon" : "Tag weapon"}
+                            </Button>
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              onClick={() => removeItem(index)}
+                              aria-label={`Drop ${item.name}`}
+                            >
+                              Drop
+                            </Button>
+                          </>
+                        ) : null}
+                      </span>
+                      {canEdit && weaponEditIndex === index ? (
+                        // Tags this item as a weapon the quick-actions panel
+                        // can offer: kind, damage dice, and an optional range
+                        // override (defaults: 5 ft melee/finesse, 60 ft
+                        // ranged).
+                        <span className={styles.weaponEditor} data-testid={`weapon-editor-${index}`}>
+                          <Select
+                            label="Weapon kind"
+                            value={weaponKindDraft}
+                            onChange={(e) =>
+                              setWeaponKindDraft(e.target.value as "" | WeaponAttackKind)
+                            }
+                            data-testid="weapon-kind-select"
+                          >
+                            <option value="">Not a weapon</option>
+                            {WEAPON_KINDS.map((kind) => (
+                              <option key={kind} value={kind}>
+                                {WEAPON_KIND_LABEL[kind]}
+                              </option>
+                            ))}
+                          </Select>
+                          {weaponKindDraft !== "" ? (
+                            <>
+                              <TextInput
+                                label="Damage dice"
+                                value={weaponDamageDraft}
+                                onChange={(e) => setWeaponDamageDraft(e.target.value)}
+                                placeholder="e.g. 1d8"
+                                data-testid="weapon-damage-input"
+                              />
+                              <TextInput
+                                label={`Range ft (default ${weaponKindDraft === "ranged" ? 60 : 5})`}
+                                type="number"
+                                min={5}
+                                value={weaponRangeDraft}
+                                onChange={(e) => setWeaponRangeDraft(e.target.value)}
+                                data-testid="weapon-range-input"
+                              />
+                            </>
                           ) : null}
-                        </>
+                          <Button
+                            variant="teal"
+                            size="sm"
+                            onClick={() => saveWeaponTag(index)}
+                            disabled={!weaponDraftValid}
+                            data-testid="weapon-save"
+                          >
+                            Save
+                          </Button>
+                        </span>
                       ) : null}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Panel>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {canEdit ? (
+                <div className={styles.addRow}>
+                  <TextInput
+                    label="Item"
+                    value={newItemName}
+                    onChange={(e) => setNewItemName(e.target.value)}
+                    placeholder="e.g. Rope (50 ft)"
+                    className={styles.addName}
+                  />
+                  <TextInput
+                    label="Qty"
+                    type="number"
+                    min={1}
+                    value={newItemQty}
+                    onChange={(e) => setNewItemQty(e.target.value)}
+                    className={styles.addQty}
+                  />
+                  <Button
+                    variant="teal"
+                    onClick={addItem}
+                    disabled={!newItemName.trim() || parseIntIn(newItemQty, 1, 999) === null}
+                  >
+                    Add item
+                  </Button>
+                </div>
+              ) : null}
+            </Panel>
+
+            {isCaster ? (
+              <Panel
+                title="Spells"
+                tone="purple"
+                headerActions={
+                  klass?.spellcastingAbility ? (
+                    <Badge tone="purple">
+                      Spellcasting: {ABILITY_LABEL[klass.spellcastingAbility]}
+                    </Badge>
+                  ) : null
+                }
+              >
+                {character.spells.length === 0 ? (
+                  <p className={styles.emptyHint}>No spells known yet.</p>
+                ) : (
+                  spellLevels.map((level) => (
+                    <div key={level} className={styles.spellGroup}>
+                      <span className={styles.groupLabel}>{spellLevelLabel(level)}</span>
+                      <ul className={styles.rowList}>
+                        {character.spells
+                          .filter((s) => s.level === level)
+                          .map((known) => {
+                            const spell = SPELLS.find((s) => s.name === known.name);
+                            return (
+                              <li key={known.name} className={styles.itemRow}>
+                                <span className={styles.itemName}>{known.name}</span>
+                                <span className={styles.itemControls}>
+                                  {spell ? (
+                                    <span className={styles.spellMeta}>
+                                      {spell.school} · {formatRange(spell.range)}
+                                      {spell.concentration ? " · conc." : ""}
+                                      {spell.attack
+                                        ? ` · ${spell.attack.kind} spell attack, ${spell.attack.damageNotation}`
+                                        : ""}
+                                    </span>
+                                  ) : null}
+                                  {canEdit && spell?.concentration ? (
+                                    // The Prompt 50 "casting" surface: a manual
+                                    // toggle only — no slot spend, no action
+                                    // economy (Prompts 51/53). Starting while
+                                    // already concentrating silently replaces
+                                    // the old spell.
+                                    <Button
+                                      variant="teal"
+                                      size="sm"
+                                      disabled={character.concentrating_on === known.name}
+                                      onClick={() => handleStartConcentrating(known.name)}
+                                      data-testid={`start-concentrating-${known.name.toLowerCase().replace(/\s+/g, "-")}`}
+                                    >
+                                      {character.concentrating_on === known.name
+                                        ? "Concentrating"
+                                        : "Start concentrating"}
+                                    </Button>
+                                  ) : null}
+                                  {canEdit ? (
+                                    <Button
+                                      variant="danger"
+                                      size="sm"
+                                      onClick={() => removeSpell(known.name)}
+                                      aria-label={`Forget ${known.name}`}
+                                    >
+                                      Forget
+                                    </Button>
+                                  ) : null}
+                                </span>
+                              </li>
+                            );
+                          })}
+                      </ul>
+                    </div>
+                  ))
+                )}
+                {canEdit ? (
+                  <div className={styles.addRow}>
+                    <Select
+                      label="Add a spell"
+                      value={spellToAdd}
+                      onChange={(e) => setSpellToAdd(e.target.value)}
+                      className={styles.addName}
+                    >
+                      <option value="">Choose a spell…</option>
+                      {addableSpells.map((spell) => (
+                        <option key={spell.name} value={spell.name}>
+                          {spell.name} ({spell.level === 0 ? "cantrip" : `level ${spell.level}`})
+                        </option>
+                      ))}
+                    </Select>
+                    <Button variant="teal" onClick={addSpell} disabled={!spellToAdd}>
+                      Learn spell
+                    </Button>
+                  </div>
+                ) : null}
+              </Panel>
+            ) : null}
+
+            {canEdit ? (
+              <Panel title="Map token" tone="teal">
+                <PawnModelPicker characterId={character.id} initialPawnModelRef={initialPawnModelRef} />
+              </Panel>
+            ) : null}
+          </div>
+        </div>
       </main>
     </div>
   );
