@@ -223,3 +223,31 @@
   line-height: 1.5;
   margin: 0;
 }
+
+.manageRow {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+}
+
+.manageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.actionRow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.confirmHint {
+  color: var(--muted);
+  line-height: 1.5;
+}

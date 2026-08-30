@@ -153,6 +153,29 @@ export async function updateCharacter(
 }
 
 /**
+ * Deletes a character — owner or the campaign's DM, 0008's characters
+ * DELETE policy exactly (`owner_id = auth.uid() or is_campaign_dm
+ * (campaign_id)`), the same zero-rows-affected detection as
+ * deleteCampaign/leaveCampaign (campaigns.ts). Every character_id-keyed
+ * table (map_tokens 0019, character_resources 0007, action_overrides 0033,
+ * character_pawns 0080) is ON DELETE CASCADE off characters, so they go
+ * with it; roll_log.character_id (0030) is ON DELETE SET NULL by design —
+ * the campaign's shared roll history survives a retired/removed character
+ * rather than being erased. Used by removeCampaignMember (campaigns.ts) to
+ * delete a removed player's character(s); also available for a future
+ * "delete my own character" UI, since the RLS already permits it.
+ */
+export async function deleteCharacter(supabase: SupabaseClient, characterId: string): Promise<void> {
+  const { error, count } = await supabase
+    .from("characters")
+    .delete({ count: "exact" })
+    .eq("id", characterId);
+
+  if (error) throw error;
+  if (count === 0) throw new Error("Only the character's owner or the campaign's DM can delete it.");
+}
+
+/**
  * Damage (negative delta) or heal (positive delta) a character, clamped to
  * [0, max_hp]. Goes through the apply_hp_delta RPC (0028) rather than a
  * read-then-update here, because the clamp must be computed from the

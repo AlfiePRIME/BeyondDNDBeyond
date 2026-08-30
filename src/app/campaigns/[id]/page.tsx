@@ -5,6 +5,7 @@ import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { listCampaignMembers, listCharactersForCampaign, isDM } from "@/data-access";
 import { AppNav } from "../../AppNav";
 import { TransferDMForm } from "./TransferDMForm";
+import { RemoveMemberForm } from "./RemoveMemberForm";
 import { CampaignRoster } from "./CampaignRoster";
 import { HouseRules } from "./HouseRules";
 import { InviteCodeBadge } from "./InviteCodeBadge";
@@ -38,6 +39,16 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   const otherMembers = members.filter((m) => m.user_id !== user.id);
   const currentUserDisplayName = members.find((m) => m.user_id === user.id)?.display_name ?? null;
   const currentUserHasCharacter = characters.some((character) => character.owner_id === user.id);
+  // RemoveMemberForm's own list, restricted to players even though
+  // otherMembers already excludes the DM themself — there is only ever one
+  // DM per campaign, so this is belt-and-suspenders, matching the same
+  // explicit role check the new campaign_members DELETE policy itself uses
+  // (0099_dm_remove_member.sql): this control must never target another DM.
+  const otherPlayers = otherMembers.filter((m) => m.role === "player");
+  const characterNamesByOwner = characters.reduce<Record<string, string[]>>((acc, character) => {
+    (acc[character.owner_id] ??= []).push(character.name);
+    return acc;
+  }, {});
 
   return (
     <div className={styles.page}>
@@ -152,6 +163,20 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
             canManage={currentUserIsDM}
           />
         </Panel>
+
+        {currentUserIsDM ? (
+          <Panel title="Remove a player" tone="pink" data-testid="remove-member-panel">
+            <p className={styles.transferHint}>
+              Remove a player from this campaign. This permanently deletes their character(s) here too — it
+              can&apos;t be undone.
+            </p>
+            <RemoveMemberForm
+              campaignId={campaignId}
+              players={otherPlayers}
+              charactersByOwner={characterNamesByOwner}
+            />
+          </Panel>
+        ) : null}
 
         {currentUserIsDM ? (
           <Panel title="Transfer DM" tone="pink">

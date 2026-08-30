@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Character } from "./characters";
+import { deleteCharacter, type Character } from "./characters";
 
 export interface Campaign {
   id: string;
@@ -197,6 +197,59 @@ export async function leaveCampaign(
   if (error) throw error;
   if (count === 0) {
     throw new Error("A DM can't leave their own campaign — transfer the DM role or delete it instead.");
+  }
+}
+
+/**
+ * DM removes ANOTHER member — a player, never another DM (see
+ * 0099_dm_remove_member.sql's new campaign_members DELETE policy this
+ * relies on, the natural complement to 0011's "a player can remove their
+ * own membership row"). The project owner's own explicit, confirmed choice:
+ * removal is a clean, complete removal, not a bare membership delete — the
+ * removed player's character(s) in THIS campaign are deleted too, never
+ * left as an orphaned row a departed member can no longer reach. Map
+ * tokens/character_resources/etc. cascade off each character delete exactly
+ * as deleteCharacter's own doc comment describes; the campaign_members
+ * columns other prompts have added since (seat_offset, dice tray
+ * preference, dm_book_offset, dm_tray_offset) are plain columns on the
+ * membership row itself, so they disappear for free with it.
+ *
+ * Deliberately deletes the MEMBERSHIP ROW FIRST, characters second — the
+ * opposite order would let 0008's existing (and unrelated) "owner or
+ * campaign DM can delete a character" permission actually delete a real
+ * character first, and only THEN discover the membership delete is
+ * RLS-blocked (a caller who isn't really the DM, a DM somehow targeting
+ * their own row, or simply this policy not having reached the database
+ * yet) — a genuinely destructive half-completed state. Deleting the
+ * membership row first means any such block fails closed with ZERO side
+ * effects: nothing about the target's characters is ever touched unless
+ * their membership row is confirmed gone first.
+ */
+export async function removeCampaignMember(
+  supabase: SupabaseClient,
+  campaignId: string,
+  targetUserId: string
+): Promise<void> {
+  const { error: memberError, count: memberCount } = await supabase
+    .from("campaign_members")
+    .delete({ count: "exact" })
+    .eq("campaign_id", campaignId)
+    .eq("user_id", targetUserId);
+
+  if (memberError) throw memberError;
+  if (memberCount === 0) {
+    throw new Error("Only the campaign's DM can remove another member, and the DM can't remove themself this way.");
+  }
+
+  const { data: targetCharacters, error: listError } = await supabase
+    .from("characters")
+    .select("id")
+    .eq("campaign_id", campaignId)
+    .eq("owner_id", targetUserId);
+  if (listError) throw listError;
+
+  for (const character of targetCharacters ?? []) {
+    await deleteCharacter(supabase, character.id);
   }
 }
 
