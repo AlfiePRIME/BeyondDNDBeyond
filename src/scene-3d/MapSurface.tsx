@@ -1,9 +1,10 @@
 "use client";
 
-import { Fragment, memo, useEffect, useMemo, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Billboard, Html } from "@react-three/drei";
-import { BufferAttribute, BufferGeometry, CanvasTexture, Color, SRGBColorSpace } from "three";
+import { BufferAttribute, BufferGeometry, CanvasTexture, Color, Euler, Quaternion, SRGBColorSpace, Vector3 } from "three";
 import type { ThreeEvent } from "@react-three/fiber";
+import type { Group } from "three";
 import { playSound, SOUND_KEYS } from "@/audio";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
@@ -1411,6 +1412,7 @@ const TokenMarker = memo(function TokenMarker({
   onSlideDebug,
   onMeasureDebug,
   onTransformDebug,
+  onModelWorldDebug,
 }: {
   id: string;
   gridX: number;
@@ -1491,6 +1493,10 @@ const TokenMarker = memo(function TokenMarker({
     id: string,
     transform: { gridX: number; gridY: number; topY: number; pitchDeg: number; yawDeg: number }
   ) => void;
+  /** Verification-only: see MapSurfaceProps.onTokenModelWorldDebug's own doc
+   * comment. Only ever fires for a token actually rendering a model
+   * (modelUrl set) — a disc-fallback token has no model node to measure. */
+  onModelWorldDebug?: (id: string, world: { x: number; y: number; z: number; yawDeg: number }) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   // Pawn Customization P1: colorOverride (a PC token's own owner's account
@@ -1547,6 +1553,47 @@ const TokenMarker = memo(function TokenMarker({
   // pose, so it keeps the true tilt.
   const tiltPitch = modelUrl && crossingRotationDeg !== null ? crossingTiltPitchMagnitude : 0;
   const tiltYaw = modelUrl && crossingRotationDeg !== null ? (crossingRotationDeg * Math.PI) / 180 : 0;
+  // Click-select-to-move pawn-model repro investigation (re-opened): the
+  // group directly wrapping this token's own loaded model (only ever
+  // mounted in the modelUrl branch below) — read by reportModelWorld just
+  // below to prove, straight out of the live three.js scene graph, that the
+  // MODEL's own node (not just the slideRef/rotationDeg groups it's nested
+  // in) actually inherits the move/rotate transform. A disc-fallback token
+  // never mounts this group, so the ref stays null for it — harmless, since
+  // reportModelWorld only ever reads it when modelUrl is set.
+  const modelWorldRef = useRef<Group | null>(null);
+  // Verification-only: reports the model's own ACTUAL rendered world
+  // position/yaw — not re-derived from props or from useTokenSlide's own
+  // pose math (that's what onTransformDebug above already does), but read
+  // directly off modelWorldRef's live matrixWorld, so this can catch a
+  // genuine scene-graph-level desync (a detached parent, a stale cached
+  // matrix, an R3F reconciliation quirk between the model and its
+  // ancestors) that prop-level reasoning alone can never rule out.
+  // updateWorldMatrix(true, false) forces a fresh, synchronous, top-down
+  // recompute of this node's ENTIRE ancestor chain (slideRef's imperative
+  // writes included) straight from each ancestor's current position/
+  // quaternion/scale — correct regardless of useFrame call-order or the
+  // renderer's own once-per-frame matrix update timing, so this never
+  // reads a stale frame. Only ever does anything once a caller actually
+  // asks for it (every real caller omits onModelWorldDebug) and only for a
+  // token that resolved a real model.
+  const reportModelWorld = useCallback(() => {
+    if (!onModelWorldDebug || !modelUrl) return;
+    const node = modelWorldRef.current;
+    if (!node) return;
+    node.updateWorldMatrix(true, false);
+    const worldPosition = new Vector3();
+    const worldQuaternion = new Quaternion();
+    node.getWorldPosition(worldPosition);
+    node.getWorldQuaternion(worldQuaternion);
+    const worldEuler = new Euler().setFromQuaternion(worldQuaternion, "YXZ");
+    onModelWorldDebug(id, {
+      x: worldPosition.x,
+      y: worldPosition.y,
+      z: worldPosition.z,
+      yawDeg: (worldEuler.y * 180) / Math.PI,
+    });
+  }, [id, modelUrl, onModelWorldDebug]);
   const { ref: slideRef, phase } = useTokenSlide({
     gridX,
     gridY,
@@ -1556,17 +1603,35 @@ const TokenMarker = memo(function TokenMarker({
     offsetZ,
     tiltPitch,
     tiltYaw,
-    onSettled: onTransformDebug
-      ? (pose) =>
-          onTransformDebug(id, {
-            gridX: pose.gridX,
-            gridY: pose.gridY,
-            topY: pose.topY,
-            pitchDeg: (pose.pitchRad * 180) / Math.PI,
-            yawDeg: (pose.yawRad * 180) / Math.PI,
-          })
-      : undefined,
+    onSettled:
+      onTransformDebug || onModelWorldDebug
+        ? (pose) => {
+            onTransformDebug?.(id, {
+              gridX: pose.gridX,
+              gridY: pose.gridY,
+              topY: pose.topY,
+              pitchDeg: (pose.pitchRad * 180) / Math.PI,
+              yawDeg: (pose.yawRad * 180) / Math.PI,
+            });
+            // A move/elevation/tilt settle is exactly when a move-triggered
+            // model desync would show up — read the model's real world
+            // transform at the same moment, not just the slideRef group's.
+            reportModelWorld();
+          }
+        : undefined,
   });
+  // Press-R-to-rotate: unlike a move, a rotation is a STATIC prop change on
+  // the rotationDeg group (see that group's own doc comment) — it never
+  // touches useTokenSlide at all, so the settle-triggered report above
+  // never fires for a rotation-only change. This effect is rotation's own
+  // equivalent trigger: r3f commits the new `rotation` prop onto the actual
+  // three.js group synchronously during render (before this effect runs),
+  // so by the time this runs, modelWorldRef's ancestor chain already
+  // reflects the new angle — reportModelWorld's own updateWorldMatrix read
+  // picks it up correctly the same way it does for a move.
+  useEffect(() => {
+    reportModelWorld();
+  }, [rotationDeg, reportModelWorld]);
   // Verification-only: mirrors this token's slide phase out to whoever asked
   // for it (see MapSurfaceProps.onTokenSlideDebug's doc comment) — a plain
   // effect on the phase transition, not a per-frame subscription, since
@@ -1615,7 +1680,7 @@ const TokenMarker = memo(function TokenMarker({
                 <cylinderGeometry args={[0.28, 0.32, PLINTH_HEIGHT, 20]} />
                 <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35 * emissiveScale} roughness={0.45} />
               </mesh>
-              <group position={[0, PLINTH_HEIGHT, 0]}>
+              <group ref={modelWorldRef} position={[0, PLINTH_HEIGHT, 0]}>
                 <PlacedObject
                   url={modelUrl}
                   forwardOffsetDeg={forwardOffsetDeg}
@@ -1920,6 +1985,21 @@ export interface MapSurfaceProps {
     id: string,
     transform: { gridX: number; gridY: number; topY: number; pitchDeg: number; yawDeg: number }
   ) => void;
+  /** Verification-only: the click-select-to-move pawn-model repro
+   * investigation, re-opened — see TokenMarker's own onModelWorldDebug doc
+   * comment. Unlike onTokenTransformDebug above (which mirrors the
+   * useTokenSlide-driven group's own pose math), this reads the loaded
+   * model's own node straight out of the live three.js scene graph
+   * (getWorldPosition/getWorldQuaternion after a forced updateWorldMatrix),
+   * so it can catch a genuine scene-graph-level desync between the model
+   * and the slideRef/rotationDeg groups it's nested in — the one thing
+   * prop-derived reasoning alone can never rule out. Fires whenever a
+   * model-backed token's slide settles OR its rotationDeg changes (a
+   * rotation never touches useTokenSlide at all, so it needs its own
+   * trigger). Never fires for a disc-fallback token (no model node to
+   * measure). Omit it (as every real caller does today) and nothing
+   * changes about how tokens render or move. */
+  onTokenModelWorldDebug?: (id: string, world: { x: number; y: number; z: number; yawDeg: number }) => void;
 }
 
 /**
@@ -1968,6 +2048,7 @@ export function MapSurface({
   onObjectMeasureDebug,
   onTokenMeasureDebug,
   onTokenTransformDebug,
+  onTokenModelWorldDebug,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
   const { offsetX, offsetZ } = mapCellOffsets(gridWidth, gridHeight, cellSize);
@@ -2149,6 +2230,7 @@ export function MapSurface({
           onSlideDebug={onTokenSlideDebug}
           onMeasureDebug={onTokenMeasureDebug}
           onTransformDebug={onTokenTransformDebug}
+          onModelWorldDebug={onTokenModelWorldDebug}
         />
       ))}
 

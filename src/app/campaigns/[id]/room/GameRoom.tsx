@@ -1676,6 +1676,34 @@ export function GameRoom({
     },
     []
   );
+  // Click-select-to-move pawn-model repro investigation (re-opened): mirrors
+  // a model-backed token's own ACTUAL rendered world transform, read
+  // straight off the loaded model's own node in the live three.js scene
+  // graph — see MapSurfaceProps.onTokenModelWorldDebug's own doc comment for
+  // why this is a stronger proof than tokenTransformDebug above (which only
+  // ever mirrors the useTokenSlide-driven group's own pose math, not the
+  // model's own node). Same dedup reasoning as handleTokenTransformDebug.
+  const [tokenModelWorldDebug, setTokenModelWorldDebug] = useState<
+    Record<string, { x: number; y: number; z: number; yawDeg: number }>
+  >({});
+  const handleTokenModelWorldDebug = useCallback(
+    (id: string, world: { x: number; y: number; z: number; yawDeg: number }) => {
+      setTokenModelWorldDebug((current) => {
+        const existing = current[id];
+        if (
+          existing &&
+          existing.x === world.x &&
+          existing.y === world.y &&
+          existing.z === world.z &&
+          existing.yawDeg === world.yawDeg
+        ) {
+          return current;
+        }
+        return { ...current, [id]: world };
+      });
+    },
+    []
+  );
   // Investigation-only (teleport/mis-scale bug hunt): mirrors each seated
   // member's own loaded avatar model's measured bounding-box height and
   // derived scale factor — same reasoning as avatarPoseDebug above.
@@ -8207,6 +8235,7 @@ export function GameRoom({
           onObjectMeasureDebug={handleObjectMeasureDebug}
           onTokenMeasureDebug={handleTokenMeasureDebug}
           onTokenTransformDebug={handleTokenTransformDebug}
+          onTokenModelWorldDebug={handleTokenModelWorldDebug}
           seatOffsets={seatOffsets}
           onChairDragEnd={handleChairDragEnd}
           onOwnChairProjectedPosition={setOwnChairScreenPosition}
@@ -8774,6 +8803,24 @@ export function GameRoom({
           hasn't settled its first frame yet. */}
       <div data-testid="token-transform-state" hidden>
         {JSON.stringify(tokenTransformDebug)}
+      </div>
+      {/* Hidden render-state mirror for the click-select-to-move pawn-model
+          repro investigation, re-opened (a real player report: "custom
+          token models do not move after the map first loads, only the disc
+          under them does, they also do not rotate") — see
+          MapSurfaceProps.onTokenModelWorldDebug's own doc comment. Unlike
+          token-transform-state above (which mirrors the useTokenSlide-driven
+          group's own pose math), x/y/z/yawDeg here are read straight off the
+          MODEL's own node in the live three.js scene graph
+          (getWorldPosition/getWorldQuaternion after a forced
+          updateWorldMatrix) — the strongest available proof that the loaded
+          model itself, not just its ancestor groups, actually inherits a
+          move or a press-R rotation. Keyed by map_tokens.id; a key absent
+          entirely means that token either hasn't settled its first frame
+          yet or has no model at all (a disc-fallback token never reports
+          here). */}
+      <div data-testid="token-model-world-state" hidden>
+        {JSON.stringify(tokenModelWorldDebug)}
       </div>
       {/* Hidden render-state mirror for scripts/db/verify-token-rotation.mjs
           (press-R-to-rotate) — the same "WebGL has no DOM" reasoning as

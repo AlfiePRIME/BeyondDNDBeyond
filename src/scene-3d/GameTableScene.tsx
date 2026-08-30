@@ -1335,6 +1335,10 @@ export interface GameTableSceneProps {
     id: string,
     transform: { gridX: number; gridY: number; topY: number; pitchDeg: number; yawDeg: number }
   ) => void;
+  /** Verification-only pass-through to MapSurface's onTokenModelWorldDebug
+   * (click-select-to-move pawn-model repro investigation, re-opened) — see
+   * its own doc comment. */
+  onTokenModelWorldDebug?: (id: string, world: { x: number; y: number; z: number; yawDeg: number }) => void;
   /** This viewer's own visible chair offsets, keyed by user_id — scene-3d's
    * own SeatOffset (seating.ts), not data-access's structurally-identical
    * twin (the SeatMember/module-boundary convention already documented on
@@ -1665,6 +1669,7 @@ export function GameTableScene({
   onObjectMeasureDebug,
   onTokenMeasureDebug,
   onTokenTransformDebug,
+  onTokenModelWorldDebug,
   seatOffsets = EMPTY_SEAT_OFFSETS,
   onChairDragEnd,
   onOwnChairProjectedPosition,
@@ -2718,6 +2723,7 @@ export function GameTableScene({
               onObjectMeasureDebug={onObjectMeasureDebug}
               onTokenMeasureDebug={onTokenMeasureDebug}
               onTokenTransformDebug={onTokenTransformDebug}
+              onTokenModelWorldDebug={onTokenModelWorldDebug}
             />
             {/* Live-room move-drag: an invisible, oversized grab handle
                 riding on top of whichever object LiveObjectsPanel currently
