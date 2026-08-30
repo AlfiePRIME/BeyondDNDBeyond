@@ -220,9 +220,11 @@ export {
 export {
   listMapTransitions,
   listMapTransitionsForCampaign,
+  listMapTransitionAnchors,
   createMapTransition,
   deleteMapTransition,
   type MapTransition,
+  type MapTransitionAnchor,
 } from "./mapTransitions";
 export {
   listConcealedPits,

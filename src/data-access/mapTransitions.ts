@@ -28,6 +28,40 @@ export interface MapTransition {
   created_at: string;
 }
 
+/** A transition's ORIGIN cell only — no destination, no required_skill.
+ * Sourced from map_transition_anchors (0095), a narrow view over
+ * map_transitions readable by any member who can read the map itself
+ * (can_read_map), not just the DM: enough to know "a transition exists
+ * here" without spoiling where it leads. */
+export interface MapTransitionAnchor {
+  from_map_id: string;
+  from_x: number;
+  from_y: number;
+}
+
+/**
+ * Every transition anchor on this one map, for ANY campaign member who can
+ * read it (map_transition_anchors' own view already scopes this correctly
+ * per caller — DM: any map in their campaign; player: only the current live
+ * map). GameRoom.tsx's blockedCellsForMovement/handleSelectedTokenCellClick
+ * need this for EVERY mover, not just the DM's own listMapTransitions/
+ * listMapTransitionsForCampaign above — a real regression showed a player's
+ * own move onto a transition-covered blocking object being flatly denied,
+ * since map_transitions itself returns nothing at all for a non-DM.
+ */
+export async function listMapTransitionAnchors(
+  supabase: SupabaseClient,
+  mapId: string
+): Promise<MapTransitionAnchor[]> {
+  const { data, error } = await supabase
+    .from("map_transition_anchors")
+    .select()
+    .eq("from_map_id", mapId);
+
+  if (error) throw error;
+  return data ?? [];
+}
+
 /** Outgoing transitions only — the ones a token on this map can trigger. */
 export async function listMapTransitions(
   supabase: SupabaseClient,

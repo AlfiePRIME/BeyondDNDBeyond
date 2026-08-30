@@ -58,6 +58,7 @@ import {
   listMapTokens,
   listMapTokensForCampaign,
   listMapTransitionsForCampaign,
+  listMapTransitionAnchors,
   listMonsterStatBlocks,
   listMonsterTemplateOverridesForCampaign,
   listSeenCells,
@@ -2540,26 +2541,19 @@ export function GameRoom({
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [interactionError, setInteractionError] = useState<string | null>(null);
 
-  // Ref, not state, for the two existing move-time consumers below
-  // (maybeOfferTransition, handleSelectedTokenCellClick): both run from
-  // event handlers, never during render, so a fetch landing there never
-  // needs a re-render. blockedCellsForMovement's own reachable-set
-  // exception further down is different — it runs INSIDE a useMemo, which
-  // React evaluates during render, where reading a ref's current value is
-  // disallowed (react-hooks/refs) and wouldn't reliably trigger a
-  // recompute anyway. `transitions` is a plain, reactive mirror of the same
-  // rows kept only for that one consumer.
+  // Ref, not state: only maybeOfferTransition below consults this (a real
+  // event-handler callback, never during render), so a fetch landing here
+  // never needs a re-render. Full MapTransition rows (destination,
+  // required_skill) — DM-only-readable (0025), matching the transition
+  // OFFER itself being DM-only by design. blockingObjectByCellKey/
+  // handleSelectedTokenCellClick's own "does a transition exist at this
+  // cell" checks use transitionAnchorKeys below instead, which — unlike
+  // this — works for every mover, not just the DM's own client.
   const transitionsRef = useRef<MapTransition[]>([]);
-  const [transitions, setTransitions] = useState<MapTransition[]>([]);
 
   const liveMapId = liveMap?.map.id ?? null;
   useEffect(() => {
     transitionsRef.current = [];
-    // transitions (the state mirror) is left alone here rather than reset
-    // to [] synchronously (react-hooks/set-state-in-effect) — it briefly
-    // holds the previous campaign/map's rows until this fetch resolves,
-    // exactly the same transient staleness transitionsRef.current already
-    // has above, not a new behavior.
     // Transitions are DM-only-readable (0025) and the offer is DM-only by
     // design — a player's client would just get an empty list back anyway.
     // Campaign-wide (0046), not keyed to whichever single map this DM
@@ -2574,16 +2568,46 @@ export function GameRoom({
     let cancelled = false;
     listMapTransitionsForCampaign(createBrowserSupabaseClient(), campaignId)
       .then((rows) => {
-        if (!cancelled) {
-          transitionsRef.current = rows;
-          setTransitions(rows);
-        }
+        if (!cancelled) transitionsRef.current = rows;
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
   }, [currentUserIsDM, campaignId]);
+
+  // Movement Collision & Gated Interaction Checks follow-up: a real
+  // regression showed a PLAYER's own move onto a cell with both a blocking
+  // object AND a transition getting flatly denied ("Something's in the way
+  // there"), even though the identical cell already correctly falls through
+  // for the DM's own move — transitionsRef above returns nothing at all for
+  // a non-DM client (map_transitions' own RLS, 0025), so
+  // handleSelectedTokenCellClick's denied-but-has-a-transition fallback and
+  // blockedCellsForMovement's reachable-set exception (both further below)
+  // never had anything to check for a player. map_transition_anchors (0095)
+  // is a narrow view exposing ONLY from_map_id/from_x/from_y — no
+  // destination, no required_skill — to any member who can read the map
+  // itself, so this works for every mover while still keeping WHERE a
+  // transition leads DM-only (transitionsRef above, maybeOfferTransition's
+  // own exclusive consumer). State, not a ref, unlike transitionsRef —
+  // blockedCellsForMovement's own memo runs during render, where reading a
+  // ref is disallowed (react-hooks/refs) and wouldn't reliably recompute
+  // anyway.
+  const [transitionAnchorKeys, setTransitionAnchorKeys] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  useEffect(() => {
+    if (!liveMapId) return;
+    let cancelled = false;
+    listMapTransitionAnchors(createBrowserSupabaseClient(), liveMapId)
+      .then((rows) => {
+        if (!cancelled) setTransitionAnchorKeys(new Set(rows.map((row) => cellKey(row.from_x, row.from_y))));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [liveMapId]);
 
   // Pits and falling (docs/design/pits-and-falling.md §5): concealed_pits'
   // own RLS is DM-only-read, exactly the reasoning transitionsRef gives —
@@ -2922,26 +2946,16 @@ export function GameRoom({
   // reachable — otherwise a token can never walk onto it at all, and
   // handleSelectedTokenCellClick's own denied-but-has-a-transition fallback
   // (see its own doc comment) never gets a chance to run: this reachable-set
-  // computation is a SEPARATE gate downstream of that click-time check,
-  // confirmed via a real regression (a token could reach the click handler's
-  // fallback fine, but still got silently cancelled here since the cell was
-  // never in the reachable set to begin with). transitionsRef is DM-only
-  // populated (see its own comment) — a player's own client never has any
-  // rows here, matching the transition OFFER already being DM-only by
-  // design; this exception is therefore a no-op for a player's own
-  // reachable-set computation, not a behavior change for them.
+  // computation is a SEPARATE gate downstream of that click-time check.
+  // transitionAnchorKeys (unlike transitionsRef) is populated for every
+  // mover, DM or player alike — see its own declaration comment for why a
+  // DM-only version of this exact exception isn't enough.
   const blockedCellsForMovement = useMemo(
     () =>
       [...blockingObjectByCellKey.keys()]
-        .map(parseCellKey)
-        .filter(
-          ({ x, y }) =>
-            !liveMapId ||
-            !transitions.some(
-              (transition) => transition.from_map_id === liveMapId && transition.from_x === x && transition.from_y === y
-            )
-        ),
-    [blockingObjectByCellKey, liveMapId, transitions]
+        .filter((key) => !transitionAnchorKeys.has(key))
+        .map(parseCellKey),
+    [blockingObjectByCellKey, transitionAnchorKeys]
   );
 
   // The click-select flow's targeting aid for THIS client's own selection —
@@ -4796,12 +4810,10 @@ export function GameRoom({
           // there were no blocking object here at all, so whichever client
           // is the DM still offers the transition normally once the move
           // settles (maybeOfferTransition's own realtime-driven trigger,
-          // completely independent of this click handler).
-          const hasTransitionHere = transitionsRef.current.some(
-            (candidate) =>
-              candidate.from_map_id === current.map.id && candidate.from_x === x && candidate.from_y === y
-          );
-          if (!hasTransitionHere) {
+          // completely independent of this click handler). transitionAnchorKeys
+          // (not transitionsRef, which is DM-only) — this must work for a
+          // player moving their own token onto the cell too, not just the DM.
+          if (!transitionAnchorKeys.has(cellKey(x, y))) {
             setTokenError(BLOCKED_CELL_MESSAGE);
             return;
           }
@@ -4831,6 +4843,7 @@ export function GameRoom({
       pendingInteraction,
       blockingObjectByCellKey,
       attemptObjectTrigger,
+      transitionAnchorKeys,
       reachableSetForSelection,
       publishTokenSelection,
       commitTokenMove,
