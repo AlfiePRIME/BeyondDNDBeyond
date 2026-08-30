@@ -38,8 +38,10 @@ function MapCard({
   folders,
   thumbnailUrl,
   busy,
+  canCopyToOtherCampaign,
   onAssign,
   onDuplicate,
+  onCopy,
   onDelete,
 }: {
   campaignId: string;
@@ -47,8 +49,10 @@ function MapCard({
   folders: MapFolder[];
   thumbnailUrl: string | null;
   busy: boolean;
+  canCopyToOtherCampaign: boolean;
   onAssign: (map: CampaignMap, folderId: string | null) => void;
   onDuplicate: (map: CampaignMap) => void;
+  onCopy: (map: CampaignMap) => void;
   onDelete: (map: CampaignMap) => void;
 }) {
   const editHref = `/campaigns/${campaignId}/maps/${map.id}/edit`;
@@ -101,6 +105,17 @@ function MapCard({
         >
           Duplicate
         </Button>
+        {canCopyToOtherCampaign ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => onCopy(map)}
+            data-testid={`copy-map-to-campaign-${map.id}`}
+          >
+            Copy to campaign…
+          </Button>
+        ) : null}
         <Button
           size="sm"
           variant="danger"
@@ -119,10 +134,16 @@ export function MapsManager({
   campaignId,
   initialMaps,
   initialFolders,
+  otherDmCampaigns,
 }: {
   campaignId: string;
   initialMaps: CampaignMap[];
   initialFolders: MapFolder[];
+  /** Every OTHER campaign this user DMs (page.tsx's own filter of
+   * listCampaignsForUser) — powers the "Copy to campaign…" action, hidden
+   * entirely when this is empty (a DM of only this one campaign has nowhere
+   * else to copy a map to). */
+  otherDmCampaigns: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [maps, setMaps] = useState(initialMaps);
@@ -141,6 +162,12 @@ export function MapsManager({
   const [linkedFromLoading, setLinkedFromLoading] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const [copyTarget, setCopyTarget] = useState<CampaignMap | null>(null);
+  const [copyDestinationId, setCopyDestinationId] = useState(otherDmCampaigns[0]?.id ?? "");
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const [copyResult, setCopyResult] = useState<{ id: string; name: string } | null>(null);
 
   const [name, setName] = useState("");
   const [width, setWidth] = useState("20");
@@ -268,6 +295,45 @@ export function MapsManager({
     })();
   }
 
+  function handleOpenCopy(map: CampaignMap) {
+    if (pendingMapId) return;
+    setCopyTarget(map);
+    setCopyError(null);
+    setCopyResult(null);
+    setCopyDestinationId(otherDmCampaigns[0]?.id ?? "");
+  }
+
+  function closeCopyDialog() {
+    if (copyBusy) return;
+    setCopyTarget(null);
+  }
+
+  async function handleConfirmCopy() {
+    if (!copyTarget || copyBusy || !copyDestinationId) return;
+    setCopyBusy(true);
+    setCopyError(null);
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const { map, cells } = await duplicateMap(supabase, copyTarget.id, copyDestinationId);
+      try {
+        await captureMapThumbnail(supabase, map, overlayFromRows(cells));
+      } catch {
+        // Cosmetic only — the copy's first editor save (in its own
+        // campaign) recaptures a thumbnail; this page never renders it
+        // either way, since the copy doesn't belong on THIS map list.
+      }
+      // The copy lives in a different campaign than this page — it does not
+      // join this page's own `maps` state; the dialog just confirms success
+      // and links over to it instead.
+      const destination = otherDmCampaigns.find((candidate) => candidate.id === copyDestinationId);
+      setCopyResult({ id: copyDestinationId, name: destination?.name ?? "the other campaign" });
+    } catch {
+      setCopyError("Couldn't copy the map — try again.");
+    } finally {
+      setCopyBusy(false);
+    }
+  }
+
   // Opens the confirm dialog and, in the background, looks up any other
   // map whose own transition leads into this one — the dialog names them
   // once the lookup resolves (linkedFromLoading gates the confirm button so
@@ -374,8 +440,10 @@ export function MapsManager({
             folders={folders}
             thumbnailUrl={thumbnails[map.id] ?? null}
             busy={pendingMapId !== null}
+            canCopyToOtherCampaign={otherDmCampaigns.length > 0}
             onAssign={handleAssign}
             onDuplicate={handleDuplicate}
+            onCopy={handleOpenCopy}
             onDelete={handleOpenDelete}
           />
         ))}
@@ -624,6 +692,72 @@ export function MapsManager({
               </p>
             ) : null}
           </div>
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={copyTarget !== null}
+        onClose={closeCopyDialog}
+        title="Copy to campaign"
+        footer={
+          copyTarget ? (
+            copyResult ? (
+              <Button size="sm" variant="teal" onClick={closeCopyDialog} data-testid="copy-map-done">
+                Done
+              </Button>
+            ) : (
+              <>
+                <Button size="sm" variant="ghost" disabled={copyBusy} onClick={closeCopyDialog}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  variant="teal"
+                  disabled={copyBusy || !copyDestinationId}
+                  onClick={() => void handleConfirmCopy()}
+                  data-testid="confirm-copy-map"
+                >
+                  {copyBusy ? "Copying…" : "Copy"}
+                </Button>
+              </>
+            )
+          ) : null
+        }
+      >
+        {copyTarget ? (
+          copyResult ? (
+            <p data-testid="copy-map-success">
+              <strong>{copyTarget.name}</strong> was copied into <strong>{copyResult.name}</strong>.{" "}
+              <Link href={`/campaigns/${copyResult.id}/maps`}>Go there</Link>
+            </p>
+          ) : (
+            <div className={styles.deleteDialogBody} data-testid="copy-map-modal">
+              <p>
+                Copies <strong>{copyTarget.name}</strong>&apos;s terrain, elevation, placed objects,
+                and chest loot into a new map in another campaign you DM. Tokens (tied to this
+                campaign&apos;s own characters) and door/staircase links to this campaign&apos;s
+                other maps aren&apos;t carried over — set those up again once it lands.
+              </p>
+              <Select
+                label="Destination campaign"
+                value={copyDestinationId}
+                onChange={(event) => setCopyDestinationId(event.target.value)}
+                disabled={copyBusy}
+                data-testid="copy-map-destination"
+              >
+                {otherDmCampaigns.map((campaign) => (
+                  <option key={campaign.id} value={campaign.id}>
+                    {campaign.name}
+                  </option>
+                ))}
+              </Select>
+              {copyError ? (
+                <p role="alert" className={styles.errorText} data-testid="copy-map-error">
+                  {copyError}
+                </p>
+              ) : null}
+            </div>
+          )
         ) : null}
       </Modal>
     </div>

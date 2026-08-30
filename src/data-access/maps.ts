@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { TerrainType } from "@/rules-engine";
+import { listItemsForMapObjects } from "./mapObjectItems";
 
 export interface CampaignMap {
   id: string;
@@ -295,46 +296,202 @@ export async function createPopulatedMap(
 }
 
 /**
- * Clones a map — terrain, elevation, lighting, and objects — as a new
- * independent map in the same campaign and folder. Objects keep their
- * authored behavior (action/content/playerTriggerable) and LOS flag but
- * `triggered` resets to false: the copy is a fresh authoring artifact that
- * hasn't been played through, so a sprung trap or opened chest on the
- * source starts un-triggered here. Light sources are NOT copied — they can
- * anchor to tokens, which duplication never copies, so a faithful partial
- * copy would be misleading; re-authoring lights on a duplicate is cheap.
+ * Clones a map — terrain, elevation, lighting, objects, container loot, and
+ * accepted top-down art — as a new independent map. Defaults to the SAME
+ * campaign and folder as the source (the pre-existing "Duplicate" button's
+ * exact behavior, unchanged) when `destinationCampaignId` is omitted; passing
+ * a different campaign id copies the map ACROSS campaigns instead (the
+ * project owner's "copy this map into another campaign I also DM" request).
+ * No extra authorization check is added here for the destination — this
+ * file's own doc comment on createMap already establishes that
+ * campaign_maps' INSERT RLS policy (0015, `with check
+ * (is_campaign_dm(campaign_id))`) is the real gate, so a caller can only ever
+ * land the copy in a campaign they actually DM regardless of what id is
+ * passed here; the UI additionally only ever offers this action from a page
+ * that's already DM-gated for the SOURCE campaign (maps/page.tsx's own
+ * notFound() check), and only lists campaigns listCampaignsForUser reports
+ * the caller as DM of.
+ *
+ * Objects keep their authored behavior (action/content/playerTriggerable)
+ * and LOS flag but `triggered` resets to false: the copy is a fresh
+ * authoring artifact that hasn't been played through, so a sprung trap or
+ * opened chest on the source starts un-triggered here. Every other real
+ * map_objects column (crossing_type, tag, revealed_to_players, tint) is
+ * carried over as-authored — this used to be a real gap (this function's own
+ * select list silently dropped every one of these once they were added to
+ * the schema, so a "duplicate" quietly lost a source object's tint/tag/
+ * crossing-structure/reveal-state even within the SAME campaign); fixed here
+ * by copying the full live column set instead of a stale hand-picked subset.
+ *
+ * mount_object_id (0065, wall-mounted torches) is a SELF-REFERENCING fk, so
+ * it can't just be copied byte-for-byte: every source object is inserted
+ * first (mount_object_id left unset), building an old-id -> new-id map from
+ * each insert's own returned id, then a second pass points each copied
+ * mounted object's mount_object_id at its host's NEW id. Sequential
+ * (one insert per object) rather than a single batch insert + relying on
+ * the RETURNING rows coming back in the same order as the input array —
+ * that ordering isn't a guarantee this code should lean on, and getting it
+ * wrong would silently attach a copied torch to the wrong wall.
+ *
+ * map_object_items (chest loot) copies over too, remapped onto each item's
+ * copied host object's new id. Items belonging to a CONCEALED PIT
+ * (concealed_pit_id set) are skipped: concealed_pits (0050) is its own
+ * separate map-scoped table this function does not duplicate — out of
+ * scope here for the same reason map_tokens/map_transitions are (see
+ * below) — so copying one of those items over would leave it pointing at
+ * the SOURCE map's own still-hidden pit instead of anything that exists on
+ * the copy.
+ *
+ * map_art (the DM's accepted ComfyUI top-down render, if any) copies too,
+ * but the underlying PNG is downloaded and RE-uploaded to a fresh path under
+ * the NEW map's own id rather than the new row simply pointing at the old
+ * image_ref path: the map-art bucket's storage RLS (0077) keys off the map
+ * id encoded in the STORAGE PATH itself, not this row's map_id column, so a
+ * bare row copy would leave a member of the DESTINATION campaign unable to
+ * ever read the "copied" art (its path's RLS check would still be asking
+ * "can this viewer read the SOURCE map", which for a player of the new
+ * campaign who was never in the old one is false) even though the database
+ * row looked entirely correct.
+ *
+ * Deliberately excluded, unlike every table above:
+ *   - map_tokens: bound to specific characters (or NPC names) that are this
+ *     campaign's own party — copying them into a different campaign would
+ *     either dangle (character_id referencing a character that was never a
+ *     member there) or, worse, silently attach someone else's PC to a token
+ *     on a map in a campaign they were never invited to.
+ *   - map_transitions: a door/staircase authored between two SPECIFIC maps
+ *     in the SOURCE campaign; neither endpoint exists in the destination
+ *     campaign (from_map_id/to_map_id both reference campaign_maps rows that
+ *     are meaningless there), so every transition would just dangle.
+ *
+ * Light sources are NOT copied either way — they can anchor to tokens, which
+ * duplication never copies, so a faithful partial copy would be misleading;
+ * re-authoring lights on a duplicate is cheap.
  */
 export async function duplicateMap(
   supabase: SupabaseClient,
-  sourceMapId: string
+  sourceMapId: string,
+  destinationCampaignId?: string
 ): Promise<{ map: CampaignMap; cells: MapCell[] }> {
   const source = await getMap(supabase, sourceMapId);
   if (!source) throw new Error("Map not found.");
+  const campaignId = destinationCampaignId ?? source.campaign_id;
+  const crossCampaign = campaignId !== source.campaign_id;
 
   const [cells, objectsResult] = await Promise.all([
     listMapCells(supabase, sourceMapId),
     supabase
       .from("map_objects")
-      .select("asset_id, x, y, elevation, rotation, behavior_config, blocks_line_of_sight")
+      .select(
+        "id, asset_id, x, y, elevation, rotation, behavior_config, blocks_line_of_sight, crossing_type, tag, revealed_to_players, tint, mount_object_id, mount_face_deg"
+      )
       .eq("map_id", sourceMapId),
   ]);
   if (objectsResult.error) throw objectsResult.error;
+  const sourceObjects = objectsResult.data ?? [];
 
-  return createPopulatedMap(supabase, {
-    campaignId: source.campaign_id,
+  // folder_id is scoped to the SOURCE campaign's own map_folders rows — only
+  // meaningful to carry over for a same-campaign duplicate. A cross-campaign
+  // copy starts unfiled; the destination's folders are a different set the
+  // DM organizes separately.
+  const { map } = await createPopulatedMap(supabase, {
+    campaignId,
     name: `${source.name} (Copy)`,
     gridWidth: source.grid_width,
     gridHeight: source.grid_height,
-    folderId: source.folder_id,
+    folderId: crossCampaign ? null : source.folder_id,
     cells,
-    objects: (objectsResult.data ?? []).map((object) => ({
-      ...object,
-      behavior_config:
-        "triggered" in object.behavior_config
-          ? { ...object.behavior_config, triggered: false }
-          : object.behavior_config,
-    })),
+    objects: [],
   });
+
+  // Pass 1: create every object fresh (own id, own map_id), tracking
+  // old id -> new id. mount_object_id is intentionally NOT set yet — see
+  // this function's own doc comment for why a second pass is required.
+  const idMap = new Map<string, string>();
+  for (const object of sourceObjects) {
+    const { data: inserted, error } = await supabase
+      .from("map_objects")
+      .insert({
+        map_id: map.id,
+        asset_id: object.asset_id,
+        x: object.x,
+        y: object.y,
+        elevation: object.elevation,
+        rotation: object.rotation,
+        behavior_config:
+          object.behavior_config && "triggered" in object.behavior_config
+            ? { ...object.behavior_config, triggered: false }
+            : object.behavior_config,
+        blocks_line_of_sight: object.blocks_line_of_sight,
+        crossing_type: object.crossing_type,
+        tag: object.tag,
+        revealed_to_players: object.revealed_to_players,
+        tint: object.tint,
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    idMap.set(object.id, inserted.id);
+  }
+
+  // Pass 2: re-point each copied mounted object at its host's NEW id.
+  for (const object of sourceObjects) {
+    if (!object.mount_object_id) continue;
+    const newHostId = idMap.get(object.mount_object_id);
+    if (!newHostId) continue; // defensive only — every source object was just copied above
+    const { error } = await supabase
+      .from("map_objects")
+      .update({ mount_object_id: newHostId, mount_face_deg: object.mount_face_deg })
+      .eq("id", idMap.get(object.id)!);
+    if (error) throw error;
+  }
+
+  // map_object_items — chest loot only (see doc comment above for why
+  // concealed-pit items are skipped). listItemsForMapObjects already
+  // returns exactly the rows keyed by one of these old object ids (its own
+  // `.in("map_object_id", ...)` query can never match a concealed-pit-only
+  // row, whose map_object_id is null) and already chunks the id list for
+  // very large maps.
+  if (idMap.size > 0) {
+    const items = await listItemsForMapObjects(supabase, [...idMap.keys()]);
+    if (items.length > 0) {
+      const { error: itemsError } = await supabase.from("map_object_items").insert(
+        items.map((item) => ({
+          campaign_id: campaignId,
+          map_object_id: idMap.get(item.map_object_id!)!,
+          name: item.name,
+          description: item.description,
+          icon: item.icon,
+          tag: item.tag,
+          hidden_dc: item.hidden_dc,
+          curse_blessing: item.curse_blessing,
+        }))
+      );
+      if (itemsError) throw itemsError;
+    }
+  }
+
+  // map_art — see this function's own doc comment for why the image is
+  // downloaded and re-uploaded to a fresh path under the NEW map's id
+  // rather than the row simply pointing at the old one.
+  const sourceArt = await getMapArt(supabase, sourceMapId);
+  if (sourceArt) {
+    const { data: blob, error: downloadError } = await supabase.storage
+      .from("map-art")
+      .download(sourceArt.image_ref);
+    if (downloadError) throw downloadError;
+    const newImageRef = await uploadMapArtFile(supabase, map.id, blob);
+    const { error: artError } = await supabase.from("map_art").insert({
+      map_id: map.id,
+      image_ref: newImageRef,
+      style_prompt: sourceArt.style_prompt,
+      generated_at: sourceArt.generated_at,
+      stale: sourceArt.stale,
+    });
+    if (artError) throw artError;
+  }
+
+  return { map, cells };
 }
 
 /**
