@@ -76,6 +76,15 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
                   DM notes
                 </Link>
               ) : null}
+              {currentUserIsDM ? (
+                <Link
+                  href={`/campaigns/${campaignId}/party`}
+                  className={styles.createLink}
+                  data-testid="party-dashboard-link"
+                >
+                  Party dashboard
+                </Link>
+              ) : null}
               <Link href={`/campaigns/${campaignId}/assets`} className={styles.createLink}>
                 Asset palette
               </Link>

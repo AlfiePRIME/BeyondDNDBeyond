@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { WeaponAttackKind } from "@/rules-engine";
+import type { AdvantageMode, WeaponAttackKind } from "@/rules-engine";
 
 /**
  * One carried item in `characters.inventory` (a jsonb array — no
@@ -75,6 +75,21 @@ export interface Character {
    * which moots it). The roll route re-reads this rather than trusting a
    * client-sent DC. */
   pending_concentration_dc: number | null;
+  /** Persisted experience points (DM party dashboard, migration 0101).
+   * Written only by the award_xp RPC (DM-only via the
+   * characters_dm_managed_columns trigger), never a direct sheet patch —
+   * crossing an SRD threshold (rules-engine levelForXp) surfaces as a
+   * suggest-then-confirm level-up on the dashboard, it never silently
+   * changes `level`. */
+  xp: number;
+  /** DM-granted advantage/disadvantage for this character's NEXT roll
+   * (migration 0101) — the persisted, cross-surface counterpart of the
+   * sheet's client-local rollMode toggle. Set (to a non-normal value) only
+   * by the DM (trigger-enforced); read AND cleared back to "normal" by the
+   * roll Route Handler via consume_pending_roll_mode, so it applies
+   * exactly once, to the next mode-honoring roll, no matter which surface
+   * triggers it. */
+  pending_roll_mode: AdvantageMode;
   created_at: string;
   updated_at: string;
 }
@@ -92,7 +107,9 @@ type ServerManagedCharacterField =
   | "is_stable"
   | "is_dead"
   | "concentrating_on"
-  | "pending_concentration_dc";
+  | "pending_concentration_dc"
+  | "xp"
+  | "pending_roll_mode";
 
 export type CreateCharacterParams = Omit<Character, ServerManagedCharacterField>;
 
@@ -207,6 +224,78 @@ export async function applyHpDelta(
 }
 
 /**
+ * Awards (or, with a negative amount, claws back) experience points via
+ * the award_xp RPC (0101) — an atomic xp = xp + delta computed from the
+ * CURRENT stored value under the row's UPDATE, the applyHpDelta reasoning
+ * (two near-simultaneous awards must both land). DM-only: the RPC checks
+ * is_campaign_dm explicitly and the characters_dm_managed_columns trigger
+ * backstops any other write path, so a player calling this (or patching
+ * the column directly) is rejected at the data layer, not just hidden in
+ * the UI. Returns the updated row; the caller decides whether the new
+ * total crosses an SRD threshold (rules-engine levelForXp) and offers —
+ * never silently applies — the level-up.
+ */
+export async function awardXp(
+  supabase: SupabaseClient,
+  characterId: string,
+  delta: number
+): Promise<Character> {
+  const { data, error } = await supabase.rpc("award_xp", {
+    p_character_id: characterId,
+    p_delta: delta,
+  });
+
+  if (error) throw error;
+  return data as Character;
+}
+
+/**
+ * Sets (or, with "normal", clears) the DM-granted next-roll
+ * advantage/disadvantage flag — a plain 0008-RLS update like
+ * startConcentrating (one row, no cross-row invariant; overwriting a
+ * still-unconsumed flag is just what an overwrite does). Setting a
+ * NON-normal value is DM-only via the characters_dm_managed_columns
+ * trigger (0101); the .single() turns a trigger rejection or an
+ * RLS-filtered zero-row write into a thrown error either way. Consumption
+ * happens server-side in the roll route via consume_pending_roll_mode —
+ * this function is only the dashboard's grant/clear control.
+ */
+export async function setPendingRollMode(
+  supabase: SupabaseClient,
+  characterId: string,
+  mode: AdvantageMode
+): Promise<Character> {
+  const { data, error } = await supabase
+    .from("characters")
+    .update({ pending_roll_mode: mode, updated_at: new Date().toISOString() })
+    .eq("id", characterId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Character;
+}
+
+/**
+ * Atomically reads-and-clears the character's pending roll mode via the
+ * consume_pending_roll_mode RPC (0101), returning what it WAS — the roll
+ * Route Handler's one call per mode-honoring d20 roll. SECURITY INVOKER:
+ * the row lock rides 0008's characters UPDATE policy (owner or DM), which
+ * is exactly who the route lets roll for the character at all.
+ */
+export async function consumePendingRollMode(
+  supabase: SupabaseClient,
+  characterId: string
+): Promise<AdvantageMode> {
+  const { data, error } = await supabase.rpc("consume_pending_roll_mode", {
+    p_character_id: characterId,
+  });
+
+  if (error) throw error;
+  return (data === "advantage" || data === "disadvantage" ? data : "normal") as AdvantageMode;
+}
+
+/**
  * Starts (or switches) concentration on a spell — a plain update through
  * 0008's characters UPDATE RLS (owner or DM), no RPC, the map_tokens
  * reasoning: one row, no cross-row invariant, and "silently replaces any
@@ -289,6 +378,53 @@ export function subscribeToCharacterChanges(
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "characters", filter: `id=eq.${characterId}` },
+        (payload) => handler(payload.new as Character)
+      )
+      .subscribe();
+  })();
+
+  return () => {
+    removed = true;
+    if (channel) void supabase.removeChannel(channel);
+  };
+}
+
+/**
+ * Fires `handler` with the new row whenever ANY character in the campaign
+ * is updated — subscribeToCharacterChanges' exact mechanism with a
+ * campaign_id filter instead of a single-row id filter, for the DM party
+ * dashboard (which watches the whole roster at once: HP swings from the
+ * Game Room, XP awards, condition-driven updated_at bumps). Visibility
+ * rides the characters SELECT policy (owner or DM — the dashboard is
+ * DM-gated, so the DM sees every row), enabled for Realtime in 0028.
+ */
+export function subscribeToCampaignCharacterChanges(
+  supabase: SupabaseClient,
+  campaignId: string,
+  handler: (character: Character) => void
+): () => void {
+  let removed = false;
+  let channel: ReturnType<SupabaseClient["channel"]> | null = null;
+
+  void (async () => {
+    // Same deterministic-claims dance as subscribeToProfileChanges: without
+    // the explicit setAuth, the socket can join as anon and RLS silently
+    // drops every event.
+    const { data } = await supabase.auth.getSession();
+    if (removed) return;
+    if (data.session) await supabase.realtime.setAuth(data.session.access_token);
+    if (removed) return;
+
+    channel = supabase
+      .channel(`campaign-character-changes:${campaignId}:${crypto.randomUUID()}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "characters",
+          filter: `campaign_id=eq.${campaignId}`,
+        },
         (payload) => handler(payload.new as Character)
       )
       .subscribe();

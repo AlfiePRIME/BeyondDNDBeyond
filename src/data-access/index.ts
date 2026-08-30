@@ -95,9 +95,13 @@ export {
   updateCharacter,
   deleteCharacter,
   applyHpDelta,
+  awardXp,
+  setPendingRollMode,
+  consumePendingRollMode,
   startConcentrating,
   stopConcentrating,
   subscribeToCharacterChanges,
+  subscribeToCampaignCharacterChanges,
   type Character,
   type OwnedCharacter,
   type CreateCharacterParams,
@@ -345,6 +349,14 @@ export {
   subscribeToCombatantConditionChanges,
   type CombatantCondition,
 } from "./conditions";
+export {
+  listCharacterConditions,
+  applyCharacterCondition,
+  removeCharacterCondition,
+  applyCharacterExhaustionDelta,
+  subscribeToCharacterConditionChanges,
+  type CharacterCondition,
+} from "./characterConditions";
 export {
   getEncounterVisionStats,
   listCombatantHiddenFrom,

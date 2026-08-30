@@ -8460,6 +8460,21 @@ export function GameRoom({
             )
           ) : null}
           {currentUserIsDM ? (
+            // The DM party dashboard opener — a REAL anchor (not a
+            // window.open popup) so right-click/middle-click/keyboard all
+            // behave, popup blockers stay quiet, and target="_blank" gives
+            // the DM the requested second tab alongside the live room.
+            <a
+              href={`/campaigns/${campaignId}/party`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.manageCharactersLink}
+              data-testid="manage-characters-link"
+            >
+              Manage characters ↗
+            </a>
+          ) : null}
+          {currentUserIsDM ? (
             <Button
               size="sm"
               variant="danger"

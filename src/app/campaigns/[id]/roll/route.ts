@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
   clearHiddenAsHider,
+  consumePendingRollMode,
   getActiveCombatEncounter,
   getCharacter,
   getCharacterCurrentToken,
@@ -185,6 +186,61 @@ async function currentCombatantForAttacker(
   const current = combatants[index];
   if (!current || current.character_id !== characterId) return null;
   return { combatantId: current.id, actionUsed: current.action_used };
+}
+
+/** The advantage-source strings a DM-granted pending_roll_mode (0101)
+ * contributes — stored in an attack breakdown's advantageSources/
+ * disadvantageSources so the log shows WHY the mode applied. */
+const DM_GRANTED_ADVANTAGE = "DM-granted advantage (next roll)";
+const DM_GRANTED_DISADVANTAGE = "DM-granted disadvantage (next roll)";
+
+/**
+ * Reads-and-clears the character's DM-granted next-roll mode (0101's
+ * consume_pending_roll_mode RPC — atomic under a row lock, so two
+ * near-simultaneous rolls see the flag exactly once). Called for every
+ * mode-HONORING, character-originated d20 kind: check/save/skill/attack,
+ * plus a PC combatant's initiative and hide. Death and concentration
+ * saves deliberately do NOT consume it — they ignore every client-sent
+ * mode by existing design ("a death save is always a plain d20"), so the
+ * flag survives them for the next roll it can actually affect. An NPC
+ * stat-block attack has no character, so no flag either.
+ *
+ * Failure-tolerant on purpose: until migration 0101 is applied the RPC
+ * doesn't exist, and a thrown error here would break EVERY roll in the
+ * app — so any failure degrades to "no DM-granted mode" (the flag, if it
+ * exists, stays set for the next attempt) rather than rejecting the roll.
+ */
+async function consumeDmGrantedMode(
+  supabase: SupabaseClient,
+  characterId: string
+): Promise<AdvantageMode> {
+  try {
+    return await consumePendingRollMode(supabase, characterId);
+  } catch {
+    return "normal";
+  }
+}
+
+/**
+ * The caller's manual toggle combined with the consumed DM-granted flag
+ * under the SRD rule (combineAdvantageSources: sources never stack, any
+ * advantage plus any disadvantage cancels to flat) — the whole mode
+ * decision for the non-attack kinds, whose breakdowns carry no source
+ * strings (mode + the two recorded d20s are the visible evidence). The
+ * attack branch instead pushes the DM_GRANTED_* strings into its own
+ * source arrays so the stored breakdown names every contributor.
+ */
+function combineWithDmGranted(mode: AdvantageMode, dmGranted: AdvantageMode): AdvantageMode {
+  return combineAdvantageSources(
+    [
+      ...(mode === "advantage" ? ["manually selected"] : []),
+      ...(dmGranted === "advantage" ? [DM_GRANTED_ADVANTAGE] : []),
+    ],
+    [
+      ...(mode === "disadvantage" ? ["manually selected"] : []),
+      ...(dmGranted === "disadvantage" ? [DM_GRANTED_DISADVANTAGE] : []),
+    ]
+  ).mode;
 }
 
 async function insertRoll(
@@ -433,7 +489,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       ? [{ label: "Dexterity modifier", value: abilityModifier(character.dexterity) }]
       : [];
 
-    const d20 = rollD20(mode);
+    // A PC combatant's initiative is a character-originated d20 that
+    // honors advantage, so the DM-granted next-roll flag (0101) applies —
+    // and is consumed — here too; an NPC has no character and no flag.
+    const dmGranted = character ? await consumeDmGrantedMode(supabase, character.id) : "normal";
+    const rolledMode = combineWithDmGranted(mode, dmGranted);
+    const d20 = rollD20(rolledMode);
     const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
 
     // RLS (can_write_combatant) is the authorization: DM, or the owning
@@ -458,7 +519,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       breakdown: {
         type: "d20",
         label,
-        mode,
+        mode: rolledMode,
         d20Rolls: d20.rolls,
         d20Result: d20.result,
         modifiers,
@@ -532,7 +593,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         throw new Error("stealth bonus breakdown mismatch");
       }
     }
-    const d20 = rollD20(mode);
+    // A PC hider's Stealth is a character-originated d20 that honors
+    // advantage — the DM-granted next-roll flag (0101) applies, and is
+    // consumed, here too (after the controllership check above, so an
+    // uninvolved caller can never eat it); an NPC hider has no flag.
+    const dmGranted = character ? await consumeDmGrantedMode(supabase, character.id) : "normal";
+    const rolledMode = combineWithDmGranted(mode, dmGranted);
+    const d20 = rollD20(rolledMode);
     const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
 
     // Everything the observer sweep needs, in one round of reads. The
@@ -716,7 +783,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       breakdown: {
         type: "d20",
         label,
-        mode,
+        mode: rolledMode,
         d20Rolls: d20.rolls,
         d20Result: d20.result,
         modifiers,
@@ -1152,15 +1219,24 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
   }
 
+  // The DM-granted next-roll flag (0101), consumed exactly once for every
+  // check/save/skill/attack — after the strict-economy gate above (a
+  // rejected attack must not eat it), before the die is rolled. Like the
+  // die itself on the attack path, a later bad-targetAc rejection still
+  // spends it — mirroring the existing "the d20 was already rolled"
+  // ordering rather than special-casing the flag.
+  const dmGranted = await consumeDmGrantedMode(supabase, character.id);
+
   // Vision/condition-driven advantage and disadvantage (Prompt 59), attacks
-  // ONLY — checks/saves/skills keep the caller's manual mode untouched
-  // (automating those is explicitly out of scope, same as the death-save/
-  // concentration comments above). Everything here is computed server-side
-  // from freshly-read rows — like the die itself, never client-reported —
-  // then combined with the player's manual toggle under the SRD rule
-  // (sources never stack; any advantage plus any disadvantage cancels to a
-  // flat roll) by the rules engine's combineAdvantageSources.
-  let rolledMode: AdvantageMode = mode;
+  // ONLY — checks/saves/skills combine just the caller's manual mode with
+  // the DM-granted flag (automating condition-driven modes for those is
+  // still explicitly out of scope, same as the death-save/concentration
+  // comments above). Everything here is computed server-side from
+  // freshly-read rows — like the die itself, never client-reported — then
+  // combined with the player's manual toggle under the SRD rule (sources
+  // never stack; any advantage plus any disadvantage cancels to a flat
+  // roll) by the rules engine's combineAdvantageSources.
+  let rolledMode: AdvantageMode = combineWithDmGranted(mode, dmGranted);
   const advantageSources: string[] = [];
   const disadvantageSources: string[] = [];
   // The attacker's combatant when they hold any hidden-from state as hider
@@ -1172,6 +1248,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (attackContext) {
     if (mode === "advantage") advantageSources.push("manually selected");
     if (mode === "disadvantage") disadvantageSources.push("manually selected");
+    // The consumed DM-granted flag joins the attack's named sources so the
+    // stored breakdown shows exactly why the mode applied.
+    if (dmGranted === "advantage") advantageSources.push(DM_GRANTED_ADVANTAGE);
+    if (dmGranted === "disadvantage") disadvantageSources.push(DM_GRANTED_DISADVANTAGE);
 
     const requestTargetTokenId =
       typeof roll.targetTokenId === "string" ? roll.targetTokenId : null;
@@ -1516,8 +1596,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     breakdown: {
       type: "d20",
       label,
-      // rolledMode === mode for every non-attack kind — only the attack
-      // branch above ever recomputes it.
+      // For a non-attack kind this is the manual toggle combined with the
+      // consumed DM-granted flag (combineWithDmGranted above); only the
+      // attack branch ever folds in further sources.
       mode: rolledMode,
       d20Rolls: d20.rolls,
       d20Result: d20.result,

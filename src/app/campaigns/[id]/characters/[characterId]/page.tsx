@@ -10,9 +10,11 @@ import {
   getCharacter,
   getCharacterPawn,
   isDM,
+  listCharacterConditions,
   listCharacterResources,
   listCombatantConditions,
   createCharacterResource,
+  type CharacterCondition,
   type CharacterResource,
 } from "@/data-access";
 import { CharacterSheet } from "./CharacterSheet";
@@ -69,10 +71,21 @@ export default async function CharacterSheetPage({
     }
   }
 
-  // Conditions hang off the character's combatant row in the currently
-  // active encounter, if any — a character not in combat simply has none.
+  // Conditions come from TWO sources as of 0101: the character's combatant
+  // row in the currently active encounter (combat-scoped, dies with the
+  // encounter), and the combat-independent character_conditions rows the
+  // DM party dashboard writes. The sheet merges them by key for display.
   const combatant = await getActiveCombatantForCharacter(supabase, campaignId, characterId);
   const initialConditions = combatant ? await listCombatantConditions(supabase, [combatant.id]) : [];
+  // Pre-0101 tolerance: until the migration is applied the table doesn't
+  // exist, and this page must keep rendering (the verify script's
+  // blocked-not-failed convention) — no conditions, not a 500.
+  let initialCharacterConditions: CharacterCondition[] = [];
+  try {
+    initialCharacterConditions = await listCharacterConditions(supabase, [characterId]);
+  } catch {
+    initialCharacterConditions = [];
+  }
 
   // Pawn Customization P2: this character's own pawn appearance row (0080)
   // — always present (the character-creation trigger guarantees it), owner
@@ -86,6 +99,7 @@ export default async function CharacterSheetPage({
       initialCharacter={character}
       initialResources={resources}
       initialConditions={initialConditions}
+      initialCharacterConditions={initialCharacterConditions}
       initialPawnModelRef={pawn?.pawn_model_ref ?? null}
       canEdit={canEdit}
     />

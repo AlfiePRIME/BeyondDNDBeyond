@@ -133,6 +133,8 @@ function character(overrides: Partial<Character>): Character {
     is_dead: false,
     concentrating_on: null,
     pending_concentration_dc: null,
+    xp: 0,
+    pending_roll_mode: "normal",
     created_at: "2026-08-24T10:00:00.000Z",
     updated_at: "2026-08-24T10:00:00.000Z",
     ...overrides,

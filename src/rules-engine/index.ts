@@ -59,6 +59,13 @@ export {
 } from "./srd/conditions";
 
 export { abilityModifier, proficiencyBonus } from "./abilityScores";
+export {
+  XP_LEVEL_THRESHOLDS,
+  MAX_CHARACTER_LEVEL,
+  levelForXp,
+  xpThresholdForLevel,
+  xpToNextLevel,
+} from "./experience";
 export { levelOneHitPoints, levelUpHitPointGain } from "./hitPoints";
 export { savingThrowBonus, skillCheckBonus, passiveScore } from "./checks";
 export {

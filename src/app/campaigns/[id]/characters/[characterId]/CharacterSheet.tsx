@@ -19,6 +19,7 @@ import {
   skillCheckBonus,
   passiveScore,
   weaponRangeFeet,
+  xpToNextLevel,
   type AbilityScore,
   type AbilityScores,
   type AdvantageMode,
@@ -32,11 +33,13 @@ import {
   consumeOverride,
   getActiveCombatantForCharacter,
   listActionOverrides,
+  listCharacterConditions,
   listCombatantConditions,
   requestOverride,
   updateCharacter,
   subscribeToActionOverrides,
   subscribeToCharacterChanges,
+  subscribeToCharacterConditionChanges,
   subscribeToCombatantConditionChanges,
   setCharacterResourceUses,
   shortRest,
@@ -45,6 +48,7 @@ import {
   stopConcentrating,
   type ActionOverride,
   type Character,
+  type CharacterCondition,
   type CharacterResource,
   type CombatantCondition,
   type InventoryItem,
@@ -115,6 +119,7 @@ export function CharacterSheet({
   initialCharacter,
   initialResources,
   initialConditions,
+  initialCharacterConditions,
   initialPawnModelRef,
   canEdit,
 }: {
@@ -124,6 +129,10 @@ export function CharacterSheet({
   /** Conditions on this character's combatant in the currently active
    * encounter — empty when the character isn't in a fight. */
   initialConditions: CombatantCondition[];
+  /** Combat-independent conditions keyed on the character itself (0101,
+   * the DM party dashboard's apply surface) — merged with the combat rows
+   * by key for display, so a condition present in both shows once. */
+  initialCharacterConditions: CharacterCondition[];
   /** Pawn Customization P2: this character's own custom pawn model, if any
    * (character_pawns.pawn_model_ref, 0080) — handed straight to
    * PawnModelPicker below, which owns all further reads/writes of it. */
@@ -133,6 +142,7 @@ export function CharacterSheet({
   const [character, setCharacter] = useState(initialCharacter);
   const [resources, setResources] = useState(initialResources);
   const [conditions, setConditions] = useState(initialConditions);
+  const [characterConditions, setCharacterConditions] = useState(initialCharacterConditions);
   const [scoreDrafts, setScoreDrafts] = useState<Record<AbilityScore, string>>(() =>
     Object.fromEntries(ABILITIES.map((a) => [a, String(initialCharacter[a])])) as Record<
       AbilityScore,
@@ -213,6 +223,27 @@ export function CharacterSheet({
       })();
     });
   }, [campaignId, initialCharacter.id]);
+
+  // Character-keyed conditions (0101 — applied from the DM party
+  // dashboard, no combat required) land here live via the same
+  // poke-then-refetch arrangement as the combatant subscription above;
+  // pre-0101 the refetch throws (no table yet) and the badges just stay.
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    let seq = 0;
+    return subscribeToCharacterConditionChanges(supabase, () => {
+      const current = ++seq;
+      void (async () => {
+        try {
+          const rows = await listCharacterConditions(supabase, [initialCharacter.id]);
+          if (current === seq) setCharacterConditions(rows);
+        } catch {
+          // A dropped refetch leaves the previous badges in place; the next
+          // poke retries.
+        }
+      })();
+    });
+  }, [initialCharacter.id]);
 
   // Override flags/verdicts land here live — the same postgres_changes
   // page-not-on-the-campaign-channel reasoning as the HP and condition
@@ -619,6 +650,28 @@ export function CharacterSheet({
     return skill.toLowerCase().replace(/\s+/g, "-");
   }
 
+  // The display merge (0101): combat-scoped (combatant_conditions) and
+  // persistent character-keyed (character_conditions) rows union BY KEY —
+  // a condition the dashboard dual-wrote to both sides shows exactly once,
+  // and exhaustion shows the higher of the two levels.
+  const mergedConditions = (() => {
+    const byKey = new Map<string, { condition_key: string; level: number | null }>();
+    for (const row of [...conditions, ...characterConditions]) {
+      const existing = byKey.get(row.condition_key);
+      if (!existing) {
+        byKey.set(row.condition_key, { condition_key: row.condition_key, level: row.level });
+      } else if (row.level !== null && (existing.level === null || row.level > existing.level)) {
+        existing.level = row.level;
+      }
+    }
+    return [...byKey.values()];
+  })();
+
+  // Defensive against the not-yet-applied 0101 migration (the column is
+  // simply absent from the row until then): treat missing as 0 XP.
+  const xpTotal = typeof character.xp === "number" ? character.xp : 0;
+  const xpNext = xpToNextLevel(xpTotal, character.level);
+
   const spellLevels = [...new Set(character.spells.map((s) => s.level))].sort((a, b) => a - b);
   const addableSpells = SPELLS.filter(
     (spell) => !character.spells.some((s) => s.name === spell.name)
@@ -863,6 +916,22 @@ export function CharacterSheet({
                 {formatModifier(proficiencyBonus(character.level))}
               </span>
             </div>
+            <div className={styles.vital}>
+              <span className={styles.vitalLabel}>Experience</span>
+              <span className={styles.vitalValue} data-testid="sheet-xp">
+                {xpTotal.toLocaleString()} XP
+              </span>
+              {/* Read-only on purpose: XP is awarded by the DM from the
+                  party dashboard (award_xp is DM-only at the data layer),
+                  never edited here. */}
+              {xpNext ? (
+                <span className={styles.vitalMax} data-testid="sheet-xp-next">
+                  {xpNext.remaining > 0
+                    ? `${xpNext.remaining.toLocaleString()} to level ${xpNext.nextLevel}`
+                    : `level ${xpNext.nextLevel} available`}
+                </span>
+              ) : null}
+            </div>
           </div>
         </Panel>
 
@@ -890,6 +959,17 @@ export function CharacterSheet({
               {rollError ? (
                 <p className={styles.saveError} role="alert" data-testid="sheet-roll-error">
                   {rollError}
+                </p>
+              ) : null}
+              {character.pending_roll_mode === "advantage" ||
+              character.pending_roll_mode === "disadvantage" ? (
+                // The DM-granted next-roll flag (0101), live via the
+                // character-row subscription — it appears the moment the DM
+                // sets it from the party dashboard and disappears the
+                // moment a roll consumes it, no matter which surface rolled.
+                <p className={styles.overrideNotice} data-testid="sheet-pending-roll-mode">
+                  The DM granted <strong>{character.pending_roll_mode}</strong> on the next roll —
+                  applied automatically, then cleared.
                 </p>
               ) : null}
               {canEdit &&
@@ -963,13 +1043,13 @@ export function CharacterSheet({
             </Panel>
 
             <Panel title="Conditions" tone="pink">
-              {conditions.length === 0 ? (
+              {mergedConditions.length === 0 ? (
                 <p className={styles.emptyHint} data-testid="sheet-conditions-empty">
                   No active conditions.
                 </p>
               ) : (
                 <ul className={styles.rowList} data-testid="sheet-conditions">
-                  {conditions.map((condition) => {
+                  {mergedConditions.map((condition) => {
                     const exhaustion = condition.condition_key === EXHAUSTION_KEY;
                     const definition = exhaustion
                       ? null

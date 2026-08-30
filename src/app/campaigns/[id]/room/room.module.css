@@ -35,6 +35,22 @@
   gap: 16px;
 }
 
+/* The DM's "Manage characters" opener — link-shaped on purpose (it
+   navigates to a page in a new tab rather than toggling room state), in
+   the top bar's mono-uppercase chrome vocabulary. */
+.manageCharactersLink {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--teal);
+  white-space: nowrap;
+}
+
+.manageCharactersLink:hover {
+  color: var(--text);
+}
+
 .endError {
   position: absolute;
   top: 64px;

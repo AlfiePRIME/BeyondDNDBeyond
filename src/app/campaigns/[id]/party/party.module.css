@@ -1,0 +1,425 @@
+/* DM party dashboard — the live "party status console". Visual language
+   is this app's own locked neon/CRT token set (tokens.css), applied with
+   the character sheet's live-play discipline: body values on solid
+   --text/--surface pairs for mid-session legibility, the neon reserved
+   for chrome (card top edges, bar fills, the active mode button). Layout
+   is a fixed-scan-order card grid: every card presents HP bar, XP bar,
+   conditions, then the two grant controls in the same positions, so the
+   DM's eye sweeps the whole party the way they'd sweep initiative. */
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+.main {
+  width: 100%;
+  /* The sheet's own full-width live-play cap. */
+  max-width: 2200px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 40px;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.backLink {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.backLink:hover {
+  color: var(--teal);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+/* The Panel surface treatment (ui.module.css .panel) with a 2px energized
+   top edge — a slightly louder card than a content panel, since each card
+   IS the unit of scanning here. */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--teal), transparent 75%);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cardTitleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cardName {
+  font-family: var(--font-h);
+  font-size: 20px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.cardName:hover {
+  color: var(--teal);
+}
+
+.cardMeta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ownerName {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.sheetLink {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--teal);
+  white-space: nowrap;
+}
+
+.sheetLink:hover {
+  color: var(--text);
+}
+
+/* ── The two scan bars ── */
+
+.statRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.statLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+  min-width: 72px;
+}
+
+.statValue {
+  font-family: var(--font-m);
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.track {
+  flex: 1;
+  min-width: 40px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  overflow: hidden;
+  display: block;
+}
+
+.track > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 300ms ease;
+}
+
+.hpFillOk {
+  background: var(--teal);
+  box-shadow: var(--gt);
+}
+
+.hpFillHurt {
+  background: var(--orange);
+}
+
+.hpFillCritical {
+  background: var(--red);
+}
+
+.xpFill {
+  background: linear-gradient(90deg, var(--purple), var(--accent));
+  box-shadow: var(--ga);
+}
+
+/* ── XP award controls ── */
+
+.awardRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.awardInput {
+  width: 76px;
+  padding: 6px 8px;
+  font-family: var(--font-m);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+}
+
+.awardInput:focus {
+  outline: none;
+  border-color: var(--purple);
+  box-shadow: var(--ga);
+}
+
+/* The suggest-then-confirm level-up row — deliberately the loudest thing
+   on a card (the sheet's deathSaveRow call-to-action weight, in the
+   accent tone): a crossed threshold should be unmissable without being
+   auto-applied. */
+.levelUpRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.levelUpText {
+  font-family: var(--font-m);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
+/* ── Conditions ── */
+
+.conditionsBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--dim2);
+}
+
+.conditionBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.noneText {
+  font-family: var(--font-m);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.conditionChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--orange);
+  border: 1px solid color-mix(in srgb, var(--orange) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+}
+
+.chipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--orange);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.chipRemove:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--orange) 30%, transparent);
+}
+
+.chipRemove:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.conditionControls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.conditionSelect {
+  flex: 1;
+  min-width: 120px;
+  padding: 6px 8px;
+  font-family: var(--font-m);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+}
+
+.conditionSelect:focus {
+  outline: none;
+  border-color: var(--purple);
+  box-shadow: var(--ga);
+}
+
+.exhaustionControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.exhaustionLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ── Next-roll grant ── */
+
+.modeBlock {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--dim2);
+}
+
+/* The DiceLogPanel AdvantageToggle's segmented shape, re-declared locally
+   (that one is welded to room.module.css) with the active state in the
+   accent tone so a standing grant is visible from across the grid. */
+.modeToggle {
+  display: inline-flex;
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.modeButton {
+  padding: 5px 10px;
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.modeButton + .modeButton {
+  border-left: 1px solid var(--dim2);
+}
+
+.modeButton:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.modeButton:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.modeButtonActive {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  box-shadow: inset 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.modeHint {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+/* ── Card footer feedback ── */
+
+.cardError {
+  margin: 0;
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--red);
+}
+
+.cardNotice {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--font-m);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 6px;
+}
+
+.emptyHint {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
