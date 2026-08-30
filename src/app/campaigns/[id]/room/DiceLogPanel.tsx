@@ -97,14 +97,32 @@ function attackRollSoundKey(roll: RollLogEntry, tokens: readonly MapToken[]): So
  * disadvantage, before modifiers — rules-engine/dice.ts). Attack rolls are
  * deliberately excluded: attackRollSoundKey above already covers a natural
  * 20 (always HIT_CRITICAL) and a natural 1 (always HIT_MISS) for those, so
- * this returning non-null for an attack would double-fire. The `type ===
- * "d20"` gate also excludes a freeform "1d20" roll (damage/flavor), which
- * carries no d20Result at all.
+ * this returning non-null for an attack would double-fire.
+ *
+ * A freeform roll (the quick "D20" button, or typing "1d20"/"1d20+3"/"2d20"
+ * by hand — breakdown.type "dice", never "d20") has no advantage/
+ * disadvantage concept, but it's the single most obvious way anyone would
+ * ever roll a plain d20 — real user testing confirmed this is genuinely
+ * what people reach for, not the structured check/save flow this function
+ * originally only covered. Scanning every d20-sided group's own individual
+ * `results` (not just the total, which a flat modifier could push past 20
+ * or below 1) catches a natural roll here too, regardless of what else is
+ * in the same expression. A 20 wins over a 1 if a single roll somehow
+ * contains both (e.g. "2d20" landing [1, 20]) — the celebratory case, not
+ * an arbitrary pick.
  */
 function naturalRollSoundKey(roll: RollLogEntry): SoundKey | null {
-  if (roll.kind === "attack" || roll.breakdown.type !== "d20") return null;
-  if (roll.breakdown.d20Result === 20) return SOUND_KEYS.NAT_20;
-  if (roll.breakdown.d20Result === 1) return SOUND_KEYS.NAT_1;
+  if (roll.kind === "attack") return null;
+  if (roll.breakdown.type === "d20") {
+    if (roll.breakdown.d20Result === 20) return SOUND_KEYS.NAT_20;
+    if (roll.breakdown.d20Result === 1) return SOUND_KEYS.NAT_1;
+    return null;
+  }
+  for (const group of roll.breakdown.groups) {
+    if (group.sides !== 20) continue;
+    if (group.results.includes(20)) return SOUND_KEYS.NAT_20;
+    if (group.results.includes(1)) return SOUND_KEYS.NAT_1;
+  }
   return null;
 }
 
