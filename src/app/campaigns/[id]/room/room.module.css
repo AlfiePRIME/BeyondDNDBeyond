@@ -521,6 +521,134 @@
   max-width: 100%;
   border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
+  /* The button wrapper (.revealedImageButton) owns the click affordance and
+     focus ring now — this stays purely visual. */
+  display: block;
+}
+
+/* Resets a native <button> down to "an image with a click handler" while
+   adding a hover/focus affordance that hints it opens fullscreen — the
+   thumbnail itself is untouched (still .revealedImage, same testid), this
+   just wraps it. */
+.revealedImageButton {
+  display: block;
+  position: relative;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  border-radius: 6px;
+}
+
+.revealedImageButton:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.revealedImageButton::after {
+  content: "⤢";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.revealedImageButton:hover::after,
+.revealedImageButton:focus-visible::after {
+  opacity: 1;
+}
+
+/* ───────────────────────── Handout fullscreen lightbox ───────────────────────── */
+
+.lightboxOverlay {
+  position: fixed;
+  inset: 0;
+  /* Above Modal's own 10000 (ui.module.css) — a handout image opened from
+     INSIDE the "DM reveals a handout" modal must still land on top of it. */
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: rgba(4, 0, 12, 0.94);
+  touch-action: none;
+  outline: none;
+  animation: fade-up 0.2s ease both;
+}
+
+.lightboxImage {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 4px;
+  user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;
+  cursor: grab;
+  /* No CSS transition here on purpose: pan/zoom must track the pointer
+     (or wheel/pinch) 1:1, every frame — a transition would make the image
+     visibly lag behind the gesture driving it. */
+}
+
+.lightboxClose {
+  position: absolute;
+  top: 18px;
+  right: 24px;
+  /* Any non-`none` CSS `transform` (which .lightboxImage always has, even
+     at rest) makes that element establish its own stacking context as if
+     it were `position` + `z-index: 0` — without this, a heavily zoomed and
+     panned image can paint OVER this button (later in DOM order = wins
+     ties), making it unreachable by click even though it's still visibly
+     "behind" nothing. */
+  z-index: 2;
+  font-family: var(--font-m);
+  font-size: 22px;
+  line-height: 1;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--dim2);
+  border-radius: var(--r);
+  color: var(--text);
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.lightboxClose:hover {
+  color: var(--pink);
+  border-color: var(--pink);
+}
+
+.lightboxClose:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.lightboxHint {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  translate: -50% 0;
+  margin: 0;
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  /* Purely decorative caption — never steal a drag/wheel gesture aimed at
+     the image just because it happens to start over this text. */
+  pointer-events: none;
 }
 
 .hint {
