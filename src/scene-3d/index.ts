@@ -70,6 +70,12 @@ export {
   isSolidPresetUrl,
 } from "./PlacedObject";
 export { isSurfaceHostUrl, isSurfacePropUrl, canShareCell } from "./surfaceStack";
+// "Objects so tokens can stand on top of them": the real, live Box3
+// measurement GameRoom.tsx calls the first time it sees a standable-flagged
+// object whose asset has no cached height yet — see that module's own doc
+// comment for why this runs off the scene graph entirely, unlike
+// PlacedObject's/SeatAvatar's own in-render measurements.
+export { measureStandableSurfaceHeight } from "./standableSurface";
 // Avatar's own normalization target — exported for the account/campaign
 // upload flows' rotate-and-confirm preview (OrientationPreview), which must
 // normalize a candidate avatar upload at the exact scale it will actually

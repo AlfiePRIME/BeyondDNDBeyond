@@ -10,6 +10,7 @@ import {
   crossingSurfaceHeight,
   crossingTiltPitchRadians,
   isStairsPresetUrl,
+  occupantSurfaceHeight,
 } from "./crossingSurface";
 
 describe("crossingSurfaceHeight", () => {
@@ -150,5 +151,45 @@ describe("isStairsPresetUrl", () => {
     expect(isStairsPresetUrl(null)).toBe(false);
     expect(isStairsPresetUrl(undefined)).toBe(false);
     expect(isStairsPresetUrl("/assets/presets/chest.glb")).toBe(false);
+  });
+});
+
+describe("occupantSurfaceHeight", () => {
+  it("is 0 when there is neither a crossing structure nor a standable occupant — every cell before either feature", () => {
+    expect(occupantSurfaceHeight(undefined, undefined)).toBe(0);
+    expect(occupantSurfaceHeight(null, null)).toBe(0);
+  });
+
+  it("passes through a standable occupant's own measured height when there's no crossing structure", () => {
+    expect(occupantSurfaceHeight(undefined, 0.27)).toBe(0.27);
+    expect(occupantSurfaceHeight(null, 0.27)).toBe(0.27);
+  });
+
+  it("treats a standable occupant with no measurement YET (null) exactly like no occupant at all — 0, not a crash or NaN", () => {
+    expect(occupantSurfaceHeight(undefined, null)).toBe(0);
+  });
+
+  it("resolves to a bridge/stairs preset's own real crossingSurfaceHeight, unaffected by any standSurfaceHeight argument — regression: this is the exact function MapSurface.tsx now calls in place of a bare crossingSurfaceHeight(url)", () => {
+    expect(occupantSurfaceHeight(BRIDGE_URL, undefined)).toBe(crossingSurfaceHeight(BRIDGE_URL));
+    expect(occupantSurfaceHeight(STAIRS_URL, undefined)).toBe(crossingSurfaceHeight(STAIRS_URL));
+    expect(occupantSurfaceHeight(STAIRS_HALF_URL, undefined)).toBe(crossingSurfaceHeight(STAIRS_HALF_URL));
+  });
+
+  it("a real, measured crossing structure takes precedence over a (theoretical) standable measurement for the same cell, never adding the two together", () => {
+    const withoutStandable = occupantSurfaceHeight(STAIRS_URL, undefined);
+    const withStandable = occupantSurfaceHeight(STAIRS_URL, 5); // an absurdly large standable height
+    expect(withStandable).toBe(withoutStandable);
+    expect(withStandable).not.toBe(withoutStandable + 5);
+  });
+
+  it("an unrecognized crossing url (0 from crossingSurfaceHeight) falls through to the standable occupant's own height", () => {
+    expect(occupantSurfaceHeight("/assets/presets/chest.glb", 0.42)).toBe(0.42);
+  });
+
+  it("two visually different standable assets produce two different, genuinely distinct lift amounts — not a single shared constant", () => {
+    const shortCrate = occupantSurfaceHeight(undefined, 0.12);
+    const tallShelf = occupantSurfaceHeight(undefined, 0.58);
+    expect(shortCrate).not.toBe(tallShelf);
+    expect(tallShelf).toBeGreaterThan(shortCrate);
   });
 });

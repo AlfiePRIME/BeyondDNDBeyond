@@ -12,6 +12,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export interface ModelOrientation {
   model_url: string;
   forward_offset_deg: number;
+  /** "Objects so tokens can stand on top of them": this model's own
+   * auto-measured real top-surface height (see
+   * 0105_standable_surface_height.sql and src/scene-3d/standableSurface.ts),
+   * in the SAME cell-relative units crossingSurface.ts's SURFACE_HEIGHT_BY_URL
+   * constants use — null until some client has actually measured it (never
+   * DM-entered), which is every model before this feature existed. */
+  standable_surface_height: number | null;
   updated_at: string;
 }
 
@@ -82,6 +89,86 @@ export async function setForwardOffsetDeg(
   const { error } = await supabase.from("model_orientation").upsert({
     model_url: modelUrl,
     forward_offset_deg: forwardOffsetDeg,
+    updated_at: new Date().toISOString(),
+  });
+
+  if (error) throw error;
+}
+
+/**
+ * "Objects so tokens can stand on top of them": batched read for N model
+ * paths' own auto-measured standable_surface_height, keyed by model_url —
+ * the SAME shape/contract as getForwardOffsetsForUrls just above, but
+ * DELIBERATELY A SEPARATE QUERY rather than one combined
+ * "select every column resolvePaletteAssets needs" read: this column is
+ * newer than forward_offset_deg (0105_standable_surface_height.sql, added
+ * long after 0043_model_orientation.sql shipped), so a live database that
+ * hasn't run that migration YET (per the project owner's own "hold every
+ * migration in this batch" instruction, real windows of exactly this exist)
+ * would otherwise fail resolvePaletteAssets' whole orientation read with an
+ * unrecognized-column error and — since a single combined query fails or
+ * succeeds as one unit — silently zero out the COMPLETELY UNRELATED,
+ * already-shipped forward_offset_deg correction for every asset too, a real
+ * regression risk for a feature this one had nothing to do with. Two
+ * independent queries (and, in resolvePaletteAssets, two independently
+ * `.catch()`-guarded calls) means a standable-height read failing can never
+ * take the orientation-offset read down with it.
+ *
+ * A url missing from the result (no stored row, or the stored row's
+ * standable_surface_height is still null/"not yet measured") both mean the
+ * same thing to a caller — nothing to add — so both are simply absent from
+ * the returned map, the same "missing means unknown, apply your own
+ * default" contract getForwardOffsetsForUrls already uses.
+ */
+export async function getStandableSurfaceHeightsForUrls(
+  supabase: SupabaseClient,
+  modelUrls: readonly string[]
+): Promise<Map<string, number>> {
+  const uniqueUrls = Array.from(new Set(modelUrls));
+  if (uniqueUrls.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from("model_orientation")
+    .select("model_url, standable_surface_height")
+    .in("model_url", uniqueUrls);
+
+  if (error) throw error;
+  return new Map(
+    (data ?? [])
+      .filter((row): row is { model_url: string; standable_surface_height: number } => row.standable_surface_height !== null)
+      .map((row) => [row.model_url, row.standable_surface_height])
+  );
+}
+
+/**
+ * Persists a freshly-measured standable surface height for one resolved
+ * model path — an upsert, like setForwardOffsetDeg, and for the same
+ * reason: the first DM to mark ANY asset standable might not be the first
+ * to have already uploaded it (a preset, or an upload from before this
+ * feature existed, both already have a model_orientation row for their
+ * forward_offset_deg alone) — this must update that existing row's new
+ * column, never fail or silently create a duplicate. Deliberately omits
+ * forward_offset_deg from the payload so an upsert on an existing row never
+ * clobbers that column back to its own default (Postgres upsert only
+ * overwrites the columns actually present in the payload).
+ *
+ * Called by any connected client the first time it measures a given
+ * asset's real geometry (src/scene-3d/standableSurface.ts) — never
+ * DM-gated, riding model_orientation's own deliberately-open write policy
+ * (0043_model_orientation.sql's own doc comment: "writes... ride alongside
+ * the existing insert/update rather than needing new RLS logic of its
+ * own" — here, there's no upload happening at all, just an idempotent,
+ * content-derived measurement any authenticated client can reproduce
+ * identically).
+ */
+export async function setStandableSurfaceHeight(
+  supabase: SupabaseClient,
+  modelUrl: string,
+  standSurfaceHeight: number
+): Promise<void> {
+  const { error } = await supabase.from("model_orientation").upsert({
+    model_url: modelUrl,
+    standable_surface_height: standSurfaceHeight,
     updated_at: new Date().toISOString(),
   });
 

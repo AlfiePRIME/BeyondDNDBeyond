@@ -123,6 +123,8 @@ export {
   getForwardOffsetDeg,
   getForwardOffsetsForUrls,
   setForwardOffsetDeg,
+  getStandableSurfaceHeightsForUrls,
+  setStandableSurfaceHeight,
   DEFAULT_FORWARD_OFFSET_DEG,
   type ModelOrientation,
 } from "./modelOrientation";

@@ -103,7 +103,11 @@ export function DiceTrayPicker({
       // own asset list (and this picker's grid, fed from that same list)
       // can render it immediately without a reload.
       const url = await getMapAssetSignedUrl(supabase, path, 6 * 60 * 60).catch(() => null);
-      onAssetUploaded({ ...created, url, forwardOffsetDeg });
+      // standSurfaceHeight: null — a dice tray's own custom model is never
+      // placed as a map_objects row, so nothing can ever mark it standable;
+      // matches resolvePaletteAssets' own "not yet measured" default for a
+      // freshly-created row with no model_orientation.standable_surface_height.
+      onAssetUploaded({ ...created, url, forwardOffsetDeg, standSurfaceHeight: null });
       setAddedName(created.name);
       setName("");
     } catch {

@@ -195,10 +195,27 @@ export function parseMapObjectBehavior(config: Record<string, unknown>): MapObje
  *                    continues" flow. null/absent (every object placed
  *                    before this addition) fires immediately, exactly as
  *                    before this feature existed.
+ *   standable      — "objects so tokens can stand on top of them": when
+ *                    true, a token (or another object) sharing this
+ *                    object's cell renders lifted onto its real, measured
+ *                    top surface instead of at the bare cell floor beneath
+ *                    it — the exact same additive Y-position mechanism
+ *                    crossingSurface.ts's bridge/stairs presets already use,
+ *                    generalized to any asset (src/scene-3d/crossingSurface.ts's
+ *                    occupantSurfaceHeight, src/scene-3d/standableSurface.ts's
+ *                    real Box3 measurement). Deliberately independent of
+ *                    blocksMovement above: an object can block movement
+ *                    without being standable (a wall), be standable without
+ *                    blocking (a low table a token can step onto OR walk
+ *                    past), or neither — this never implies, reads, or sets
+ *                    blocksMovement, and vice versa. false/absent (every
+ *                    object placed before this addition) renders at exactly
+ *                    today's height — no lift at all.
  */
 export interface ObjectMovementConfig {
   blocksMovement: boolean | null;
   requiredCheck: { skill: SkillName } | null;
+  standable: boolean;
 }
 
 /** Never null, unlike parseMapObjectBehavior — see ObjectMovementConfig's
@@ -218,7 +235,8 @@ export function parseObjectMovementConfig(config: Record<string, unknown>): Obje
     typeof rawSkill === "string" && SKILLS.some((skill) => skill.name === rawSkill)
       ? { skill: rawSkill as SkillName }
       : null;
-  return { blocksMovement, requiredCheck };
+  const standable = config.standable === true;
+  return { blocksMovement, requiredCheck, standable };
 }
 
 const OBJECT_COLUMNS = "*, asset:asset_library(name, source_type, model_ref)";
@@ -411,9 +429,9 @@ export async function revealAllPendingMapObjects(
  * a judgment call in place of the two-function split the task description
  * floated, made explicitly to avoid that read-modify-write hazard. Omitted
  * (every call site from before this feature existed) behaves exactly like
- * `{ blocksMovement: null, requiredCheck: null }` — no new keys are ever
- * written — so an unconfigured object's behavior_config stays byte-for-byte
- * identical to what this function always produced.
+ * `{ blocksMovement: null, requiredCheck: null, standable: false }` — no new
+ * keys are ever written — so an unconfigured object's behavior_config stays
+ * byte-for-byte identical to what this function always produced.
  */
 export async function setMapObjectBehavior(
   supabase: SupabaseClient,
@@ -435,6 +453,9 @@ export async function setMapObjectBehavior(
   }
   if (movement?.requiredCheck) {
     behavior_config.requiredCheck = movement.requiredCheck;
+  }
+  if (movement?.standable) {
+    behavior_config.standable = true;
   }
   const { data, error } = await supabase
     .from("map_objects")

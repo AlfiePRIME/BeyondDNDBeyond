@@ -1,0 +1,38 @@
+-- "Objects so tokens can stand on top of them" — a general per-object
+-- "standable" setting (map_objects.behavior_config's new `standable` jsonb
+-- key, see src/data-access/mapObjects.ts's ObjectMovementConfig doc comment;
+-- no schema change needed for that half, the same jsonb-not-column
+-- convention blocksMovement/requiredCheck already use for a per-placement
+-- DM toggle).
+--
+-- This migration covers the OTHER half: the project owner explicitly chose
+-- auto-measuring the model's real height over a DM-entered manual number, so
+-- the measured height needs somewhere to live once computed. It's a fact
+-- about the MODEL (any placement of the same asset stands at the same real
+-- height), not about a specific placement, which is exactly the shape
+-- model_orientation (0043) already exists for — "general per-model[-url]
+-- metadata... generalizes to any future model_ref-shaped column", per that
+-- migration's own top comment. Added as a new column on that same table
+-- rather than a new one: same key (model_url), same get/set/batch-get
+-- call-site shape as forward_offset_deg, same RLS.
+--
+-- Nullable, no default value (unlike forward_offset_deg's `default 0`):
+-- null here means "not yet measured" — a real, distinct third state from
+-- "measured at 0" (a degenerate/flat model), so a caller can tell "nothing
+-- to add yet, go measure it" apart from "measured, and it's genuinely
+-- zero". forward_offset_deg has no such ambiguity (0 IS the correct
+-- default for "no correction"), which is exactly why it can default to 0
+-- but this can't.
+--
+-- Populated lazily, client-side, the first time any client actually renders
+-- a standable-flagged object whose asset has no row here yet (a live
+-- three.js Box3 measurement of that asset's OWN real geometry, the same
+-- technique PropModel/SeatAvatar already use to fit a model to its cell/
+-- avatar-height — see src/scene-3d/standableSurface.ts) — never entered by
+-- a DM. Every asset that predates this feature (every existing upload and
+-- preset) starts at null and gets measured + cached here the first time any
+-- DM ever marks something using it standable, from any connected client
+-- (model_orientation's write policy is already open to any authenticated
+-- user, ridable exactly as designed).
+alter table public.model_orientation
+  add column if not exists standable_surface_height numeric null;

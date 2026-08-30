@@ -64,6 +64,14 @@ export function BehaviorEditor({
   const [requiredSkill, setRequiredSkill] = useState<SkillName | "">(
     savedMovement.requiredCheck?.skill ?? ""
   );
+  // "Objects so tokens can stand on top of them": a plain boolean, unlike
+  // blocksMovement's tri-state above — there's no structural "preset
+  // default" for standable the way isSolidPresetUrl gives blocksMovement a
+  // meaningful "Default" third state, so this is the same simple on/off
+  // shape as triggerOnStepOn below. Always shown (like blocksMovement),
+  // never gated behind `action !== ""`: a plain crate with no action at all
+  // still needs this settable.
+  const [standable, setStandable] = useState(savedMovement.standable);
 
   const needsContent = action === "reveal_text" || action === "reveal_image";
   // A required check is only ever meaningful when there's something to gate
@@ -75,6 +83,7 @@ export function BehaviorEditor({
     const movement: ObjectMovementConfig = {
       blocksMovement,
       requiredCheck: requiredSkill === "" ? null : { skill: requiredSkill },
+      standable,
     };
     if (action === "") {
       onSave(null, movement);
@@ -173,6 +182,24 @@ export function BehaviorEditor({
           Never
         </Button>
       </div>
+      {/* "Objects so tokens can stand on top of them": deliberately its own
+          row, independent of blocksMovement above — a DM can mark an object
+          standable, blocking, both, or neither, with neither toggle ever
+          implying or reading the other. Shown unconditionally, same
+          reasoning as blocksMovement: a plain crate with no action
+          configured at all still needs this settable. Height itself is
+          never entered here — it's auto-measured from the object's own real
+          model geometry the first time it's needed (standableSurface.ts). */}
+      <div className={styles.toolRow}>
+        <Button
+          size="sm"
+          variant={standable ? "accent" : "ghost"}
+          onClick={() => setStandable((value) => !value)}
+          data-testid="behavior-standable"
+        >
+          Tokens can stand on this: {standable ? "yes" : "no"}
+        </Button>
+      </div>
       {showRequiredCheck ? (
         <Select
           label="Required check"
@@ -198,7 +225,7 @@ export function BehaviorEditor({
         >
           Save behavior
         </Button>
-        {saved || savedMovement.blocksMovement !== null || savedMovement.requiredCheck ? (
+        {saved || savedMovement.blocksMovement !== null || savedMovement.requiredCheck || savedMovement.standable ? (
           <span className={styles.selectedMeta} data-testid="behavior-summary">
             {saved ? `Saved: ${ACTION_LABELS[saved.action]}` : "Saved: no action"}
             {saved ? (saved.playerTriggerable ? " · players can trigger" : " · DM only") : ""}
@@ -206,6 +233,7 @@ export function BehaviorEditor({
             {savedMovement.blocksMovement === true ? " · blocks movement" : ""}
             {savedMovement.blocksMovement === false ? " · never blocks movement" : ""}
             {savedMovement.requiredCheck ? ` · requires ${savedMovement.requiredCheck.skill}` : ""}
+            {savedMovement.standable ? " · standable" : ""}
           </span>
         ) : null}
       </div>

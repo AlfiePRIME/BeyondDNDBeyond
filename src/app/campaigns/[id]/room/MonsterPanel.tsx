@@ -224,7 +224,11 @@ export function MonsterPanel({
       // The upload/catalog half is done — GameRoom takes it from here
       // (appends to the campaign's own asset list, links it as this
       // template's override).
-      onUploadOverride(templateId, { ...asset, url, forwardOffsetDeg });
+      // standSurfaceHeight: null — matches resolvePaletteAssets' own "not
+      // yet measured" default for a freshly-created row; GameRoom's own
+      // lazy-measure effect fills this in later if a DM ever places this
+      // same asset as a map object and marks it standable.
+      onUploadOverride(templateId, { ...asset, url, forwardOffsetDeg, standSurfaceHeight: null });
     } catch {
       setOverrideUploadError("Couldn't upload that override model — try again.");
     } finally {

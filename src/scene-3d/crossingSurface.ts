@@ -243,3 +243,42 @@ export function crossingTiltPitchRadians(url: string | null | undefined): number
 export function isStairsPresetUrl(url: string | null | undefined): boolean {
   return url !== null && url !== undefined && Object.hasOwn(TILT_PITCH_RADIANS_BY_URL, url);
 }
+
+/**
+ * "Objects so tokens can stand on top of them" — the generalization of this
+ * module's own crossingSurfaceHeight beyond the three hardcoded bridge/
+ * stairs presets, to ANY object a DM has marked standable
+ * (map_objects.behavior_config's `standable` key, see
+ * src/data-access/mapObjects.ts's ObjectMovementConfig), using a real,
+ * per-asset MEASURED height (src/scene-3d/standableSurface.ts's live Box3
+ * measurement, cached in model_orientation.standable_surface_height) rather
+ * than a second hardcoded lookup table — one couldn't exist ahead of time
+ * for an arbitrary DM upload the way SURFACE_HEIGHT_BY_URL's three entries
+ * can.
+ *
+ * This is the ONE function MapSurface.tsx's own topY formula calls (in
+ * place of a bare crossingSurfaceHeight(url)) — a single, unified "what's
+ * under this token/object that lifts it" answer, not two independently
+ * additive terms that could silently disagree about which cell's
+ * occupant wins. crossingSurfaceHeight's own three real, precisely
+ * measured presets take precedence whenever both could apply (an
+ * essentially theoretical case — a DM would have to ALSO mark a bridge or
+ * stairs preset standable — but resolving it this way means the existing,
+ * regression-tested bridge/stairs geometry can never be second-guessed by
+ * a same-url standable measurement, which for a preset would in practice
+ * agree numerically anyway since both derive from the exact same real
+ * model). `standSurfaceHeight` is the caller's already-resolved value for
+ * THIS SPECIFIC cell's standable occupant (GameRoom.tsx resolves which
+ * object, if any, is both standable and sharing this cell, then looks up
+ * its own asset's measured height) — null/undefined (no standable occupant
+ * at this cell, or one exists but hasn't been measured yet) contributes 0,
+ * exactly like `crossingSurfaceHeight`'s own "nothing here" case.
+ */
+export function occupantSurfaceHeight(
+  crossingUrl: string | null | undefined,
+  standSurfaceHeight: number | null | undefined
+): number {
+  const crossing = crossingSurfaceHeight(crossingUrl);
+  if (crossing > 0) return crossing;
+  return standSurfaceHeight ?? 0;
+}

@@ -106,6 +106,23 @@ export function isWallFamilyUrl(url: string | null): boolean {
   return url !== null && Object.hasOwn(WALL_FIT_TARGET_BY_URL, url);
 }
 
+/**
+ * "Objects so tokens can stand on top of them": the exact fit-size target
+ * PropModel's own `scale = fitSize / maxDim` below uses for a given asset
+ * url — extracted out of PropModel's measurement memo (it used to be
+ * computed inline, only there) so src/scene-3d/standableSurface.ts's own
+ * OFF-SCREEN real-geometry measurement (no react-three-fiber scene graph,
+ * see that module's own doc comment) can apply the IDENTICAL fit-scale a
+ * real render of this same url actually uses, rather than a second,
+ * separately-maintained copy of "PLACED_OBJECT_SIZE unless it's a
+ * wall-family preset" that could silently drift from this one. Every
+ * non-wall-family url (every ordinary prop, and every custom upload today)
+ * resolves to the same PLACED_OBJECT_SIZE this always returned inline.
+ */
+export function fitSizeForUrl(url: string | null): number {
+  return (url ? WALL_FIT_TARGET_BY_URL[url] : undefined) ?? PLACED_OBJECT_SIZE;
+}
+
 // Map Editor Batch A8a's 8 exterior-facade presets (0066_building_presets.sql)
 // — matched structurally by model url, the same isWallFamilyUrl precedent
 // just above, rather than any asset_library category column (none exists).
@@ -213,8 +230,9 @@ function PropModel({
     // Wall-family presets fit to WALL_FIT_TARGET_BY_URL's full-cell (or
     // larger, for the diagonal) target instead of the ordinary props' inset
     // — see that constant's own doc comment for the real-measurement-backed
-    // reasoning.
-    const fitSize = WALL_FIT_TARGET_BY_URL[url] ?? PLACED_OBJECT_SIZE;
+    // reasoning. fitSizeForUrl is this exact lookup, extracted so
+    // standableSurface.ts's own off-screen measurement can reuse it.
+    const fitSize = fitSizeForUrl(url);
     // Guard against degenerate (flat/empty) models rather than dividing by ~0.
     const scale = maxDim > 1e-3 ? fitSize / maxDim : 1;
     // Recenter on x/z and put the model's base on the cell surface regardless

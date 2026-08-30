@@ -90,6 +90,7 @@ import {
   setMapWhiteboardHeight,
   setMonsterTemplateOverride,
   setSeatOffset,
+  setStandableSurfaceHeight,
   setTokenAllegiance,
   setWeather,
   startCombat,
@@ -203,6 +204,7 @@ import {
   isSurfaceHostUrl,
   isSurfacePropUrl,
   mapCellOffsets,
+  measureStandableSurfaceHeight,
   ObjectRevealCard,
   pawnBodyTypeForRace,
   PERSONAL_TRAY_RADIUS,
@@ -6456,6 +6458,15 @@ export function GameRoom({
     () => new Map(assetList.map((asset) => [asset.id, asset.forwardOffsetDeg])),
     [assetList]
   );
+  // "Objects so tokens can stand on top of them": same id-keyed map shape as
+  // assetForwardOffsetById just above, for each asset's own auto-measured
+  // real stand-on height (PaletteAsset.standSurfaceHeight) — null for an
+  // asset nobody has ever marked standable, or one that's standable but not
+  // measured yet (the lazy-measure effect below fills this in).
+  const assetStandHeightById = useMemo(
+    () => new Map(assetList.map((asset) => [asset.id, asset.standSurfaceHeight])),
+    [assetList]
+  );
   // Custom assets only — DiceTrayPicker's own selectable list; a preset
   // model (a built-in map prop) was never meant to double as a dice tray's
   // own appearance, the same distinction AssetPalette.tsx's own upload
@@ -7218,6 +7229,36 @@ export function GameRoom({
       const url = assetUrlById.get(object.asset_id) ?? null;
       if (isSurfaceHostUrl(url)) surfaceHostUrlByCell.set(cellKey(object.x, object.y), url!);
     }
+    // "Objects so tokens can stand on top of them": the standable-flagged
+    // object (if any) at each cell — the SAME keyed-once-up-front shape as
+    // crossingObjectByCell above, so a token/object sharing that cell can
+    // resolve, in one lookup, both WHICH asset is standing under it and (via
+    // assetStandHeightById just below) how tall that asset's own real
+    // geometry measures. Only one freestanding object per cell in the
+    // ordinary case (crossingObjectByCell's own doc comment), so "the"
+    // standable object per cell is unambiguous the same way.
+    const standableObjectByCell = new Map<string, MapObject>();
+    for (const object of liveMap.objects) {
+      if (parseObjectMovementConfig(object.behavior_config).standable) {
+        standableObjectByCell.set(cellKey(object.x, object.y), object);
+      }
+    }
+    // Resolves the ALREADY-MEASURED real stand-on height (crossingSurface.ts's
+    // own cell-relative units) for whichever standable object occupies
+    // `x`/`y`, or undefined if none does or it hasn't been measured yet —
+    // MapSurfaceObject/MapSurfaceToken.standSurfaceHeight's own contract.
+    // `excludeObjectId` is the self-exclusion crossingSurface/surfaceHostUrl
+    // above both already apply: an object is never lifted by its own
+    // standable flag.
+    const standSurfaceHeightAt = (
+      x: number,
+      y: number,
+      excludeObjectId?: string
+    ): number | null | undefined => {
+      const host = standableObjectByCell.get(cellKey(x, y));
+      if (!host || host.id === excludeObjectId) return undefined;
+      return assetStandHeightById.get(host.asset_id);
+    };
     return {
       id: liveMap.map.id,
       gridWidth: liveMap.map.grid_width,
@@ -7340,6 +7381,12 @@ export function GameRoom({
             crossingSurface: object.crossing_type
               ? undefined
               : (crossingPresetUrlFor(crossingObjectByCell.get(cellKey(object.x, object.y))) ?? undefined),
+            // "Objects so tokens can stand on top of them": the SAME
+            // "renders on top of it, unless this row IS the standable
+            // object itself" contract crossingSurface above establishes —
+            // standSurfaceHeightAt's own `excludeObjectId` param is that
+            // self-exclusion.
+            standSurfaceHeight: standSurfaceHeightAt(object.x, object.y, object.id),
           },
         ];
       }),
@@ -7505,6 +7552,12 @@ export function GameRoom({
           // model url (assetUrlById), not its crossing_type — see
           // crossingPresetUrlFor's own doc comment above.
           crossingSurface: crossingPresetUrlFor(crossingHere) ?? undefined,
+          // "Objects so tokens can stand on top of them": a token is never
+          // itself the standable object (only map_objects rows carry the
+          // `standable` behavior_config key), so unlike the objects loop
+          // above there's no self-exclusion to apply here — every excludeObjectId
+          // stays undefined.
+          standSurfaceHeight: standSurfaceHeightAt(token.x, token.y),
           // Tilt only ever applies for a STAIRS preset's own url — see
           // MapSurfaceToken's own doc comment; a bridge crossingHere still
           // sets crossingSurface above (for the height fix) but leaves this
@@ -7554,7 +7607,95 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId, currentMapArtUrl, characterPawnByCharacterId, pawnColorByUserId, characterRosterNames]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, assetStandHeightById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId, currentMapArtUrl, characterPawnByCharacterId, pawnColorByUserId, characterRosterNames]);
+
+  // "Objects so tokens can stand on top of them": every asset id currently
+  // used by a standable-flagged object on the live map that has no measured
+  // height yet (assetStandHeightById reads null for "not yet measured" —
+  // see that memo's own doc comment) — deduped by asset id (several placed
+  // objects can share one asset) so the effect below only ever needs to
+  // measure each DISTINCT asset once, however many times it's placed.
+  const unmeasuredStandableAssetIds = useMemo(() => {
+    if (!liveMap) return [];
+    const ids = new Set<string>();
+    for (const object of liveMap.objects) {
+      if (!parseObjectMovementConfig(object.behavior_config).standable) continue;
+      if (assetStandHeightById.get(object.asset_id) != null) continue;
+      ids.add(object.asset_id);
+    }
+    return Array.from(ids);
+  }, [liveMap, assetStandHeightById]);
+
+  // Measures, then caches, each not-yet-measured standable asset's own real
+  // stand-on height — the project owner's explicit choice (auto-measure
+  // from the model's own geometry, never a DM-entered number) — the first
+  // time ANY connected client (not just the DM's) sees it referenced by a
+  // standable object; see standableSurface.ts's own doc comment for why
+  // this measures off the live scene graph entirely (so it isn't gated on
+  // that specific object actually being on-screen for THIS client right
+  // now) and 0105_standable_surface_height.sql for where the result is
+  // persisted so every OTHER client/session gets it for free afterward,
+  // never remeasuring the same asset twice.
+  //
+  // measuredAssetIdsRef is a plain in-flight/settled guard, not react state
+  // — an asset id added here never needs to be removed on SUCCESS (assetList
+  // itself, updated below, already reflects the real measured value from
+  // then on, which is what unmeasuredStandableAssetIds' own `!= null` check
+  // reads), and IS removed on failure so a transient error (a network
+  // hiccup, a since-fixed corrupt upload) gets a fresh attempt on the next
+  // render that still needs it, rather than being stuck unmeasured for the
+  // rest of the session.
+  const measuredAssetIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const toMeasure = unmeasuredStandableAssetIds.filter((id) => !measuredAssetIdsRef.current.has(id));
+    if (toMeasure.length === 0) return;
+    for (const assetId of toMeasure) {
+      measuredAssetIdsRef.current.add(assetId);
+      const asset = assetList.find((candidate) => candidate.id === assetId);
+      const url = asset ? assetUrlById.get(assetId) : null;
+      if (!asset || !url) {
+        measuredAssetIdsRef.current.delete(assetId);
+        continue;
+      }
+      void (async () => {
+        let standSurfaceHeight: number;
+        try {
+          standSurfaceHeight = await measureStandableSurfaceHeight(url);
+        } catch {
+          // The MEASUREMENT itself failed (a network hiccup, a corrupt
+          // upload) — nothing to render or cache; un-guard so a later
+          // render (this asset referenced again, or the next reconnect)
+          // gets a fresh attempt instead of being stuck unmeasured all
+          // session.
+          measuredAssetIdsRef.current.delete(assetId);
+          return;
+        }
+        // Render THIS session immediately, independent of whether caching
+        // it for every other future session (below) succeeds — a real
+        // measurement was just taken; nothing about showing it locally
+        // should depend on a separate write's success. Deliberately never
+        // rolled back if that write fails: this client's own token(s)
+        // still deserve to render at the real height they were just
+        // measured at.
+        setAssetList((current) =>
+          current.map((candidate) => (candidate.id === assetId ? { ...candidate, standSurfaceHeight } : candidate))
+        );
+        try {
+          await setStandableSurfaceHeight(createBrowserSupabaseClient(), asset.model_ref, standSurfaceHeight);
+        } catch {
+          // Soft-fail the CACHE WRITE only (resolvePaletteAssets' own "one
+          // bad thing can't take down the room" posture) — this session
+          // already rendered correctly above; a future session that hits
+          // the same cache miss just re-measures once more instead of
+          // getting a free cache hit, never anything worse. Deliberately
+          // does NOT re-add assetId to measuredAssetIdsRef: retrying the
+          // same doomed write every render (e.g. while a real schema
+          // migration is still pending) would be pure waste with this
+          // client's own render already correct either way.
+        }
+      })();
+    }
+  }, [unmeasuredStandableAssetIds, assetUrlById, assetList]);
 
   // A hidden, serialized snapshot of the per-viewer render states above —
   // exactly what the scene is told to draw — for the Playwright

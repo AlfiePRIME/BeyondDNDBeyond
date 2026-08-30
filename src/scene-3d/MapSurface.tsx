@@ -7,7 +7,7 @@ import type { ThreeEvent } from "@react-three/fiber";
 import { playSound, SOUND_KEYS } from "@/audio";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
-import { crossingSurfaceHeight, crossingTiltPitchRadians, isStairsPresetUrl } from "./crossingSurface";
+import { crossingTiltPitchRadians, isStairsPresetUrl, occupantSurfaceHeight } from "./crossingSurface";
 import { surfaceStackLift, surfaceStackScale } from "./surfaceStack";
 import { buildGridOverlayPositions } from "./gridOverlay";
 import type { PawnBodyType } from "./pawnBodyType";
@@ -620,6 +620,24 @@ export interface MapSurfaceObject {
    * object before this feature) renders at exactly today's height/scale —
    * see surfaceStack.ts's surfaceStackLift/surfaceStackScale. */
   surfaceHostUrl?: string | null;
+  /** "Objects so tokens can stand on top of them": the ALREADY-RESOLVED
+   * real, measured stand-on height (crossingSurface.ts's own cell-relative
+   * units, the same ones `crossingSurface` above resolves into) of whichever
+   * OTHER object, if any, is both marked standable
+   * (map_objects.behavior_config's `standable` key) and sharing THIS
+   * object's cell — the same "never set for the standable object's own row"
+   * self-exclusion contract `crossingSurface`/`surfaceHostUrl` above both
+   * already establish. GameRoom.tsx resolves this (which object occupies
+   * the cell, whether it's flagged standable, and that object's own asset's
+   * measured height from model_orientation.standable_surface_height) —
+   * this component only ever consumes the final plain number, through
+   * crossingSurface.ts's occupantSurfaceHeight (see that function's own
+   * doc comment for why crossing structures and standable objects are ONE
+   * unified lookup, not two independently-additive ones). null (a
+   * standable occupant exists but hasn't been measured yet) and undefined
+   * (no standable occupant at this cell at all, or every object before
+   * this feature) both add exactly 0. */
+  standSurfaceHeight?: number | null;
 }
 
 interface ObjectMarkerProps {
@@ -973,6 +991,19 @@ export interface MapSurfaceToken {
    * crossingSurface.ts's STAIRS_TILT_PITCH_RADIANS doc comment for the
    * pitch this pairs with. */
   crossingRotationDeg?: number | null;
+  /** "Objects so tokens can stand on top of them": see
+   * MapSurfaceObject.standSurfaceHeight's own doc comment — the same
+   * already-resolved, already-measured real stand-on height, for whichever
+   * object (if any) marked standable is occupying THIS TOKEN's own current
+   * cell. A token is never itself the standable object (only map_objects
+   * rows carry the `standable` behavior_config key), so unlike
+   * MapSurfaceObject's own field there is no self-exclusion case to
+   * document here — every token that shares a cell with a standable
+   * object's own asset receives this. null/undefined (no standable
+   * occupant at this cell, an occupant not yet measured, or every token
+   * before this feature) adds exactly 0, via crossingSurface.ts's
+   * occupantSurfaceHeight. */
+  standSurfaceHeight?: number | null;
   /** Race-variant pawns: which of TokenMarker's own PAWN_BODY_GEOMETRY
    * shapes the disc-fallback (no modelUrl) branch renders — the caller
    * (GameRoom) derives this from a PC token's own character.race via
@@ -2033,20 +2064,26 @@ export function MapSurface({
           id={object.id}
           worldX={(object.x + (object.renderOffsetX ?? 0)) * cellSize - offsetX}
           worldZ={(object.y + (object.renderOffsetZ ?? 0)) * cellSize - offsetZ}
-          // Bridges and stairs surface-height fix: additive on top of the
-          // raw cell elevation (never replacing it) — see
-          // crossingSurface.ts's crossingSurfaceHeight doc comment. 0 for
-          // every object not sharing a cell with a crossing structure
-          // (crossingSurface undefined/null), rendering at exactly today's
-          // height. Tavern furniture surface-stacking: the SAME additive
-          // pattern, for a small prop sharing a cell with a Table/Bar
+          // Bridges and stairs surface-height fix, generalized by "objects
+          // so tokens can stand on top of them": additive on top of the raw
+          // cell elevation (never replacing it) — see
+          // crossingSurface.ts's occupantSurfaceHeight doc comment for why
+          // the crossing-structure and standable-object lifts are ONE
+          // unified lookup here, not two independently-additive terms. 0
+          // for every object not sharing a cell with either a crossing
+          // structure or a measured standable object, rendering at exactly
+          // today's height. Tavern furniture surface-stacking: a SEPARATE
+          // additive term, for a small prop sharing a cell with a Table/Bar
           // Counter/Bar Corner host — see surfaceStack.ts's
-          // surfaceStackLift doc comment. Both add exactly 0 for every
-          // object before either feature.
+          // surfaceStackLift doc comment (deliberately untouched by this
+          // feature — see that module's own doc comment for why it's an
+          // object-to-object allowlist, not a token-facing mechanism).
+          // Every term here adds exactly 0 for every object before all
+          // three features.
           topY={
             baseHeight +
             object.elevation * elevationStepHeight +
-            crossingSurfaceHeight(object.crossingSurface) * cellSize +
+            occupantSurfaceHeight(object.crossingSurface, object.standSurfaceHeight) * cellSize +
             surfaceStackLift(object.surfaceHostUrl) * cellSize
           }
           scale={cellSize * surfaceStackScale(object.surfaceHostUrl)}
@@ -2076,13 +2113,15 @@ export function MapSurface({
           cellSize={cellSize}
           offsetX={offsetX}
           offsetZ={offsetZ}
-          // Bridges and stairs surface-height fix: see the matching
+          // Bridges and stairs surface-height fix, generalized by "objects
+          // so tokens can stand on top of them": see the matching
           // ObjectMarker topY comment just above — additive, 0 for every
-          // token not standing on a crossing structure.
+          // token not standing on a crossing structure or a measured
+          // standable object.
           topY={
             baseHeight +
             token.elevation * elevationStepHeight +
-            crossingSurfaceHeight(token.crossingSurface) * cellSize
+            occupantSurfaceHeight(token.crossingSurface, token.standSurfaceHeight) * cellSize
           }
           scale={cellSize}
           allegiance={token.allegiance}
