@@ -3,6 +3,7 @@ import {
   getForwardOffsetDeg,
   type AvatarSource,
   type CampaignMember,
+  type NameLabelSize,
   type SupabaseClient,
 } from "@/data-access";
 import { AVATAR_PRESETS } from "@/app/account/avatar-presets";
@@ -25,6 +26,19 @@ export interface RoomMember extends CampaignMember {
    * only for the vanishingly unlikely case of a missing profile row —
    * every real profile always has a real, non-null value here. */
   default_pawn_color: string;
+  /** Name Labels: this member's own account-wide floating name-label color
+   * (profiles.name_label_color, 0100) — completely unrelated to
+   * default_pawn_color above (that colors the MAP TOKEN) or avatar_url
+   * (the seated avatar MODEL); this colors only the always-visible text
+   * label GameTableScene's SeatNameLabel renders above THIS member's own
+   * seat. Falls back to DEFAULT_NAME_LABEL_COLOR only for the vanishingly
+   * unlikely case of a missing profile row — every real profile always has
+   * a real, non-null value here (0100's own NOT NULL column). */
+  name_label_color: string;
+  /** Name Labels: this member's own account-wide name-label size preset
+   * (profiles.name_label_size, 0100) — same fallback reasoning as
+   * name_label_color immediately above. */
+  name_label_size: NameLabelSize;
 }
 
 /** Mirrors 0079_default_pawn_color.sql's own column default exactly (the
@@ -32,6 +46,22 @@ export interface RoomMember extends CampaignMember {
  * as page.tsx's fallback for a member whose profile row failed to load,
  * never a real per-row default (the DB itself already guarantees NOT NULL). */
 export const DEFAULT_PAWN_COLOR = "#1ec8c8";
+
+/** Mirrors 0100_name_label.sql's own name_label_color column default
+ * exactly (tokens.css's `--text`) — same "page.tsx fallback only" scope as
+ * DEFAULT_PAWN_COLOR immediately above. Independently re-declared here
+ * (rather than imported) from scene-3d's own SeatNameLabel.DEFAULT_NAME_
+ * LABEL_COLOR — the identical cross-module-boundary mirroring
+ * DEFAULT_PAWN_COLOR/MapSurface.tsx's ALLEGIANCE_COLOR.party already
+ * establish (this app layer file can't import from scene-3d's own default
+ * for a page.tsx-only fallback constant, nor should it: the two defaults
+ * exist for two different callers to reach for their own missing-row edge
+ * case, not one shared import). */
+export const DEFAULT_NAME_LABEL_COLOR = "#ede0ff";
+
+/** Mirrors 0100_name_label.sql's own name_label_size column default
+ * exactly. Same page.tsx-fallback-only scope as DEFAULT_NAME_LABEL_COLOR. */
+export const DEFAULT_NAME_LABEL_SIZE: NameLabelSize = "medium";
 
 /** resolveAvatarUrl's return shape — the URL scene-3d can load, paired with
  * its stored forward-direction correction (0 when none is set). */

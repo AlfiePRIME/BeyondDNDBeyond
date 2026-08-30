@@ -21,7 +21,15 @@ export interface PawnColorPickerProps {
 // that close would make it hard to tell your own party pawn apart from a
 // hostile/neutral one at a glance, the exact confusion this feature's own
 // color/allegiance interaction reasoning is trying to avoid.
-const PRESET_COLORS = [
+//
+// Exported so Name Labels' own NameLabelPicker.tsx can reuse this exact
+// swatch row for its own (unrelated) color choice — a name label has no
+// allegiance meaning at all, so the hue-avoidance reasoning above doesn't
+// literally apply there, but "a broad, mutually-distinct spread of hues" is
+// just as good a default swatch set for any per-account color picker in
+// this app, and reusing one real list beats hand-copying a second one that
+// could silently drift from it.
+export const PRESET_COLORS = [
   "#1ec8c8", // teal
   "#cc55ff", // purple/magenta
   "#3ddc68", // green

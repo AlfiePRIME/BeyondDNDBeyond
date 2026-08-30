@@ -1,0 +1,27 @@
+/* Name Labels: the floating, always-visible label above a seated member's
+   own chair (SeatNameLabel.tsx). Unlike ChatBubble.module.css's own bubble
+   chrome (a solid background chip with a border), this is deliberately bare
+   text: it's permanent chrome present above EVERY seat at once, not a
+   transient message, so a background chip on every single seat would read
+   as far busier/heavier than a brief chat bubble ever does. A solid chip
+   would also fight its own purpose here in a way it doesn't for chat text —
+   a member's SELF-CHOSEN color could easily be close to (or the same as) a
+   chip background also drawn from this app's own limited token palette,
+   silently reducing contrast right where this feature most needs it.
+   A multi-layer dark text-shadow instead reads clearly against ANY
+   background this scene can produce (either DAY_NIGHT_PRESETS room color,
+   a bright or dark map cell, or another member's differently-colored label
+   behind it) regardless of which color the member themselves picked. */
+.label {
+  font-family: var(--font-b);
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+  text-align: center;
+  text-shadow:
+    0 0 3px rgba(0, 0, 0, 0.95),
+    0 1px 2px rgba(0, 0, 0, 0.95),
+    0 0 9px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  user-select: none;
+}

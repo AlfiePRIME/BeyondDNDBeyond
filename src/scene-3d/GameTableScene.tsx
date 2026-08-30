@@ -35,6 +35,7 @@ import {
 } from "./seating";
 import { SeatAvatar } from "./SeatAvatar";
 import { Chair, SEAT_TOP_Y } from "./Chair";
+import { DEFAULT_NAME_LABEL_COLOR, SeatNameLabel } from "./SeatNameLabel";
 // DM tray drag: only needed to size the tray's own invisible grab-handle hit
 // box proportionally to its real footprint (PERSONAL_TRAY_RADIUS) — no
 // circular import risk, DiceTumble.tsx does not import anything from this
@@ -946,6 +947,24 @@ const TableSeat = memo(function TableSeat({
               (DmBookProp's own precedent). */}
           <meshBasicMaterial transparent opacity={0} depthWrite={false} />
         </mesh>
+      ) : null}
+      {/* Name Labels: "so people know who is who" — every seated member,
+          DM's throne included, gets an always-visible floating label above
+          their own chair. Skipped entirely for a member with no display
+          name yet (an incomplete profile — isProfileComplete's own
+          definition) rather than rendering an empty/placeholder label. A
+          direct child of THIS group (not a separately-positioned sibling)
+          so it rides along with the imperative position/rotation this
+          group already carries — see SeatNameLabel's own doc comment for
+          why that placement is load-bearing, not stylistic. */}
+      {seat.member.display_name ? (
+        <SeatNameLabel
+          userId={userId}
+          displayName={seat.member.display_name}
+          color={seat.member.name_label_color ?? DEFAULT_NAME_LABEL_COLOR}
+          size={seat.member.name_label_size ?? "medium"}
+          role={seat.member.role}
+        />
       ) : null}
     </group>
   );

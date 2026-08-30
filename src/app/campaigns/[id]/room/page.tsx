@@ -36,7 +36,13 @@ import {
   listWhiteboardTiles,
 } from "@/data-access";
 import { resolvePaletteAssets } from "../maps/[mapId]/edit/lib/assetUrl";
-import { DEFAULT_PAWN_COLOR, resolveAvatarUrl, type RoomMember } from "./avatar-url";
+import {
+  DEFAULT_NAME_LABEL_COLOR,
+  DEFAULT_NAME_LABEL_SIZE,
+  DEFAULT_PAWN_COLOR,
+  resolveAvatarUrl,
+  type RoomMember,
+} from "./avatar-url";
 import { resolveHandout } from "./handout-url";
 import { resolveCampaignPawnAppearance } from "./pawn-url";
 import { mostRecentOwnToken } from "./vision";
@@ -100,6 +106,11 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
         // only ever covers a member whose profile row itself failed to
         // load at all.
         default_pawn_color: profile?.default_pawn_color ?? DEFAULT_PAWN_COLOR,
+        // Name Labels: same "fallback only covers a failed profile load"
+        // reasoning as default_pawn_color immediately above (0100's own
+        // columns are NOT NULL).
+        name_label_color: profile?.name_label_color ?? DEFAULT_NAME_LABEL_COLOR,
+        name_label_size: profile?.name_label_size ?? DEFAULT_NAME_LABEL_SIZE,
       };
     })
   );

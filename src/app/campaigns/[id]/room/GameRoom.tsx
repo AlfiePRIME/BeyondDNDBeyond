@@ -3724,6 +3724,14 @@ export function GameRoom({
   // change on its very next recompute — no page reload needed, and no
   // separate subscription to wire up, since this effect already fires for
   // exactly "this campaign member's profile just changed".
+  //
+  // Name Labels rides this same feed too: name_label_color/name_label_size
+  // land in `roster` right alongside default_pawn_color, so GameTableScene's
+  // TableSeat (reading straight off `roster` as its own SeatMember list)
+  // picks up a color/size change made on /account on its very next
+  // recompute, for every OTHER connected client — no page reload, and no
+  // separate broadcast, for the identical reason default_pawn_color needs
+  // none.
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
     const memberIds = new Set(members.map((member) => member.user_id));
@@ -3738,6 +3746,8 @@ export function GameRoom({
                 avatar_url: avatar.url,
                 avatar_forward_offset_deg: avatar.forwardOffsetDeg,
                 default_pawn_color: profile.default_pawn_color,
+                name_label_color: profile.name_label_color,
+                name_label_size: profile.name_label_size,
               }
             : member
         )

@@ -4,6 +4,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * storage object path in the avatars bucket. */
 export type AvatarSource = "preset" | "custom";
 
+/** profiles.name_label_size's own closed 3-step enum (0100) — see that
+ * migration's doc comment for why this is a bounded preset, not a free
+ * numeric pixel/rem value. */
+export type NameLabelSize = "small" | "medium" | "large";
+
 /**
  * One Game Room panel's persisted layout (Phase B of the UI overhaul, `height`
  * added by the panel-resize follow-up, `docked` added by the dock/close +
@@ -134,6 +139,18 @@ export interface Profile {
    * 0080), but never with another account's color — this one value follows
    * a user into every campaign and every character they own. */
   default_pawn_color: string;
+  /** Name Labels: this user's own account-wide floating name-label color
+   * (0100) — a hex string, always set (NOT NULL, defaulting to tokens.css's
+   * own `--text`). Rendered above this user's seat at the table in every
+   * campaign (GameTableScene's SeatNameLabel), completely unrelated to
+   * default_pawn_color above (that colors the MAP TOKEN, not the seat
+   * label) or avatar_source/avatar_ref (the seated avatar MODEL, not text). */
+  name_label_color: string;
+  /** Name Labels: this user's own account-wide name-label font-size preset
+   * (0100) — a closed 3-step enum, always set (NOT NULL, defaulting to
+   * 'medium'). See NameLabelSize's own doc comment for why this is bounded
+   * rather than a free numeric value. */
+  name_label_size: NameLabelSize;
 }
 
 export async function getProfile(supabase: SupabaseClient, userId: string): Promise<Profile | null> {
@@ -295,6 +312,49 @@ export async function setDefaultPawnColor(
 }
 
 /**
+ * Sets the caller's own account-wide name-label color (Name Labels, 0100) —
+ * the setDefaultPawnColor shape exactly, through the SAME self-only UPDATE
+ * policy (0001's `id = auth.uid()`), and backed by the same 0100 hex-format
+ * CHECK constraint. A separate, single-column write (not bundled with
+ * setNameLabelSize below) because these are two independently-validated
+ * DB columns, not one jsonb document — NameLabelPicker.tsx's color swatch/
+ * input and size dropdown each save immediately on their own change, with
+ * no shared-document merge risk the way ui_preferences' single jsonb column
+ * has (setUiPreferences' own doc comment).
+ */
+export async function setNameLabelColor(
+  supabase: SupabaseClient,
+  userId: string,
+  color: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("profiles")
+    .update({ name_label_color: color })
+    .eq("id", userId);
+
+  if (error) throw error;
+}
+
+/**
+ * Sets the caller's own account-wide name-label size preset (Name Labels,
+ * 0100) — see setNameLabelColor's own doc comment immediately above for why
+ * this is a separate, independent single-column write rather than bundled
+ * with it.
+ */
+export async function setNameLabelSize(
+  supabase: SupabaseClient,
+  userId: string,
+  size: NameLabelSize
+): Promise<void> {
+  const { error } = await supabase
+    .from("profiles")
+    .update({ name_label_size: size })
+    .eq("id", userId);
+
+  if (error) throw error;
+}
+
+/**
  * Overwrites the caller's whole ui_preferences document (Phase B) — a plain
  * column write through profiles' existing self-only UPDATE policy (0001),
  * the setProfileAvatar shape exactly. Whole-document replacement, not a
@@ -352,11 +412,25 @@ export async function getAvatarSignedUrl(
  * campaign's, and any other campaign's) live, exactly the avatar_source/
  * avatar_ref reasoning above — GameRoom.tsx's own roster-sync effect is
  * what actually applies it to the render model.
+ *
+ * name_label_color/name_label_size (Name Labels, 0100) ride this same feed
+ * for the identical reason: a color/size change made on /account must reach
+ * every OTHER connected client's rendering of THIS member's own seat label
+ * live, with no page reload — see GameRoom.tsx's own roster-sync effect.
  */
 export function subscribeToProfileChanges(
   supabase: SupabaseClient,
   handler: (
-    profile: Pick<Profile, "id" | "display_name" | "avatar_source" | "avatar_ref" | "default_pawn_color">
+    profile: Pick<
+      Profile,
+      | "id"
+      | "display_name"
+      | "avatar_source"
+      | "avatar_ref"
+      | "default_pawn_color"
+      | "name_label_color"
+      | "name_label_size"
+    >
   ) => void
 ): () => void {
   let removed = false;

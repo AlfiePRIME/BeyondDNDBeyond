@@ -26,6 +26,23 @@ export interface SeatMember {
    * feature.
    */
   avatar_forward_offset_deg?: number | null;
+  /**
+   * Name Labels: this member's own account-wide floating name-label color
+   * (profiles.name_label_color, 0100) — a hex string, resolved in the app
+   * layer alongside avatar_url/default_pawn_color for the identical
+   * module-boundary reason. null/absent falls back to
+   * SeatNameLabel.tsx's own DEFAULT_NAME_LABEL_COLOR, the same "absent means
+   * the pre-this-feature default" convention avatar_forward_offset_deg's
+   * null-means-0 already established.
+   */
+  name_label_color?: string | null;
+  /**
+   * Name Labels: this member's own account-wide name-label font-size preset
+   * (profiles.name_label_size, 0100) — a closed 3-step enum, resolved the
+   * same way as name_label_color immediately above. null/absent falls back
+   * to "medium", the same reasoning.
+   */
+  name_label_size?: "small" | "medium" | "large" | null;
 }
 
 export type CameraMode = "seat" | "orbit";

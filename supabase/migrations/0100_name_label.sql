@@ -1,0 +1,86 @@
+-- Floating name labels above seated table avatars: "can we please add
+-- username above the characters in their chairs so people know who is who,
+-- users should be able to decide the size font and colour of their name in
+-- the account page" (the project owner's own follow-up, explicitly
+-- narrowing an earlier, looser "apply effects... or even css/html" idea down
+-- to just size and color). This migration is the account-wide preference
+-- half of that: two columns on `profiles`, resolved in the app layer
+-- (room/avatar-url.ts, room/page.tsx) exactly like default_pawn_color
+-- already is, and rendered by GameTableScene's new SeatNameLabel component
+-- above every seated member's own chair — the DM's throne included, since
+-- "who is who" includes the DM.
+--
+-- Deliberately NOT free-form CSS/HTML, despite the project owner's own first
+-- message floating that idea: rendering one user's arbitrary, attacker-
+-- controlled markup into every OTHER connected campaign member's page would
+-- be a genuine stored-XSS vector (this app is exactly the kind of
+-- multi-tenant, real-time-shared-view surface that vulnerability class
+-- targets), not merely a style/taste tradeoff — a firm scope boundary, not
+-- a nice-to-have simplification. Only two closed, individually-validated
+-- knobs exist: a hex color and a 3-step size preset, both enforced by the
+-- CHECK constraints below before either value ever reaches a browser.
+--
+-- Two dedicated columns, not jsonb: this app has two live jsonb precedents
+-- for "a small struct on a member/campaign row" — seat_offset/
+-- dm_book_offset/dm_tray_offset, and they all share one specific shape this
+-- feature does NOT have: an OFFSET from a separately-computed, occasionally-
+-- RESHAPING default (see 0098_dm_tray_offset.sql's own doc comment — "that
+-- computed default reshapes as party size/table arrangement changes... a
+-- stored absolute coordinate would silently go stale"). A member's chosen
+-- label color/size is never relative to anything and never goes stale as
+-- other members join or leave — it's a plain, always-present, individually-
+-- meaningful ABSOLUTE preference, exactly the category default_pawn_color
+-- (0079) already established with its own dedicated `text` column plus a
+-- CHECK constraint, not a jsonb blob. Two columns (rather than packing both
+-- into one jsonb `{ color, size }` document, which would also have been a
+-- defensible choice) were chosen specifically so EACH value keeps its own
+-- narrow, DB-enforced validation — a hex-format CHECK for one, a 3-value
+-- enum CHECK for the other — the same reasoning campaigns.weather_kind
+-- (0081) and map_cells.terrain_type (0039) already use a plain `text ...
+-- check (col in (...))` column for a small closed enum rather than jsonb.
+--
+-- name_label_color: the default_pawn_color CHECK exactly
+-- (`^#[0-9a-fA-F]{6}$`), NOT NULL with a default so every existing profile
+-- backfills to a real value and the app layer never has to ask "does this
+-- profile have an opinion yet?" — same reasoning as 0079's own doc comment.
+--
+-- The default is NOT default_pawn_color's own #1ec8c8 teal. That default
+-- exists purely to reproduce a color that was ALREADY rendering on every
+-- token before that migration shipped — zero regression for a pre-existing
+-- pixel. No name label has ever rendered anywhere before this feature at
+-- all, so there is no prior color to preserve, and the only real design
+-- goal for a never-customized label is legibility against THIS scene's own
+-- dark, moody room backgrounds (GameTableScene's DAY_NIGHT_PRESETS —
+-- roomBg #0d0520 by day, #060012 by night, both close to this app's own
+-- darkest surface tokens). #ede0ff is exactly tokens.css's own `--text`
+-- value — the color this entire app already established as "the readable
+-- default text color against these exact dark surfaces," reused here rather
+-- than inventing a new default, since that is precisely the same problem
+-- this default is solving.
+--
+-- name_label_size: a plain 3-step enum CHECK, the weather_kind/terrain_type
+-- precedent again — deliberately NOT an unbounded numeric pixel/rem column:
+-- an unrestricted number lets a member set an absurd value (0, or 10000)
+-- that breaks the seated table's own readability/layout for every other
+-- connected client looking at that member's seat, not just their own view.
+-- 'medium' is the obvious middle default of a closed 3-step range.
+alter table public.profiles
+  add column if not exists name_label_color text not null default '#ede0ff'
+    check (name_label_color ~ '^#[0-9a-fA-F]{6}$'),
+  add column if not exists name_label_size text not null default 'medium'
+    check (name_label_size in ('small', 'medium', 'large'));
+
+-- No new RLS policy — re-confirmed here by reading 0001_profiles.sql's
+-- actual policy SQL directly (not assumed), the exact verification
+-- discipline 0079's and 0098's own doc comments already modeled:
+--   - SELECT: "profiles are readable by any authenticated user" (0001,
+--     using (true)) — every OTHER seated member's client needs to read
+--     this to render that member's own label with their own chosen
+--     color/size, the same broad-read posture avatar_source/avatar_ref/
+--     default_pawn_color already rely on.
+--   - UPDATE: "a user can update only their own profile" (0001, using/with
+--     check id = auth.uid()) — a user can set only their own two new
+--     columns; nobody else's. Same setProfileAvatar/setDefaultPawnColor
+--     shape: RLS re-checks id = auth.uid() server-side regardless of what
+--     the calling data-access function is told to write, so a caller can
+--     never set another user's label no matter what userId it's handed.

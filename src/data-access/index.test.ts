@@ -209,6 +209,8 @@ describe("data-access module", () => {
         ui_preferences: { panelLayout: {} },
         is_admin: false,
         default_pawn_color: "#1ec8c8",
+        name_label_color: "#ede0ff",
+        name_label_size: "medium",
       })
     ).toBe(false);
     expect(
@@ -221,6 +223,8 @@ describe("data-access module", () => {
         ui_preferences: { panelLayout: {} },
         is_admin: false,
         default_pawn_color: "#1ec8c8",
+        name_label_color: "#ede0ff",
+        name_label_size: "medium",
       })
     ).toBe(false);
   });
@@ -236,6 +240,8 @@ describe("data-access module", () => {
         ui_preferences: { panelLayout: {} },
         is_admin: false,
         default_pawn_color: "#1ec8c8",
+        name_label_color: "#ede0ff",
+        name_label_size: "medium",
       })
     ).toBe(true);
   });

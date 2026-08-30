@@ -6,6 +6,7 @@ import { getProfile, listCampaignsForUser, listCharactersForUser } from "@/data-
 import { AppNav } from "../AppNav";
 import { AvatarPicker } from "./AvatarPicker";
 import { PawnColorPicker } from "./PawnColorPicker";
+import { NameLabelPicker } from "./NameLabelPicker";
 import { DisplayNameForm } from "./DisplayNameForm";
 import { CharacterCreateLauncher } from "./CharacterCreateLauncher";
 import { CampaignManageRow } from "./CampaignManageRow";
@@ -50,6 +51,17 @@ export default async function AccountPage() {
             that character has no custom uploaded model. This is separate from your avatar above.
           </p>
           <PawnColorPicker userId={user.id} initialColor={profile?.default_pawn_color ?? "#1ec8c8"} />
+
+          <SectionHeader eyebrow="Account" title="Your name label" />
+          <p className={styles.pickerHint}>
+            The floating label shown above your seat at the table, in every campaign, so everyone
+            knows who is who.
+          </p>
+          <NameLabelPicker
+            userId={user.id}
+            initialColor={profile?.name_label_color ?? "#ede0ff"}
+            initialSize={profile?.name_label_size ?? "medium"}
+          />
         </Panel>
 
         <Panel title="Character library" tone="teal">
