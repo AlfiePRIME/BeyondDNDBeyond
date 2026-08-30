@@ -31,6 +31,7 @@ import {
   declareDisengage,
   deleteConcealedPit,
   deleteHandout,
+  deleteMapObject,
   deleteMapToken,
   endCombat,
   endSession,
@@ -65,6 +66,7 @@ import {
   listMonsterTemplateOverridesForCampaign,
   listSeenCells,
   moveCombatToken,
+  moveMapObject,
   moveMapToken,
   parseMapObjectBehavior,
   parseObjectMovementConfig,
@@ -633,9 +635,15 @@ interface DoorTransitionPayload {
  * MAP_OBJECT_UPSERTED_EVENT's own doc comment for why this never carries an
  * unrevealed object. applyObjectUpserted upserts by id, so this doubles as
  * both "a brand-new object just became visible" and "an already-visible
- * object's behavior/tag just changed". */
+ * object's behavior/tag just changed". `object` null means deleted (the
+ * live-room delete affordance, LiveObjectsPanel's own Delete action) —
+ * HandoutPayload's own "id + nullable full row" shape, reused rather than a
+ * second event/type for a case this one already has all the machinery for;
+ * `objectId` carries the id in that case (a null `object` has none of its
+ * own to read). */
 interface MapObjectUpsertedPayload {
-  object: MapObject;
+  objectId: string;
+  object: MapObject | null;
 }
 
 /** Map Editor Batch A4: an item was just claimed (claim_map_object_item
@@ -1885,6 +1893,18 @@ export function GameRoom({
   const [chairDragGhostPosition, setChairDragGhostPosition] = useState<readonly [number, number, number] | null>(
     null
   );
+  // Live-room move-drag ("It is not easy to move objects... mid game"):
+  // this client's own currently-draggable object's grab-handle live screen
+  // projection — GameTableScene's onObjectDragHandleProjectedPosition, the
+  // exact dmTrayScreenPosition/ownChairScreenPosition reasoning above (WebGL
+  // has no DOM of its own for a test to find a click target).
+  const [objectDragHandleScreenPosition, setObjectDragHandleScreenPosition] = useState<[number, number] | null>(
+    null
+  );
+  // Live-room placement preview + move-drag: the shared ghost's current
+  // target CELL, or null while neither gesture is active —
+  // GameTableScene's onObjectPreviewCellDebug.
+  const [objectPreviewCell, setObjectPreviewCell] = useState<{ x: number; y: number } | null>(null);
   // Seated look-around: this client's own look-around yaw/pitch offset,
   // live — GameTableScene's onLookAroundDebug, the same "WebGL has no DOM
   // of its own for a test to inspect a camera's orientation" reasoning as
@@ -3189,6 +3209,22 @@ export function GameRoom({
     setLiveMapState(liveMapRef.current);
   }, []);
 
+  // Live-room delete (LiveObjectsPanel's own Delete action): applyObjectUpserted's
+  // own shape, in reverse — drops one object by id, a no-op if this client's
+  // own liveMapRef doesn't have it (a different map, or already gone). The
+  // DM's own delete handler calls this directly (no round trip);
+  // MAP_OBJECT_UPSERTED_EVENT's subscribe handler below calls it for every
+  // other connected client whenever a payload's `object` is null.
+  const applyObjectRemoved = useCallback((objectId: string) => {
+    const current = liveMapRef.current;
+    if (!current || !current.objects.some((candidate) => candidate.id === objectId)) return;
+    liveMapRef.current = {
+      ...current,
+      objects: current.objects.filter((candidate) => candidate.id !== objectId),
+    };
+    setLiveMapState(liveMapRef.current);
+  }, []);
+
   // Map Editor Batch A3: subscribeToMapObjectChanges' own receiver — merges
   // just the changed scalar fields (tint, chiefly, but tag/rotation/behavior
   // too) onto whatever candidate this client already has, keeping that
@@ -4123,9 +4159,11 @@ export function GameRoom({
     });
     // Map Editor Batch A10: see MAP_OBJECT_UPSERTED_EVENT's own doc comment
     // for why this only ever carries a row every receiver may already have.
+    // Live-room delete: a null `object` means removed instead (the same
+    // payload's own doc comment).
     const unsubscribeObjectUpserted = channel.subscribe<MapObjectUpsertedPayload>(
       MAP_OBJECT_UPSERTED_EVENT,
-      (payload) => applyObjectUpserted(payload.object)
+      (payload) => (payload.object ? applyObjectUpserted(payload.object) : applyObjectRemoved(payload.objectId))
     );
     const unsubscribeToken = channel.subscribe<TokenPayload>(TOKEN_EVENT, (payload) => {
       // Position compared against the pre-update row so only genuine moves
@@ -4468,6 +4506,7 @@ export function GameRoom({
     refreshLiveMap,
     applyTriggered,
     applyObjectUpserted,
+    applyObjectRemoved,
     applyTokenChange,
     applyCellChange,
     applyItemTaken,
@@ -4606,6 +4645,7 @@ export function GameRoom({
         const updated = await updateMapObject(supabase, object.id, { revealed_to_players: true });
         applyObjectUpserted(updated);
         await campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+          objectId: updated.id,
           object: updated,
         });
       } catch (err) {
@@ -4629,6 +4669,7 @@ export function GameRoom({
       await Promise.all(
         updated.map((object) =>
           campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+            objectId: object.id,
             object,
           })
         )
@@ -4652,6 +4693,7 @@ export function GameRoom({
         applyObjectUpserted(updated);
         if (updated.revealed_to_players) {
           await campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+            objectId: updated.id,
             object: updated,
           });
         }
@@ -4670,11 +4712,86 @@ export function GameRoom({
         applyObjectUpserted(updated);
         if (updated.revealed_to_players) {
           await campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+            objectId: updated.id,
             object: updated,
           });
         }
       } catch (err) {
         setLiveObjectError(errorMessage(err) ?? "Could not save that tag.");
+      }
+    },
+    [applyObjectUpserted]
+  );
+
+  // Live-room delete ("Move existing objects... Delete existing objects" —
+  // the same DM ask this whole feature answers): LiveObjectsPanel's own
+  // per-object Delete action, reaching deleteMapObject (previously only ever
+  // called from the separate Map Editor route) directly from the Game Room.
+  // DM-only, enforced by both the UI (LiveObjectsPanel renders nothing for a
+  // non-DM viewer) and map_objects' own DELETE RLS policy. Closes the
+  // editor if the object being deleted is the one currently open in it —
+  // otherwise a stale row would linger in BehaviorEditor/ObjectTagEditor
+  // referencing an id that no longer exists.
+  const handleDeleteLiveObject = useCallback(
+    async (objectId: string) => {
+      if (liveObjectBusy) return;
+      setLiveObjectBusy(true);
+      setLiveObjectError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        await deleteMapObject(supabase, objectId);
+        applyObjectRemoved(objectId);
+        setEditingLiveObjectId((current) => (current === objectId ? null : current));
+        await campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+          objectId,
+          object: null,
+        });
+      } catch (err) {
+        setLiveObjectError(errorMessage(err) ?? "Could not delete that object.");
+      } finally {
+        setLiveObjectBusy(false);
+      }
+    },
+    [liveObjectBusy, applyObjectRemoved]
+  );
+
+  // Live-room move-drag ("It is not easy to move objects... mid game"):
+  // GameTableScene's onObjectDragEnd, fired once on release with the
+  // destination grid cell — handlePlaceLiveObject's own void/occupied
+  // validation, reused verbatim (a move is just a placement that starts from
+  // an existing object instead of nothing). A drop back onto the object's
+  // OWN starting cell is a harmless no-op (not an error) rather than an
+  // "already occupied" rejection — the occupancy check below explicitly
+  // excludes this object's own id for exactly that reason.
+  const [objectMoveError, setObjectMoveError] = useState<string | null>(null);
+  const handleObjectDragEnd = useCallback(
+    async (objectId: string, x: number, y: number) => {
+      const current = liveMapRef.current;
+      if (!current) return;
+      const object = current.objects.find((candidate) => candidate.id === objectId);
+      if (!object) return;
+      if (object.x === x && object.y === y) return;
+      if (cellIsVoid(current.cells, x, y)) {
+        setObjectMoveError(VOID_CELL_MESSAGE);
+        return;
+      }
+      if (current.objects.some((candidate) => candidate.id !== objectId && candidate.x === x && candidate.y === y)) {
+        setObjectMoveError("There's already an object on that cell.");
+        return;
+      }
+      setObjectMoveError(null);
+      try {
+        const supabase = createBrowserSupabaseClient();
+        const updated = await moveMapObject(supabase, objectId, x, y, cellElevation(current.cells, x, y));
+        applyObjectUpserted(updated);
+        if (updated.revealed_to_players) {
+          await campaignChannelRef.current?.publish<MapObjectUpsertedPayload>(MAP_OBJECT_UPSERTED_EVENT, {
+            objectId: updated.id,
+            object: updated,
+          });
+        }
+      } catch (err) {
+        setObjectMoveError(errorMessage(err) ?? "Could not move that object.");
       }
     },
     [applyObjectUpserted]
@@ -8104,6 +8221,23 @@ export function GameRoom({
           onDmTrayDragMove={handleDmTrayDragMove}
           onDmTrayDragEnd={handleDmTrayDragEnd}
           onDmTrayProjectedPosition={setDmTrayScreenPosition}
+          // Live-room placement preview + move-drag (the DM ask: "not easy
+          // to move objects or place them mid game"): both DM-only in
+          // practice (placingAssetId/editingLiveObjectId are DM-only state —
+          // LiveObjectsPanel itself never mounts for a non-DM viewer), with
+          // the same defense-in-depth currentUserIsDM guard the rest of this
+          // feature already applies. draggableObjectId additionally goes
+          // inert during a live placement or any token gesture — the exact
+          // mutual-exclusion guard MapSurfaceObject.selectable's own gating
+          // (the objects useMemo below) already applies, so a press on the
+          // table never has two competing "what does this mean" answers.
+          placementPreviewActive={currentUserIsDM && Boolean(placingAssetId)}
+          draggableObjectId={
+            currentUserIsDM && !placingAssetId && !armedToken && !selectedTokenId ? editingLiveObjectId : null
+          }
+          onObjectDragEnd={(objectId, x, y) => void handleObjectDragEnd(objectId, x, y)}
+          onObjectDragHandleProjectedPosition={setObjectDragHandleScreenPosition}
+          onObjectPreviewCellDebug={setObjectPreviewCell}
           onLookAroundDebug={setLookAroundDebug}
           whiteboardInteractive={currentUserIsDM && drawMode}
           whiteboardHeight={whiteboardHeight}
@@ -8877,6 +9011,27 @@ export function GameRoom({
           error: chairMoveError,
         })}
       </div>
+      {/* Hidden render-state mirror for the live-room object placement
+          preview + move-drag (the DM ask: "not easy to move objects or
+          place them mid game") — same "WebGL has no DOM of its own"
+          reasoning as chair-drag-state above. `dragHandleScreen` is this
+          client's own currently-draggable object's grab-handle live
+          canvas-relative CSS-pixel projection (or null if nothing is
+          currently selected for editing, or it's off-screen) — the only way
+          a Playwright drag simulation can find real pixel coordinates to
+          press down on, GameTableScene's onObjectDragHandleProjectedPosition.
+          `previewCell` is the shared placement-preview/move-drag ghost's own
+          current target grid cell (or null while neither gesture is
+          active), GameTableScene's onObjectPreviewCellDebug. `moveError`
+          mirrors the last failed move-drag drop attempt, if any — the
+          chairMoveError precedent immediately above. */}
+      <div data-testid="live-object-drag-state" hidden>
+        {JSON.stringify({
+          dragHandleScreen: objectDragHandleScreenPosition,
+          previewCell: objectPreviewCell,
+          moveError: objectMoveError,
+        })}
+      </div>
       {/* Hidden render-state mirror for a real Playwright verification of
           the turn camera feature — same "WebGL has no DOM of its own"
           reasoning as every other mirror on this page, plus this feature's
@@ -9173,8 +9328,9 @@ export function GameRoom({
             void handleSaveLiveObjectBehavior(objectId, behavior, movement)
           }
           onSaveTag={(objectId, tag) => void handleSaveLiveObjectTag(objectId, tag)}
+          onDelete={(objectId) => void handleDeleteLiveObject(objectId)}
           busy={liveObjectBusy}
-          error={liveObjectError}
+          error={liveObjectError ?? objectMoveError}
         />
       </DraggablePanel>
       {liveMap ? (

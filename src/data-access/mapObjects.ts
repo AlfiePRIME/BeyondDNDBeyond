@@ -395,6 +395,29 @@ export async function updateMapObject(
 }
 
 /**
+ * Live-room move-drag ("It is not easy to move objects... mid game", the
+ * project owner's own bug report): a thin, positional wrapper over
+ * updateMapObject's own generic patch — that function is already fully
+ * general enough to take `{ x, y, elevation }` directly, but every OTHER
+ * caller of it also patches tag/tint/behavior-adjacent fields alongside (or
+ * instead of) a move, so a dedicated positional signature reads intention-
+ * revealing at THIS call site (GameRoom.tsx's own drag-end handler) —
+ * "move this object to this cell at this elevation", not "patch some object
+ * with whichever properties this particular caller happens to want". DM-only,
+ * enforced by the exact same map_objects UPDATE RLS policy updateMapObject
+ * itself already goes through.
+ */
+export async function moveMapObject(
+  supabase: SupabaseClient,
+  objectId: string,
+  x: number,
+  y: number,
+  elevation: number
+): Promise<MapObject> {
+  return updateMapObject(supabase, objectId, { x, y, elevation });
+}
+
+/**
  * Map Editor Batch A10: the DM's bulk "Reveal all pending" action — every
  * object on this map that's still hidden from players becomes visible in
  * one round trip, rather than the caller looping updateMapObject per row.

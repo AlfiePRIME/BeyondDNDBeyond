@@ -205,6 +205,7 @@ export {
   createMapObject,
   restoreMapObject,
   updateMapObject,
+  moveMapObject,
   deleteMapObject,
   setMapObjectBehavior,
   triggerMapObject,

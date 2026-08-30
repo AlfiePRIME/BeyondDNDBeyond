@@ -43,10 +43,17 @@ import { DEFAULT_NAME_LABEL_COLOR, SeatNameLabel } from "./SeatNameLabel";
 import { PERSONAL_TRAY_RADIUS } from "./DiceTumble";
 import {
   MapSurface,
+  mapCellOffsets,
   type MapSurfaceCell,
   type MapSurfaceObject,
   type MapSurfaceToken,
 } from "./MapSurface";
+// Live-room object placement/move (see the "Live-room object placement
+// preview + move-drag" section below): only needed to size the new
+// placement-preview/drag ghost and grab handle proportionally to the SAME
+// real footprint every placed object itself renders at — no circular import
+// risk, PlacedObject.tsx does not import anything from this file.
+import { PLACED_OBJECT_SIZE } from "./PlacedObject";
 import { computeTableMapMetrics } from "./mapFit";
 import { computeMapArtFit } from "./mapArtFit";
 import type { TokenSlidePhase } from "./useTokenSlide";
@@ -601,6 +608,152 @@ const dmTrayProjPoint = new Vector3();
 const dmTrayProjCameraPos = new Vector3();
 const dmTrayProjForward = new Vector3();
 const dmTrayProjDelta = new Vector3();
+
+// ---------------------------------------------------------------------------
+// Live-room object placement preview + move-drag ("It is not easy to move
+// objects or place them mid game" — the project owner's own bug report).
+// Reuses the chair/DM-tray drag gestures' own proven shape verbatim — the
+// SAME floorPointFromClientXY raycast, the SAME "grab, see a ghost track the
+// cursor for the whole gesture, drop it" flow, the SAME oversized invisible
+// grab-handle hit box — generalized from a continuous (x, z) target to a
+// GRID CELL target: map_objects.x/y are integers (createMapObject/
+// updateMapObject), so unlike a chair or a personal tray this preview is
+// cell-quantized, not free-floating. Two gestures share this machinery:
+//   1. Placement preview — while LiveObjectsPanel has an asset armed
+//      (GameRoom's placingAssetId), hovering the table (no press needed)
+//      shows the ghost at the cell the cursor is currently over, using a
+//      canvas-scoped "pointermove" listener (armed-but-not-yet-pressed has
+//      no drag session to survive leaving the canvas, unlike a real drag).
+//   2. Move-drag — grabbing the ONE object LiveObjectsPanel currently has
+//      selected for editing (draggableObjectId, reusing that existing
+//      selection rather than adding a second one) and dragging it shows the
+//      SAME ghost tracking the cursor; releasing commits the new cell via
+//      onObjectDragEnd, which GameRoom.tsx resolves (elevation, void/
+//      occupied validation — handlePlaceLiveObject's own checks, reused)
+//      into a moveMapObject call.
+// Mutually exclusive by construction (GameRoom never arms a NEW placement
+// and offers an EXISTING object to drag at the same time), so both gestures
+// safely share one ghost-target ref/component and one debug mirror below.
+// ---------------------------------------------------------------------------
+
+/** Nearest valid grid cell for a raw floor-plane hit, clamped to the map's
+ * own bounds — a raycast landing just past an edge cell (or, on a
+ * degenerate ray, whatever stale point floorPointFromClientXY last
+ * returned) still resolves to something a caller can validate/place at,
+ * rather than an out-of-range index nothing downstream expects. */
+function nearestCellFromFloorPoint(
+  point: { x: number; z: number },
+  gridWidth: number,
+  gridHeight: number,
+  cellSize: number
+): { x: number; y: number } {
+  const { offsetX, offsetZ } = mapCellOffsets(gridWidth, gridHeight, cellSize);
+  const cellX = Math.round((point.x + offsetX) / cellSize);
+  const cellY = Math.round((point.z + offsetZ) / cellSize);
+  return {
+    x: Math.min(Math.max(cellX, 0), gridWidth - 1),
+    y: Math.min(Math.max(cellY, 0), gridHeight - 1),
+  };
+}
+
+// Sized as a fraction of the map's own cellSize, matching MapSurface's own
+// ObjectMarker `ghost` box exactly (PLACED_OBJECT_SIZE at 0.7 scale, HIT_BOX_
+// HEIGHT — a private constant of that file, 0.9 — at the same 0.7 scale) so
+// this preview reads as the SAME "not-yet-committed placement" visual
+// language as the hidden-object ghost MapSurface already renders, not a
+// second, differently-proportioned box. Duplicated here (not imported)
+// because that box lives inside ObjectMarker, a private, unexported
+// component of MapSurface.tsx — the WhiteboardPlane.tsx
+// planePointFromClientXY precedent for "a small, self-contained duplicate
+// beats reaching into another component's own private internals".
+const OBJECT_GHOST_SIZE_RATIO = PLACED_OBJECT_SIZE * 0.7;
+const OBJECT_GHOST_HEIGHT_RATIO = 0.9 * 0.7;
+
+/** The translucent "it will land here"/"drop it here" box — MapSurface's own
+ * ObjectMarker `ghost` convention, reused for a preview that (unlike a real
+ * placed object) has no asset model loaded yet. Rendered imperatively from
+ * `cellRef` every frame (ChairDragGhost's own "mutate an Object3D's own
+ * position directly rather than round-trip through React state 60x/second"
+ * convention) — shared by BOTH gestures described above, since only one is
+ * ever active on a given client at a time. `onDebug` mirrors the ghost's own
+ * current target CELL (or null while inactive) — WebGL has no DOM of its own
+ * for a script to otherwise confirm where this preview actually landed, the
+ * onChairDragGhostDebug precedent, in grid-cell terms since that's the unit
+ * this feature actually reasons in. */
+function MapObjectPreviewGhost({
+  cellRef,
+  cellSize,
+  offsetX,
+  offsetZ,
+  baseY,
+  onDebug,
+}: {
+  cellRef: RefObject<{ x: number; y: number } | null>;
+  cellSize: number;
+  offsetX: number;
+  offsetZ: number;
+  baseY: number;
+  onDebug?: (cell: { x: number; y: number } | null) => void;
+}) {
+  const groupRef = useRef<Group>(null);
+  const lastReported = useRef<{ x: number; y: number } | null>(null);
+  useFrame(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    const cell = cellRef.current;
+    if (!cell) {
+      group.visible = false;
+      if (onDebug && lastReported.current) {
+        lastReported.current = null;
+        onDebug(null);
+      }
+      return;
+    }
+    group.visible = true;
+    group.position.set(cell.x * cellSize - offsetX, baseY, cell.y * cellSize - offsetZ);
+    const last = lastReported.current;
+    if (onDebug && (!last || last.x !== cell.x || last.y !== cell.y)) {
+      lastReported.current = cell;
+      onDebug(cell);
+    }
+  });
+  useEffect(() => {
+    return () => onDebug?.(null);
+  }, [onDebug]);
+  const boxSize = cellSize * OBJECT_GHOST_SIZE_RATIO;
+  const boxHeight = cellSize * OBJECT_GHOST_HEIGHT_RATIO;
+  return (
+    <group ref={groupRef} visible={false}>
+      <mesh position={[0, boxHeight / 2, 0]}>
+        <boxGeometry args={[boxSize, boxHeight, boxSize]} />
+        <meshBasicMaterial wireframe color={PURPLE} transparent opacity={0.5} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
+// The move-drag grab handle's own footprint: a real placed object's hit box
+// is PLACED_OBJECT_SIZE square at HIT_BOX_HEIGHT (0.9, MapSurface's own
+// private constant) tall, scaled by cellSize — this handle is rendered
+// OUTSIDE that scaled group (a plain sibling mesh in raw world units, the
+// DM_TRAY_DRAG_HIT_BOX precedent), so its own args below multiply by cellSize
+// directly. Oversized by OBJECT_DRAG_HANDLE_OVERSIZE — "bigger than the real
+// target so a grab doesn't need pixel-perfect aim" (CHAIR_DRAG_HIT_BOX/
+// DM_TRAY_DRAG_HIT_BOX's own reasoning) AND so it reliably wins raycasting
+// priority over the object's own, smaller, coincidentally-positioned
+// selectable trigger hit box (MapSurface's ObjectMarker) whenever both exist
+// on the same object — a larger box's near face sits closer to the camera,
+// so r3f's per-mesh raycasting hits this one first.
+const OBJECT_DRAG_HANDLE_OVERSIZE = 1.3;
+
+// Scratch vector for the object-drag grab handle's own screen-projection
+// debug callback below — the ownChairPoint/dmTrayProjPoint precedent, kept
+// as its own dedicated scratch object for the identical "one call site's
+// mutation should never leak into another's" reasoning.
+const objectDragHandleProjPoint = new Vector3();
+const objectDragHandleProjCameraPos = new Vector3();
+const objectDragHandleProjForward = new Vector3();
+const objectDragHandleProjDelta = new Vector3();
 
 // The directional light's shadow-camera frustum must cover every
 // shadow-casting seat/chair around the table — whose furthest possible
@@ -1341,6 +1494,47 @@ export interface GameTableSceneProps {
    * pixel coordinates to press down on and drag from. Not read by
    * GameTableScene itself. */
   onDmTrayProjectedPosition?: (point: [number, number] | null) => void;
+  /** Live-room object placement preview (the DM ask: "not easy to... place
+   * [objects] mid game"): true while an asset is armed for live placement
+   * (LiveObjectsPanel/GameRoom's placingAssetId) — shows a translucent ghost
+   * box at the pointer's current floor-cell projection, the exact
+   * floorPointFromClientXY raycast the chair/DM-tray drags above already
+   * use, generalized to "which grid cell is the ray over" (map_objects.x/y
+   * are integers, so this preview is cell-quantized, not free-floating).
+   * Only ever true on the DM's own client in practice (placingAssetId is
+   * DM-only state), but GameRoom passes this with its own defense-in-depth
+   * currentUserIsDM guard regardless. */
+  placementPreviewActive?: boolean;
+  /** Live-room move-drag (the DM ask: "not easy to move objects... mid
+   * game"): the one object id currently eligible for a real grab-and-drag
+   * gesture in the 3D scene — LiveObjectsPanel's own "Edit an object"
+   * selection (editingObjectId), reused rather than adding a second
+   * selection mechanism. Null renders no grab handle at all. GameRoom
+   * suppresses this whenever a live placement, a token placement, or a
+   * token's click-to-move is already in progress — the exact same mutual-
+   * exclusion guard MapSurfaceObject.selectable's own gating already
+   * applies, so a press on the table never has two competing answers for
+   * "what does this mean". */
+  draggableObjectId?: string | null;
+  /** Fires once, on release, only if the drag actually moved at least once
+   * (ChairDragSession.moved's own "a plain click-and-release with no real
+   * movement fires nothing" convention) — the destination grid cell.
+   * GameRoom.tsx resolves that cell's own elevation and validates it (void/
+   * already-occupied) the exact same way handlePlaceLiveObject already does
+   * for a brand-new placement, then calls the new moveMapObject data-access
+   * function. */
+  onObjectDragEnd?: (objectId: string, x: number, y: number) => void;
+  /** Verification-only: the currently-draggable object's own grab-handle
+   * screen projection — the onDmTrayProjectedPosition precedent (WebGL has
+   * no DOM of its own for a Playwright drag simulation to find a press
+   * point). Null whenever draggableObjectId is null, that object can't be
+   * found, or it's off-screen/behind the camera. */
+  onObjectDragHandleProjectedPosition?: (point: [number, number] | null) => void;
+  /** Verification-only: the placement-preview/move-drag ghost's current
+   * target cell, or null while neither gesture is active — the
+   * onChairDragGhostDebug precedent, in grid-cell terms since that's the
+   * unit both gestures actually reason in. */
+  onObjectPreviewCellDebug?: (cell: { x: number; y: number } | null) => void;
   /** Verification-only: this client's own look-around yaw/pitch offset (see
    * the "Seated look-around" block comment above), in radians, fired
    * whenever it genuinely changes — the same "WebGL has no DOM of its own
@@ -1485,6 +1679,11 @@ export function GameTableScene({
   onDmTrayDragMove,
   onDmTrayDragEnd,
   onDmTrayProjectedPosition,
+  placementPreviewActive = false,
+  draggableObjectId = null,
+  onObjectDragEnd,
+  onObjectDragHandleProjectedPosition,
+  onObjectPreviewCellDebug,
   onLookAroundDebug,
   whiteboardInteractive = false,
   whiteboardHeight = DEFAULT_WHITEBOARD_HEIGHT,
@@ -2100,6 +2299,173 @@ export function GameTableScene({
     () => (liveMap ? computeTableMapMetrics(liveMap.gridWidth, liveMap.gridHeight) : null),
     [liveMap]
   );
+  const mapOffsets = useMemo(
+    () => (liveMap && mapMetrics ? mapCellOffsets(liveMap.gridWidth, liveMap.gridHeight, mapMetrics.cellSize) : null),
+    [liveMap, mapMetrics]
+  );
+
+  // Live-room object placement preview + move-drag: the ghost's own current
+  // target cell, mutated directly by handlePlacementHoverCell below (a real
+  // per-cell hover event) and by the move-drag effect further down (never by
+  // React state — MapObjectPreviewGhost's own doc comment) and read only by
+  // that component's useFrame.
+  const objectPreviewCellRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Placement preview: reuses MapSurface's own REAL per-cell onCellPointerOver
+  // (the same discrete event onCellPointerDown/handleCellPointerDown already
+  // resolves a commit through) rather than a manual floor-plane raycast —
+  // deliberately NOT the chair/DM-tray drag's own floorPointFromClientXY
+  // technique, despite the surface-level similarity. A manual raycast
+  // against an INFINITE mathematical plane always resolves to SOME
+  // clamped-into-bounds cell for literally any screen point, including ones
+  // nowhere near the rendered map at all (pointing at the felt beyond the
+  // grid, a chair, empty air) — confirmed by inspection: it would show a
+  // confident-looking ghost for a point that a real click, resolved through
+  // R3F's own mesh-based raycasting, never reaches at all, silently
+  // breaking the ONE guarantee this feature exists to make ("see exactly
+  // where it will land before clicking"). A real per-cell hover event only
+  // ever fires for a cell that's ACTUALLY rendered and reachable — the same
+  // mesh a subsequent click resolves through — so the ghost and the commit
+  // can never disagree. (While an asset is armed, GameRoom's own objects
+  // useMemo already forces every object's `selectable` to false — see its
+  // own doc comment — so an occupied cell's floor is reachable for hover
+  // exactly like an empty one, matching the click-time "already occupied"
+  // error this same gesture already surfaces.) The move-drag gesture below
+  // keeps the manual raycast: that one genuinely needs continuous,
+  // occlusion-immune tracking across a HELD-DOWN drag, the chair-drag
+  // precedent's own reasoning — a discrete hover-in event is the wrong
+  // shape for that gesture, but exactly the right one for this one.
+  const handlePlacementHoverCell = useCallback((x: number, y: number) => {
+    objectPreviewCellRef.current = { x, y };
+  }, []);
+  useEffect(() => {
+    if (!placementPreviewActive) objectPreviewCellRef.current = null;
+  }, [placementPreviewActive]);
+
+  // Move-drag: one in-progress drag's own fixed session, mirroring
+  // ChairDragSession's own shape (captured once at press, read — never
+  // re-derived — by the window "pointermove"/"pointerup" listeners below).
+  const objectDragSessionRef = useRef<{
+    objectId: string;
+    moved: boolean;
+    latestCell: { x: number; y: number };
+  } | null>(null);
+  const [isDraggingObject, setIsDraggingObject] = useState(false);
+  const onObjectDragEndRef = useRef(onObjectDragEnd);
+  useEffect(() => {
+    onObjectDragEndRef.current = onObjectDragEnd;
+  }, [onObjectDragEnd]);
+
+  const handleObjectDragHandlePointerDown = useCallback(
+    (object: MapSurfaceObject, event: ThreeEvent<PointerEvent>) => {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      objectDragSessionRef.current = { objectId: object.id, moved: false, latestCell: { x: object.x, y: object.y } };
+      objectPreviewCellRef.current = { x: object.x, y: object.y };
+      setIsDraggingObject(true);
+    },
+    []
+  );
+
+  // The release can land anywhere — off the map, off the canvas — so the
+  // pointerup (and, for the same reason, pointermove) listeners live on
+  // window, the chair/ruler drag precedent.
+  useEffect(() => {
+    if (!isDraggingObject) return;
+    const map = liveMap;
+    const metrics = mapMetrics;
+    if (!map || !metrics) return;
+    const canvas = gl.domElement;
+    // The map's own group sits at TABLE_SURFACE_Y + 0.002 (this file's own
+    // <group> wrapping <MapSurface>) with zero x/z translation — so a
+    // world-space floor-plane raycast needs THAT world height, not the
+    // local-to-the-group baseHeight alone (the mistake would systematically
+    // skew the resolved cell for any camera angle that isn't perfectly
+    // top-down, exactly the perspective-raycast sensitivity
+    // floorPointFromClientXY's own doc comment already warns about).
+    const planeY = TABLE_SURFACE_Y + 0.002 + metrics.baseHeight;
+    function handleMove(event: PointerEvent) {
+      const session = objectDragSessionRef.current;
+      if (!session) return;
+      const point = floorPointFromClientXY(camera, canvas, event.clientX, event.clientY, planeY);
+      if (!point) return;
+      const cell = nearestCellFromFloorPoint(point, map!.gridWidth, map!.gridHeight, metrics!.cellSize);
+      session.moved = true;
+      session.latestCell = cell;
+      objectPreviewCellRef.current = cell;
+    }
+    function handleUp() {
+      const session = objectDragSessionRef.current;
+      objectDragSessionRef.current = null;
+      objectPreviewCellRef.current = null;
+      setIsDraggingObject(false);
+      if (session?.moved) {
+        onObjectDragEndRef.current?.(session.objectId, session.latestCell.x, session.latestCell.y);
+      }
+    }
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+  }, [isDraggingObject, liveMap, mapMetrics, camera, gl]);
+
+  // The currently-draggable object's own row, if any — resolved once here
+  // rather than re-found at each of the two JSX/useFrame call sites below
+  // that both need it (the grab handle mesh, and its projected-position
+  // debug).
+  const draggableObject = useMemo(
+    () => (draggableObjectId ? liveMap?.objects.find((object) => object.id === draggableObjectId) ?? null : null),
+    [draggableObjectId, liveMap]
+  );
+
+  // Move-drag, verification-only: the draggable object's own grab-handle
+  // live screen projection — the onOwnChairProjectedPosition/
+  // onDmTrayProjectedPosition precedent immediately above, generalized from
+  // a seat/tray to whichever object LiveObjectsPanel currently has selected
+  // for editing. A SEPARATE useFrame subscription (not folded into either of
+  // those) for the identical reason the DM-tray one is already its own: no
+  // coupling to either gesture's own control flow.
+  const lastObjectDragHandleScreen = useRef<[number, number] | null>(null);
+  useFrame(() => {
+    if (!onObjectDragHandleProjectedPosition) return;
+    if (!draggableObject || !mapMetrics || !mapOffsets) {
+      if (lastObjectDragHandleScreen.current !== null) {
+        lastObjectDragHandleScreen.current = null;
+        onObjectDragHandleProjectedPosition(null);
+      }
+      return;
+    }
+    const worldX = draggableObject.x * mapMetrics.cellSize - mapOffsets.offsetX;
+    const worldZ = draggableObject.y * mapMetrics.cellSize - mapOffsets.offsetZ;
+    const topY =
+      TABLE_SURFACE_Y +
+      0.002 +
+      mapMetrics.baseHeight +
+      draggableObject.elevation * mapMetrics.elevationStepHeight;
+    const handleHeight = 0.9 * mapMetrics.cellSize * OBJECT_DRAG_HANDLE_OVERSIZE;
+    objectDragHandleProjPoint.set(worldX, topY + handleHeight / 2, worldZ);
+    camera.updateMatrixWorld();
+    objectDragHandleProjCameraPos.setFromMatrixPosition(camera.matrixWorld);
+    objectDragHandleProjDelta.copy(objectDragHandleProjPoint).sub(objectDragHandleProjCameraPos);
+    camera.getWorldDirection(objectDragHandleProjForward);
+    if (objectDragHandleProjDelta.angleTo(objectDragHandleProjForward) > Math.PI / 2) {
+      if (lastObjectDragHandleScreen.current !== null) {
+        lastObjectDragHandleScreen.current = null;
+        onObjectDragHandleProjectedPosition(null);
+      }
+      return;
+    }
+    objectDragHandleProjPoint.project(camera);
+    const x = (objectDragHandleProjPoint.x * size.width) / 2 + size.width / 2;
+    const y = -((objectDragHandleProjPoint.y * size.height) / 2) + size.height / 2;
+    const last = lastObjectDragHandleScreen.current;
+    if (!last || Math.abs(last[0] - x) > 0.5 || Math.abs(last[1] - y) > 0.5) {
+      lastObjectDragHandleScreen.current = [x, y];
+      onObjectDragHandleProjectedPosition([x, y]);
+    }
+  });
 
   // Map Art Generation E5: true only once MapArtPlane's own texture has
   // actually finished loading — see its onReadyChange doc comment for why
@@ -2337,7 +2703,13 @@ export function GameTableScene({
                     ? handleCellPointerDown
                     : undefined
               }
-              onCellPointerOver={measuring ? handleRulerDragOver : undefined}
+              onCellPointerOver={
+                measuring
+                  ? handleRulerDragOver
+                  : placementPreviewActive
+                    ? handlePlacementHoverCell
+                    : undefined
+              }
               onTokenPointerDown={
                 !rulerActive && onTokenClick ? handleTokenPointerDown : undefined
               }
@@ -2347,6 +2719,56 @@ export function GameTableScene({
               onTokenMeasureDebug={onTokenMeasureDebug}
               onTokenTransformDebug={onTokenTransformDebug}
             />
+            {/* Live-room move-drag: an invisible, oversized grab handle
+                riding on top of whichever object LiveObjectsPanel currently
+                has selected for editing — the DM_TRAY_DRAG_HIT_BOX precedent,
+                rendered as a plain sibling mesh in this group's own local
+                (== world x/z) coordinates rather than through MapSurface's
+                own scaled ObjectMarker group, so it can never collide with
+                — or need to reason about — that component's own selectable
+                trigger hit box beyond simply being bigger than it. */}
+            {draggableObject && mapOffsets ? (
+              <mesh
+                position={[
+                  draggableObject.x * mapMetrics.cellSize - mapOffsets.offsetX,
+                  mapMetrics.baseHeight +
+                    draggableObject.elevation * mapMetrics.elevationStepHeight +
+                    (0.9 * mapMetrics.cellSize * OBJECT_DRAG_HANDLE_OVERSIZE) / 2,
+                  draggableObject.y * mapMetrics.cellSize - mapOffsets.offsetZ,
+                ]}
+                onPointerDown={(event) => handleObjectDragHandlePointerDown(draggableObject, event)}
+              >
+                <boxGeometry
+                  args={[
+                    PLACED_OBJECT_SIZE * mapMetrics.cellSize * OBJECT_DRAG_HANDLE_OVERSIZE,
+                    0.9 * mapMetrics.cellSize * OBJECT_DRAG_HANDLE_OVERSIZE,
+                    PLACED_OBJECT_SIZE * mapMetrics.cellSize * OBJECT_DRAG_HANDLE_OVERSIZE,
+                  ]}
+                />
+                {/* opacity-0, not visible={false} — an invisible mesh is
+                    skipped by the raycaster, which would defeat the hit box
+                    entirely (CHAIR_DRAG_HIT_BOX/DM_TRAY_DRAG_HIT_BOX's own
+                    precedent). */}
+                <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+              </mesh>
+            ) : null}
+            {/* Live-room placement preview + move-drag: the shared ghost —
+                see the "Live-room object placement preview + move-drag"
+                block comment (above floorPointFromClientXY's own module) for
+                the full reasoning. Always mounted whenever a live map
+                exists (mapOffsets is non-null exactly when mapMetrics is) —
+                cheap while idle, since it renders nothing visible until
+                objectPreviewCellRef actually holds a cell. */}
+            {mapOffsets ? (
+              <MapObjectPreviewGhost
+                cellRef={objectPreviewCellRef}
+                cellSize={mapMetrics.cellSize}
+                offsetX={mapOffsets.offsetX}
+                offsetZ={mapOffsets.offsetZ}
+                baseY={mapMetrics.baseHeight}
+                onDebug={onObjectPreviewCellDebug}
+              />
+            ) : null}
           </group>
           {/* Whiteboard drawing layer (docs/design/whiteboard-drawing-layer.md,
               Prompt 2) — a SEPARATE group at its own DM-adjustable height,

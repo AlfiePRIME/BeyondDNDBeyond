@@ -50,6 +50,7 @@ export function LiveObjectsPanel({
   onSelectEditing,
   onSaveBehavior,
   onSaveTag,
+  onDelete,
   busy,
   error,
 }: {
@@ -83,6 +84,12 @@ export function LiveObjectsPanel({
     movement: ObjectMovementConfig
   ) => void;
   onSaveTag: (objectId: string, tag: string | null) => void;
+  /** Delete this object outright (reaches the already-existing
+   * deleteMapObject, previously only ever callable from the separate Map
+   * Editor route). No confirmation dialog — matches BehaviorEditor's own
+   * "Clear" action and the Map Editor's own object delete, neither of which
+   * confirm either. */
+  onDelete: (objectId: string) => void;
   busy: boolean;
   error: string | null;
 }) {
@@ -213,6 +220,15 @@ export function LiveObjectsPanel({
 
       {editingObject ? (
         <>
+          {/* Move existing objects mid-session (the DM ask: "not easy to
+              move objects... mid game"): selecting an object here also arms
+              it for a real grab-and-drag gesture directly on the 3D map
+              (GameRoom's draggableObjectId/GameTableScene's grab handle) —
+              this hint is the only UI surface for that, since the gesture
+              itself lives entirely in the 3D scene. */}
+          <p className={styles.hint} data-testid="live-object-move-hint">
+            Drag it directly on the map to move it.
+          </p>
           <ObjectTagEditor
             key={`live-tag-${editingObject.id}`}
             object={editingObject}
@@ -223,6 +239,18 @@ export function LiveObjectsPanel({
             object={editingObject}
             onSave={(behavior, movement) => onSaveBehavior(editingObject.id, behavior, movement)}
           />
+          {/* Delete existing objects (the same DM ask): the already-existing
+              deleteMapObject, previously only ever reachable from the
+              separate Map Editor route. */}
+          <Button
+            size="sm"
+            variant="danger"
+            disabled={busy}
+            onClick={() => onDelete(editingObject.id)}
+            data-testid="live-object-delete"
+          >
+            Delete object
+          </Button>
         </>
       ) : null}
 
