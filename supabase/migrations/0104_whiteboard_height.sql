@@ -1,0 +1,96 @@
+-- Whiteboard height persistence & sync: "the white board height is way too
+-- high in game, it needs to be lowerable too" — two bugs in one report, both
+-- rooted in the same fact: GameRoom.tsx's `whiteboardHeight` state
+-- (scene-3d/whiteboardMath.ts's own DEFAULT_WHITEBOARD_HEIGHT) has never
+-- been anything but pure per-client React state — never persisted anywhere,
+-- never broadcast over the campaign channel. MapPanel.tsx's own height
+-- slider (Prompt 2, docs/design/whiteboard-drawing-layer.md §6) has existed
+-- since the whiteboard drawing layer shipped, but dragging it has only ever
+-- changed the DRAGGING DM's own local `useState` — every OTHER connected
+-- client (every player, and the DM's own next reload) keeps rendering the
+-- plane at whatever DEFAULT_WHITEBOARD_HEIGHT happens to be, forever. This
+-- migration is the persistence half of the fix; GameRoom.tsx gets a matching
+-- persist-then-broadcast write path and subscribe handler (the
+-- dm_book_offset/0094 and dm_tray_offset/0098 precedent) so every already-
+-- connected client's own plane moves live too, and a fresh join/reload lands
+-- on the real current height instead of guessing.
+--
+-- Lives on campaign_maps, NOT campaign_members (unlike dm_book_offset/
+-- dm_tray_offset) — a whiteboard is a property of the specific MAP's own
+-- drawing layer, not the campaign as a whole or any one member's own
+-- personal prop. Confirmed by re-reading map_whiteboard_tiles' own scoping
+-- (0058) before assuming this: that table is keyed by map_id directly
+-- (`(map_id, x, y)` primary key, no campaign_id column anywhere on it), and
+-- grow_map_grid's own west/north shift moves its rows per-MAP alongside
+-- map_cells/concealed_pits, not per-campaign. A height for that exact same
+-- drawing layer follows the identical per-map scoping, not the per-campaign-
+-- DM shape dm_book_offset/dm_tray_offset use for a completely different kind
+-- of prop (a book/tray belongs to the DM personally and follows them across
+-- whichever map they happen to be viewing; a whiteboard's ink AND its height
+-- both belong to the map being drawn on, and a DM switching maps mid-session
+-- should see THAT map's own last-saved height, not carry one map's height
+-- over onto another map's board).
+--
+-- A plain nullable `real`, NOT jsonb and NOT an offset from a computed
+-- default. dm_book_offset/dm_tray_offset are both `{dx, dz}` OFFSETS
+-- specifically because their own underlying default position is a live,
+-- occasionally-RESHAPING computed value (seating.ts's own seat-angle
+-- recompute as party size/table arrangement changes) that a stored absolute
+-- coordinate would silently go stale against the moment it changes (see
+-- 0098's own doc comment for the full reasoning). Whiteboard height has no
+-- such reshaping default to go stale against — DEFAULT_WHITEBOARD_HEIGHT is
+-- a fixed constant, not a per-viewer/per-table computed position — so a
+-- plain absolute value is both sufficient and simpler: the exact
+-- profiles.default_pawn_color (0079) / campaign_maps.reference_image_scale
+-- (0026) shape, "just a value", not an offset from anything. NULL means
+-- "never explicitly set — render DEFAULT_WHITEBOARD_HEIGHT", the same
+-- sparse-optional-column convention this exact table's own thumbnail_ref/
+-- reference_image_scale already use.
+--
+-- The CHECK below mirrors scene-3d/whiteboardMath.ts's own
+-- MIN_WHITEBOARD_HEIGHT/MAX_WHITEBOARD_HEIGHT constants (0.3 / 3) — a
+-- DB-level backstop against a malformed direct write producing a value so
+-- extreme every connected viewer's own render breaks, the same defense-in-
+-- depth reasoning name_label_size's own CHECK constraint gives (0100: "an
+-- unrestricted number lets a member set an absurd value... that breaks the
+-- seated table's own readability/layout for every other connected client
+-- looking at that member's seat" — the identical risk here, just for the
+-- shared whiteboard plane instead of one member's own seat).
+--
+-- docs/design/whiteboard-drawing-layer.md §6 already anticipated this exact
+-- column when the drawing layer itself first shipped ("Recommend persisting
+-- it as a new nullable campaign_maps.whiteboard_height column (real, default
+-- some small positive constant)") — that spike just was never carried
+-- through to an actual migration/wiring until this bug report. Nullable,
+-- yes, but deliberately WITHOUT that suggested DB-level default: a NOT NULL
+-- column with `default 0.7` baked in at row-creation time (the
+-- day_night_mode/0041 shape §6 itself points to for precedent) would freeze
+-- every never-touched map to whatever DEFAULT_WHITEBOARD_HEIGHT happened to
+-- be the day it was created, forever — the exact staleness problem this
+-- migration's own jsonb-vs-offset reasoning above is busy avoiding for a
+-- different reason. NULL-means-"track the app's current default" instead
+-- keeps every never-touched map current if DEFAULT_WHITEBOARD_HEIGHT is ever
+-- retuned again later, the identical sparse-nullable convention this exact
+-- table's own thumbnail_ref/reference_image_ref already use, and the exact
+-- shape the project owner's own brief for this fix explicitly asked for
+-- ("a new nullable campaign_maps.whiteboard_height real null column").
+--
+-- No new RLS: campaign_maps' existing "DM updates maps in their campaign"
+-- UPDATE policy (0015_maps_rls.sql, re-read here directly rather than
+-- assumed) is a blanket
+--   using (is_campaign_dm(campaign_id)) with check (is_campaign_dm(campaign_id))
+-- with no column-level restriction — the exact seat_offset/dm_book_offset/
+-- dm_tray_offset precedent of an existing blanket DM-only UPDATE policy
+-- already covering a brand new column on the same row, zero policy changes
+-- needed. campaign_maps' own SELECT policy (0054_campaign_maps_returning_fix.sql,
+-- "a map is readable per can_read_map", also re-read directly) already
+-- covers every OTHER member reading this new column back too, on whichever
+-- map their own RLS lets them see (the shared live map, or a map their own
+-- character's token happens to be on) — shared, visible table state (every
+-- player at the table sees the whiteboard rendered at its actual current
+-- height), the exact same read posture map_whiteboard_tiles' own tiles
+-- already have (0058: "players see the DM's drawing live with no reveal
+-- gate").
+alter table public.campaign_maps
+  add column if not exists whiteboard_height real null
+    check (whiteboard_height is null or (whiteboard_height >= 0.3 and whiteboard_height <= 3));

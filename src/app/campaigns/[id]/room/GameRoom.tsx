@@ -86,6 +86,7 @@ import {
   setHandoutRevealed,
   setLiveMap,
   setMapObjectBehavior,
+  setMapWhiteboardHeight,
   setMonsterTemplateOverride,
   setSeatOffset,
   setTokenAllegiance,
@@ -411,6 +412,18 @@ const WHITEBOARD_STROKE_POINTS_EVENT = "whiteboard-stroke-points";
 const WHITEBOARD_STROKE_END_EVENT = "whiteboard-stroke-end";
 const WHITEBOARD_TILES_CHANGED_EVENT = "whiteboard-tiles-changed";
 const WHITEBOARD_CLEARED_EVENT = "whiteboard-cleared";
+// Whiteboard height ("the white board height is way too high in game, it
+// needs to be lowerable too"): the DM_BOOK_MOVED_EVENT/DM_TRAY_MOVED_EVENT
+// persist-then-broadcast shape (0104_whiteboard_height.sql) — the DB write
+// (setMapWhiteboardHeight) happens FIRST, then this broadcasts the exact
+// already-persisted value, so a receiver applies it directly with no
+// follow-up read. Keyed by mapId, unlike DM_BOOK_MOVED_EVENT/
+// DM_TRAY_MOVED_EVENT (a single per-campaign value): whiteboard height is a
+// per-MAP value (campaign_maps.whiteboard_height), so every receiver first
+// confirms this is about the map it's currently looking at, the exact same
+// `payload.mapId !== liveMapRef.current?.map.id` guard every other
+// whiteboard event above already uses.
+const WHITEBOARD_HEIGHT_CHANGED_EVENT = "whiteboard-height-changed";
 
 // Batching interval for the live tier's own outgoing point stream (§5.2's
 // own "on the order of every 30-50ms" starting-point guidance) — accumulate
@@ -428,6 +441,14 @@ const WHITEBOARD_STROKE_FLUSH_MS = 40;
 // (a perceived cell must land in map_seen_cells before the player relies
 // on remembering it, not instantly).
 const SEEN_CELLS_FLUSH_MS = 1500;
+
+// Whiteboard height (0104): how long the height slider waits after the DM's
+// last onChange tick before actually writing/broadcasting — short enough
+// that another connected client sees the change land moments after the DM
+// stops dragging (unlike SEEN_CELLS_FLUSH_MS's own "eventual consistency is
+// fine" reasoning, this IS meant to read as live), long enough that a full
+// end-to-end drag across the slider's range costs one write, not dozens.
+const WHITEBOARD_HEIGHT_SAVE_DEBOUNCE_MS = 300;
 
 // Weather & Enemies C4: how often the DM's own connected client attempts a
 // firestorm/acid-storm damage tick (see the weatherTickActive effect below,
@@ -732,6 +753,15 @@ interface WhiteboardTilesChangedPayload {
  * both cheaper to send and clearer in intent (§5.2). */
 interface WhiteboardClearedPayload {
   mapId: string;
+}
+
+/** WHITEBOARD_HEIGHT_CHANGED_EVENT's payload — the exact DmBookMovedPayload
+ * already-persisted-value shape, plus `mapId` (see that event const's own
+ * doc comment for why height needs the per-map key dm_book_offset/
+ * dm_tray_offset don't). */
+interface WhiteboardHeightChangedPayload {
+  mapId: string;
+  height: number;
 }
 
 /** SEAT_MOVED_EVENT's payload — the exact already-persisted offset
@@ -1089,7 +1119,19 @@ export function GameRoom({
    * campaign's shared default (initialCampaignLiveMapId) when they have
    * none. For the DM this is always the shared default itself — their own
    * view starts there, same as always, and is independently switchable
-   * from then on. */
+   * from then on.
+   *
+   * Whiteboard height (0104): `initialLiveMap.map.whiteboard_height` rides
+   * along for free here — unlike initialDmBookOffset/initialDmTrayOffset
+   * below, this does NOT need its own separate top-level initial* prop
+   * fetched by a dedicated getWhiteboardHeight-style call. Those two live on
+   * campaign_members, a table this page never otherwise fetches wholesale
+   * for the room; campaign_maps, by contrast, is already fetched in full
+   * right here (getMap) for every viewer's own effective map, DM and player
+   * alike, so campaign_maps.whiteboard_height is simply already present on
+   * this same object the moment the column exists — see whiteboardHeight's
+   * own useState initializer and refreshLiveMap below, which read it
+   * straight off `.map.whiteboard_height` rather than a parallel prop. */
   initialLiveMap: LiveMapData | null;
   /** The raw campaigns.live_map column (0046) — distinct from
    * initialLiveMap above (which map's bundle THIS viewer starts on): this
@@ -3174,7 +3216,37 @@ export function GameRoom({
   const [whiteboardTool, setWhiteboardTool] = useState<WhiteboardTool>("pen");
   const [whiteboardColor, setWhiteboardColor] = useState(DEFAULT_WHITEBOARD_COLOR);
   const [whiteboardBrushSize, setWhiteboardBrushSize] = useState<WhiteboardBrushSize>(DEFAULT_WHITEBOARD_BRUSH_SIZE);
-  const [whiteboardHeight, setWhiteboardHeight] = useState(DEFAULT_WHITEBOARD_HEIGHT);
+  // Whiteboard height (0104): initialized from the SSR-fetched map bundle's
+  // own stored value (falling back to the shipped default for a map that's
+  // never had a height saved), NOT a bare DEFAULT_WHITEBOARD_HEIGHT constant
+  // — this is what makes a player's very first paint already show the
+  // whiteboard at wherever the DM last actually left it, with no flash of
+  // the wrong height before a broadcast/reconnect could correct it. This
+  // state is still purely local/display — see handleSetWhiteboardHeight and
+  // refreshLiveMap below for the persist-then-broadcast write path and the
+  // per-map resync that keeps it in lockstep with whichever map's bundle
+  // this client currently has loaded.
+  const [whiteboardHeight, setWhiteboardHeight] = useState(
+    initialLiveMap?.map.whiteboard_height ?? DEFAULT_WHITEBOARD_HEIGHT
+  );
+  // Surfaced the exact dmBookMoveError/dmTrayMoveError way — see those
+  // states' own doc comments for why a failed save is worth telling the DM
+  // about (unlike handleWhiteboardTilesPersist/handleWhiteboardClearPersist's
+  // own silent best-effort catch: THOSE would need replaying exact touched
+  // pixels to retry, not worth building for v1, but a height save failure is
+  // trivially retried by just moving the slider again).
+  const [whiteboardHeightError, setWhiteboardHeightError] = useState<string | null>(null);
+  // Debounces the persist-then-broadcast write below — a range slider's own
+  // onChange fires on every step crossed while dragging (the identical
+  // native "input" event React's onChange binds to for DmBookProp's own
+  // onDragMove), and writing to the database on every single tick would
+  // flood it with dozens of updates for one drag gesture. The SEEN_CELLS_FLUSH_MS
+  // debounced-write precedent above, adapted: local display state
+  // (setWhiteboardHeight itself, called synchronously below with zero
+  // debounce) still updates on every tick for a perfectly smooth slider
+  // feel — only the network round-trip waits for the DM to actually stop
+  // moving it.
+  const whiteboardHeightSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [whiteboardHistory, setWhiteboardHistory] = useState({ canUndo: false, canRedo: false });
   // Verification-only mirror of WhiteboardPlane's own tile store — see
   // onWhiteboardDebug's doc comment (GameTableScene.tsx); nothing here reads
@@ -3323,6 +3395,54 @@ export function GameRoom({
         // best-effort — see handleWhiteboardTilesPersist's own doc comment.
       }
     })();
+  }, []);
+
+  // Whiteboard height (0104) — MapPanel.tsx's slider calls this on every
+  // onChange tick. Local display state updates immediately and
+  // unconditionally (setWhiteboardHeight, synchronous, no debounce — the
+  // slider itself must feel exactly as responsive as it did back when this
+  // was pure local state), matching handleBookDragMove's own "purely local,
+  // optimistic visual update" for the identical reason. The actual
+  // persist-then-broadcast (handleBookDragEnd's own ordering: DB write
+  // first, then publish the already-durable value) is debounced
+  // WHITEBOARD_HEIGHT_SAVE_DEBOUNCE_MS past the last tick — see that
+  // constant's own doc comment for why. A no-op with no live map loaded
+  // (there is nothing to persist a height against, and MapPanel never
+  // renders this slider without one — see its own `isDM && liveMapId` gate).
+  const handleSetWhiteboardHeight = useCallback(
+    (height: number) => {
+      setWhiteboardHeight(height);
+      setWhiteboardHeightError(null);
+      const mapId = liveMapRef.current?.map.id;
+      if (!mapId) return;
+      if (whiteboardHeightSaveTimerRef.current) clearTimeout(whiteboardHeightSaveTimerRef.current);
+      whiteboardHeightSaveTimerRef.current = setTimeout(() => {
+        void (async () => {
+          try {
+            const supabase = createBrowserSupabaseClient();
+            await setMapWhiteboardHeight(supabase, mapId, height);
+            await campaignChannelRef.current?.publish<WhiteboardHeightChangedPayload>(
+              WHITEBOARD_HEIGHT_CHANGED_EVENT,
+              { mapId, height }
+            );
+          } catch (err) {
+            setWhiteboardHeightError(errorMessage(err) ?? "Could not save the whiteboard's new height.");
+          }
+        })();
+      }, WHITEBOARD_HEIGHT_SAVE_DEBOUNCE_MS);
+    },
+    []
+  );
+
+  // Tears down a stray debounce timer if the whole room unmounts mid-drag —
+  // the whiteboardFlushTimerRef cleanup effect's own precedent immediately
+  // above, for the identical reason: a leaked setTimeout would otherwise
+  // fire once (reading refs off an unmounted component's own closure) after
+  // navigating away.
+  useEffect(() => {
+    return () => {
+      if (whiteboardHeightSaveTimerRef.current) clearTimeout(whiteboardHeightSaveTimerRef.current);
+    };
   }, []);
 
   // Updates BOTH the campaign-wide token cache (campaignTokensState/Ref)
@@ -3679,6 +3799,17 @@ export function GameRoom({
     rulerDragRef.current = null;
     setRulerDrag(null);
     setTransitionOffer(null);
+    // Whiteboard height (0104): the exact same "nothing on the OLD map
+    // should still glow" reasoning immediately above, applied to the height
+    // slider — a map switch (handleSwitchMap/handlePreviewMap, both funnel
+    // through here via the desiredMapId effect below) must render THIS map's
+    // own last-saved height, not whatever the previously-viewed map's height
+    // happened to be. `next?.map.whiteboard_height` for a real map, falling
+    // back to the shipped default for one that's never had a height saved,
+    // or null with no live map at all (whiteboardHeight is simply unused
+    // then — MapPanel never renders the slider and GameTableScene never
+    // mounts the plane without a live map either).
+    setWhiteboardHeight(next?.map.whiteboard_height ?? DEFAULT_WHITEBOARD_HEIGHT);
   }, []);
 
   // Live strictness + day/night + weather sync: the campaigns
@@ -4100,6 +4231,31 @@ export function GameRoom({
       const tiles = await listWhiteboardTiles(supabase, mapId).catch(() => null);
       if (tiles) whiteboardHandleRef.current?.loadTiles(tiles);
     });
+    // Whiteboard height (0104): WHITEBOARD_HEIGHT_CHANGED_EVENT's own doc
+    // comment — the payload IS the already-persisted value, so a receiver
+    // applies it directly, the exact DM_BOOK_MOVED_EVENT/DM_TRAY_MOVED_EVENT
+    // shape, but per-map-filtered like every other whiteboard event above
+    // (a player who isn't currently looking at the map the DM just resized
+    // must ignore this — the same guard WHITEBOARD_TILES_CHANGED_EVENT's own
+    // handler uses).
+    const unsubscribeWhiteboardHeightChanged = channel.subscribe<WhiteboardHeightChangedPayload>(
+      WHITEBOARD_HEIGHT_CHANGED_EVENT,
+      (payload) => {
+        if (payload.mapId !== liveMapRef.current?.map.id) return;
+        setWhiteboardHeight(payload.height);
+      }
+    );
+    // Same dropped-broadcast reasoning as DM_BOOK_MOVED_EVENT's own reconnect
+    // above — a height changed while disconnected is gone from the wire, so
+    // re-read the map row (whiteboard_height rides along with everything
+    // else campaign_maps carries) for whichever map this client currently
+    // has open.
+    const unsubscribeWhiteboardHeightReconnect = channel.onReconnect(async () => {
+      const mapId = liveMapRef.current?.map.id ?? null;
+      if (!mapId) return;
+      const fresh = await getMap(supabase, mapId).catch(() => null);
+      if (fresh) setWhiteboardHeight(fresh.whiteboard_height ?? DEFAULT_WHITEBOARD_HEIGHT);
+    });
 
     return () => {
       unsubscribeLiveMap();
@@ -4132,6 +4288,8 @@ export function GameRoom({
       unsubscribeWhiteboardTilesChanged();
       unsubscribeWhiteboardCleared();
       unsubscribeWhiteboardReconnect();
+      unsubscribeWhiteboardHeightChanged();
+      unsubscribeWhiteboardHeightReconnect();
       campaignChannelRef.current = null;
       void channel.leave();
     };
@@ -8021,6 +8179,15 @@ export function GameRoom({
           color: whiteboardColor,
           brushSize: whiteboardBrushSize,
           height: whiteboardHeight,
+          // Whiteboard height (0104): the DB-backed value straight off
+          // liveMap.map (refreshLiveMap's own fetch), alongside `height`
+          // above (this client's own local display state, applied
+          // optimistically/instantly and via broadcast) — a real Playwright
+          // script can tell "rendered locally" and "actually landed in the
+          // database on this client's own already-fetched map row" apart,
+          // rather than trusting one number to mean both. null means this
+          // map has never had a height explicitly saved.
+          persistedHeight: liveMap?.map.whiteboard_height ?? null,
           canUndo: whiteboardHistory.canUndo,
           canRedo: whiteboardHistory.canRedo,
           tileCount: whiteboardDebug.tileKeys.length,
@@ -8028,6 +8195,11 @@ export function GameRoom({
           centerScreenPoint: whiteboardCenterScreen,
         })}
       </div>
+      {whiteboardHeightError ? (
+        <div data-testid="whiteboard-height-error" hidden>
+          {whiteboardHeightError}
+        </div>
+      ) : null}
       {/* Hidden render-state mirror for verify-per-member-dice-trays.mjs
           (and the surviving parts of verify-dice-tumble.mjs/
           verify-private-dice-rolls.mjs) — one entry per CONNECTED member's
@@ -8609,7 +8781,7 @@ export function GameRoom({
           whiteboardBrushSize={whiteboardBrushSize}
           onSetWhiteboardBrushSize={setWhiteboardBrushSize}
           whiteboardHeight={whiteboardHeight}
-          onSetWhiteboardHeight={setWhiteboardHeight}
+          onSetWhiteboardHeight={handleSetWhiteboardHeight}
           whiteboardCanUndo={whiteboardHistory.canUndo}
           whiteboardCanRedo={whiteboardHistory.canRedo}
           onWhiteboardUndo={handleWhiteboardUndo}

@@ -13,6 +13,15 @@ export interface CampaignMap {
   reference_image_x: number | null;
   reference_image_y: number | null;
   reference_image_scale: number | null;
+  /** The whiteboard drawing layer's own DM-adjustable plane height (0104),
+   * in world units above the tabletop — null means "never explicitly set",
+   * and every reader falls back to scene-3d/whiteboardMath.ts's own
+   * DEFAULT_WHITEBOARD_HEIGHT (GameRoom.tsx's refreshLiveMap does exactly
+   * this). A plain per-map absolute value, not an offset — see
+   * 0104_whiteboard_height.sql's own doc comment for why this shape, unlike
+   * dm_book_offset/dm_tray_offset, needs no separately-computed default to
+   * stay relative to. */
+  whiteboard_height: number | null;
   created_at: string;
 }
 
@@ -732,6 +741,35 @@ export async function clearMapReferenceImage(
       reference_image_y: null,
       reference_image_scale: null,
     })
+    .eq("id", mapId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Persists this map's own whiteboard plane height (0104) — a plain UPDATE on
+ * campaign_maps, the setMapThumbnail/setMapReferenceImage precedent exactly:
+ * DM-only via campaign_maps' existing UPDATE RLS (0015, no new policy
+ * needed — see the migration's own doc comment), `.update().select().single()`
+ * is safe here (unlike createMap's own INSERT+RETURNING footgun — see that
+ * function's doc comment) since campaign_maps' SELECT policy checks
+ * is_campaign_dm(campaign_id) directly for the DM's own row, not the
+ * self-referential can_read_map lookup that trips up a fresh INSERT.
+ * GameRoom.tsx's own handleSetWhiteboardHeight calls this FIRST, then
+ * broadcasts the already-persisted value (WHITEBOARD_HEIGHT_CHANGED_EVENT),
+ * the same persist-then-broadcast ordering dm_book_offset/dm_tray_offset use.
+ */
+export async function setMapWhiteboardHeight(
+  supabase: SupabaseClient,
+  mapId: string,
+  height: number
+): Promise<CampaignMap> {
+  const { data, error } = await supabase
+    .from("campaign_maps")
+    .update({ whiteboard_height: height })
     .eq("id", mapId)
     .select()
     .single();

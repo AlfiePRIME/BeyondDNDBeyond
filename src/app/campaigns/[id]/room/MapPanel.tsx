@@ -133,6 +133,15 @@ export function MapPanel({
    * WhiteboardPlaneProps.brushSize's own doc comment. */
   whiteboardBrushSize: WhiteboardBrushSize;
   onSetWhiteboardBrushSize: (size: WhiteboardBrushSize) => void;
+  /** DM-adjustable plane height (0104) — unlike every other whiteboard
+   * control on this panel, deliberately rendered OUTSIDE the
+   * whiteboardDrawMode gate below (see the render code's own comment): the
+   * DM can lower an already-too-high board without first entering drawing
+   * mode. GameRoom.tsx's onSetWhiteboardHeight persists and broadcasts the
+   * new value (debounced) in addition to updating this local display value —
+   * genuinely shared, persisted table state, unlike whiteboardDrawMode/
+   * whiteboardTool/whiteboardColor/whiteboardBrushSize immediately above,
+   * which really are this client's own purely-local UI state. */
   whiteboardHeight: number;
   onSetWhiteboardHeight: (height: number) => void;
   whiteboardCanUndo: boolean;
@@ -188,6 +197,29 @@ export function MapPanel({
               🖊 {whiteboardDrawMode ? "Drawing" : "Draw"}
             </Button>
           </div>
+          {/* Whiteboard height (0104, "the white board height is way too
+              high in game, it needs to be lowerable too"): deliberately
+              OUTSIDE the `whiteboardDrawMode ? ... : null` block below —
+              unlike the pen/eraser/brush-size/color/undo/redo/clear
+              controls, which only mean anything while actively drawing,
+              height is the plane's own persistent, always-relevant
+              position. Gating it behind draw mode was the bug: a DM
+              couldn't lower an already-too-high board without first
+              toggling into drawing, an unrelated mode, just to reach this
+              one slider. Still isDM-only (matching every other control in
+              this panel) and still liveMapId-gated (this whole block's own
+              outer condition) — there's nothing to persist a height
+              against with no live map. */}
+          <TextInput
+            type="range"
+            label={`Height: ${whiteboardHeight.toFixed(1)}`}
+            min={MIN_WHITEBOARD_HEIGHT}
+            max={MAX_WHITEBOARD_HEIGHT}
+            step={WHITEBOARD_HEIGHT_STEP}
+            value={whiteboardHeight}
+            onChange={(event) => onSetWhiteboardHeight(Number(event.target.value))}
+            data-testid="whiteboard-height-slider"
+          />
           {whiteboardDrawMode ? (
             <>
               <div className={styles.modeToggle} role="group" aria-label="Whiteboard tool">
@@ -243,16 +275,6 @@ export function MapPanel({
                 value={whiteboardColor}
                 onChange={(event) => onSetWhiteboardColor(event.target.value)}
                 data-testid="whiteboard-color-picker"
-              />
-              <TextInput
-                type="range"
-                label={`Height: ${whiteboardHeight.toFixed(1)}`}
-                min={MIN_WHITEBOARD_HEIGHT}
-                max={MAX_WHITEBOARD_HEIGHT}
-                step={WHITEBOARD_HEIGHT_STEP}
-                value={whiteboardHeight}
-                onChange={(event) => onSetWhiteboardHeight(Number(event.target.value))}
-                data-testid="whiteboard-height-slider"
               />
               <div className={styles.objectHeader}>
                 <Button

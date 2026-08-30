@@ -66,7 +66,13 @@ import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PORT = 3461;
-const APP_URL = `http://localhost:${PORT}`;
+// The verify-dm-tray-drag.mjs/verify-whiteboard-height.mjs convention — lets
+// this script target an already-running dev server (this project's own
+// single-dev-server-per-directory lock means only one `next dev` can ever
+// bind here at a time, which matters on a shared checkout with another
+// agent's own server already up) instead of always spawning its own on the
+// hardcoded PORT.
+const APP_URL = process.env.APP_URL ?? `http://localhost:${PORT}`;
 const SCREENSHOT_DIR =
   "/tmp/claude-1000/-home-alfie/fda45a16-d7f7-41e9-92d5-1ed5b73bb4cb/scratchpad/whiteboard-screenshots";
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
@@ -556,7 +562,11 @@ try {
   // ── 6. Height slider: updates its own reported value AND genuinely moves
   //    the plane (its projected screen point shifts), not just a label. ──
   const beforeHeight = await whiteboardState(dmPage);
-  check("the height starts at the documented default", beforeHeight.height === 1.2, JSON.stringify(beforeHeight));
+  // 0104_whiteboard_height.sql: DEFAULT_WHITEBOARD_HEIGHT was lowered from
+  // 1.2 to 0.7 ("the white board height is way too high in game") — this
+  // fresh map has never had a height explicitly saved, so it renders at the
+  // shipped default exactly like before, just a different numeric value.
+  check("the height starts at the documented default", beforeHeight.height === 0.7, JSON.stringify(beforeHeight));
   const screenBeforeHeightChange = beforeHeight.centerScreenPoint;
   // A modest raise (not the max) — large enough to shift the projected
   // point by a confidently-measurable amount, small enough to keep that

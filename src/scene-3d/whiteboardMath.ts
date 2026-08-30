@@ -57,10 +57,22 @@ export const ERASER_WIDTH_CELLS_BY_SIZE: Record<WhiteboardBrushSize, number> = {
 
 /** DM-adjustable plane height (world units above the tabletop) — a plain
  * numeric range, not a 3D drag handle (see docs/design/whiteboard-drawing-layer.md
- * §6 for why). Default sits comfortably above a standing token's own head
- * height (TokenMarker's HP bar sits at 0.82 local units at cellSize=1) while
- * staying well clear of a seated camera's eye line. */
-export const DEFAULT_WHITEBOARD_HEIGHT = 1.2;
+ * §6 for why). Persisted per-map (campaign_maps.whiteboard_height, migration
+ * 0104) and broadcast live (GameRoom.tsx's WHITEBOARD_HEIGHT_CHANGED_EVENT)
+ * so every connected client renders the plane at the same height, not just
+ * the DM who last dragged the slider — this constant is now only ever the
+ * fallback for a map that has never had a height explicitly saved.
+ *
+ * Lowered from the original 1.2 ("the white board height is way too high in
+ * game" — a real project-owner report): 1.2 world units put the plane well
+ * above a seated camera's own eye line, reading as implausibly high on a
+ * freshly-loaded table nobody has touched the slider on yet. 0.7 was chosen
+ * by eye against a real screenshot (scripts/db/verify-whiteboard-height.mjs's
+ * own before/after capture) — comfortably lower and immediately readable
+ * from the default seated view, while staying above a standing token's own
+ * head height (TokenMarker's HP bar sits at 0.82 local units at cellSize=1)
+ * so it still doesn't clip through a pawn standing under it. */
+export const DEFAULT_WHITEBOARD_HEIGHT = 0.7;
 export const MIN_WHITEBOARD_HEIGHT = 0.3;
 export const MAX_WHITEBOARD_HEIGHT = 3;
 export const WHITEBOARD_HEIGHT_STEP = 0.1;
