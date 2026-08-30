@@ -348,7 +348,21 @@ export function MapPanel({
           ) : (
             entries.map(({ object, behavior }) => {
               const badge = stateBadge(behavior);
-              const canTrigger = isDM || behavior.playerTriggerable;
+              // A player-visible "Switch on"/"Show" button for a lever or
+              // light switch is fine — a known mechanism, not a secret — but
+              // "Reveal" for a reveal_text/reveal_image object spoils
+              // exactly which objects on the map have hidden content before
+              // it's been found naturally, even though playerTriggerable
+              // already lets a player trigger it for real by clicking or
+              // stepping on it in the 3D scene
+              // (handleSelectedTokenCellClick/handleTrigger/
+              // handleTokenLanded) — this panel button was always a
+              // redundant shortcut to that, never the only way in. Scoped to
+              // the two reveal actions specifically, not every
+              // playerTriggerable object, so an ordinary toggle_state
+              // switch/lever keeps its own panel button exactly as before.
+              const isSpoilerProne = behavior.action === "reveal_text" || behavior.action === "reveal_image";
+              const canTrigger = isDM || (behavior.playerTriggerable && !isSpoilerProne);
               return (
                 <div key={object.id} className={styles.objectRow} data-testid={`interactive-${object.id}`}>
                   <div className={styles.objectHeader}>
