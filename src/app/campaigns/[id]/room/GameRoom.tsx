@@ -525,13 +525,14 @@ const DM_BOOK_LATERAL_OFFSET = 1.0;
 // DmBookProp's own book, whose HTML_ANCHOR_Y clearance is ALSO a flat,
 // non-scaling absolute number for exactly this reason — see that constant's
 // own doc comment). A purely cellSize-proportional world-space gap above the
-// object shrinks right along with cellSize, so on the smaller cellSize even
-// a FIXED, grown table (mapFit.ts's computeTableFootprint) can still
-// legitimately produce for a large enough map, that gap projects to only a
-// handful of screen pixels — reading as "reveals too low, right on top of
-// the object" (the reported bug), even though it's technically still
-// clearing the model's own top by the same generous relative margin as
-// ever.
+// object shrinks right along with cellSize, so on the smaller cellSize that
+// mapFit.ts's computeTableMapMetrics can still legitimately produce for a
+// large/lopsided enough map (a grid that no longer fits the table's own
+// real, fixed surface at a legible size just renders smaller — mapFit.ts's
+// own doc comment), that gap projects to only a handful of screen pixels —
+// reading as "reveals too low, right on top of the object" (the reported
+// bug), even though it's technically still clearing the model's own top by
+// the same generous relative margin as ever.
 //
 // REVEAL_CARD_FIXED_CLEARANCE is a flat, non-scaling addition on top of the
 // existing proportional term — so the card keeps a real, visible gap above

@@ -1,53 +1,63 @@
 #!/usr/bin/env node
-// Bug report (2026-08-26, both filed together in the same conversation, both
-// coupled through the same cellSize-derived geometry — mapFit.ts's
-// computeTableMapMetrics/computeTableFootprint):
+// THIRD investigation of this exact area (2026-08-30) — supersedes this
+// script's own prior two versions. History, briefly (full reasoning lives in
+// src/scene-3d/mapFit.ts's own doc comment on computeTableMapMetrics and
+// src/scene-3d/table.ts's on COMBINED_TABLE_VISIBLE_TOP):
 //
 //   1. "this is a 20x40 map, it is very small in game, please make it so
-//      larger maps display bigger so they can be played easier." — the
-//      table's own fixed physical footprint (table.ts's TABLE_TOP) used to
-//      be the ONLY thing a live map's cellSize was fit against, so a large
-//      grid got crammed into the same footprint a tiny one did, shrinking
-//      cellSize (and everything scaled to it — tokens, terrain, objects,
-//      reveal cards) toward unreadable. mapFit.ts's computeTableFootprint
-//      now grows the table's own footprint (COMBINED_TABLE_TOP first — the
-//      head square's own already-rendered, already-doubled surface,
-//      previously left unused by the live map — then a further, seat-
-//      clearance-capped extension slab, GameTableScene.tsx's TableExtension)
-//      to keep cellSize legible on large/lopsided grids instead.
-//   2. "when the text, image is revealed it reveals too low, it should show
-//      above the object like the DM's book does to the DM." —
-//      ObjectRevealCard's own anchorY used to be a PURE cellSize multiple
-//      (cellSize * 1.15), which read fine on a typically-sized map but
-//      shrank toward the object's own top on exactly the small-cellSize
-//      maps bug #1 is about — GameRoom.tsx's REVEAL_CARD_FIXED_CLEARANCE
-//      adds a flat, non-scaling clearance on top of that term (the same
-//      "fixed absolute number" idea as DmBookProp.tsx's own HTML_ANCHOR_Y),
-//      so the card keeps real, visible separation regardless of map size.
+//      larger maps display bigger" — fixed by GROWING the table's own
+//      footprint (computeTableFootprint) past its real modeled size on
+//      large/lopsided grids, backed by a synthetic flat wood-colored slab
+//      (GameTableScene's TableExtension) wherever it grew past the real
+//      table.glb model.
+//   2. That growth was measured against the wrong (too-wide) footprint
+//      constant (COMBINED_TABLE_TOP, the LEG-clearance one, not the real
+//      visible top) — "this is way too large for the table... the complete
+//      opposite of before". Fixed by introducing COMBINED_TABLE_VISIBLE_TOP
+//      — but that constant's own DEPTH formula was ALSO wrong (TABLE_TOP.depth
+//      + TABLE_TOP_JOIN_DEPTH = 3.948, when the real combined visible depth,
+//      confirmed by directly measuring public/table/table.glb's own vertices,
+//      is 2 × TABLE_TOP_JOIN_DEPTH = 3.696 — TABLE_TOP.depth is the WIDER
+//      leg-inclusive figure, the exact category of mistake #2 above was
+//      about, just recurring in a smaller, easier-to-miss form).
+//   3. The project owner's own direct call, after both of the above still
+//      didn't fully fix it: "the table is exactly the same, remove the brown
+//      box it places, and make the 3d map fit to the 3d table models that
+//      are there." This is that fix: computeTableFootprint and
+//      TableExtension are BOTH GONE — the live map now fits ONLY inside
+//      COMBINED_TABLE_VISIBLE_TOP's own real, fixed, already-rendered surface
+//      (with its depth formula corrected per #2 above), never synthesizing
+//      extra surface to grow onto. A large/extreme grid legitimately gets a
+//      SMALLER cellSize than would read as comfortably legible — an honest,
+//      accepted tradeoff now, not a bug to work around by growing the table.
 //
-// This script proves both fixes on the SAME live campaign: a small (8x8)
-// reference map and a large (20x40) map, each with one token (a size
+// This script seeds THREE grid shapes in the same campaign — a small square
+// (5x5, comfortably within the table even before any of this), a wide one
+// close to the original "24x11"-ish overflow report, and the original "20x40"
+// extreme case from the very first bug report — each with one token (a size
 // reference) and one reveal_text object (triggered live, via the ordinary
-// MapPanel trigger-<id> button — unchanged by either fix).
+// MapPanel trigger-<id> button — untouched by this fix; GameRoom.tsx's
+// REVEAL_CARD_FIXED_CLEARANCE still applies on top of it).
 //
-// Checks, per map size (small AND large):
+// Checks, per map size:
 //   - The map loads with no page errors.
-//   - computeTableFootprint/computeTableMapMetrics's own formula (replayed
-//     here in plain JS — this project's own "plain perspective-projection
-//     replay" precedent, seating.ts's CAMERA_FORWARD_INSET doc comment)
-//     yields a cellSize that's never smaller than the OLD single-table fit
-//     ever produced, and — for the large map specifically — at least 1.5x
-//     bigger, a real, substantial improvement, not a rounding-error one.
+//   - computeTableMapMetrics's own formula (replayed here in plain JS — this
+//     project's own "plain perspective-projection replay" precedent,
+//     seating.ts's CAMERA_FORWARD_INSET doc comment) NEVER exceeds
+//     COMBINED_TABLE_VISIBLE_TOP on either axis, for every shape including
+//     the extreme one — no special-cased growth path exists anymore to make
+//     this NOT hold.
 //   - Triggering the reveal_text object shows a real object-reveal-card-<id>
 //     node with the exact content, rendered inside the <canvas> bounds.
 //   - The reveal card's anchorY clears the object's own worst-case modelled
 //     height by a REAL absolute margin (REVEAL_CARD_FIXED_CLEARANCE) that
-//     does not shrink to nothing as cellSize shrinks — replayed numerically
-//     here, since a card floating "a fraction of a shrinking cellSize" above
-//     an object is exactly the bug being fixed.
-//   - A real screenshot of each map (before AND after triggering the reveal)
-//     for a human to visually confirm "looks bigger" / "card floats above,
-//     not on top of, the object" — saved under this repo's scratchpad.
+//     does not shrink to nothing as cellSize shrinks.
+//   - Real screenshots of each map — a close, steeply-tilted top-down-ish
+//     orbit view specifically so a human (or a subsequent Claude turn) can
+//     visually confirm every one of the grid's own edge cells sits fully on
+//     real, visible wood, on every side, with nothing floating past the
+//     table's real edge — the whole point of this fix, and something no
+//     numeric assertion here can substitute for.
 //
 // Needs the local Supabase stack; starts `yarn dev` itself (and polls
 // /api/health) if its own port isn't already serving.
@@ -64,65 +74,30 @@ import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const APP_PORT = Number(process.env.LARGE_MAP_SCALE_APP_PORT ?? 49481);
 const APP_URL = `http://localhost:${APP_PORT}`;
-const SCRATCH_DIR = "/tmp/claude-1000/-home-alfie/fda45a16-d7f7-41e9-92d5-1ed5b73bb4cb/scratchpad";
+const SCRATCH_DIR = "/tmp/claude-1000/-home-alfie/fda45a16-d7f7-41e9-92d5-1ed5b73bb4cb/scratchpad/map-fits-table";
 mkdirSync(SCRATCH_DIR, { recursive: true });
 
 const CHEST_PRESET_ID = "a55e7002-0000-4000-8000-000000000002";
 
 // ═══════════════════════════════════════════════════════════════════════
-// mapFit.ts's real formulas, replayed here in plain JS — this script can't
-// `import` the TS module directly (a plain Node .mjs script, no TS loader),
-// so every constant/formula below is copied verbatim from the real source
-// (src/scene-3d/mapFit.ts / table.ts / seating.ts) rather than re-derived.
-// If any of these ever drift from the real implementation, mapFit.test.ts
-// (which DOES import the real module) is the source of truth — this is a
-// live, end-to-end sanity check on top of that, not a replacement for it.
+// mapFit.ts/table.ts's real formulas, replayed here in plain JS — this
+// script can't `import` the TS modules directly (a plain Node .mjs script,
+// no TS loader), so every constant/formula below is copied verbatim from the
+// real source rather than re-derived. If any of these ever drift from the
+// real implementation, mapFit.test.ts (which DOES import the real module) is
+// the source of truth — this is a live, end-to-end sanity check on top of
+// that, not a replacement for it.
 // ═══════════════════════════════════════════════════════════════════════
-const TABLE_TOP = { width: 4.36, thickness: 0.35, depth: 2.1 };
-const TABLE_UNITS_LONG_EDGE = 2;
-const COMBINED_TABLE_TOP = { width: TABLE_TOP.width, depth: TABLE_TOP.depth * TABLE_UNITS_LONG_EDGE };
+const TABLE_TOP = { width: 4.36, depth: 2.1 };
+const TABLE_TOP_JOIN_DEPTH = 1.848;
+const COMBINED_TABLE_VISIBLE_TOP = { width: TABLE_TOP.width, depth: TABLE_TOP_JOIN_DEPTH * 2 };
 const TABLE_MAP_MARGIN = 0.3;
-const MIN_LEGIBLE_CELL_SIZE = 0.22;
-const TABLE_GROWTH_SEAT_CLEARANCE = 0.5;
-const SEAT_MARGIN = 0.4;
-
-function seatEllipseSemiAxes(table) {
-  return {
-    semiX: (table.width / 2) * Math.SQRT2 + SEAT_MARGIN,
-    semiZ: (table.depth / 2) * Math.SQRT2 + SEAT_MARGIN,
-  };
-}
-
-function computeTableFootprint(gridWidth, gridHeight) {
-  const naturalCellSize = Math.min(
-    (COMBINED_TABLE_TOP.width - TABLE_MAP_MARGIN * 2) / gridWidth,
-    (COMBINED_TABLE_TOP.depth - TABLE_MAP_MARGIN * 2) / gridHeight
-  );
-  if (naturalCellSize >= MIN_LEGIBLE_CELL_SIZE) {
-    return { width: COMBINED_TABLE_TOP.width, depth: COMBINED_TABLE_TOP.depth };
-  }
-  const { semiX, semiZ } = seatEllipseSemiAxes(COMBINED_TABLE_TOP);
-  const maxWidth = (semiX - TABLE_GROWTH_SEAT_CLEARANCE) * 2;
-  const maxDepth = (semiZ - TABLE_GROWTH_SEAT_CLEARANCE) * 2;
-  const wantedWidth = gridWidth * MIN_LEGIBLE_CELL_SIZE + TABLE_MAP_MARGIN * 2;
-  const wantedDepth = gridHeight * MIN_LEGIBLE_CELL_SIZE + TABLE_MAP_MARGIN * 2;
-  return {
-    width: Math.min(Math.max(COMBINED_TABLE_TOP.width, wantedWidth), maxWidth),
-    depth: Math.min(Math.max(COMBINED_TABLE_TOP.depth, wantedDepth), maxDepth),
-  };
-}
 
 function newCellSize(gridWidth, gridHeight) {
-  const footprint = computeTableFootprint(gridWidth, gridHeight);
-  return Math.min((footprint.width - TABLE_MAP_MARGIN * 2) / gridWidth, (footprint.depth - TABLE_MAP_MARGIN * 2) / gridHeight);
-}
-
-// The OLD formula (before this fix) — fit directly against the single,
-// un-doubled TABLE_TOP, with no footprint growth at all. This no longer
-// exists in src/ (mapFit.test.ts's own regression test keeps the same
-// baseline) — kept here purely as this script's own "before" comparison.
-function oldCellSize(gridWidth, gridHeight) {
-  return Math.min((TABLE_TOP.width - TABLE_MAP_MARGIN * 2) / gridWidth, (TABLE_TOP.depth - TABLE_MAP_MARGIN * 2) / gridHeight);
+  return Math.min(
+    (COMBINED_TABLE_VISIBLE_TOP.width - TABLE_MAP_MARGIN * 2) / gridWidth,
+    (COMBINED_TABLE_VISIBLE_TOP.depth - TABLE_MAP_MARGIN * 2) / gridHeight
+  );
 }
 
 // PlacedObject.tsx's own fit target — a model's tallest dimension (any
@@ -201,8 +176,8 @@ function sessionCookies(session) {
 // Collapses every panel except map/tokens (verify-live-object-reveal.mjs's
 // own COLLAPSED_PANEL_LAYOUT precedent, extended a bit further) — this
 // script's screenshots need a clean, mostly-unobstructed view of the actual
-// 3D table/map for a human to visually judge "does this look bigger", not a
-// screen full of floating dice/combat/chat panels.
+// 3D table/map for a human to visually judge "does every edge cell sit on
+// real wood", not a screen full of floating dice/combat/chat panels.
 const COLLAPSED_PANEL_LAYOUT = {
   combat: { collapsed: true, x: 0, y: 0 },
   opportunityAttack: { collapsed: true, x: 0, y: 0 },
@@ -212,16 +187,17 @@ const COLLAPSED_PANEL_LAYOUT = {
   diceTray: { collapsed: true, x: 0, y: 0 },
   hp: { collapsed: true, x: 0, y: 0 },
   chatLog: { collapsed: true, x: 0, y: 0 },
+  diceRoller: { collapsed: true, x: 0, y: 0 },
 };
 
 async function makeTestUser(label) {
-  const email = `large-map-scale-${label}-${Date.now()}@example.test`;
+  const email = `map-fits-table-${label}-${Date.now()}@example.test`;
   const password = "test-password-1234!";
   const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
   if (error) throw new Error(`creating test user ${label}: ${error.message}`);
   await admin.from("profiles").insert({
     id: data.user.id,
-    display_name: `Large Map Scale ${label}`,
+    display_name: `Map Fits Table ${label}`,
     ui_preferences: { panelLayout: COLLAPSED_PANEL_LAYOUT },
   });
   const client = createClient(supabaseUrl, anonKey, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -264,7 +240,7 @@ const browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
 
 try {
   const campaignId = crypto.randomUUID();
-  await admin.from("campaigns").insert({ id: campaignId, name: "Large map scale test", creator: dm.id });
+  await admin.from("campaigns").insert({ id: campaignId, name: "Map fits table test", creator: dm.id });
   await admin.from("campaign_members").insert([{ campaign_id: campaignId, user_id: dm.id, role: "dm" }]);
 
   const dmCharacterId = crypto.randomUUID();
@@ -291,87 +267,63 @@ try {
     spells: [],
   });
 
-  // ── The small reference map: comfortably within the OLD single-table
-  //    footprint already — this fix must NOT change how it looks. ──
-  const SMALL_W = 8;
-  const SMALL_H = 8;
-  const smallMapId = crypto.randomUUID();
-  await admin.from("campaign_maps").insert({ id: smallMapId, campaign_id: campaignId, name: "Small Reference Room", grid_width: SMALL_W, grid_height: SMALL_H });
-  await seedGrid(smallMapId, SMALL_W, SMALL_H);
-  await admin.from("map_tokens").insert({ id: crypto.randomUUID(), map_id: smallMapId, character_id: dmCharacterId, x: 4, y: 4, elevation: 0, allegiance: "party" });
   const REVEAL_TEXT = "A faint humming rises from the vault below.";
-  const { data: smallObj, error: smallObjError } = await admin
-    .from("map_objects")
-    .insert({
-      map_id: smallMapId,
-      asset_id: CHEST_PRESET_ID,
-      x: 3,
-      y: 3,
-      elevation: 0,
-      rotation: 0,
-      behavior_config: { action: "reveal_text", content: REVEAL_TEXT, playerTriggerable: true, triggerOnStepOn: false, triggered: false },
-    })
-    .select()
-    .single();
-  if (smallObjError) throw smallObjError;
 
-  // ── The large (literal "20x40") map from the bug report — the whole
-  //    reason this fix exists. ──
-  const LARGE_W = 20;
-  const LARGE_H = 40;
-  const largeMapId = crypto.randomUUID();
-  await admin.from("campaign_maps").insert({ id: largeMapId, campaign_id: campaignId, name: "Sprawling Dungeon (20x40)", grid_width: LARGE_W, grid_height: LARGE_H });
-  await seedGrid(largeMapId, LARGE_W, LARGE_H);
-  await admin.from("map_tokens").insert({ id: crypto.randomUUID(), map_id: largeMapId, character_id: dmCharacterId, x: 10, y: 20, elevation: 0, allegiance: "party" });
-  const { data: largeObj, error: largeObjError } = await admin
-    .from("map_objects")
-    .insert({
-      map_id: largeMapId,
-      asset_id: CHEST_PRESET_ID,
-      x: 9,
-      y: 19,
-      elevation: 0,
-      rotation: 0,
-      behavior_config: { action: "reveal_text", content: REVEAL_TEXT, playerTriggerable: true, triggerOnStepOn: false, triggered: false },
-    })
-    .select()
-    .single();
-  if (largeObjError) throw largeObjError;
+  async function makeMap(label, w, h) {
+    const mapId = crypto.randomUUID();
+    await admin.from("campaign_maps").insert({ id: mapId, campaign_id: campaignId, name: `${label} (${w}x${h})`, grid_width: w, grid_height: h });
+    await seedGrid(mapId, w, h);
+    const tokenX = Math.floor(w / 2);
+    const tokenY = Math.floor(h / 2);
+    await admin.from("map_tokens").insert({ id: crypto.randomUUID(), map_id: mapId, character_id: dmCharacterId, x: tokenX, y: tokenY, elevation: 0, allegiance: "party" });
+    const { data: obj, error: objError } = await admin
+      .from("map_objects")
+      .insert({
+        map_id: mapId,
+        asset_id: CHEST_PRESET_ID,
+        x: Math.max(0, tokenX - 1),
+        y: Math.max(0, tokenY - 1),
+        elevation: 0,
+        rotation: 0,
+        behavior_config: { action: "reveal_text", content: REVEAL_TEXT, playerTriggerable: true, triggerOnStepOn: false, triggered: false },
+      })
+      .select()
+      .single();
+    if (objError) throw objError;
+    return { mapId, w, h, obj };
+  }
+
+  // Three grid shapes, per the task: a small square, a wide one near the
+  // "24x11"-ish overflow report, and the original "20x40" extreme case.
+  const small = await makeMap("Small Square", 5, 5);
+  const wide = await makeMap("Wide Overflow Repro", 24, 11);
+  const tall = await makeMap("Extreme Tall", 20, 40);
+  const maps = [
+    ["small", small],
+    ["wide", wide],
+    ["tall", tall],
+  ];
 
   // ═══════════════════════════════════════════════════════════════════
   // Numeric checks — mapFit.ts's real formula, replayed above.
   // ═══════════════════════════════════════════════════════════════════
-  const smallOld = oldCellSize(SMALL_W, SMALL_H);
-  const smallNew = newCellSize(SMALL_W, SMALL_H);
-  const largeOld = oldCellSize(LARGE_W, LARGE_H);
-  const largeNew = newCellSize(LARGE_W, LARGE_H);
-  console.log(`\ncellSize — small (${SMALL_W}x${SMALL_H}): old=${smallOld.toFixed(4)} new=${smallNew.toFixed(4)}`);
-  console.log(`cellSize — large (${LARGE_W}x${LARGE_H}): old=${largeOld.toFixed(4)} new=${largeNew.toFixed(4)} (${(largeNew / largeOld).toFixed(2)}x)\n`);
+  for (const [label, m] of maps) {
+    const cellSize = newCellSize(m.w, m.h);
+    console.log(`cellSize — ${label} (${m.w}x${m.h}): ${cellSize.toFixed(4)}`);
+    check(
+      `${label} map: rendered width (cellSize * gridWidth) never exceeds the table's real visible width`,
+      cellSize * m.w < COMBINED_TABLE_VISIBLE_TOP.width,
+      { cellSize, width: cellSize * m.w, tableWidth: COMBINED_TABLE_VISIBLE_TOP.width }
+    );
+    check(
+      `${label} map: rendered depth (cellSize * gridHeight) never exceeds the table's real visible depth`,
+      cellSize * m.h < COMBINED_TABLE_VISIBLE_TOP.depth,
+      { cellSize, depth: cellSize * m.h, tableDepth: COMBINED_TABLE_VISIBLE_TOP.depth }
+    );
+    check(`${label} map: cellSize is a real, positive number (never clamped to zero/negative)`, cellSize > 0, { cellSize });
 
-  check("the small map's cellSize never regresses (new >= old)", smallNew >= smallOld - 1e-9, { smallOld, smallNew });
-  check(
-    "the large map's cellSize is at least 1.5x bigger than the old single-table fit ever produced",
-    largeNew > largeOld * 1.5,
-    { largeOld, largeNew, ratio: largeNew / largeOld }
-  );
-  check(
-    "the large map's computed footprint actually grew past COMBINED_TABLE_TOP (TableExtension should render)",
-    (() => {
-      const footprint = computeTableFootprint(LARGE_W, LARGE_H);
-      return footprint.width > COMBINED_TABLE_TOP.width + 1e-6 || footprint.depth > COMBINED_TABLE_TOP.depth + 1e-6;
-    })()
-  );
-
-  for (const [label, w, h] of [
-    ["small", SMALL_W, SMALL_H],
-    ["large", LARGE_W, LARGE_H],
-  ]) {
-    const cellSize = newCellSize(w, h);
     const oldClearanceAboveObjectTop = cellSize * REVEAL_CARD_PROPORTIONAL_TERM - cellSize * PLACED_OBJECT_SIZE;
     const newClearanceAboveObjectTop = oldClearanceAboveObjectTop + REVEAL_CARD_FIXED_CLEARANCE;
-    console.log(
-      `reveal card clearance above worst-case object top — ${label} map: old=${oldClearanceAboveObjectTop.toFixed(4)} new=${newClearanceAboveObjectTop.toFixed(4)}`
-    );
     check(
       `${label} map: the reveal card's real clearance above the object's own top includes the full fixed addition (doesn't shrink away with cellSize)`,
       newClearanceAboveObjectTop - oldClearanceAboveObjectTop >= REVEAL_CARD_FIXED_CLEARANCE - 1e-9,
@@ -379,10 +331,15 @@ try {
     );
   }
 
+  check(
+    "the wide/tall maps get a SMALLER cellSize than the small one (no more artificial table growth to compensate — an accepted tradeoff now)",
+    newCellSize(wide.w, wide.h) < newCellSize(small.w, small.h) && newCellSize(tall.w, tall.h) < newCellSize(small.w, small.h)
+  );
+
   // ═══════════════════════════════════════════════════════════════════
   // Live, real Playwright checks — one Game Room, switched between maps.
   // ═══════════════════════════════════════════════════════════════════
-  await admin.from("campaigns").update({ live_map: smallMapId }).eq("id", campaignId);
+  await admin.from("campaigns").update({ live_map: small.mapId }).eq("id", campaignId);
 
   const pageErrors = [];
   const ROOM_VIEWPORT = { width: 1920, height: 1080 };
@@ -408,30 +365,30 @@ try {
     }
     check(`${label} map: table-surface-state reflects the right live map`, onMap !== null);
     // Real asset/GLTF loads (table, chest, avatar) settling — this project's
-    // own established post-navigation buffer (verify-object-reveal-card.mjs,
-    // verify-live-object-reveal.mjs et al. all sleep after the first
-    // attached-selector wait rather than assuming DOM-attached means
-    // visually settled).
+    // own established post-navigation buffer.
     await sleep(2500);
-
-    // The default seated camera deliberately leans in close (seating.ts's
-    // CAMERA_FORWARD_INSET doc comment: "leaning in at your own seat,
-    // looking across the board") — great for actual play, but too tight a
-    // crop for a screenshot meant to show the WHOLE table at once. Switch to
-    // Free Camera (orbit) and scroll out toward its own maxDistance (26 —
-    // GameTableScene.tsx's own OrbitControls prop) for a consistent, wide,
-    // comparable framing across both map sizes.
     await page.click('[data-testid="camera-mode-toggle"]');
     await sleep(400);
+  }
+
+  // A close, steeply-tilted top-down-ish orbit framing — specifically so the
+  // table's own 4 corners AND every grid edge are visible at once in a
+  // single screenshot, the exact framing needed to visually confirm "no
+  // grid tile floats past the real wood" (a numeric assertion alone can't
+  // substitute for this — see this script's own header comment).
+  async function frameTopDown(page) {
     const canvasBox = await page.locator("canvas").first().boundingBox();
-    if (canvasBox) {
-      await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2);
-      for (let i = 0; i < 10; i++) {
-        await page.mouse.wheel(0, 400);
-        await sleep(80);
-      }
+    if (!canvasBox) return;
+    await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2);
+    for (let i = 0; i < 10; i++) {
+      await page.mouse.wheel(0, 300);
+      await sleep(50);
     }
-    await sleep(500);
+    await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2 + 300, { steps: 10 });
+    await page.mouse.up();
+    await sleep(400);
   }
 
   async function clickTrigger(objectId, label) {
@@ -442,74 +399,45 @@ try {
     return attached;
   }
 
-  await loadMap(smallMapId, "small");
-  await page.screenshot({ path: join(SCRATCH_DIR, "small-map-scale.png") });
-  console.log(`saved ${join(SCRATCH_DIR, "small-map-scale.png")}`);
+  for (const [label, m] of maps) {
+    await admin.from("campaigns").update({ live_map: m.mapId }).eq("id", campaignId);
+    await loadMap(m.mapId, label);
+    await frameTopDown(page);
+    const shotPath = join(SCRATCH_DIR, `${label}-${m.w}x${m.h}-topdown.png`);
+    await page.screenshot({ path: shotPath });
+    console.log(`saved ${shotPath}`);
 
-  await clickTrigger(smallObj.id, "small");
-  const smallTriggered = await pollUntil(async () => {
-    const row = await mapObjectRow(smallObj.id);
-    return row?.behavior_config?.triggered === true ? row : null;
-  });
-  check("small map: triggering the reveal_text object persists triggered = true", smallTriggered !== null);
+    await clickTrigger(m.obj.id, label);
+    const triggered = await pollUntil(async () => {
+      const row = await mapObjectRow(m.obj.id);
+      return row?.behavior_config?.triggered === true ? row : null;
+    });
+    check(`${label} map: triggering the reveal_text object persists triggered = true`, triggered !== null);
 
-  const smallCardSelector = `[data-testid="object-reveal-card-${smallObj.id}"]`;
-  const smallCardShown = await page.waitForSelector(smallCardSelector, { state: "attached", timeout: 15000 }).then(() => true).catch(() => false);
-  check("small map: the reveal card appears after triggering", smallCardShown);
-  if (smallCardShown) {
-    const text = await page.textContent(smallCardSelector);
-    check("small map: the card shows the exact revealed text", text === REVEAL_TEXT, text);
-    const canvasBox = await page.locator("canvas").first().boundingBox();
-    const cardBox = await page.locator(smallCardSelector).boundingBox();
-    check(
-      "small map: the card renders inside the 3D canvas' own bounds",
-      canvasBox !== null &&
-        cardBox !== null &&
-        cardBox.x >= canvasBox.x - 5 &&
-        cardBox.y >= canvasBox.y - 5 &&
-        cardBox.x + cardBox.width <= canvasBox.x + canvasBox.width + 5 &&
-        cardBox.y + cardBox.height <= canvasBox.y + canvasBox.height + 5,
-      { canvasBox, cardBox }
-    );
+    const cardSelector = `[data-testid="object-reveal-card-${m.obj.id}"]`;
+    const cardShown = await page.waitForSelector(cardSelector, { state: "attached", timeout: 15000 }).then(() => true).catch(() => false);
+    check(`${label} map: the reveal card appears after triggering`, cardShown);
+    if (cardShown) {
+      const text = await page.textContent(cardSelector);
+      check(`${label} map: the card shows the exact revealed text`, text === REVEAL_TEXT, text);
+      const canvasBox = await page.locator("canvas").first().boundingBox();
+      const cardBox = await page.locator(cardSelector).boundingBox();
+      check(
+        `${label} map: the card renders inside the 3D canvas' own bounds`,
+        canvasBox !== null &&
+          cardBox !== null &&
+          cardBox.x >= canvasBox.x - 5 &&
+          cardBox.y >= canvasBox.y - 5 &&
+          cardBox.x + cardBox.width <= canvasBox.x + canvasBox.width + 5 &&
+          cardBox.y + cardBox.height <= canvasBox.y + canvasBox.height + 5,
+        { canvasBox, cardBox }
+      );
+    }
+    await sleep(500);
+    const revealShotPath = join(SCRATCH_DIR, `${label}-${m.w}x${m.h}-reveal-card.png`);
+    await page.screenshot({ path: revealShotPath });
+    console.log(`saved ${revealShotPath}`);
   }
-  await sleep(500);
-  await page.screenshot({ path: join(SCRATCH_DIR, "small-map-reveal-card.png") });
-  console.log(`saved ${join(SCRATCH_DIR, "small-map-reveal-card.png")}`);
-
-  await admin.from("campaigns").update({ live_map: largeMapId }).eq("id", campaignId);
-  await loadMap(largeMapId, "large");
-  await page.screenshot({ path: join(SCRATCH_DIR, "large-map-scale.png") });
-  console.log(`saved ${join(SCRATCH_DIR, "large-map-scale.png")}`);
-
-  await clickTrigger(largeObj.id, "large");
-  const largeTriggered = await pollUntil(async () => {
-    const row = await mapObjectRow(largeObj.id);
-    return row?.behavior_config?.triggered === true ? row : null;
-  });
-  check("large map: triggering the reveal_text object persists triggered = true", largeTriggered !== null);
-
-  const largeCardSelector = `[data-testid="object-reveal-card-${largeObj.id}"]`;
-  const largeCardShown = await page.waitForSelector(largeCardSelector, { state: "attached", timeout: 15000 }).then(() => true).catch(() => false);
-  check("large map: the reveal card appears after triggering", largeCardShown);
-  if (largeCardShown) {
-    const text = await page.textContent(largeCardSelector);
-    check("large map: the card shows the exact revealed text", text === REVEAL_TEXT, text);
-    const canvasBox = await page.locator("canvas").first().boundingBox();
-    const cardBox = await page.locator(largeCardSelector).boundingBox();
-    check(
-      "large map: the card renders inside the 3D canvas' own bounds",
-      canvasBox !== null &&
-        cardBox !== null &&
-        cardBox.x >= canvasBox.x - 5 &&
-        cardBox.y >= canvasBox.y - 5 &&
-        cardBox.x + cardBox.width <= canvasBox.x + canvasBox.width + 5 &&
-        cardBox.y + cardBox.height <= canvasBox.y + canvasBox.height + 5,
-      { canvasBox, cardBox }
-    );
-  }
-  await sleep(500);
-  await page.screenshot({ path: join(SCRATCH_DIR, "large-map-reveal-card.png") });
-  console.log(`saved ${join(SCRATCH_DIR, "large-map-reveal-card.png")}`);
 
   check("no uncaught page errors occurred", pageErrors.length === 0, pageErrors.join("\n"));
 } finally {
@@ -525,4 +453,5 @@ try {
 }
 
 console.log(failures === 0 ? `\nAll checks passed.` : `\n${failures} check(s) FAILED.`);
+console.log(`\nScreenshots written to ${SCRATCH_DIR}`);
 process.exit(failures === 0 ? 0 : 1);

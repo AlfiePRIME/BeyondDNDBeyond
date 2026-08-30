@@ -111,32 +111,60 @@ export const TABLE_TOP_JOIN_DEPTH = 1.848;
  * file's own doc comment above, and CombinedTable's in GameTableScene.tsx,
  * both already call this discrepancy out explicitly: "the tables now sit
  * slightly closer together than COMBINED_TABLE_TOP's own depth would
- * suggest"). Depth is TABLE_TOP.depth + TABLE_TOP_JOIN_DEPTH (2.1 + 1.848 =
- * 3.948) — one full table's own depth plus how much closer the SECOND
- * table's center sits versus the naive TABLE_TOP.depth spacing
- * COMBINED_TABLE_TOP.depth (2 × 2.1 = 4.2) still assumes — not
- * TABLE_TOP.depth doubled. Width is unchanged (TABLE_TOP.width): the join
- * only ever runs along depth, so there's no analogous leg-vs-top gap on
- * that axis to correct for.
+ * suggest").
+ *
+ * Depth is `TABLE_TOP_JOIN_DEPTH * 2`, NOT `TABLE_TOP.depth +
+ * TABLE_TOP_JOIN_DEPTH` (3.948) as an earlier version of this constant
+ * computed — that formula was itself a real bug, caught and corrected here
+ * (2026-08-30, THIRD investigation of this same map-sizing area): it reasoned
+ * "one full table's own [outer, leg-inclusive] depth (TABLE_TOP.depth) plus
+ * how much closer the second table's center sits" — but TABLE_TOP_JOIN_DEPTH
+ * is, BY ITS OWN DEFINITION (this file's doc comment above), exactly one
+ * table's own REAL TOP-SURFACE depth, chosen precisely so two tables placed
+ * TABLE_TOP_JOIN_DEPTH apart join their tops with NO gap and NO overlap.
+ * Placing two such tables therefore produces a combined visible top spanning
+ * exactly `2 * TABLE_TOP_JOIN_DEPTH` (3.696) end to end, not TABLE_TOP.depth
+ * (2.1, the WIDER leg-inclusive figure) plus that number — mixing the two
+ * measurements overstated the real depth by ~0.25 units (~6.8%), enough for
+ * a depth-heavy grid to still visibly render past the table's real wood.
+ *
+ * Verified directly, not re-derived by hand a third time: a throwaway script
+ * (the same category of measurement table.ts's own TABLE_TOP_JOIN_DEPTH
+ * comment already describes — loading public/table/table.glb, applying the
+ * exact recenter/scale/rotate GameTableScene.tsx's TableModel applies at
+ * render time, then slicing to the topmost ~1% of vertices by height, the
+ * only band that is real playing-surface geometry rather than leg/underside
+ * geometry) simulated BOTH table instances at their real
+ * ±TABLE_TOP_JOIN_DEPTH/2 offsets and unioned their top-surface Z ranges
+ * directly: result 3.696 (matching `2 * TABLE_TOP_JOIN_DEPTH` to within
+ * 0.0004, i.e. the "no gap no overlap" claim above holds in practice, not
+ * just in the idealized formula) — confirming the 3.948 figure was wrong,
+ * not just imprecise. That same vertex scan also checked (and ruled out) an
+ * ornate/carved corner cutting inward from the outer rectangle on either
+ * axis — every corner's own top-surface vertices reach the full measured
+ * width/depth exactly (the decorative corner scrollwork visible in a real
+ * screenshot is a flat texture painted on the tabletop, not a geometric
+ * chamfer) — so a plain rectangle at this width/depth is the real, safe,
+ * fittable surface, corners included. Width is unchanged (TABLE_TOP.width):
+ * the join only ever runs along depth, so there's no analogous leg-vs-top
+ * gap on that axis to correct for (confirmed by the same vertex scan: the
+ * top-surface width exactly matches the outer/leg-inclusive width).
  *
  * A real regression (2026-08-30, reported live right after the "larger maps
  * should display bigger" fix shipped: "this is way too large for the
- * table... the complete opposite of before") is exactly this constant
- * FAILING to exist yet: mapFit.ts's computeTableFootprint was fit against
- * COMBINED_TABLE_TOP's wider (4.2) leg-based depth, so the grid (and its
- * matching TableExtension slab) rendered ~6% deeper than the table's real
- * visible top surface actually reaches — invisible while the fitted
- * footprint was small relative to that error, glaringly visible once a
- * grid's own depth filled most of it. COMBINED_TABLE_TOP itself stays
- * completely untouched here (the seating ellipse's own generous leg
- * clearance is still exactly right for its own purpose) — only the map's
- * own fit (mapFit.ts) and its matching TableExtension "has this grown past
- * the real table" check (GameTableScene.tsx) switch to this constant
- * instead.
+ * table... the complete opposite of before") was the FIRST symptom of this
+ * area getting the depth measurement wrong (that time: COMBINED_TABLE_TOP's
+ * wider 4.2 leg-based depth used directly, a ~13% error) — introducing this
+ * constant at 3.948 fixed most, but not all, of that error, which is why the
+ * project owner still saw overflow afterward ("the table is exactly the
+ * same... make the 3d map fit to the 3d table models that are there").
+ * COMBINED_TABLE_TOP itself stays completely untouched here (the seating
+ * ellipse's own generous leg clearance is still exactly right for its own
+ * purpose) — only the map's own fit (mapFit.ts) uses this constant.
  */
 export const COMBINED_TABLE_VISIBLE_TOP = {
   width: TABLE_TOP.width,
-  depth: TABLE_TOP.depth + TABLE_TOP_JOIN_DEPTH,
+  depth: TABLE_TOP_JOIN_DEPTH * 2,
 } as const;
 
 /**
