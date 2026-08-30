@@ -17,7 +17,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
 import { Box3, DoubleSide, Plane, Raycaster, SRGBColorSpace, TextureLoader, Vector2, Vector3 } from "three";
 import type { Camera, Group, Object3D, Texture } from "three";
-import { COMBINED_TABLE_TOP, LEG, TABLE_TOP, TABLE_SURFACE_Y, TABLE_TOP_JOIN_DEPTH } from "./table";
+import { COMBINED_TABLE_VISIBLE_TOP, LEG, TABLE_TOP, TABLE_SURFACE_Y, TABLE_TOP_JOIN_DEPTH } from "./table";
 import {
   applySeatOffset,
   clampToTableArrangement,
@@ -680,7 +680,10 @@ useGLTF.preload(TABLE_URL);
  * footprint — chairs need to clear the full leg stance, not just the
  * visible top, so that generous number remains the right one for seating/
  * clearance purposes even though the tables now sit slightly closer
- * together than COMBINED_TABLE_TOP's own depth would suggest.
+ * together than COMBINED_TABLE_TOP's own depth would suggest. Anything that
+ * DOES need the real visible surface instead (the live map's own fit,
+ * mapFit.ts) uses table.ts's separate COMBINED_TABLE_VISIBLE_TOP —
+ * introduced after a real regression from conflating the two.
  *
  * Nothing here depends on which instance renders "first" — every position
  * anchored to a specific spot on this combined surface (the live map's
@@ -708,7 +711,7 @@ function CombinedTable() {
 
 // A hair below TABLE_SURFACE_Y so TableExtension's own slab never z-fights
 // the real table.glb model in the region where they overlap (always at
-// least COMBINED_TABLE_TOP's own footprint — mapFit.ts's
+// least COMBINED_TABLE_VISIBLE_TOP's own footprint — mapFit.ts's
 // computeTableFootprint never returns anything smaller). The real model's
 // own textured top wins there; this slab is only actually VISIBLE in the
 // ring where a large map's grid has grown the footprint past the real
@@ -733,7 +736,7 @@ const TABLE_EXTENSION_SURFACE_EPSILON = 0.003;
  * ever interacts with what's visible on top, so a flat, legless slab reads
  * completely fine from every camera angle this scene's normal seated/orbit
  * range ever uses. Only ever rendered when computeTableFootprint actually
- * grew past COMBINED_TABLE_TOP (see this component's own call site below) —
+ * grew past COMBINED_TABLE_VISIBLE_TOP (see this component's own call site below) —
  * every map that already fit comfortably renders exactly as it always has,
  * with no extra slab at all.
  */
@@ -750,7 +753,7 @@ function TableExtension({ width, depth }: { width: number; depth: number }) {
     // non-issue here: this slab is only ever visible as a thin sliver
     // peeking past table.glb's own (rounded, real) edges — this component's
     // own call site only mounts it when the map's footprint has grown past
-    // COMBINED_TABLE_TOP at all.
+    // COMBINED_TABLE_VISIBLE_TOP at all.
     <mesh
       position={[0, TABLE_SURFACE_Y - TABLE_EXTENSION_SURFACE_EPSILON - TABLE_EXTENSION_THICKNESS / 2, 0]}
       castShadow
@@ -1871,12 +1874,16 @@ export function GameTableScene({
   // Same grid, the OTHER half of computeTableFootprint/computeTableMapMetrics's
   // shared derivation — whether (and how big) a TableExtension slab needs to
   // render below. null (no extension) whenever the footprint hasn't grown
-  // past COMBINED_TABLE_TOP, the common case for anything but a large map.
+  // past COMBINED_TABLE_VISIBLE_TOP (the real visible playing surface, NOT
+  // the wider leg-clearance COMBINED_TABLE_TOP — mapFit.ts's own doc comment
+  // on computeTableFootprint explains why these differ), the common case
+  // for anything but a large map.
   const tableFootprint = useMemo(() => {
     if (!liveMap) return null;
     const footprint = computeTableFootprint(liveMap.gridWidth, liveMap.gridHeight);
     const grown =
-      footprint.width > COMBINED_TABLE_TOP.width + 1e-6 || footprint.depth > COMBINED_TABLE_TOP.depth + 1e-6;
+      footprint.width > COMBINED_TABLE_VISIBLE_TOP.width + 1e-6 ||
+      footprint.depth > COMBINED_TABLE_VISIBLE_TOP.depth + 1e-6;
     return grown ? footprint : null;
   }, [liveMap]);
 

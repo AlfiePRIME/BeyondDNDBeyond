@@ -1,5 +1,5 @@
 import { seatEllipseSemiAxes } from "./seating";
-import { COMBINED_TABLE_TOP } from "./table";
+import { COMBINED_TABLE_TOP, COMBINED_TABLE_VISIBLE_TOP } from "./table";
 import { EDITOR_MAP_METRICS, type MapSurfaceMetrics } from "./MapSurface";
 
 // Border of bare tabletop left visible around the map, so it reads as a
@@ -37,26 +37,39 @@ const TABLE_GROWTH_SEAT_CLEARANCE = 0.5;
 
 /**
  * The physical (x/z) footprint the live map is fit onto. Starts from
- * COMBINED_TABLE_TOP — both of the head square's own already-rendered table
- * halves (table.ts's CombinedTable), doubled along depth — which alone is
- * enough to keep most grids at a legible cellSize; this footprint only grows
- * further, symmetrically on both axes, when even that isn't enough
- * (MIN_LEGIBLE_CELL_SIZE), and never past where a seated chair could be
- * (TABLE_GROWTH_SEAT_CLEARANCE). GameTableScene renders an actual physical
- * slab at this size (TableExtension) whenever it exceeds COMBINED_TABLE_TOP,
+ * COMBINED_TABLE_VISIBLE_TOP — the head square's REAL visible playing
+ * surface (table.ts's own doc comment on why this differs from
+ * COMBINED_TABLE_TOP, its wider leg-clearance sibling used for seating) —
+ * which alone is enough to keep most grids at a legible cellSize; this
+ * footprint only grows further, symmetrically on both axes, when even that
+ * isn't enough (MIN_LEGIBLE_CELL_SIZE), and never past where a seated chair
+ * could be (TABLE_GROWTH_SEAT_CLEARANCE, still measured against the WIDER
+ * COMBINED_TABLE_TOP ellipse below — a chair's own clearance is a leg-stance
+ * question, not a visible-top-surface one, so that part deliberately keeps
+ * using the other constant). GameTableScene renders an actual physical slab
+ * at this size (TableExtension) whenever it exceeds COMBINED_TABLE_VISIBLE_TOP,
  * so the grid this footprint feeds into computeTableMapMetrics always has
  * real, solid wood underneath it — never floating past the real table
  * model's own edges.
  *
- * Deliberately never SMALLER than COMBINED_TABLE_TOP, for any grid size: a
- * map that already fit comfortably within it keeps rendering exactly as it
- * always has. This is a strict improvement over the single-table footprint
- * this function used to fit against, never a regression — COMBINED_TABLE_TOP
- * was already doubled and already rendered (table.ts's own comment), just
- * previously left unused by the live map on the project owner's own earlier,
- * narrower call ("the live map deliberately does NOT use this... it stays
- * sized to a single table's worth of surface") — superseded by this same
- * "larger maps should display bigger" bug report.
+ * A real regression (2026-08-30): this function originally started from
+ * COMBINED_TABLE_TOP directly (the wider, leg-based footprint) — visually
+ * fine while the fitted grid was small relative to the ~6% error between
+ * the two, but a large/wide grid filling most of the footprint rendered
+ * genuinely past the table's real visible edge ("this is way too large for
+ * the table... the complete opposite of before"). COMBINED_TABLE_VISIBLE_TOP
+ * is the real fix, not a numeric tweak of this function's own logic.
+ *
+ * Deliberately never SMALLER than COMBINED_TABLE_VISIBLE_TOP, for any grid
+ * size: a map that already fit comfortably within it keeps rendering
+ * exactly as it always has. This is a strict improvement over the
+ * single-table footprint this function used to fit against before the
+ * "larger maps should display bigger" bug report, never a regression —
+ * COMBINED_TABLE_VISIBLE_TOP's own already-rendered head square (table.ts's
+ * CombinedTable) was always there, just previously left unused by the live
+ * map on the project owner's own earlier, narrower call ("the live map
+ * deliberately does NOT use this... it stays sized to a single table's
+ * worth of surface").
  *
  * Full uniform scaling of the WHOLE table+seating+camera system (considered
  * and rejected — see mapFit.test.ts's own doc comment on
@@ -72,11 +85,11 @@ const TABLE_GROWTH_SEAT_CLEARANCE = 0.5;
  */
 export function computeTableFootprint(gridWidth: number, gridHeight: number): { width: number; depth: number } {
   const naturalCellSize = Math.min(
-    (COMBINED_TABLE_TOP.width - TABLE_MAP_MARGIN * 2) / gridWidth,
-    (COMBINED_TABLE_TOP.depth - TABLE_MAP_MARGIN * 2) / gridHeight
+    (COMBINED_TABLE_VISIBLE_TOP.width - TABLE_MAP_MARGIN * 2) / gridWidth,
+    (COMBINED_TABLE_VISIBLE_TOP.depth - TABLE_MAP_MARGIN * 2) / gridHeight
   );
   if (naturalCellSize >= MIN_LEGIBLE_CELL_SIZE) {
-    return { width: COMBINED_TABLE_TOP.width, depth: COMBINED_TABLE_TOP.depth };
+    return { width: COMBINED_TABLE_VISIBLE_TOP.width, depth: COMBINED_TABLE_VISIBLE_TOP.depth };
   }
 
   const { semiX, semiZ } = seatEllipseSemiAxes(COMBINED_TABLE_TOP);
@@ -87,8 +100,8 @@ export function computeTableFootprint(gridWidth: number, gridHeight: number): { 
   const wantedDepth = gridHeight * MIN_LEGIBLE_CELL_SIZE + TABLE_MAP_MARGIN * 2;
 
   return {
-    width: Math.min(Math.max(COMBINED_TABLE_TOP.width, wantedWidth), maxWidth),
-    depth: Math.min(Math.max(COMBINED_TABLE_TOP.depth, wantedDepth), maxDepth),
+    width: Math.min(Math.max(COMBINED_TABLE_VISIBLE_TOP.width, wantedWidth), maxWidth),
+    depth: Math.min(Math.max(COMBINED_TABLE_VISIBLE_TOP.depth, wantedDepth), maxDepth),
   };
 }
 

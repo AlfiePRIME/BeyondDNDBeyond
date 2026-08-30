@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { computeTableFootprint, computeTableMapMetrics } from "./mapFit";
 import { seatEllipseSemiAxes } from "./seating";
-import { COMBINED_TABLE_TOP, TABLE_TOP } from "./table";
+import { COMBINED_TABLE_TOP, COMBINED_TABLE_VISIBLE_TOP, TABLE_TOP } from "./table";
 
 /**
  * computeTableFootprint deliberately does NOT scale the seated camera along
@@ -19,9 +19,20 @@ import { COMBINED_TABLE_TOP, TABLE_TOP } from "./table";
  * function's own return value, fed only into mapFit's cellSize/table-slab
  * geometry) instead means cellSize grows while the camera never moves — a
  * real, verifiable improvement in on-screen size instead of a no-op zoom.
+ *
+ * These tests assert against COMBINED_TABLE_VISIBLE_TOP, NOT
+ * COMBINED_TABLE_TOP — a real regression (2026-08-30) shipped from
+ * computeTableFootprint being fit against the latter (the wider, leg-
+ * clearance footprint) instead: the grid rendered ~6% past the table's real
+ * visible edge on any map that filled most of the footprint. Only the
+ * seat-clearance CAP (the "never grows past where a chair could be" test
+ * below) still legitimately uses the wider COMBINED_TABLE_TOP, matching
+ * mapFit.ts's own real seatEllipseSemiAxes(COMBINED_TABLE_TOP) call — a
+ * chair's own clearance really is a leg-stance question, not a visible-top
+ * one.
  */
 describe("computeTableFootprint", () => {
-  it("never shrinks below COMBINED_TABLE_TOP, for any grid size", () => {
+  it("never shrinks below COMBINED_TABLE_VISIBLE_TOP, for any grid size", () => {
     for (const [w, h] of [
       [1, 1],
       [5, 5],
@@ -32,22 +43,23 @@ describe("computeTableFootprint", () => {
       [100, 100],
     ] as const) {
       const footprint = computeTableFootprint(w, h);
-      expect(footprint.width).toBeGreaterThanOrEqual(COMBINED_TABLE_TOP.width - 1e-9);
-      expect(footprint.depth).toBeGreaterThanOrEqual(COMBINED_TABLE_TOP.depth - 1e-9);
+      expect(footprint.width).toBeGreaterThanOrEqual(COMBINED_TABLE_VISIBLE_TOP.width - 1e-9);
+      expect(footprint.depth).toBeGreaterThanOrEqual(COMBINED_TABLE_VISIBLE_TOP.depth - 1e-9);
     }
   });
 
-  it("leaves an already-comfortable grid at exactly COMBINED_TABLE_TOP (no regression for typical maps)", () => {
+  it("leaves an already-comfortable grid at exactly COMBINED_TABLE_VISIBLE_TOP (no regression for typical maps)", () => {
     // A small map was already comfortably width-bound under the OLD
     // single-table fit (TABLE_TOP), so growing the depth axis to
-    // COMBINED_TABLE_TOP's own doubled depth changes nothing about which
-    // axis binds or what cellSize comes out — this grid's own natural fit
-    // against COMBINED_TABLE_TOP already clears MIN_LEGIBLE_CELL_SIZE.
+    // COMBINED_TABLE_VISIBLE_TOP's own combined depth changes nothing about
+    // which axis binds or what cellSize comes out — this grid's own natural
+    // fit against COMBINED_TABLE_VISIBLE_TOP already clears
+    // MIN_LEGIBLE_CELL_SIZE.
     const footprint = computeTableFootprint(5, 5);
-    expect(footprint).toEqual({ width: COMBINED_TABLE_TOP.width, depth: COMBINED_TABLE_TOP.depth });
+    expect(footprint).toEqual({ width: COMBINED_TABLE_VISIBLE_TOP.width, depth: COMBINED_TABLE_VISIBLE_TOP.depth });
   });
 
-  it("grows past COMBINED_TABLE_TOP for a large/lopsided grid", () => {
+  it("grows past COMBINED_TABLE_VISIBLE_TOP for a large/lopsided grid", () => {
     const small = computeTableFootprint(5, 5);
     const large = computeTableFootprint(20, 40);
     expect(large.width).toBeGreaterThanOrEqual(small.width);
@@ -91,10 +103,10 @@ describe("computeTableMapMetrics", () => {
     expect(wide.cellSize * 40).toBeLessThan(computeTableFootprint(40, 5).width);
     expect(tall.cellSize * 40).toBeLessThan(computeTableFootprint(5, 40).depth);
     // The depth axis is the tighter one for a square footprint request, at
-    // exactly COMBINED_TABLE_TOP (this grid is already comfortable there, so
-    // the footprint doesn't grow any further).
+    // exactly COMBINED_TABLE_VISIBLE_TOP (this grid is already comfortable
+    // there, so the footprint doesn't grow any further).
     const square = computeTableMapMetrics(10, 10);
-    expect(square.cellSize * 10).toBeCloseTo(COMBINED_TABLE_TOP.depth - 0.6, 5);
+    expect(square.cellSize * 10).toBeCloseTo(COMBINED_TABLE_VISIBLE_TOP.depth - 0.6, 5);
   });
 
   it("a large map gets a meaningfully bigger cellSize than the old single-table fit ever could", () => {

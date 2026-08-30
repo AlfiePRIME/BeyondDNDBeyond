@@ -106,6 +106,40 @@ export const COMBINED_TABLE_TOP = {
 export const TABLE_TOP_JOIN_DEPTH = 1.848;
 
 /**
+ * The combined head square's REAL visible playing surface, as opposed to
+ * COMBINED_TABLE_TOP's deliberately wider leg-clearance footprint (this
+ * file's own doc comment above, and CombinedTable's in GameTableScene.tsx,
+ * both already call this discrepancy out explicitly: "the tables now sit
+ * slightly closer together than COMBINED_TABLE_TOP's own depth would
+ * suggest"). Depth is TABLE_TOP.depth + TABLE_TOP_JOIN_DEPTH (2.1 + 1.848 =
+ * 3.948) — one full table's own depth plus how much closer the SECOND
+ * table's center sits versus the naive TABLE_TOP.depth spacing
+ * COMBINED_TABLE_TOP.depth (2 × 2.1 = 4.2) still assumes — not
+ * TABLE_TOP.depth doubled. Width is unchanged (TABLE_TOP.width): the join
+ * only ever runs along depth, so there's no analogous leg-vs-top gap on
+ * that axis to correct for.
+ *
+ * A real regression (2026-08-30, reported live right after the "larger maps
+ * should display bigger" fix shipped: "this is way too large for the
+ * table... the complete opposite of before") is exactly this constant
+ * FAILING to exist yet: mapFit.ts's computeTableFootprint was fit against
+ * COMBINED_TABLE_TOP's wider (4.2) leg-based depth, so the grid (and its
+ * matching TableExtension slab) rendered ~6% deeper than the table's real
+ * visible top surface actually reaches — invisible while the fitted
+ * footprint was small relative to that error, glaringly visible once a
+ * grid's own depth filled most of it. COMBINED_TABLE_TOP itself stays
+ * completely untouched here (the seating ellipse's own generous leg
+ * clearance is still exactly right for its own purpose) — only the map's
+ * own fit (mapFit.ts) and its matching TableExtension "has this grown past
+ * the real table" check (GameTableScene.tsx) switch to this constant
+ * instead.
+ */
+export const COMBINED_TABLE_VISIBLE_TOP = {
+  width: TABLE_TOP.width,
+  depth: TABLE_TOP.depth + TABLE_TOP_JOIN_DEPTH,
+} as const;
+
+/**
  * World-space Z offset for the center of the `index`-th (0-based) plain
  * single table appended beside the fixed head square, once a campaign's
  * party outgrows the head square's own seat capacity
