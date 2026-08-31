@@ -376,6 +376,7 @@ export {
   listCharacterResources,
   createCharacterResource,
   setCharacterResourceUses,
+  growCharacterResourceMax,
   applyResourceDelta,
   shortRest,
   longRest,

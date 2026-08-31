@@ -64,6 +64,40 @@ export async function setCharacterResourceUses(
 }
 
 /**
+ * Raises a resource's max_uses by `deltaMax` (current_uses moves by the
+ * same delta, clamped at the new max) — the level-up wizard's spell-slot
+ * resync step: a level-up that increases a slot LEVEL's count (e.g. a
+ * Wizard's 2nd-level slots going from 2 to 3 between character level 3 and
+ * 4) must bump the row's ceiling, not just leave it stale at the old max
+ * the way the character sheet page's own load-time provisioning (which
+ * only creates MISSING slot-level rows, never resizes an existing one)
+ * does. A plain update off the CALLER-supplied resource — not a
+ * read-then-write RPC like apply_character_resource_delta — because a
+ * level-up is the wizard's own single-player, already-serialized flow;
+ * nothing else can race a level-up's slot resync the way a mid-combat
+ * spend/restore can race across two tabs. Same RLS as
+ * setCharacterResourceUses (owner or campaign DM via 0008's
+ * can_access_character delegation).
+ */
+export async function growCharacterResourceMax(
+  supabase: SupabaseClient,
+  resource: CharacterResource,
+  deltaMax: number
+): Promise<CharacterResource> {
+  const nextMax = resource.max_uses + deltaMax;
+  const nextCurrent = Math.min(nextMax, Math.max(0, resource.current_uses + deltaMax));
+  const { data, error } = await supabase
+    .from("character_resources")
+    .update({ max_uses: nextMax, current_uses: nextCurrent })
+    .eq("id", resource.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as CharacterResource;
+}
+
+/**
  * Raise or lower a named resource's current_uses by `delta`, clamped to
  * [0, max_uses], via the apply_character_resource_delta RPC (Map Editor
  * Batch A9) — the apply_hp_delta/applyExhaustionDelta pattern, not a

@@ -32,6 +32,16 @@ export interface Character {
   name: string;
   race: string;
   class: string;
+  /** The character's one SRD subclass pick (e.g. "Thief", "School of
+   * Evocation"), migration 0106 — null until the level-up wizard's
+   * subclass-choice step is completed at (or, for a legacy character
+   * created before this column existed, any level at or past) the base
+   * class's own subclass-gate level. Player-writable like any other sheet
+   * field (0008's blanket owner-or-DM UPDATE policy already covers it) —
+   * unlike xp/pending_roll_mode, choosing a subclass is exactly the kind
+   * of thing completing the level-up wizard itself should be allowed to
+   * do, so no DM-only trigger narrowing applies here. */
+  subclass: string | null;
   level: number;
   strength: number;
   dexterity: number;

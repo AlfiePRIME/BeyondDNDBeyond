@@ -3,13 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  CLASSES,
   CONDITIONS,
   CONDITION_BY_KEY,
   EXHAUSTION_KEY,
   MAX_EXHAUSTION_LEVEL,
   levelForXp,
-  levelUpHitPointGain,
   xpThresholdForLevel,
   xpToNextLevel,
   type AdvantageMode,
@@ -33,12 +31,12 @@ import {
   subscribeToCampaignCharacterChanges,
   subscribeToCharacterConditionChanges,
   subscribeToCombatantConditionChanges,
-  updateCharacter,
   type Character,
   type CharacterCondition,
   type SupabaseClient,
 } from "@/data-access";
 import { Badge, Button } from "@/ui-components";
+import { LevelUpWizard } from "../LevelUpWizard";
 import styles from "./party.module.css";
 
 /** A combat-sourced condition already resolved to its character — the
@@ -229,33 +227,23 @@ export function PartyDashboard({
     });
   }
 
-  /** The suggest-then-confirm resolution of a crossed threshold — exactly
-   * the sheet's levelUp math (one level, SRD average hit-die + CON gain to
-   * both current and max HP, one updateCharacter call), triggered by the
-   * DM's explicit click, never by the award itself. */
-  async function confirmLevelUp(character: Character) {
-    const klass = CLASSES.find((c) => c.name === character.class) ?? null;
-    if (!klass) {
-      setCardError(
-        character.id,
-        "Unknown class — no hit die to compute the HP gain. Use the sheet's level field and edit HP manually."
-      );
-      return;
-    }
-    if (character.level >= 20) return;
-    await run(character.id, async () => {
-      const hpGain = levelUpHitPointGain(klass.hitDie, character.constitution);
-      const updated = await updateCharacter(createBrowserSupabaseClient(), character.id, {
-        level: character.level + 1,
-        current_hp: character.current_hp + hpGain,
-        max_hp: character.max_hp + hpGain,
-      });
-      replaceCharacter(updated);
-      setCardNotice(
-        character.id,
-        `${updated.name} is now level ${updated.level} — hit points +${hpGain} (${updated.current_hp} / ${updated.max_hp}).`
-      );
-    });
+  // The suggest-then-confirm resolution of a crossed threshold used to run
+  // its own inline math (one level, SRD average hit-die + CON gain, one
+  // updateCharacter call) — that's now the guided LevelUpWizard, shared
+  // with the character sheet's own "Level up" button (see that
+  // component's doc comment for why one shared flow instead of two). This
+  // page just tracks WHICH character's wizard is open (one at a time — a
+  // DM confirming several level-ups in a row opens, completes, and closes
+  // it per character) and reacts to its result the same way the sheet
+  // does: replace the row, show the same-shaped confirmation notice.
+  const [levelUpCharacter, setLevelUpCharacter] = useState<Character | null>(null);
+
+  function handleLevelUpApplied(updated: Character, hpGain: number) {
+    replaceCharacter(updated);
+    setCardNotice(
+      updated.id,
+      `${updated.name} is now level ${updated.level} — hit points +${hpGain} (${updated.current_hp} / ${updated.max_hp}).`
+    );
   }
 
   async function applyPickedCondition(character: Character) {
@@ -379,7 +367,8 @@ export function PartyDashboard({
   }
 
   return (
-    <section className={styles.grid} data-testid="party-dashboard">
+    <>
+      <section className={styles.grid} data-testid="party-dashboard">
       {characters.map((character) => {
         const merged = mergedConditionsFor(character.id);
         const exhaustion = merged.find((row) => row.condition_key === EXHAUSTION_KEY);
@@ -513,7 +502,7 @@ export function PartyDashboard({
                   size="sm"
                   variant="accent"
                   disabled={cardBusy}
-                  onClick={() => void confirmLevelUp(character)}
+                  onClick={() => setLevelUpCharacter(character)}
                   data-testid={`party-levelup-${character.id}`}
                 >
                   Confirm level {character.level + 1}
@@ -667,7 +656,18 @@ export function PartyDashboard({
           </article>
         );
       })}
-    </section>
+      </section>
+      {levelUpCharacter ? (
+        <LevelUpWizard
+          onClose={() => setLevelUpCharacter(null)}
+          character={levelUpCharacter}
+          onApplied={(updated, hpGain) => {
+            handleLevelUpApplied(updated, hpGain);
+            setLevelUpCharacter(null);
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 

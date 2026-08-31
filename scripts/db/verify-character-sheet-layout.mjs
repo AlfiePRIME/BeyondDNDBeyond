@@ -33,7 +33,15 @@ import { chromium } from "playwright";
 import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
+// Port 3000 on this host is the production standalone server (never to be
+// touched by this script, per verify-character-sheet-access.mjs's own
+// documented reasoning) — this script now always starts its OWN `yarn dev`
+// on a dedicated port instead of defaulting to :3000 and silently reusing
+// whatever's already answering there (which, before this fix, meant a run
+// against the currently-DEPLOYED code rather than this checkout's own
+// uncommitted changes whenever the production server happened to be up).
+const LAYOUT_TEST_PORT = 6474;
+const APP_URL = process.env.APP_URL ?? `http://localhost:${LAYOUT_TEST_PORT}`;
 
 function loadEnv(path) {
   const env = {};
@@ -61,6 +69,7 @@ const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY ?? env.SERVICE_ROLE_KEY;
 const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
 
 let failures = 0;
+let blocked = 0;
 function check(label, condition, detail) {
   if (condition) {
     console.log(`PASS  ${label}`);
@@ -68,6 +77,16 @@ function check(label, condition, detail) {
     console.error(`FAIL  ${label}${detail ? ` — ${detail}` : ""}`);
     failures++;
   }
+}
+// The level-up wizard's "probe first, blocked-not-failed" convention
+// (verify-party-dashboard.mjs's exact pattern): this file's Wizard test
+// character is already past its class's subclass-gate level (Arcane
+// Tradition, level 2) with no subclass chosen, so its next level-up
+// necessarily needs to write characters.subclass — which genuinely does
+// not exist until migration 0106_character_subclass.sql is applied.
+function skipBlocked(label, reason) {
+  console.log(`BLOCKED  ${label} — ${reason}`);
+  blocked++;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -78,14 +97,14 @@ async function healthOk() {
 
 let devServer = null;
 async function ensureDevServer() {
-  if (await healthOk()) return;
-  console.log("dev server not running — starting yarn dev…");
-  devServer = spawn("yarn", ["dev"], { cwd: rootDir, stdio: "ignore", detached: true });
+  if (process.env.APP_URL && (await healthOk())) return; // an explicitly-provided APP_URL is trusted as-is
+  console.log(`dev server not running on :${LAYOUT_TEST_PORT} — starting this checkout's own…`);
+  devServer = spawn("yarn", ["dev", "-p", String(LAYOUT_TEST_PORT)], { cwd: rootDir, stdio: "ignore", detached: true });
   for (let i = 0; i < 120; i++) {
     await sleep(1000);
     if (await healthOk()) return;
   }
-  throw new Error("dev server did not become healthy within 120s");
+  throw new Error(`dev server did not become healthy on :${LAYOUT_TEST_PORT} within 120s`);
 }
 
 const COOKIE_NAME = `sb-${new URL(supabaseUrl).hostname.split(".")[0]}-auth-token`;
@@ -153,6 +172,17 @@ async function panelRects(page) {
 const near = (a, b, tolerance = 2) => Math.abs(a - b) <= tolerance;
 
 await ensureDevServer();
+
+// Non-destructive migration probe (the verify-party-dashboard.mjs
+// convention): a SELECT of characters.subclass either works (migration
+// 0106_character_subclass.sql applied) or errors (not applied yet).
+const subclassProbe = await admin.from("characters").select("subclass").limit(1);
+const subclassColumnExists = !subclassProbe.error;
+console.log(
+  subclassColumnExists
+    ? "migration 0106_character_subclass.sql is APPLIED — the level-up wizard's subclass step runs for real.\n"
+    : "migration 0106_character_subclass.sql is NOT applied — the level-up wizard's subclass-dependent checks will report BLOCKED.\n"
+);
 
 const dm = await makeTestUser("dm");
 const browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
@@ -284,15 +314,42 @@ try {
   await page.setViewportSize({ width: 2000, height: 1100 });
   await page.waitForTimeout(300);
 
-  // Level up: Wizard d6, CON 13 → gain = floor(6/2)+1+1 = 5 to both HP
-  // fields, level 5 → 6, all in one persisted row.
+  // "Level up" now opens the guided LevelUpWizard (shared with the DM
+  // party dashboard's own level-up control) instead of instantly applying
+  // the level. Wizard d6, CON 13 → HP gain = floor(6/2)+1+1 = 5 to both HP
+  // fields, level 5 → 6, all in one persisted row (the wizard's single
+  // combined updateCharacter call). Arcane Tradition (Wizard's subclass
+  // gate) is level 2 — already behind this character with no subclass
+  // chosen — so the wizard's subclass step appears ONLY once migration
+  // 0106_character_subclass.sql is applied (pre-migration, the column is
+  // simply absent from the row rather than genuinely null, so
+  // needsSubclassChoice reads it as "not applicable" and the step is
+  // skipped rather than broken — see LevelUpWizard.tsx's own doc comment).
+  // Level 6 isn't one of Wizard's ASI levels (4/8/12/16/19), so no ASI
+  // step either; Wizard IS a caster, so slot growth (2nd-level slots
+  // 2→3) and new-spell (+2 spellbook) steps both appear.
   await page.click('[data-testid="sheet-level-up-button"]');
+  await page.waitForSelector('[data-testid="levelup-step-features"]', { timeout: 15000 });
+  await page.click('[data-testid="levelup-next"]');
+  if (subclassColumnExists) {
+    await page.waitForSelector('[data-testid="levelup-step-subclass"]', { timeout: 15000 });
+    await page.click('[data-testid="levelup-subclass-choice-school-of-evocation"]');
+    await page.click('[data-testid="levelup-next"]');
+  }
+  await page.waitForSelector('[data-testid="levelup-step-slots"]', { timeout: 15000 });
+  await page.click('[data-testid="levelup-next"]');
+  await page.waitForSelector('[data-testid="levelup-step-spells"]', { timeout: 15000 });
+  await page.click('[data-testid="levelup-next"]');
+  await page.waitForSelector('[data-testid="levelup-step-hp"]', { timeout: 15000 });
+  await page.click('[data-testid="levelup-next"]');
+  await page.waitForSelector('[data-testid="levelup-step-review"]', { timeout: 15000 });
+  await page.click('[data-testid="levelup-confirm"]');
   const afterLevelUp = await waitForCharacter(
     charId,
     (c) => c.level === 6 && c.current_hp === 27 && c.max_hp === 36
   );
   check(
-    "Level up advances level 5→6 and grants +5 HP to BOTH current and max (Wizard d6, CON +1)",
+    "Level up (via the wizard) advances level 5→6 and grants +5 HP to BOTH current and max (Wizard d6, CON +1)",
     afterLevelUp?.level === 6 && afterLevelUp?.current_hp === 27 && afterLevelUp?.max_hp === 36,
     JSON.stringify({ level: afterLevelUp?.level, hp: afterLevelUp?.current_hp, max: afterLevelUp?.max_hp })
   );
@@ -301,6 +358,18 @@ try {
     ((await page.textContent('[data-testid="sheet-levelup-notice"]').catch(() => "")) ?? "").includes("Leveled up to 6"),
     await page.textContent('[data-testid="sheet-levelup-notice"]').catch(() => "<missing>")
   );
+  if (subclassColumnExists) {
+    check(
+      "the chosen subclass persisted to the character row",
+      afterLevelUp?.subclass === "School of Evocation",
+      afterLevelUp?.subclass
+    );
+  } else {
+    skipBlocked(
+      "the chosen subclass persists to characters.subclass",
+      "migration 0106_character_subclass.sql not applied — run `node scripts/db/migrate.mjs`, then re-run this script"
+    );
+  }
 
   // HP stepper in the relocated Vitals strip.
   await page.click('button[aria-label="Heal 1 hit point"]');
@@ -377,8 +446,12 @@ try {
 }
 
 if (failures > 0) {
-  console.error(`\n${failures} check(s) failed.`);
+  console.error(`\n${failures} check(s) failed, ${blocked} blocked.`);
   process.exit(1);
 }
-console.log("\nAll character-sheet-layout checks passed.");
+console.log(
+  blocked > 0
+    ? `\nAll runnable character-sheet-layout checks passed; ${blocked} blocked pending migration 0106_character_subclass.sql.`
+    : "\nAll character-sheet-layout checks passed."
+);
 process.exit(0);

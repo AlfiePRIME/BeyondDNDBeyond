@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { parseDiceNotation } from "../dice";
 import { SPELLS } from "./spells";
+import type { ClassName } from "./types";
 
 const SPELL_LEVELS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+const NON_CASTER_CLASSES: ClassName[] = ["Barbarian", "Fighter", "Monk", "Rogue"];
+const CASTER_CLASSES: ClassName[] = [
+  "Bard",
+  "Cleric",
+  "Druid",
+  "Paladin",
+  "Ranger",
+  "Sorcerer",
+  "Warlock",
+  "Wizard",
+];
 
 describe("SPELLS", () => {
   it("is a genuinely comprehensive list, not a token handful", () => {
@@ -35,6 +47,42 @@ describe("SPELLS", () => {
     const byName = Object.fromEntries(SPELLS.map((s) => [s.name, s]));
     if (byName["Bless"]) expect(byName["Bless"].concentration).toBe(true);
     if (byName["Fireball"]) expect(byName["Fireball"].concentration).toBe(false);
+  });
+
+  describe("class restriction data (level-up wizard)", () => {
+    it("gives every spell at least one class from the real SRD class lists", () => {
+      const orphans = SPELLS.filter((s) => s.classes.length === 0).map((s) => s.name);
+      expect(orphans).toEqual([]);
+    });
+
+    it("never assigns a spell to a non-caster class", () => {
+      for (const spell of SPELLS) {
+        for (const nonCaster of NON_CASTER_CLASSES) {
+          expect(spell.classes).not.toContain(nonCaster);
+        }
+      }
+    });
+
+    it("only ever assigns real caster class names", () => {
+      for (const spell of SPELLS) {
+        for (const className of spell.classes) {
+          expect(CASTER_CLASSES).toContain(className);
+        }
+      }
+    });
+
+    it("flags well-known class-exclusive/iconic spells correctly", () => {
+      const byName = Object.fromEntries(SPELLS.map((s) => [s.name, s]));
+      expect(byName["Eldritch Blast"].classes).toEqual(["Warlock"]);
+      expect(byName["Hex"].classes).toEqual(["Warlock"]);
+      expect(byName["Vicious Mockery"].classes).toEqual(["Bard"]);
+      expect(byName["Find Familiar"].classes).toEqual(["Wizard"]);
+      expect(byName["Shillelagh"].classes).toEqual(["Druid"]);
+      expect(byName["Fireball"].classes).toEqual(expect.arrayContaining(["Sorcerer", "Wizard"]));
+      expect(byName["Cure Wounds"].classes).toEqual(
+        expect.arrayContaining(["Bard", "Cleric", "Druid", "Paladin", "Ranger"])
+      );
+    });
   });
 
   describe("attack metadata (Prompt 51)", () => {

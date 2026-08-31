@@ -23,6 +23,7 @@ export type {
   CasterProgression,
   ClassFeature,
   ClassDefinition,
+  SubclassDefinition,
   SkillName,
   SkillDefinition,
   SpellSchool,
@@ -46,6 +47,8 @@ export {
   type RaceOptionStats,
 } from "./srd/races";
 export { CLASSES } from "./srd/classes";
+export { SUBCLASSES } from "./srd/subclasses";
+export { FEATURE_DESCRIPTIONS, featureDescription } from "./srd/featureDescriptions";
 export { SKILLS, SKILL_ABILITY } from "./srd/skills";
 export { SPELLS } from "./srd/spells";
 export { STARTING_EQUIPMENT } from "./srd/equipment";
@@ -67,6 +70,17 @@ export {
   xpToNextLevel,
 } from "./experience";
 export { levelOneHitPoints, levelUpHitPointGain } from "./hitPoints";
+export {
+  subclassGateLevel,
+  subclassForClass,
+  subclassesForClass,
+  asiLevelsForClass,
+  featuresGainedBetween,
+  newSpellsKnownDelta,
+  isValidAbilityScoreImprovementChoice,
+  applyAbilityScoreImprovement,
+  type AbilityScoreImprovementChoice,
+} from "./levelUp";
 export { savingThrowBonus, skillCheckBonus, passiveScore } from "./checks";
 export {
   getSpellSlots,

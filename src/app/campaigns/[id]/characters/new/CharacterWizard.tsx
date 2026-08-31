@@ -318,6 +318,11 @@ export function CharacterWizard({
         name: name.trim(),
         race: raceToSave,
         class: klass.name,
+        // No subclass at creation — every SRD class's subclass choice is
+        // walked through by the level-up wizard once the character
+        // reaches that class's own gate level (1st, 2nd, or 3rd, per
+        // class), not offered here.
+        subclass: null,
         level: 1,
         ...finalScores,
         current_hp: maxHp,

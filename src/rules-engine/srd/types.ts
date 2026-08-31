@@ -117,6 +117,24 @@ export interface ClassDefinition {
   features: ClassFeature[];
 }
 
+/**
+ * A single SRD-legal subclass (Barbarian's Primal Path pick, Wizard's
+ * Arcane Tradition pick, etc.) — one per base class in this catalog (see
+ * srd/subclasses.ts), the exact PHB subclass reproduced in the SRD 5.1
+ * document for that class. `features` mirrors ClassDefinition's own
+ * level-gated shape so the level-up wizard's feature-diff logic (old level
+ * -> new level) treats base-class and subclass features identically; the
+ * level-up wizard's own gating (the level-up wizard finds the base class's
+ * subclass-CHOICE level from ClassDefinition.features by name, e.g. Rogue's
+ * "Roguish Archetype" at level 3) decides WHEN a subclass can be picked,
+ * not this type.
+ */
+export interface SubclassDefinition {
+  name: string;
+  className: ClassName;
+  features: ClassFeature[];
+}
+
 export type SkillName =
   | "Acrobatics"
   | "Animal Handling"
@@ -186,6 +204,7 @@ export interface Spell {
   range: SpellRange;
   targetType: TargetType;
   concentration: boolean;
+  classes: ClassName[];
   attack?: SpellAttack;
 }
 

@@ -61,6 +61,7 @@ const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY ?? env.SERVICE_ROLE_KEY;
 const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
 
 let failures = 0;
+let blocked = 0;
 function check(label, condition, detail) {
   if (condition) {
     console.log(`PASS  ${label}`);
@@ -68,6 +69,16 @@ function check(label, condition, detail) {
     console.error(`FAIL  ${label}${detail ? ` — ${detail}` : ""}`);
     failures++;
   }
+}
+// The level-up wizard's "probe first, blocked-not-failed" convention
+// (verify-party-dashboard.mjs's exact pattern): the Cleric test character
+// below is already past its class's subclass-gate level (Divine Domain,
+// level 1) with no subclass chosen, so its next level-up necessarily
+// needs to write characters.subclass — which genuinely does not exist
+// until migration 0106_character_subclass.sql is applied.
+function skipBlocked(label, reason) {
+  console.log(`BLOCKED  ${label} — ${reason}`);
+  blocked++;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -162,6 +173,17 @@ async function waitForCharacter(characterId, predicate, timeoutMs = 8000) {
 const port = await pickFreePort();
 const APP_URL = `http://localhost:${port}`;
 await ensureDevServer(APP_URL, port);
+
+// Non-destructive migration probe (the verify-party-dashboard.mjs
+// convention): a SELECT of characters.subclass either works (migration
+// 0106_character_subclass.sql applied) or errors (not applied yet).
+const subclassProbe = await admin.from("characters").select("subclass").limit(1);
+const subclassColumnExists = !subclassProbe.error;
+console.log(
+  subclassColumnExists
+    ? "migration 0106_character_subclass.sql is APPLIED — the level-up wizard's subclass step runs for real.\n"
+    : "migration 0106_character_subclass.sql is NOT applied — the level-up wizard's subclass-dependent checks will report BLOCKED.\n"
+);
 
 const dm = await makeTestUser("dm");
 const alice = await makeTestUser("alice");
@@ -326,9 +348,28 @@ try {
       (await bobRoom.locator(`[data-testid="view-sheet-${pcTokenId}"]`).count()) === 0
   );
 
-  // -- 3. Level up: level +1, HP +7 (average d8 gain + CON 14's +2
-  //    modifier) to BOTH current_hp and max_hp, in one PATCH; resources and
-  //    spells are untouched (byte-for-byte). --
+  // -- 3. Level up (now the guided LevelUpWizard, shared with the DM party
+  //    dashboard): level +1, HP +7 (average d8 gain + CON 14's +2
+  //    modifier, unaffected by the ASI step below since that picks
+  //    Strength) to BOTH current_hp and max_hp, landing in one PATCH.
+  //    Cleric 3→4 crosses TWO gates at once: Divine Domain (subclass) is
+  //    level 1 — already behind this level-1-created character with no
+  //    subclass chosen, so the subclass step appears only once migration
+  //    0106_character_subclass.sql is applied — and level 4 IS one of
+  //    Cleric's SRD Ability Score Improvement levels, so the ASI step
+  //    always appears regardless of that migration. Cleric is also a
+  //    caster: the earlier "View sheet" navigation above already loaded
+  //    this character's sheet once, which lazily provisioned BOTH its
+  //    1st- and 2nd-level spell-slot resource rows at their level-3 SRD
+  //    values (4 and 2) via the sheet page's own load-time backfill — so
+  //    by the time the level-up runs, 2nd-level slots grow 2→3 on that
+  //    ALREADY-EXISTING row (the wizard's resync path, not its
+  //    create-missing-row path) while 1st-level stays untouched at 4 (its
+  //    SRD count doesn't change between level 3 and 4). The prepared-spell
+  //    count goes up by 1 too (WIS 16 → +3 modifier), but no spell is
+  //    actually picked here so `spells` stays byte-identical — the
+  //    existing "spells untouched" assertion below is preserved on purpose
+  //    by not picking one. --
   const { data: resourcesBefore } = await admin
     .from("character_resources")
     .select()
@@ -345,6 +386,25 @@ try {
   };
   sheet.on("request", countPatch);
   await sheet.click('[data-testid="sheet-level-up-button"]');
+  await sheet.waitForSelector('[data-testid="levelup-step-features"]', { timeout: 15000 });
+  await sheet.click('[data-testid="levelup-next"]');
+  if (subclassColumnExists) {
+    await sheet.waitForSelector('[data-testid="levelup-step-subclass"]', { timeout: 15000 });
+    await sheet.click('[data-testid="levelup-subclass-choice-life-domain"]');
+    await sheet.click('[data-testid="levelup-next"]');
+  }
+  await sheet.waitForSelector('[data-testid="levelup-step-slots"]', { timeout: 15000 });
+  await sheet.click('[data-testid="levelup-next"]');
+  await sheet.waitForSelector('[data-testid="levelup-step-spells"]', { timeout: 15000 });
+  await sheet.click('[data-testid="levelup-next"]'); // no spell picked — spells must stay untouched
+  await sheet.waitForSelector('[data-testid="levelup-step-asi"]', { timeout: 15000 });
+  await sheet.click('[data-testid="levelup-asi-mode-single"]');
+  await sheet.selectOption('[data-testid="levelup-asi-single-ability"]', "strength");
+  await sheet.click('[data-testid="levelup-next"]');
+  await sheet.waitForSelector('[data-testid="levelup-step-hp"]', { timeout: 15000 });
+  await sheet.click('[data-testid="levelup-next"]');
+  await sheet.waitForSelector('[data-testid="levelup-step-review"]', { timeout: 15000 });
+  await sheet.click('[data-testid="levelup-confirm"]');
   const afterLevelUp = await waitForCharacter(charId, (c) => c.level === 4);
   sheet.off("request", countPatch);
 
@@ -360,10 +420,27 @@ try {
     String(afterLevelUp?.max_hp)
   );
   check(
-    "level and both HP fields landed in a SINGLE updateCharacter PATCH",
+    "the ASI step's +2 Strength persisted (10 → 12), leaving Constitution (and the HP math) untouched",
+    afterLevelUp?.strength === 12 && afterLevelUp?.constitution === 14,
+    JSON.stringify({ strength: afterLevelUp?.strength, constitution: afterLevelUp?.constitution })
+  );
+  check(
+    "level, both HP fields, the ability score, and (if applicable) the subclass all landed in a SINGLE updateCharacter PATCH",
     characterPatches === 1,
     `${characterPatches} PATCH request(s)`
   );
+  if (subclassColumnExists) {
+    check(
+      "the chosen subclass persisted to the character row",
+      afterLevelUp?.subclass === "Life Domain",
+      afterLevelUp?.subclass
+    );
+  } else {
+    skipBlocked(
+      "the chosen subclass persists to characters.subclass",
+      "migration 0106_character_subclass.sql not applied — run `node scripts/db/migrate.mjs`, then re-run this script"
+    );
+  }
 
   const notice = (await sheet.textContent('[data-testid="sheet-levelup-notice"]').catch(() => "")) ?? "";
   check(
@@ -377,11 +454,44 @@ try {
     .select()
     .eq("character_id", charId)
     .order("id");
+  // The wizard's spell-slot resync is new, deliberate behavior (the whole
+  // point of the fix — see LevelUpWizard.tsx's own doc comment on the
+  // resync gap it closes): the pre-existing "Channel Divinity" resource
+  // (not a spell slot) AND the 1st-level slot row (unchanged at 4 between
+  // levels 3 and 4) both stay byte-identical, while the ALREADY-EXISTING
+  // 2nd-level slot row (provisioned by the earlier "View sheet" page load,
+  // not created here) gets its max_uses genuinely bumped 2 → 3 IN PLACE —
+  // resized, not deleted and recreated — rather than the old one-click
+  // action's "resources never touched at all" behavior.
+  const secondLevelSlotBefore = resourcesBefore.find((r) => r.name === "2nd-Level Spell Slots");
+  const firstLevelSlotBefore = resourcesBefore.find((r) => r.name === "1st-Level Spell Slots");
   check(
-    "Level up leaves every character_resources row byte-identical",
-    JSON.stringify(resourcesBefore) === JSON.stringify(resourcesAfter) &&
-      resourcesAfter.some((r) => JSON.stringify(r) === JSON.stringify(seededResource)),
+    "precondition: the earlier sheet visit already lazily provisioned both spell-slot rows",
+    Boolean(secondLevelSlotBefore) && Boolean(firstLevelSlotBefore),
+    JSON.stringify(resourcesBefore)
+  );
+  check(
+    "Level up leaves the pre-existing Channel Divinity resource byte-identical",
+    resourcesAfter.some((r) => JSON.stringify(r) === JSON.stringify(seededResource)),
     JSON.stringify({ before: resourcesBefore, after: resourcesAfter })
+  );
+  check(
+    "Level up leaves the 1st-level slot row untouched (4 → 4, no SRD change at this level)",
+    resourcesAfter.some(
+      (r) => r.id === firstLevelSlotBefore?.id && r.max_uses === 4 && r.current_uses === 4
+    ),
+    JSON.stringify(resourcesAfter)
+  );
+  const secondLevelSlotAfter = resourcesAfter.find((r) => r.id === secondLevelSlotBefore?.id);
+  check(
+    "Level up's spell-slot resync grows the EXISTING 2nd-level slot row's max_uses in place (2 → 3)",
+    secondLevelSlotAfter?.max_uses === 3 && secondLevelSlotAfter?.current_uses === 3,
+    JSON.stringify(secondLevelSlotAfter)
+  );
+  check(
+    "no resource rows were added or removed — the resync resized an existing row rather than creating a new one",
+    resourcesAfter.length === resourcesBefore.length,
+    `before ${resourcesBefore.length}, after ${resourcesAfter.length}`
   );
   check(
     "Level up leaves the character's spells array completely unchanged",
@@ -436,8 +546,12 @@ try {
 }
 
 if (failures > 0) {
-  console.error(`\n${failures} check(s) failed.`);
+  console.error(`\n${failures} check(s) failed, ${blocked} blocked.`);
   process.exit(1);
 }
-console.log("\nAll character-sheet-access checks passed.");
+console.log(
+  blocked > 0
+    ? `\nAll runnable character-sheet-access checks passed; ${blocked} blocked pending migration 0106_character_subclass.sql.`
+    : "\nAll character-sheet-access checks passed."
+);
 process.exit(0);

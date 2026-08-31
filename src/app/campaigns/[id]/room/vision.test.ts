@@ -112,6 +112,7 @@ function character(overrides: Partial<Character>): Character {
     name: "Test Character",
     race: "Human",
     class: "Fighter",
+    subclass: null,
     level: 1,
     strength: 10,
     dexterity: 10,

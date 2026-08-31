@@ -1,0 +1,34 @@
+-- Level-up wizard: "make sure when level ups happen new spells/character
+-- traits/advantages are added to character sheets and users are walked
+-- through them" — the project owner's explicit full-system choice
+-- (author subclasses + build the ASI UI too, not the smaller MVP).
+--
+-- The only schema change this feature needs: characters.subclass, the
+-- player's one SRD subclass pick (e.g. "Thief", "Life Domain") persisted
+-- once chosen in the level-up wizard's subclass-choice step. Everything
+-- else (the subclass catalog, spell class-restriction data, ASI levels,
+-- spell-slot resync) is pure rules-engine data/logic or reuses existing
+-- character_resources rows — no other table changes.
+--
+-- Nullable, no default beyond null itself: every character created before
+-- this migration (and every character created at level 1 by the
+-- unmodified CharacterWizard, which doesn't offer a subclass choice at
+-- creation) starts with no subclass, exactly matching the SRD's own
+-- "you don't pick until your class's gate level" timing. The level-up
+-- wizard treats null-and-past-the-gate-level as "still owed a choice"
+-- regardless of whether THIS particular level-up crossed the gate or the
+-- character simply predates this column — see rules-engine/levelUp.ts's
+-- subclassGateLevel and the wizard's own gating.
+--
+-- RLS: verified directly against 0008_character_rls_policies.sql (the
+-- current owner-or-DM UPDATE policy for `characters` has not moved since —
+-- confirmed by reading it fresh) — "owner or campaign DM can update a
+-- character" is a blanket USING/WITH CHECK with no column list, so it
+-- already covers writes to this new column with zero RLS changes needed.
+-- Unlike 0101's xp/pending_roll_mode, a subclass pick is NOT DM-restricted
+-- (it's the player's own choice, made by completing the level-up wizard),
+-- so no DM-only trigger narrowing is added here either — the 0101
+-- characters_dm_managed_columns trigger only inspects xp and
+-- pending_roll_mode, so it's unaffected by this column's existence.
+alter table public.characters
+  add column if not exists subclass text null;

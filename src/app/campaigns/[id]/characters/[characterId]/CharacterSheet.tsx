@@ -11,13 +11,15 @@ import {
   SKILLS,
   SPELLS,
   abilityModifier,
-  levelUpHitPointGain,
+  featureDescription,
   parseDiceNotation,
   proficiencyBonus,
   resolveRaceOption,
   savingThrowBonus,
   skillCheckBonus,
   passiveScore,
+  subclassGateLevel,
+  subclassesForClass,
   weaponRangeFeet,
   xpToNextLevel,
   type AbilityScore,
@@ -34,6 +36,7 @@ import {
   getActiveCombatantForCharacter,
   listActionOverrides,
   listCharacterConditions,
+  listCharacterResources,
   listCombatantConditions,
   requestOverride,
   updateCharacter,
@@ -56,10 +59,11 @@ import {
   type RollLogEntry,
   type UpdateCharacterPatch,
 } from "@/data-access";
-import { Badge, Button, Panel, SectionHeader, Select, TextInput } from "@/ui-components";
+import { Badge, Button, ChoiceCard, Panel, SectionHeader, Select, TextInput } from "@/ui-components";
 import { postRoll, type RollRequest } from "../../roll/api";
 import { rollDetail, rollHeadline } from "../../roll/format";
 import { AdvantageToggle } from "../../room/DiceLogPanel";
+import { LevelUpWizard } from "../../LevelUpWizard";
 import { PawnModelPicker } from "./PawnModelPicker";
 import styles from "./sheet.module.css";
 
@@ -278,6 +282,37 @@ export function CharacterSheet({
   const klass = CLASSES.find((c) => c.name === character.class) ?? null;
   const isCaster = Boolean(klass?.spellcastingAbility);
 
+  // Standalone subclass choice — independent of the level-up wizard, and
+  // deliberately so: three of the twelve SRD classes (Cleric, Sorcerer,
+  // Warlock) gate their subclass at level 1, the SAME level every character
+  // is created at (CharacterWizard.tsx always creates at level 1, with no
+  // starting-level picker) — so for exactly those three classes, "wait for
+  // the next level-up" would mean the ONLY way to ever record a subclass
+  // pick is to open the level-up wizard and advance to level 2, an
+  // incorrect level/HP bump for a character who hasn't actually earned it
+  // yet. This control lets ANY character already at or past their class's
+  // own gate level (freshly created level-1 Cleric/Sorcerer/Warlock, or a
+  // legacy character that predates this column and is already well past
+  // its class's gate) record the choice on its own, with no level or HP
+  // change attached — exactly what completing this step inside the wizard
+  // would do, minus the rest of that flow. Once set, this section stops
+  // rendering (subclassGateLevel/subclassOptions below are unaffected by
+  // level, so the ONLY gate left is character.subclass === null).
+  const subclassGate = klass ? subclassGateLevel(klass.name) : null;
+  const subclassOptions = klass ? subclassesForClass(klass.name) : [];
+  const needsStandaloneSubclassChoice =
+    klass !== null && subclassGate !== null && character.subclass === null && character.level >= subclassGate;
+  const [subclassPick, setSubclassPick] = useState<string | null>(null);
+  const [subclassSaving, setSubclassSaving] = useState(false);
+
+  async function confirmSubclassPick() {
+    if (!subclassPick || subclassSaving) return;
+    setSubclassSaving(true);
+    const ok = await persist({ subclass: subclassPick });
+    setSubclassSaving(false);
+    if (ok) setSubclassPick(null);
+  }
+
   // Live scores: a valid in-progress draft drives every derived stat before
   // it's persisted; an invalid draft falls back to the saved value.
   const abilityScores = Object.fromEntries(
@@ -357,37 +392,38 @@ export function CharacterSheet({
     if (!ok) setLevelDraft(String(character.level));
   }
 
-  /** The real "gain a level" action — distinct from the raw level number
-   * input above, which stays the "manually correct a mistake" tool and
-   * never touches HP. This always advances by exactly one level (capped at
-   * the SRD max of 20) and grants the SRD's deterministic "average" hit
-   * points for the new level (half the class hit die rounded down, plus
-   * one, plus the Constitution modifier) to BOTH current_hp and max_hp —
-   * a level-up raises your current HP, not just your ceiling. Level and
-   * both HP fields are persisted together in one updateCharacter call.
-   * Same restraint as commitLevel: deliberately does NOT touch
-   * character_resources, spell slots, or the spells list. A character
-   * whose stored class isn't in the CLASSES catalog (homebrew/unrecognized)
-   * has no known hit die, so the action is disabled for them — the raw
-   * level field plus a manual HP edit remains their path. */
-  async function levelUp() {
-    if (character.level >= 20 || !klass) return;
-    const nextLevel = character.level + 1;
-    const hpGain = levelUpHitPointGain(klass.hitDie, character.constitution);
-    const nextCurrentHp = character.current_hp + hpGain;
-    const nextMaxHp = character.max_hp + hpGain;
-    setLevelUpNotice(null);
-    const ok = await persist({
-      level: nextLevel,
-      current_hp: nextCurrentHp,
-      max_hp: nextMaxHp,
-    });
-    if (ok) {
-      setLevelDraft(String(nextLevel));
-      setHpDraft(String(nextCurrentHp));
-      setLevelUpNotice(
-        `Leveled up to ${nextLevel} — hit points +${hpGain} (now ${nextCurrentHp} / ${nextMaxHp}).`
-      );
+  // The guided level-up flow (LevelUpWizard) replaced the old one-click
+  // instant action here — it walks the player through class features,
+  // a subclass pick at the gate level, spell slots/spells for casters, an
+  // Ability Score Improvement at the class's own named ASI levels, and the
+  // same SRD average-hit-die HP gain as before, then commits everything in
+  // one review step. This just opens it; the wizard owns the whole flow
+  // and reports back through onLevelUpApplied below.
+  const [levelUpWizardOpen, setLevelUpWizardOpen] = useState(false);
+
+  /** The wizard's single callback once it commits — mirrors what the old
+   * one-click levelUp() used to do locally (sync the level/HP drafts,
+   * show the same-shaped confirmation notice) plus what's genuinely new:
+   * the ability score drafts can now change (the ASI step) and
+   * character_resources can gain new/resized spell-slot rows the wizard
+   * itself wrote, so resources are re-fetched rather than patched
+   * in-place from here. */
+  async function handleLevelUpApplied(updated: Character, hpGain: number) {
+    setCharacter(updated);
+    setLevelDraft(String(updated.level));
+    setHpDraft(String(updated.current_hp));
+    setScoreDrafts(
+      Object.fromEntries(ABILITIES.map((a) => [a, String(updated[a])])) as Record<AbilityScore, string>
+    );
+    setLevelUpNotice(
+      `Leveled up to ${updated.level} — hit points +${hpGain} (now ${updated.current_hp} / ${updated.max_hp}).`
+    );
+    try {
+      setResources(await listCharacterResources(createBrowserSupabaseClient(), updated.id));
+    } catch {
+      // The wizard's own resource writes already landed server-side; a
+      // failed refetch just leaves this tab's Resources panel stale until
+      // the next reload or postgres_changes-driven refresh elsewhere.
     }
   }
 
@@ -766,7 +802,7 @@ export function CharacterSheet({
                     variant="accent"
                     size="sm"
                     disabled={character.level >= 20 || !klass}
-                    onClick={() => void levelUp()}
+                    onClick={() => setLevelUpWizardOpen(true)}
                     title={
                       character.level >= 20
                         ? "Already at the SRD max level (20)."
@@ -933,6 +969,48 @@ export function CharacterSheet({
               ) : null}
             </div>
           </div>
+
+          {canEdit && needsStandaloneSubclassChoice ? (
+            <div className={styles.subclassChoice} data-testid="sheet-subclass-choice">
+              <span className={styles.vitalLabel}>
+                {character.class} chooses its subclass now — pick one to record it on the sheet.
+              </span>
+              <div className={styles.cardGrid}>
+                {subclassOptions.map((subclass) => (
+                  <ChoiceCard
+                    key={subclass.name}
+                    title={subclass.name}
+                    selected={subclassPick === subclass.name}
+                    onClick={() => setSubclassPick(subclass.name)}
+                    data-testid={`sheet-subclass-choice-${subclass.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")}`}
+                  />
+                ))}
+              </div>
+              {subclassPick ? (
+                <>
+                  <ul className={styles.featureList}>
+                    {(subclassOptions.find((s) => s.name === subclassPick)?.features ?? [])
+                      .filter((f) => f.level <= character.level)
+                      .map((feature) => (
+                        <li key={feature.name} className={styles.featureRow}>
+                          <span className={styles.featureName}>{feature.name}</span>
+                          <span className={styles.featureDescription}>{featureDescription(feature.name)}</span>
+                        </li>
+                      ))}
+                  </ul>
+                  <Button
+                    size="sm"
+                    variant="accent"
+                    disabled={subclassSaving}
+                    onClick={() => void confirmSubclassPick()}
+                    data-testid="sheet-subclass-confirm"
+                  >
+                    {subclassSaving ? "Saving…" : `Confirm ${subclassPick}`}
+                  </Button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </Panel>
 
         {/* Live-play layout: below the full-width Vitals strip, three
@@ -1558,6 +1636,14 @@ export function CharacterSheet({
           </div>
         </div>
       </main>
+
+      {levelUpWizardOpen ? (
+        <LevelUpWizard
+          onClose={() => setLevelUpWizardOpen(false)}
+          character={character}
+          onApplied={(updated, hpGain) => void handleLevelUpApplied(updated, hpGain)}
+        />
+      ) : null}
     </div>
   );
 }

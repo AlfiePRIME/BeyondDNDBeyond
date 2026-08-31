@@ -357,8 +357,30 @@ try {
     );
     await partyPage.screenshot({ path: join(SCREENSHOT_DIR, "party-levelup-offered.png"), fullPage: true });
     console.log(`Screenshot saved: ${join(SCREENSHOT_DIR, "party-levelup-offered.png")}`);
+    // "Confirm level 2" now opens the guided LevelUpWizard (shared with the
+    // character sheet's own "Level up" button) instead of instantly
+    // applying the level — Fighter 1→2 crosses no subclass gate (Martial
+    // Archetype is level 3) and no ASI level (4/6/8/12/14/16/19), and
+    // Fighter isn't a caster, so the flow is just Class Features -> Hit
+    // Points -> Review, exactly like the old math but walked through.
     await partyPage.click(`[data-testid="party-levelup-${fighter.id}"]`);
-    await sleep(1500);
+    await partyPage.waitForSelector('[data-testid="levelup-step-features"]', { timeout: 15000 });
+    const fighterFeatures = (await partyPage.textContent('[data-testid="levelup-step-features"]')) ?? "";
+    check(
+      "the level-up wizard's first step shows the real class feature Fighter gains at level 2 (Action Surge)",
+      fighterFeatures.includes("Action Surge"),
+      fighterFeatures
+    );
+    await partyPage.click('[data-testid="levelup-next"]');
+    await partyPage.waitForSelector('[data-testid="levelup-step-hp"]', { timeout: 15000 });
+    await partyPage.click('[data-testid="levelup-next"]');
+    await partyPage.waitForSelector('[data-testid="levelup-step-review"]', { timeout: 15000 });
+    await partyPage.click('[data-testid="levelup-confirm"]');
+    // Wait for the wizard modal to actually close (onApplied+onClose both
+    // fire only on a successful commit) rather than the card's notice
+    // testid, which already exists from the EARLIER XP-award actions above
+    // and would resolve instantly without waiting for anything.
+    await partyPage.waitForSelector('[data-testid="level-up-wizard"]', { state: "detached", timeout: 15000 });
     {
       const { data } = await admin
         .from("characters")
@@ -366,7 +388,7 @@ try {
         .eq("id", fighter.id)
         .single();
       check(
-        "confirming applies level 2 with the SRD average Fighter gain (d10, CON 10 → +6: 10/10 → 16/16), XP untouched",
+        "confirming through the wizard applies level 2 with the SRD average Fighter gain (d10, CON 10 → +6: 10/10 → 16/16), XP untouched",
         data?.level === 2 && data?.current_hp === 16 && data?.max_hp === 16 && data?.xp === 350,
         JSON.stringify(data)
       );

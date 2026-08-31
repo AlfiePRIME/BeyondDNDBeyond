@@ -496,3 +496,58 @@
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 6px;
 }
+
+/* Standalone subclass choice (CharacterSheet.tsx's needsStandaloneSubclassChoice):
+   a full-width strip below the Vitals grid, shown only for a character
+   already at or past their class's own SRD subclass-gate level with no
+   subclass recorded yet — mirrors LevelUpWizard.tsx's own subclass-step
+   layout (cardGrid/featureList/featureRow/featureName/featureDescription
+   below) for visual consistency, since this is the same choice, just
+   reachable outside a level-up. */
+.subclassChoice {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--dim2);
+}
+
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.featureList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.featureRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--dim2);
+}
+
+.featureRow:last-child {
+  border-bottom: none;
+}
+
+.featureName {
+  font-family: var(--font-m);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.featureDescription {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}

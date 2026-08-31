@@ -194,6 +194,10 @@ export function ImportFlow({
         name: name.trim() || "Imported Character",
         race: raceName || "Unknown",
         class: className || "Unknown",
+        // The import flow has no source data for a subclass pick — like
+        // fresh character creation, that's the level-up wizard's job once
+        // the imported character next levels up past its class's gate.
+        subclass: null,
         level: parsedLevel,
         ...parsedScores,
         current_hp: parseIntIn(maxHp, 0, 999) ?? 10,
