@@ -14,6 +14,7 @@ import {
   applyExhaustionDelta,
   applyHpDelta,
   applyNpcHpDelta,
+  applyNpcTokenHpDelta,
   applyResourceDelta,
   applyWeatherTick,
   claimContainerItem,
@@ -5702,6 +5703,57 @@ export function GameRoom({
     [tokenBusy, applyTokenChange, publishTokenChange, pushAllegianceBannerIfNeeded]
   );
 
+  // NPC HP outside combat: read-only from the existing combat state (never
+  // new combat_combatants handling) — every token_id currently seated as a
+  // combatant in the campaign's active encounter, if any. TokenPanel's own
+  // damage/heal control is suppressed for a token in this set, since
+  // CombatPanel's existing control already owns that token's HP writes
+  // (and keeps combat_combatants.npc_current_hp in sync); TokenPanel still
+  // shows the read-only HP number regardless.
+  const activeCombatantTokenIds = useMemo(
+    () => new Set((combat?.combatants ?? []).flatMap((combatant) => (combatant.token_id ? [combatant.token_id] : []))),
+    [combat]
+  );
+
+  // TokenPanel's own always-visible damage/heal control (the DM ask this
+  // closes): a signed HP delta applied straight to a stat-blocked NPC
+  // token's own current_hp via applyNpcTokenHpDelta (mapTokens.ts) — no
+  // active encounter, and no combat_combatants row, required at all. Only
+  // ever invoked by TokenPanel for a token with a resolvable stat block
+  // that is NOT in activeCombatantTokenIds (see that panel's own render
+  // guard), so this never races with CombatPanel's own combatant-scoped
+  // control. Same persist-then-apply-locally-then-broadcast shape as
+  // handleSetAllegiance, so every other connected client's TokenPanel (and
+  // any live 3D HP indicator reading the same token) updates immediately.
+  const handleApplyNpcTokenHp = useCallback(
+    (token: MapToken, delta: number) => {
+      if (tokenBusy) return;
+      const statBlock = token.monster_stat_block_id
+        ? statBlocks.find((candidate) => candidate.id === token.monster_stat_block_id)
+        : undefined;
+      if (!statBlock) return;
+      setTokenBusy(true);
+      setTokenError(null);
+      void (async () => {
+        try {
+          const updated = await applyNpcTokenHpDelta(createBrowserSupabaseClient(), {
+            tokenId: token.id,
+            currentHp: token.current_hp,
+            maxHp: statBlock.max_hp,
+            delta,
+          });
+          applyTokenChange(updated.id, updated);
+          await publishTokenChange(updated.id, updated);
+        } catch (err) {
+          setTokenError(errorMessage(err) ?? "Could not update that token's HP.");
+        } finally {
+          setTokenBusy(false);
+        }
+      })();
+    },
+    [tokenBusy, statBlocks, applyTokenChange, publishTokenChange]
+  );
+
   // Persist first, refresh from the DB, broadcast last — the same ordering
   // as triggering/map switching, and the refresh doubles as the sender's own
   // UI update since publish doesn't echo back to its sender.
@@ -9431,6 +9483,8 @@ export function GameRoom({
             currentUserId={currentUserId}
             characters={characterRows}
             tokens={liveMap.tokens}
+            statBlocks={statBlocks}
+            activeCombatantTokenIds={activeCombatantTokenIds}
             armed={armedToken}
             busy={tokenBusy}
             error={tokenError}
@@ -9438,6 +9492,7 @@ export function GameRoom({
             onCancel={() => setArmedToken(null)}
             onRemove={handleRemoveToken}
             onSetAllegiance={handleSetAllegiance}
+            onApplyNpcHp={handleApplyNpcTokenHp}
           />
         </DraggablePanel>
       ) : null}

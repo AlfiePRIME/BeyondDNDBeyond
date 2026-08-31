@@ -329,6 +329,45 @@ export async function setTokenAllegiance(
 }
 
 /**
+ * NPC HP outside combat: a signed HP delta applied directly to a stat-
+ * blocked NPC token's own current_hp — TokenPanel's own always-visible
+ * damage/heal control, closing the gap where an NPC's HP was only ever
+ * trackable via CombatPanel, and only once its token had been seated as a
+ * combatant in an active encounter. Unlike combat.ts's applyNpcHpDelta
+ * (apply_npc_hp_delta), this needs no existing combat_combatants row at
+ * all — a token that has never been (or currently isn't) an active
+ * combatant has none, which is the common case this feature targets.
+ * Clamps to [0, maxHp] exactly like that RPC's own clamp; the caller
+ * resolves maxHp from the token's linked stat block and passes the token's
+ * own current_hp as-is (null included) — this function applies the "null
+ * means full" convention 0089 established before adding the delta. A
+ * plain single-column update through the SAME DM-or-owning-player RLS
+ * setTokenAllegiance/rotateMapToken already rely on (0019) — no new grant
+ * needed, since an NPC token's only controlling player IS the DM in
+ * practice (TokenPanel's own canControl). GameRoom's own handler only ever
+ * calls this for a token that is NOT the active encounter's own currently-
+ * seated combatant — CombatPanel's existing damage/heal control already
+ * owns that case (keeping combat_combatants.npc_current_hp in sync via
+ * apply_npc_hp_delta); this function never touches that table, so the two
+ * HP counters can't drift apart from this code path.
+ */
+export async function applyNpcTokenHpDelta(
+  supabase: SupabaseClient,
+  params: { tokenId: string; currentHp: number | null; maxHp: number; delta: number }
+): Promise<MapToken> {
+  const nextHp = Math.min(params.maxHp, Math.max(0, (params.currentHp ?? params.maxHp) + params.delta));
+  const { data, error } = await supabase
+    .from("map_tokens")
+    .update({ current_hp: nextHp })
+    .eq("id", params.tokenId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
  * Press-R-to-rotate: same shape as setTokenAllegiance (a plain single-column
  * update), allowed for the DM or the token's own owning player under the
  * SAME "DM, or the owning player, can move a token" UPDATE policy

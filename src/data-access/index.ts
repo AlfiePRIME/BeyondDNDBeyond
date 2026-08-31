@@ -232,6 +232,7 @@ export {
   moveCombatToken,
   transitionMapToken,
   setTokenAllegiance,
+  applyNpcTokenHpDelta,
   rotateMapToken,
   deleteMapToken,
   TOKEN_ALLEGIANCES,
