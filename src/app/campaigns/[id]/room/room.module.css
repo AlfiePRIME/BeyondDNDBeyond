@@ -1022,6 +1022,41 @@
   color: var(--orange);
 }
 
+/* Attack Weapon/Spell Picker (distinct addition to the click-to-attack
+   modal — unrelated to any object-click/placement work elsewhere in this
+   file): the computeQuickActions card grid, grouped by weapons/cantrips/
+   spells, mirroring CharacterWizard's own spell-picker group/cardGrid
+   layout (wizard.module.css) so a "nice UI" reads consistently with the
+   rest of the app rather than inventing a new visual language. */
+.attackPickerScroll {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.attackPickerGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attackPickerGroupLabel {
+  font-family: var(--font-m);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.attackPickerCardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
 /* Prompt 54: the opportunity-attack prompt surface — a transient banner
    stack carrying the Prompt 49/50 prompt-banner visual weight: it only
    exists while an offer is pending, and it must not get lost. Phase B: no

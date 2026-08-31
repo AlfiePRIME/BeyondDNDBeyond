@@ -48,6 +48,7 @@ import {
   getMapArt,
   getMapArtSignedUrl,
   getSeatOffsetsForCampaign,
+  listCharacterResources,
   listCharacterRosterNames,
   listCharactersForCampaign,
   listCombatCombatants,
@@ -118,6 +119,7 @@ import {
   type CampaignMap,
   type ChatMessage,
   type Character,
+  type CharacterResource,
   type CharacterRosterName,
   type CombatCombatant,
   type CombatantEconomyFlag,
@@ -157,9 +159,11 @@ import {
 } from "@/data-access";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
+  CLASSES,
   CONDITION_BY_KEY,
   EXHAUSTION_KEY,
   computeOpportunityAttacks,
+  computeQuickActions,
   computeReachableCells,
   computeVisibilityTiers,
   fallDamageDiceCount,
@@ -173,6 +177,7 @@ import {
   type ConditionKey,
   type GridPoint,
   type MovementCellInput,
+  type QuickAction,
   type SkillName,
   type VisibilityCellInput,
   type VisibilityTier,
@@ -181,6 +186,7 @@ import { applyGameMusic, applyWeatherAudio, resolveGameMusic, resolveWeatherAudi
 import {
   Badge,
   Button,
+  ChoiceCard,
   computeChatBubbleDurationMs,
   Droplets,
   LightningFlash,
@@ -1129,6 +1135,27 @@ function ConnectedMemberDiceTray({
       onDieSettled={handleDieSettled}
     />
   );
+}
+
+// Attack Weapon/Spell Picker (distinct addition to the click-to-attack
+// modal's own pendingAttack scope — unrelated to any object-click/
+// placement work elsewhere in this file): a stable React key/data-testid
+// stem for one computeQuickActions result, matching QuickActionsPanel's
+// own module-level actionKey exactly (same shape, kept as a separate
+// local copy rather than an import since that one is that panel's own
+// private helper, not part of any shared module).
+function attackPickerActionKey(action: QuickAction): string {
+  return `${action.source}-${action.name.toLowerCase().replace(/\s+/g, "-")}`;
+}
+
+/** One computeQuickActions result, decorated for the picker's own card
+ * grid — see pendingAttackActionGroups' own comment for what reachesTarget
+ * and disabledReason mean. */
+interface AttackPickerItem {
+  action: QuickAction;
+  key: string;
+  reachesTarget: boolean;
+  disabledReason: string | null;
 }
 
 export function GameRoom({
@@ -3360,12 +3387,39 @@ export function GameRoom({
   const [pendingAttack, setPendingAttack] = useState<{
     attackerCharacterId: string;
     targetToken: MapToken;
+    // Attack Weapon/Spell Picker addition (pendingAttack's own scope only —
+    // unrelated to any object-click/placement work elsewhere in this file):
+    // the attacker's own token position at the moment the prompt opened, so
+    // computeQuickActions below can do its normal range-with-repositioning
+    // check against the fixed target this modal already knows about.
+    attackerPosition: GridPoint;
   } | null>(null);
   const [attackKind, setAttackKind] = useState<AttackKind>("melee");
   const [attackDamageNotation, setAttackDamageNotation] = useState("1d6");
   const [attackMode, setAttackMode] = useState<AdvantageMode>("normal");
   const [attackBusy, setAttackBusy] = useState(false);
   const [attackError, setAttackError] = useState<string | null>(null);
+  // Attack Weapon/Spell Picker (distinct addition — see the modal's own JSX
+  // comment further down for the full picture): `selectedQuickActionKey`
+  // tracks which computeQuickActions card is currently highlighted purely
+  // for the picker's own selected-card styling; the actual values that fire
+  // on Roll! still live in attackKind/attackDamageNotation above exactly as
+  // before — picking a card just pre-fills them instead of the player
+  // typing them in. `manualAttackEntry` reveals the original free-text
+  // kind+notation fields as a fallback, forced on further down whenever the
+  // attacker has nothing tagged at all, and reachable by choice otherwise
+  // for an attack computeQuickActions doesn't cover (e.g. an improvised or
+  // homebrew weapon never tagged on the sheet).
+  const [selectedQuickActionKey, setSelectedQuickActionKey] = useState<string | null>(null);
+  const [manualAttackEntry, setManualAttackEntry] = useState(false);
+  // Attack Weapon/Spell Picker: the attacking character's live spell-slot
+  // resources, fetched fresh each time the prompt opens — same shape/intent
+  // as QuickActionsPanel's own resourceState, just keyed off this modal's
+  // pendingAttack instead of a combat turn's current combatant.
+  const [pendingAttackResourceState, setPendingAttackResourceState] = useState<{
+    characterId: string;
+    rows: CharacterResource[];
+  } | null>(null);
   // Click-select-to-move (replaces the old click-hold-drag gesture): the
   // token THIS client has picked up, if any. Purely local — never broadcast
   // directly (publishTokenSelection below sends the poke), and the only
@@ -5333,7 +5387,15 @@ export function GameRoom({
           setAttackDamageNotation("1d6");
           setAttackMode("normal");
           setAttackError(null);
-          setPendingAttack({ attackerCharacterId: selected.character_id, targetToken: clicked });
+          // Attack Weapon/Spell Picker addition: fresh picker state for the
+          // newly-opened prompt (see the state's own comments above).
+          setSelectedQuickActionKey(null);
+          setManualAttackEntry(false);
+          setPendingAttack({
+            attackerCharacterId: selected.character_id,
+            targetToken: clicked,
+            attackerPosition: { x: selected.x, y: selected.y },
+          });
           return;
         }
       }
@@ -5690,7 +5752,15 @@ export function GameRoom({
         setAttackDamageNotation("1d6");
         setAttackMode("normal");
         setAttackError(null);
-        setPendingAttack({ attackerCharacterId: token.character_id, targetToken: occupant });
+        // Attack Weapon/Spell Picker addition: fresh picker state for the
+        // newly-opened prompt (see the state's own comments above).
+        setSelectedQuickActionKey(null);
+        setManualAttackEntry(false);
+        setPendingAttack({
+          attackerCharacterId: token.character_id,
+          targetToken: occupant,
+          attackerPosition: { x: token.x, y: token.y },
+        });
         return;
       }
       // Movement Collision & Gated Interaction Checks: any OTHER occupied
@@ -6880,6 +6950,148 @@ export function GameRoom({
       characterRows.find((row) => row.id === pendingAttack.targetToken.character_id)?.name ??
       "the target")
     : "";
+
+  // --- Attack Weapon/Spell Picker (distinct, self-contained addition to
+  // pendingAttack's own scope — no interaction at all with the object-
+  // click/placement/selectability work happening elsewhere in this file).
+  // Replaces the manual "pick a category, type dice notation from memory"
+  // form with a real card picker built from computeQuickActions — the
+  // exact same pure engine QuickActionsPanel already relies on — fed this
+  // modal's fixed attacker/target instead of a combat turn's whole hostile
+  // roster. See that function's own doc comment in rules-engine/
+  // quickActions.ts for the "in range with full-speed repositioning" and
+  // slot-blocking rules it applies.
+  const pendingAttackCharacterId = pendingAttack?.attackerCharacterId ?? null;
+  const pendingAttackCharacter = pendingAttackCharacterId
+    ? (characterRows.find((row) => row.id === pendingAttackCharacterId) ?? null)
+    : null;
+
+  // Fetches the attacker's live spell-slot resources fresh each time the
+  // prompt opens — mirrors QuickActionsPanel's own resourceState effect
+  // exactly, just keyed off this modal's pendingAttack instead of a combat
+  // turn's current combatant.
+  useEffect(() => {
+    if (!pendingAttackCharacterId) return;
+    let cancelled = false;
+    listCharacterResources(createBrowserSupabaseClient(), pendingAttackCharacterId)
+      .then((rows) => {
+        if (!cancelled) {
+          setPendingAttackResourceState({ characterId: pendingAttackCharacterId, rows });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingAttackCharacterId]);
+
+  const pendingAttackResources = useMemo(
+    () =>
+      pendingAttackResourceState &&
+      pendingAttackResourceState.characterId === pendingAttackCharacterId
+        ? pendingAttackResourceState.rows
+        : [],
+    [pendingAttackResourceState, pendingAttackCharacterId]
+  );
+
+  // Every non-party token currently on the map — click-to-attack itself
+  // can target "hostile" AND "neutral" tokens (see handleTokenSelect/
+  // handleSelectedTokenCellClick's own `allegiance !== "party"` checks
+  // above) and works whether or not combat is formally active, so this
+  // deliberately does NOT narrow to an active encounter's combatant roster
+  // the way QuickActionsPanel's own turn-scoped `hostiles` does —
+  // pendingAttack.targetToken (below) is what actually decides which one
+  // this modal fires at; the wider list just lets computeQuickActions
+  // report a weapon/spell's full reach honestly.
+  const pendingAttackHostileTokens = useMemo(
+    () => (liveMap ? liveMap.tokens.filter((token) => token.allegiance !== "party") : []),
+    [liveMap]
+  );
+
+  const pendingAttackSpellCapable = pendingAttackCharacter
+    ? Boolean(
+        CLASSES.find((candidate) => candidate.name === pendingAttackCharacter.class)
+          ?.spellcastingAbility
+      )
+    : false;
+
+  const pendingAttackActions = useMemo(() => {
+    if (!pendingAttack || !pendingAttackCharacter) return [];
+    return computeQuickActions({
+      position: pendingAttack.attackerPosition,
+      speed: pendingAttackCharacter.speed,
+      hostiles: pendingAttackHostileTokens.map((token) => ({
+        tokenId: token.id,
+        position: { x: token.x, y: token.y },
+      })),
+      inventory: pendingAttackCharacter.inventory,
+      knownSpellNames: pendingAttackSpellCapable
+        ? pendingAttackCharacter.spells.map((spell) => spell.name)
+        : [],
+      resources: pendingAttackResources,
+    });
+  }, [
+    pendingAttack,
+    pendingAttackCharacter,
+    pendingAttackHostileTokens,
+    pendingAttackSpellCapable,
+    pendingAttackResources,
+  ]);
+
+  // Grouped + sorted for the picker's own card grid: weapons, cantrips,
+  // then leveled spells, each internally sorted so an action that can
+  // actually reach THIS modal's fixed target (its id present in the
+  // action's own targetTokenIds — computeQuickActions' wider hostile list
+  // above means an action can come back still reaching only some OTHER
+  // hostile) sorts first, a resource-blocked-but-reaching action next, and
+  // an action that reaches a different hostile but not this one last —
+  // shown disabled with a reason rather than hidden, the same "don't just
+  // hide it" convention QuickActionsPanel's own blockedReason rendering
+  // already established for resource blocks.
+  const pendingAttackActionGroups = useMemo(() => {
+    const targetId = pendingAttack?.targetToken.id ?? null;
+    const decorated: AttackPickerItem[] = pendingAttackActions.map((action) => {
+      const reachesTarget = targetId !== null && action.targetTokenIds.includes(targetId);
+      const disabledReason =
+        action.blockedReason ?? (reachesTarget ? null : "Out of range of this target");
+      return { action, key: attackPickerActionKey(action), reachesTarget, disabledReason };
+    });
+    const rank = (item: AttackPickerItem) =>
+      item.disabledReason === null ? 0 : item.reachesTarget ? 1 : 2;
+    const sorted = [...decorated].sort((a, b) => rank(a) - rank(b));
+    return [
+      { label: "Weapons", items: sorted.filter((item) => item.action.source === "weapon") },
+      {
+        label: "Cantrips",
+        items: sorted.filter(
+          (item) => item.action.source === "spell" && item.action.spellLevel === 0
+        ),
+      },
+      {
+        label: "Spells",
+        items: sorted.filter(
+          (item) => item.action.source === "spell" && (item.action.spellLevel ?? 0) > 0
+        ),
+      },
+    ].filter((group) => group.items.length > 0);
+  }, [pendingAttack, pendingAttackActions]);
+
+  // Forced on with nothing tagged at all (there's no picker to show), and
+  // reachable by choice otherwise so the original free-text fields stay
+  // available for whatever computeQuickActions doesn't cover (an
+  // improvised/homebrew attack never tagged on the sheet).
+  const showManualAttackForm = manualAttackEntry || pendingAttackActions.length === 0;
+
+  const handlePickQuickAction = useCallback(
+    (item: AttackPickerItem) => {
+      if (attackBusy || item.disabledReason !== null) return;
+      setSelectedQuickActionKey(item.key);
+      setAttackKind(item.action.attackKind);
+      setAttackDamageNotation(item.action.damageNotation);
+    },
+    [attackBusy]
+  );
+  // --- end Attack Weapon/Spell Picker addition ---
 
   const handleCancelAttack = useCallback(() => {
     if (attackBusy) return;
@@ -9886,11 +10098,17 @@ export function GameRoom({
           kenCellClick's own occupant check) — Roll!/Cancel, whether or not
           combat is formally active. Roll! posts an ordinary "attack" roll
           (the same roll route every other attack goes through); the target
-          AC is always auto-filled, never typed in here. */}
+          AC is always auto-filled, never typed in here. Attack Weapon/
+          Spell Picker addition: the body now offers a computeQuickActions-
+          built card picker (weapons/cantrips/spells) instead of asking the
+          player to pick a category and type dice notation from memory —
+          `size="wide"` gives that card grid room; the footer/roll mechanics
+          below are otherwise completely unchanged. */}
       <Modal
         open={pendingAttack !== null}
         onClose={handleCancelAttack}
         title={`Attack ${pendingAttackTargetName}?`}
+        size="wide"
         footer={
           pendingAttack ? (
             <>
@@ -9928,25 +10146,101 @@ export function GameRoom({
                 Enemies book first.
               </p>
             )}
-            <Select
-              label="Attack kind"
-              value={attackKind}
-              onChange={(event) => setAttackKind(event.target.value as AttackKind)}
-              disabled={attackBusy}
-              data-testid="attack-prompt-kind"
-            >
-              <option value="melee">Melee</option>
-              <option value="ranged">Ranged</option>
-              <option value="finesse">Finesse</option>
-              <option value="spell">Spell</option>
-            </Select>
-            <TextInput
-              label="Damage dice"
-              value={attackDamageNotation}
-              onChange={(event) => setAttackDamageNotation(event.target.value)}
-              disabled={attackBusy}
-              data-testid="attack-prompt-damage"
-            />
+            {/* Attack Weapon/Spell Picker (distinct addition — see
+                pendingAttackActionGroups' own comment further up for the
+                grouping/sorting rules). A character with nothing tagged at
+                all falls straight through to the original manual form
+                below with a pointer at the character sheet; otherwise the
+                picker is the default view, with the manual form always one
+                click away as a fallback for whatever computeQuickActions
+                doesn't cover. */}
+            {pendingAttackActions.length === 0 ? (
+              <p className={styles.hint} data-testid="attack-prompt-nothing-tagged">
+                Nothing tagged for {pendingAttackCharacter?.name ?? "this character"} yet — attack
+                manually below, or tag a weapon or spell on the character sheet.
+              </p>
+            ) : !showManualAttackForm ? (
+              <>
+                <div className={styles.attackPickerScroll} data-testid="attack-prompt-picker">
+                  {pendingAttackActionGroups.map((group) => (
+                    <div key={group.label} className={styles.attackPickerGroup}>
+                      <span className={styles.attackPickerGroupLabel}>{group.label}</span>
+                      <div className={styles.attackPickerCardGrid}>
+                        {group.items.map((item) => (
+                          <ChoiceCard
+                            key={item.key}
+                            title={item.action.name}
+                            meta={`${item.action.damageNotation} · ${item.action.rangeFeet} ft`}
+                            selected={selectedQuickActionKey === item.key}
+                            disabled={attackBusy || item.disabledReason !== null}
+                            onClick={() => handlePickQuickAction(item)}
+                            data-testid={`attack-prompt-action-${item.key}`}
+                          >
+                            {item.action.spellLevel !== null ? (
+                              <Badge tone="purple">
+                                {item.action.spellLevel === 0
+                                  ? "cantrip"
+                                  : `level ${item.action.spellLevel}`}
+                              </Badge>
+                            ) : null}
+                            {item.disabledReason ? (
+                              <span
+                                className={styles.blockedReason}
+                                data-testid={`attack-prompt-action-blocked-${item.key}`}
+                              >
+                                {item.disabledReason}
+                              </span>
+                            ) : null}
+                          </ChoiceCard>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={attackBusy}
+                  onClick={() => setManualAttackEntry(true)}
+                  data-testid="attack-prompt-manual-toggle"
+                >
+                  Enter manually instead
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={attackBusy}
+                onClick={() => setManualAttackEntry(false)}
+                data-testid="attack-prompt-manual-back"
+              >
+                ← Back to tagged attacks
+              </Button>
+            )}
+            {showManualAttackForm ? (
+              <>
+                <Select
+                  label="Attack kind"
+                  value={attackKind}
+                  onChange={(event) => setAttackKind(event.target.value as AttackKind)}
+                  disabled={attackBusy}
+                  data-testid="attack-prompt-kind"
+                >
+                  <option value="melee">Melee</option>
+                  <option value="ranged">Ranged</option>
+                  <option value="finesse">Finesse</option>
+                  <option value="spell">Spell</option>
+                </Select>
+                <TextInput
+                  label="Damage dice"
+                  value={attackDamageNotation}
+                  onChange={(event) => setAttackDamageNotation(event.target.value)}
+                  disabled={attackBusy}
+                  data-testid="attack-prompt-damage"
+                />
+              </>
+            ) : null}
             <AdvantageToggle
               mode={attackMode}
               onChange={setAttackMode}
