@@ -482,6 +482,17 @@
   outline: none;
 }
 
+/* Modal's own `size="wide"` variant (default stays exactly the 480px cap
+   above, unchanged for every other caller) — for content that's
+   genuinely dense at 480px (LevelUpWizard's own multi-column step bodies:
+   subclass card grids, side-by-side ability selects, spell groups), which
+   previously demanded its own min-width wider than .modalDialog ever
+   allowed, forcing the dialog into a horizontal-scroll state instead of
+   ever actually growing. */
+.modalDialogWide {
+  width: min(94vw, 720px);
+}
+
 .modalDialog::before {
   content: "";
   height: 1px;

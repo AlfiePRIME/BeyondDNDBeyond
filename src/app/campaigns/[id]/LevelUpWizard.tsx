@@ -341,6 +341,7 @@ export function LevelUpWizard({
       onClose={onClose}
       title={`Level Up — ${character.name}`}
       footer={!canLevelUp ? undefined : footer}
+      size="wide"
     >
       <div className={styles.wizard} data-testid="level-up-wizard">
         {!canLevelUp ? (

@@ -12,6 +12,11 @@ export interface ModalProps {
   title: ReactNode;
   /** Optional footer row (typically Buttons), right-aligned. */
   footer?: ReactNode;
+  /** Dialog width — "default" (480px cap) unless the content is genuinely
+   * dense enough to need more room (a multi-column step body, a wide
+   * table), in which case "wide" (720px cap) avoids forcing horizontal
+   * scroll inside the dialog instead of ever actually growing to fit. */
+  size?: "default" | "wide";
   children?: ReactNode;
 }
 
@@ -20,7 +25,7 @@ export interface ModalProps {
  * purple glow chrome, Escape/backdrop dismissal, focus moved into the
  * dialog on open and restored on close.
  */
-export function Modal({ open, onClose, title, footer, children }: ModalProps) {
+export function Modal({ open, onClose, title, footer, size = "default", children }: ModalProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -66,7 +71,7 @@ export function Modal({ open, onClose, title, footer, children }: ModalProps) {
     <div className={styles.modalOverlay} onMouseDown={onOverlayMouseDown}>
       <div
         ref={dialogRef}
-        className={styles.modalDialog}
+        className={size === "wide" ? `${styles.modalDialog} ${styles.modalDialogWide}` : styles.modalDialog}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

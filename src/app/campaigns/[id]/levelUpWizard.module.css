@@ -2,7 +2,16 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-width: min(560px, 80vw);
+  /* Fills whatever width Modal's own size="wide" variant actually
+     provides (ui.module.css's .modalDialogWide, 720px cap) — this used to
+     instead DEMAND its own min-width wider than the dialog ever allowed
+     (the default 480px cap, before this component requested "wide"),
+     which never grew the dialog to fit; it just forced this content
+     wider than its own container, so reading anything past the first
+     ~480px meant scrolling the whole dialog sideways. width: 100% (never
+     min-width) can't repeat that mistake — it can only ever fill the
+     dialog it's actually given, whatever that width is. */
+  width: 100%;
 }
 
 .stepBadges {
