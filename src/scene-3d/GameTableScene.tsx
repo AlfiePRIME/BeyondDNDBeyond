@@ -1339,6 +1339,12 @@ export interface GameTableSceneProps {
    * (click-select-to-move pawn-model repro investigation, re-opened) — see
    * its own doc comment. */
   onTokenModelWorldDebug?: (id: string, world: { x: number; y: number; z: number; yawDeg: number }) => void;
+  /** Pass-through to MapSurface's liveModelWorldDebug — see its own doc
+   * comment. GameRoom is the only real caller, and only ever sets this true
+   * for its own DM client once the DM has opted into the live diagnostic
+   * overlay; false/undefined (every other caller, and every non-DM viewer)
+   * changes nothing about how tokens render or move. */
+  liveModelWorldDebug?: boolean;
   /** This viewer's own visible chair offsets, keyed by user_id — scene-3d's
    * own SeatOffset (seating.ts), not data-access's structurally-identical
    * twin (the SeatMember/module-boundary convention already documented on
@@ -1670,6 +1676,7 @@ export function GameTableScene({
   onTokenMeasureDebug,
   onTokenTransformDebug,
   onTokenModelWorldDebug,
+  liveModelWorldDebug = false,
   seatOffsets = EMPTY_SEAT_OFFSETS,
   onChairDragEnd,
   onOwnChairProjectedPosition,
@@ -2738,6 +2745,7 @@ export function GameTableScene({
               onTokenMeasureDebug={onTokenMeasureDebug}
               onTokenTransformDebug={onTokenTransformDebug}
               onTokenModelWorldDebug={onTokenModelWorldDebug}
+              liveModelWorldDebug={liveModelWorldDebug}
             />
             {/* Live-room move-drag: an invisible, oversized grab handle
                 riding on top of whichever object LiveObjectsPanel currently

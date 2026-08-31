@@ -279,6 +279,7 @@ import { ChatLogPanel } from "./ChatLogPanel";
 import { ContainerPanel } from "./ContainerPanel";
 import { DraggablePanel, DmBookSizeBridge, PanelDockBar, PanelLayoutProvider } from "./DraggablePanel";
 import { SoundControl } from "./SoundControl";
+import { TokenModelDebugOverlay, type TokenModelDebugRow } from "./TokenModelDebugOverlay";
 import { AdvantageToggle, DiceLogPanel } from "./DiceLogPanel";
 import { DiceTrayPicker } from "./DiceTrayPicker";
 import { DmBook } from "./DmBook";
@@ -297,6 +298,28 @@ import styles from "./room.module.css";
 // multi-hour session's own re-render never needs a fresh sign mid-scene,
 // short enough that a leaked URL doesn't stay valid indefinitely.
 const MAP_ART_SIGNED_URL_TTL_SECONDS = 60 * 60;
+
+// DM live model/position diagnostic overlay (TokenModelDebugOverlay.tsx):
+// how far a model-backed token's own ACTUAL rendered world position
+// (onTokenModelWorldDebug) may drift from where its logical/DB position
+// says it should be before the overlay flags it as a mismatch, expressed
+// as a FRACTION OF A GRID CELL rather than a raw world-unit distance so it
+// reads the same regardless of a given map's own fitted cellSize
+// (computeTableMapMetrics — a large/lopsided grid gets a much smaller
+// cellSize than a small one). No prior "is this token's position close
+// enough" convention exists for a LIVE human-facing readout to reuse
+// directly — the closest precedents are verify-pawn-model-transform-
+// repeat.mjs's own closeTo (0.01 world units, used to assert an UNCHANGED
+// transform is byte-identical across two readings, a much stricter bar
+// than "did this settle in the right place") and the chair/seat drag
+// scripts' own 0.05-world-unit "did this visibly move" threshold. 0.05 of
+// a cell sits on that same 0.05 order of magnitude while staying
+// grid-size-agnostic, and is generous enough that ordinary floating-point
+// noise from the settle math never trips a false "MISMATCH" — the actual
+// reported bug is a full-cell-or-more freeze, not a sub-percent rounding
+// gap, so there's no real tension between "loose enough to stay quiet
+// normally" and "tight enough to catch the real bug" here.
+const MODEL_WORLD_MISMATCH_TOLERANCE_CELLS = 0.05;
 
 const SESSION_ENDED_EVENT = "session-ended";
 // All on the CAMPAIGN channel, not the room channel — the room topic's
@@ -1734,6 +1757,19 @@ export function GameRoom({
     },
     []
   );
+  // DM live model/position diagnostic overlay (TokenModelDebugOverlay.tsx's
+  // own top doc comment): off by default, DM-only opt-in — a capture tool
+  // for the click-select-to-move pawn-model repro investigation above, not
+  // a fifth automated reproduction attempt. Drives BOTH the visible panel
+  // below AND (via liveModelWorldDebug, threaded down through GameTableScene
+  // to MapSurface's own prop of that name) whether every model-backed
+  // TokenMarker starts sampling onTokenModelWorldDebug continuously instead
+  // of only on settle/rotation-change — see that prop's own doc comment.
+  // Never true for a non-DM viewer: nothing in this file ever flips it on
+  // except the DM-gated toggle button this state feeds, and
+  // TokenModelDebugOverlay itself renders nothing at all (not even a
+  // disabled control) when isDM is false.
+  const [modelWorldDebugOverlayEnabled, setModelWorldDebugOverlayEnabled] = useState(false);
   // Investigation-only (teleport/mis-scale bug hunt): mirrors each seated
   // member's own loaded avatar model's measured bounding-box height and
   // derived scale factor — same reasoning as avatarPoseDebug above.
@@ -8553,6 +8589,61 @@ export function GameRoom({
     return { ...metrics, offsetX, offsetZ };
   }, [tableMap]);
 
+  // DM live model/position diagnostic overlay (TokenModelDebugOverlay.tsx):
+  // one row per model-backed token currently on this map, pairing its
+  // logical/DB position (tableMap.tokens' own x/y/elevation/rotation — the
+  // SAME fields every other client on this map already treats as this
+  // token's authoritative current position) against its model's own ACTUAL
+  // rendered world position (tokenModelWorldDebug, keyed by token id —
+  // MapSurfaceProps.onTokenModelWorldDebug's own doc comment). Reuses
+  // revealCardMetrics' own cellSize/offsetX/offsetZ (the exact pure
+  // functions MapSurface itself renders through) to convert the DB grid
+  // position into the SAME world-space x/z the model's own reading is
+  // already in, rather than a second, independently-derived formula.
+  //
+  // Deliberately does NOT attempt to also score elevation/rotation for
+  // mismatch: the model's real-world Y carries fixed offsets this file has
+  // no clean way to reproduce (TokenMarker's own PLINTH_HEIGHT, the
+  // click-selected RAISE_HEIGHT, any crossing-surface stand height), and
+  // its real-world yaw is the SUM of rotationDeg, the per-model
+  // forwardOffsetDeg orientation correction, and any stairs-tilt yaw — none
+  // of which this file resolves independently of MapSurface. Recomputing
+  // an approximation of either risks a WRONG, misleading mismatch flag,
+  // worse than the honest choice made here: show both raw readings side by
+  // side so a DM can eyeball them, and reserve the actual scored/highlighted
+  // mismatch for position (x/z), which is both fully reproducible here AND
+  // the exact axis the real reported bug is on ("the model stays rendered
+  // at its old position").
+  //
+  // Gated on currentUserIsDM && modelWorldDebugOverlayEnabled (returns []
+  // otherwise) so this never does any work at all for a player's client or
+  // for a DM who hasn't opted in — tokenModelWorldDebug itself keeps
+  // updating regardless (it's wired unconditionally, same as before this
+  // feature), but converting it into rows nobody's looking at would be
+  // pure waste.
+  const modelWorldDebugRows = useMemo<TokenModelDebugRow[]>(() => {
+    if (!currentUserIsDM || !modelWorldDebugOverlayEnabled || !tableMap || !revealCardMetrics) return [];
+    const { cellSize, offsetX, offsetZ } = revealCardMetrics;
+    return tableMap.tokens
+      .filter((token) => token.modelUrl)
+      .map((token) => {
+        const model = tokenModelWorldDebug[token.id] ?? null;
+        const expectedWorldX = token.x * cellSize - offsetX;
+        const expectedWorldZ = token.y * cellSize - offsetZ;
+        const deltaCells = model
+          ? Math.hypot(model.x - expectedWorldX, model.z - expectedWorldZ) / cellSize
+          : null;
+        return {
+          id: token.id,
+          label: token.name ?? `Token ${token.id.slice(0, 8)}`,
+          db: { x: token.x, y: token.y, elevation: token.elevation, rotationDeg: token.rotation ?? 0 },
+          model,
+          deltaCells,
+          mismatch: deltaCells !== null && deltaCells > MODEL_WORLD_MISMATCH_TOLERANCE_CELLS,
+        };
+      });
+  }, [currentUserIsDM, modelWorldDebugOverlayEnabled, tableMap, revealCardMetrics, tokenModelWorldDebug]);
+
   // Map Editor Batch A4: every object on the current live map worth
   // showing an Open action for — see LiveMapData.containerObjectIds' own
   // comment for what populates the id set this filters against.
@@ -8690,6 +8781,13 @@ export function GameRoom({
           onTokenMeasureDebug={handleTokenMeasureDebug}
           onTokenTransformDebug={handleTokenTransformDebug}
           onTokenModelWorldDebug={handleTokenModelWorldDebug}
+          // DM live model/position diagnostic overlay: currentUserIsDM is
+          // defense in depth (modelWorldDebugOverlayEnabled can in principle
+          // only ever be flipped true by this file's own DM-gated toggle,
+          // the same "belt and suspenders" reasoning editObjectsMode's own
+          // wiring already uses above) — a player's client never runs
+          // TokenMarker's continuous live-sampling poll at all.
+          liveModelWorldDebug={currentUserIsDM && modelWorldDebugOverlayEnabled}
           seatOffsets={seatOffsets}
           onChairDragEnd={handleChairDragEnd}
           onOwnChairProjectedPosition={setOwnChairScreenPosition}
@@ -9766,6 +9864,19 @@ export function GameRoom({
             musicSettingsBusy={musicSettingsBusy}
             onToggleCalmMusicEnabled={() => void handleToggleCalmMusicEnabled()}
             onToggleCombatMusicEnabled={() => void handleToggleCombatMusicEnabled()}
+          />
+          {/* Click-select-to-move pawn-model repro investigation
+              (re-opened): a live, DM-only, opt-in capture tool — NOT a
+              fifth reproduction attempt — see TokenModelDebugOverlay.tsx's
+              own doc comment. Mounted here (not a draggable game panel) the
+              same "always-reachable utility control" reasoning as
+              SoundControl right above. Renders nothing at all for a
+              non-DM viewer. */}
+          <TokenModelDebugOverlay
+            isDM={currentUserIsDM}
+            enabled={modelWorldDebugOverlayEnabled}
+            onToggle={() => setModelWorldDebugOverlayEnabled((current) => !current)}
+            rows={modelWorldDebugRows}
           />
           <span className={styles.roomLabel}>Game Room</span>
         </div>

@@ -3,7 +3,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Billboard, Html } from "@react-three/drei";
 import { BufferAttribute, BufferGeometry, CanvasTexture, Color, Euler, Quaternion, SRGBColorSpace, Vector3 } from "three";
-import type { ThreeEvent } from "@react-three/fiber";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import type { Group } from "three";
 import { playSound, SOUND_KEYS } from "@/audio";
 import type { TerrainType } from "@/rules-engine";
@@ -1413,6 +1413,7 @@ const TokenMarker = memo(function TokenMarker({
   onMeasureDebug,
   onTransformDebug,
   onModelWorldDebug,
+  liveModelWorldDebug = false,
 }: {
   id: string;
   gridX: number;
@@ -1497,6 +1498,10 @@ const TokenMarker = memo(function TokenMarker({
    * comment. Only ever fires for a token actually rendering a model
    * (modelUrl set) — a disc-fallback token has no model node to measure. */
   onModelWorldDebug?: (id: string, world: { x: number; y: number; z: number; yawDeg: number }) => void;
+  /** See MapSurfaceProps.liveModelWorldDebug's own doc comment — this is
+   * just the per-token plumbing for that flag. False for every caller
+   * before this feature. */
+  liveModelWorldDebug?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   // Pawn Customization P1: colorOverride (a PC token's own owner's account
@@ -1594,6 +1599,31 @@ const TokenMarker = memo(function TokenMarker({
       yawDeg: (worldEuler.y * 180) / Math.PI,
     });
   }, [id, modelUrl, onModelWorldDebug]);
+  // DM live model/position diagnostic overlay (MapSurfaceProps.
+  // liveModelWorldDebug's own doc comment): reportModelWorld above only
+  // fires on a settle or a rotationDeg change — exactly what the original
+  // repro investigation needed, but not enough for a DM to "literally watch"
+  // a token that's sitting still, since a genuinely frozen model produces NO
+  // settle/rotation event at all once it's stuck. This throttled useFrame
+  // poll calls the SAME reportModelWorld function (never a second read path)
+  // on a live clock instead, so the overlay's numbers keep refreshing every
+  // ~⅙s while the DM has it turned on. Every-10th-frame rather than every
+  // frame: a human eye (or a screenshot) never needs 60Hz here, and this
+  // runs for every model-backed token simultaneously once enabled. The
+  // counter lives in a ref (not state) so this poll itself never triggers a
+  // re-render — only the eventual onModelWorldDebug call further downstream
+  // does that, exactly like every other imperative useFrame write in this
+  // file. Inert (the early return fires before the counter even advances)
+  // whenever liveModelWorldDebug is off, which is every non-DM viewer and
+  // every DM who hasn't opted in — this poll adds nothing beyond one idle
+  // subscription for them.
+  const liveDebugFrameCounter = useRef(0);
+  useFrame(() => {
+    if (!liveModelWorldDebug || !onModelWorldDebug || !modelUrl) return;
+    liveDebugFrameCounter.current += 1;
+    if (liveDebugFrameCounter.current % 10 !== 0) return;
+    reportModelWorld();
+  });
   const { ref: slideRef, phase } = useTokenSlide({
     gridX,
     gridY,
@@ -2000,6 +2030,19 @@ export interface MapSurfaceProps {
    * measure). Omit it (as every real caller does today) and nothing
    * changes about how tokens render or move. */
   onTokenModelWorldDebug?: (id: string, world: { x: number; y: number; z: number; yawDeg: number }) => void;
+  /** DM live model/position diagnostic overlay (a capture tool for the
+   * click-select-to-move pawn-model repro investigation above, NOT another
+   * repro attempt itself): when true, every model-backed TokenMarker also
+   * samples onTokenModelWorldDebug on a throttled live clock (TokenMarker's
+   * own liveModelWorldDebug doc comment), not just on settle/rotation-change
+   * — so a DM watching GameRoom's opt-in overlay panel sees the readout keep
+   * refreshing even while nothing else here would have reported anything,
+   * which is exactly the state a genuinely frozen model would be stuck in.
+   * False/undefined (every caller before this feature, and every non-DM
+   * viewer today — GameRoom only ever flips this on for the DM's own client,
+   * and only once they've opted in) costs nothing beyond one extra idle
+   * useFrame subscription per model-backed token. */
+  liveModelWorldDebug?: boolean;
 }
 
 /**
@@ -2049,6 +2092,7 @@ export function MapSurface({
   onTokenMeasureDebug,
   onTokenTransformDebug,
   onTokenModelWorldDebug,
+  liveModelWorldDebug = false,
 }: MapSurfaceProps) {
   const { cellSize, baseHeight, elevationStepHeight } = metrics;
   const { offsetX, offsetZ } = mapCellOffsets(gridWidth, gridHeight, cellSize);
@@ -2231,6 +2275,7 @@ export function MapSurface({
           onMeasureDebug={onTokenMeasureDebug}
           onTransformDebug={onTokenTransformDebug}
           onModelWorldDebug={onTokenModelWorldDebug}
+          liveModelWorldDebug={liveModelWorldDebug}
         />
       ))}
 
