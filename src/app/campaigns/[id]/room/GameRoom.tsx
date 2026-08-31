@@ -2379,6 +2379,28 @@ export function GameRoom({
   // expanded — purely local UI state, same shape as MapEditor's own
   // soloSelectedId.
   const [editingLiveObjectId, setEditingLiveObjectId] = useState<string | null>(null);
+  // --- "Edit objects" mode (object click-routing/selectability addition) --
+  // The DM ask: the coordinate dropdown above ("Wall Segment · 10,0") isn't
+  // practical once a map has more than a handful of objects, since the DM
+  // doesn't track exact grid coordinates in their head. This is a DM-only,
+  // STICKY toggle (LiveObjectsPanel's own "Edit objects" button) — mirrors
+  // the whiteboard's own drawMode toggle, staying on across several picks
+  // rather than firing once and resetting like armedToken, since a DM
+  // decorating/adjusting a map mid-session will likely click through
+  // several objects in a row. While true: (1) MapSurfaceObject.selectable
+  // below additionally makes EVERY object on the map a click target, even
+  // one with no configured interactive behavior at all (a plain wall, an
+  // undecorated crate) — today those are never clickable in the 3D scene,
+  // which is exactly why coordinates were the only way to reach them; (2)
+  // handleSelectMapObject below routes a click straight to
+  // setEditingLiveObjectId instead of firing the object's trigger/opening
+  // its container, so a DM in this mode clicking a chest never accidentally
+  // opens it. Purely additive: the coordinate dropdown and the
+  // pending-reveal per-object Edit button both keep working exactly as
+  // before, and this mode changes nothing about the ordinary player-facing
+  // click-to-trigger/open-container path (which stays gated on a configured
+  // behavior, same as always) when it's off.
+  const [editObjectsMode, setEditObjectsMode] = useState(false);
   // Same ahead-of-React ref pattern as MapEditor: broadcast handlers and the
   // trigger path both write, and two updates landing in one frame must
   // stack, not clobber.
@@ -4717,10 +4739,22 @@ export function GameRoom({
     (id: string) => {
       const object = liveMapRef.current?.objects.find((candidate) => candidate.id === id);
       if (!object) return;
+      // Edit-objects mode (object click-routing/selectability addition,
+      // DM-only): a click here means "open this object's editor", full
+      // stop — never fire its trigger or open its container, even for a
+      // chest/lever that would otherwise respond to an ordinary click.
+      // currentUserIsDM is defense in depth (editObjectsMode can in
+      // practice only ever be true for a DM — LiveObjectsPanel, the only
+      // surface that can turn it on, renders nothing at all for a player),
+      // matching this file's own precedent elsewhere for DM-only state.
+      if (currentUserIsDM && editObjectsMode) {
+        setEditingLiveObjectId(id);
+        return;
+      }
       void handleTrigger(object);
       void handleOpenObjectContainer(object);
     },
-    [handleTrigger, handleOpenObjectContainer]
+    [currentUserIsDM, editObjectsMode, handleTrigger, handleOpenObjectContainer]
   );
 
   // Map Editor Batch A10: live object placement + staged reveal, DM-only
@@ -4733,6 +4767,25 @@ export function GameRoom({
 
   const handleCancelLivePlacement = useCallback(() => {
     setPlacingAssetId(null);
+  }, []);
+
+  // Object click-routing/selectability addition: LiveObjectsPanel's own
+  // "Edit objects" button. Entering the mode cancels any live-object
+  // PLACEMENT already armed — the two both live in LiveObjectsPanel and
+  // shouldn't be active together, since a placement's next map click means
+  // "put the new object here" while edit mode's next map click means
+  // "select whatever's already there", and only one of those can be true at
+  // once (the same "one gesture owns the table" convention armedToken/
+  // selectedTokenId/placingAssetId already share, see
+  // MapSurfaceObject.selectable's own gating below). Leaving the mode does
+  // NOT close whatever editor happens to already be open — turning it off
+  // only stops FUTURE map clicks from re-routing here.
+  const handleToggleEditObjectsMode = useCallback(() => {
+    setEditObjectsMode((current) => {
+      const next = !current;
+      if (next) setPlacingAssetId(null);
+      return next;
+    });
   }, []);
 
   // The onCellClick target while placingAssetId is armed (wired below,
@@ -7678,9 +7731,23 @@ export function GameRoom({
             // "trigger this", so the click must reach the cell, not the
             // object sitting on it. Ordinary click-to-trigger (nothing
             // armed) is unaffected.
+            //
+            // Object click-routing/selectability addition: the second half
+            // of the OR below is `editObjectsMode`'s own contribution — a
+            // DM-only "Edit objects" toggle (LiveObjectsPanel) that makes
+            // EVERY object clickable, even one with NO configured behavior
+            // at all (a plain wall, an undecorated crate), which the first
+            // half of the OR (the ordinary trigger-gate) never allows. It
+            // joins the SAME armedToken/selectedTokenId/placingAssetId
+            // mutual-exclusion the ordinary path already respects — a
+            // token move/placement in progress suppresses object-click-to-
+            // edit exactly like it suppresses object-click-to-trigger.
+            // handleSelectMapObject is what actually routes a click to the
+            // editor instead of the trigger/container path while this mode
+            // is on; this only decides whether the click can land at all.
             selectable:
-              behavior !== null &&
-              (currentUserIsDM || behavior.playerTriggerable) &&
+              ((behavior !== null && (currentUserIsDM || behavior.playerTriggerable)) ||
+                (currentUserIsDM && editObjectsMode)) &&
               !armedToken &&
               !selectedTokenId &&
               !placingAssetId,
@@ -7927,7 +7994,7 @@ export function GameRoom({
         }];
       }),
     };
-  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, assetStandHeightById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId, currentMapArtUrl, characterPawnByCharacterId, pawnColorByUserId, characterRosterNames]);
+  }, [liveMap, cellOverlay, assetUrlById, assetForwardOffsetById, assetStandHeightById, currentUserIsDM, armedToken, selectedTokenId, placingAssetId, editObjectsMode, visibleSelections, highlightedCellKeysForViewer, ownCharacterIds, characterById, conditionLabelsByTokenId, visionMasking, seenCells, hiddenFromViewerTokenIds, statBlockById, monsterTemplateById, overrideAssetIdByTemplateId, currentMapArtUrl, characterPawnByCharacterId, pawnColorByUserId, characterRosterNames]);
 
   // "Objects so tokens can stand on top of them": every asset id currently
   // used by a standable-flagged object on the live map that has no measured
@@ -9544,6 +9611,8 @@ export function GameRoom({
           onCancelPlacement={handleCancelLivePlacement}
           onReveal={(object) => void handleRevealLiveObject(object)}
           onRevealAll={() => void handleRevealAllPendingLiveObjects()}
+          editObjectsMode={editObjectsMode}
+          onToggleEditObjectsMode={handleToggleEditObjectsMode}
           editingObjectId={editingLiveObjectId}
           onSelectEditing={setEditingLiveObjectId}
           onSaveBehavior={(objectId, behavior, movement) =>

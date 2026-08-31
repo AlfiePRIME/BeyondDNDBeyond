@@ -34,6 +34,17 @@ import panelStyles from "./DraggablePanel.module.css";
  * the DM asked for ("link the objects to do things... at the time"); the
  * rest stays a Map Editor concern, matching the Notes' steer against a
  * second toolbar.
+ *
+ * "Edit objects" mode (a later ask: the coordinate dropdown above turned out
+ * to be impractical once a map has more than a handful of objects, since a
+ * DM doesn't track exact grid coordinates in their head): a sticky toggle —
+ * stays on across several picks, matching the whiteboard's own draw-mode
+ * toggle rather than an arm-once-then-reset gesture — that makes the 3D map
+ * itself the picker. All the actual mode/gating logic lives in GameRoom
+ * (MapSurfaceObject.selectable's own extra clause, and handleSelectMapObject
+ * routing a click to setEditingLiveObjectId instead of the ordinary
+ * trigger/open-container path); this file only renders the toggle button and
+ * closes its own local `pickerOpen` add-object grid when the DM turns it on.
  */
 export function LiveObjectsPanel({
   isDM,
@@ -46,6 +57,8 @@ export function LiveObjectsPanel({
   onCancelPlacement,
   onReveal,
   onRevealAll,
+  editObjectsMode,
+  onToggleEditObjectsMode,
   editingObjectId,
   onSelectEditing,
   onSaveBehavior,
@@ -75,6 +88,20 @@ export function LiveObjectsPanel({
   onCancelPlacement: () => void;
   onReveal: (object: MapObject) => void;
   onRevealAll: () => void;
+  /**
+   * "Edit objects" mode (the DM ask: the coordinate dropdown below isn't
+   * practical once a map has more than a handful of objects) — a sticky
+   * toggle, not a one-shot arm/fire, since a DM decorating/adjusting a map
+   * mid-session will likely want to click through several objects in a
+   * row. While true, GameRoom makes EVERY object on the 3D map a click
+   * target (not just ones with a configured interactive behavior) and
+   * routes a click straight to `onSelectEditing` instead of firing the
+   * object's trigger/opening its container. This is a THIRD, easier way to
+   * reach the same editor below — the coordinate dropdown and the
+   * pending-reveal per-object Edit button both keep working unchanged.
+   */
+  editObjectsMode: boolean;
+  onToggleEditObjectsMode: () => void;
   /** Which object's behavior/tag editor is currently expanded, if any. */
   editingObjectId: string | null;
   onSelectEditing: (objectId: string | null) => void;
@@ -128,7 +155,30 @@ export function LiveObjectsPanel({
             Cancel
           </Button>
         ) : null}
+        {/* Edit objects mode: the click-any-object-on-the-map alternative to
+            the coordinate dropdown below. Closes the add-object picker on
+            the way in — a picker mid-pick and edit-select mode are two
+            different ideas about what happens next, and only one should be
+            live — GameRoom's own onToggleEditObjectsMode separately cancels
+            any placement already ARMED (past the picker), for the same
+            reason. */}
+        <Button
+          size="sm"
+          variant={editObjectsMode ? "accent" : "ghost"}
+          onClick={() => {
+            if (!editObjectsMode) setPickerOpen(false);
+            onToggleEditObjectsMode();
+          }}
+          data-testid="live-object-edit-mode-toggle"
+        >
+          Edit objects
+        </Button>
       </div>
+      {editObjectsMode ? (
+        <p className={styles.hint} data-testid="live-object-edit-mode-hint">
+          Click any object on the map to edit it. Click “Edit objects” again to stop.
+        </p>
+      ) : null}
       {pickerOpen && !placingAssetId ? (
         <AssetPickerGrid
           assets={assets}
