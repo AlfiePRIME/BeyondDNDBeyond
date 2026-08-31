@@ -102,6 +102,8 @@ import {
   listWhiteboardTiles,
   saveWhiteboardTiles,
   subscribeToCampaignChanges,
+  subscribeToCampaignCharacterChanges,
+  subscribeToCombatantConditionChanges,
   subscribeToCombatantHiddenFromChanges,
   subscribeToMapObjectChanges,
   subscribeToProfileChanges,
@@ -4063,6 +4065,73 @@ export function GameRoom({
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
     return subscribeToCombatantHiddenFromChanges(supabase, () => {
+      void refreshCombat(supabase).catch(() => undefined);
+    });
+  }, [refreshCombat]);
+
+  // Live character sync (DM Party Dashboard live-sync fix): a postgres_changes
+  // feed on characters, campaign-scoped (0028's publication) — the SAME table
+  // subscribeToCampaignCharacterChanges already drives for PartyDashboard.tsx,
+  // just also wired in here now. Before this, an XP award, a level-up
+  // (level/max_hp/current_hp/subclass/ability scores), or a DM-granted
+  // advantage/disadvantage (pending_roll_mode) made from the dashboard (or
+  // from a character sheet, or from a DM's own second tab) only reached this
+  // room's characterRows on the NEXT unrelated refreshCombat() call this file
+  // happens to trigger (a roll, a rest, damage, the existing combat-changed
+  // broadcast) — or a full reload. This closes that gap directly, independent
+  // of every other trigger.
+  //
+  // Merge, don't clobber: exactly applyItemTaken's own
+  // `setCharacterRows((rows) => rows.map(...))` shape just above (and
+  // subscribeToProfileChanges' roster merge below) — replace the one row by
+  // id, leave every other row untouched, and silently no-op for an id not
+  // currently in characterRows (a character outside this campaign, or one
+  // this client simply hasn't loaded — never happens today, but matches the
+  // "leave the array alone" convention rather than inventing an insert path
+  // no other call site here needs).
+  //
+  // Race guard against refreshCombat: refreshCombat's own
+  // listCharactersForCampaign fetch and this subscription's postgres_changes
+  // payload are two independent, unordered round-trips to the server, so a
+  // slow refreshCombat triggered by an OLDER change could in principle
+  // resolve and apply its snapshot AFTER a newer row already landed here (or
+  // vice versa). Comparing `updated_at` (bumped on every characters write —
+  // see updateCharacter et al.) makes whichever side actually holds the
+  // newer row win, regardless of arrival order, without needing the two
+  // paths to coordinate at all. Every characters write in this codebase sets
+  // updated_at, so this is never undefined for a real row.
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    return subscribeToCampaignCharacterChanges(supabase, campaignId, (character) => {
+      setCharacterRows((rows) =>
+        rows.map((row) =>
+          row.id === character.id && character.updated_at >= row.updated_at ? character : row
+        )
+      );
+    });
+  }, [campaignId]);
+
+  // Live condition sync, the combat side: combatant_conditions is where the
+  // dashboard's condition apply/remove MIRRORS to while a character has a
+  // live combatant (see PartyDashboard.tsx's own doc comment on the dual-
+  // write) — a direct table write from a page that isn't on this room's
+  // campaign channel, so no COMBAT_EVENT broadcast ever announces it here.
+  // Same payload-free poke-then-refetch shape as
+  // subscribeToCombatantHiddenFromChanges just above (DELETE events carry
+  // only the old primary key, so there's no single-row payload to merge in
+  // directly either way) — refreshCombat already re-reads combatant
+  // conditions alongside characters/stat blocks/hidden-from in one shot, so
+  // this reuses that existing read rather than adding a second, narrower one.
+  // Persistent character_conditions changes need no equivalent subscription
+  // here: this room's own condition badges (conditionLabelsByTokenId) are
+  // derived entirely from combat.conditions (combatant-scoped) — a character
+  // condition applied outside combat has no combatant row to attach to and
+  // renders nothing in this room today regardless of source, a pre-existing,
+  // documented limitation (see applyItemTaken's curse/blessing condition
+  // branch above), not something this fix changes.
+  useEffect(() => {
+    const supabase = createBrowserSupabaseClient();
+    return subscribeToCombatantConditionChanges(supabase, () => {
       void refreshCombat(supabase).catch(() => undefined);
     });
   }, [refreshCombat]);
