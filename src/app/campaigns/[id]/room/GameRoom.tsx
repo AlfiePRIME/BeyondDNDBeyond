@@ -4085,19 +4085,62 @@ export function GameRoom({
   // recompute, for every OTHER connected client — no page reload, and no
   // separate broadcast, for the identical reason default_pawn_color needs
   // none.
+  //
+  // Long-session investigation (avatar-scale-glitch bug report, 5th pass):
+  // this handler used to call resolveAvatarUrl UNCONDITIONALLY on every
+  // single fire, regardless of which profile column actually changed — a
+  // player toggling only their OWN name-label color (or ANY other unrelated
+  // field) still re-ran it. For a "custom" avatar, resolveAvatarUrl's own
+  // getAvatarSignedUrl mints a BRAND NEW signed-URL token from Supabase
+  // Storage on every call, even for the exact same underlying file — so
+  // every unrelated profile write handed SeatAvatar's useGLTF(url) a
+  // genuinely different cache key. r3f's useLoader cache (suspend-react,
+  // keyed on that exact URL string) never evicts an old entry on its own,
+  // and nothing in this codebase ever calls useGLTF.clear()/useLoader.clear()
+  // for an avatar — so each spurious re-sign permanently retained one MORE
+  // full, byte-identical copy of the model in memory for the rest of the
+  // tab's lifetime, for every connected client rendering that seat. Over a
+  // long, active session (real players changing real unrelated profile
+  // settings many times) this accumulates without bound — confirmed via a
+  // real 30-minute unbroken-session Playwright run
+  // (verify-avatar-long-session.mjs) that observed both an independently-
+  // connected DM's and the affected player's own client permanently losing
+  // their avatar measurement and going to a blank canvas partway through the
+  // session, right after repeated profile churn. lastAvatarIdentityRef
+  // tracks each member's last-seen "avatar_source:avatar_ref" pair so
+  // resolveAvatarUrl (and the resulting reload) only runs again when a
+  // member's ACTUAL avatar selection changed — every other field
+  // (default_pawn_color/name_label_color/name_label_size) still updates
+  // every time, exactly as before, since none of those need a reload.
+  //
+  // Known limitation (deliberate trade against the leak above, the same
+  // "accept a narrow reload-required edge case" precedent
+  // SIGNED_URL_TTL_SECONDS's own doc comment already sets for a different
+  // reason): a custom avatar's avatar_ref is a FIXED per-user storage path
+  // (uploadAvatarFile's own upsert-same-path re-upload scheme), so
+  // re-uploading a REPLACEMENT model onto an already-custom avatar leaves
+  // this identity string byte-for-byte unchanged. An already-open Game Room
+  // tab elsewhere therefore keeps rendering the previously-cached model
+  // until reloaded — every other avatar change (none -> custom, custom ->
+  // preset, a brand new upload for a member with no avatar yet) still
+  // updates live exactly as before, since each of those genuinely changes
+  // this identity string.
+  const lastAvatarIdentityRef = useRef<Map<string, string>>(new Map());
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
     const memberIds = new Set(members.map((member) => member.user_id));
     return subscribeToProfileChanges(supabase, async (profile) => {
       if (!memberIds.has(profile.id)) return;
-      const avatar = await resolveAvatarUrl(supabase, profile.avatar_source, profile.avatar_ref);
+      const identity = `${profile.avatar_source ?? ""}:${profile.avatar_ref ?? ""}`;
+      const avatarChanged = lastAvatarIdentityRef.current.get(profile.id) !== identity;
+      lastAvatarIdentityRef.current.set(profile.id, identity);
+      const avatar = avatarChanged ? await resolveAvatarUrl(supabase, profile.avatar_source, profile.avatar_ref) : null;
       setRoster((prev) =>
         prev.map((member) =>
           member.user_id === profile.id
             ? {
                 ...member,
-                avatar_url: avatar.url,
-                avatar_forward_offset_deg: avatar.forwardOffsetDeg,
+                ...(avatar ? { avatar_url: avatar.url, avatar_forward_offset_deg: avatar.forwardOffsetDeg } : null),
                 default_pawn_color: profile.default_pawn_color,
                 name_label_color: profile.name_label_color,
                 name_label_size: profile.name_label_size,
