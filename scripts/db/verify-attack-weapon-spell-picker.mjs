@@ -212,14 +212,45 @@ async function scanLocalGrid(page, center, done, opts = {}) {
   return null;
 }
 
-function reselectOnMiss(page, tokenId, tokenPoint) {
-  return async () => {
+/** Like scanLocalGrid, but for the specific "find the target's cell, given
+ * the attacker is already selected" step: re-checks (and, if needed,
+ * restores) the attacker's own selection BEFORE every candidate click,
+ * not just reactively after a miss. A reactive-only reselect (onMiss)
+ * leaves a real gap — a candidate point that happens to land on a
+ * DIFFERENT party token (silently switching the live selection, per
+ * handleTokenSelect's own "switching between two friendly selections"
+ * branch) is only caught on the FOLLOWING iteration, so if the training
+ * arena's other PC token sits at a comparable on-screen distance to the
+ * real target, a later click can land on the target's cell while that
+ * wrong token is still selected, opening this modal for the WRONG
+ * attacker — confirmed via a real screenshot during this test's own
+ * development (Alice's own tagged picker opening instead of the
+ * untagged character's fallback). Checking selection state up front, on
+ * every single candidate, closes that gap entirely. */
+async function scanForTargetCell(page, attackerTokenId, attackerPoint, opts = {}) {
+  const { radius = 110, step = 8, settleMs = 150 } = opts;
+  const points = [];
+  for (let dy = -radius; dy <= radius; dy += step) {
+    for (let dx = -radius; dx <= radius; dx += step) {
+      points.push({ x: attackerPoint.x + dx, y: attackerPoint.y + dy });
+    }
+  }
+  points.sort(
+    (a, b) =>
+      (a.x - attackerPoint.x) ** 2 + (a.y - attackerPoint.y) ** 2 -
+      ((b.x - attackerPoint.x) ** 2 + (b.y - attackerPoint.y) ** 2)
+  );
+  for (const point of points) {
     const state = await selectionState(page);
-    if (state.selectedTokenId !== tokenId) {
-      await page.mouse.click(tokenPoint.x, tokenPoint.y);
+    if (state.selectedTokenId !== attackerTokenId) {
+      await page.mouse.click(attackerPoint.x, attackerPoint.y);
       await sleep(200);
     }
-  };
+    await page.mouse.click(point.x, point.y);
+    await sleep(settleMs);
+    if (await isVisible(page, "attack-prompt-modal")) return point;
+  }
+  return null;
 }
 
 /** Select `attackerTokenId`, then move it onto the Goblin's own cell to
@@ -239,15 +270,23 @@ function reselectOnMiss(page, tokenId, tokenPoint) {
 async function openAttackPromptOnce(page, attackerTokenId, seedPoint) {
   const point = seedPoint
     ? await scanLocalGrid(page, seedPoint, async () => (await selectionState(page)).selectedTokenId === attackerTokenId, {
-        radius: 50,
-        step: 3,
+        radius: 90,
+        step: 4,
         settleMs: 150,
       })
     : await scanGridClick(page, async () => (await selectionState(page)).selectedTokenId === attackerTokenId);
   if (!point) return null;
-  const opened = await scanLocalGrid(page, point, async () => isVisible(page, "attack-prompt-modal"), {
-    onMiss: reselectOnMiss(page, attackerTokenId, point),
-  });
+  // The target's own cell can be a full diagonal cell or more away from the
+  // attacker's own screen point at this arena's camera scale (confirmed via
+  // a real screenshot: ~80-90px per cell at the 1400x900 viewport this
+  // script uses) — a plain adjacent-cell default radius (30, tuned for a
+  // smaller default viewport elsewhere) can undershoot that by a wide
+  // margin, so this search gets a generously larger radius instead of
+  // assuming the target renders within one small step of the attacker —
+  // see scanForTargetCell's own doc comment for why it also re-verifies
+  // the attacker's own selection before every candidate click, not just
+  // reactively after a miss.
+  const opened = await scanForTargetCell(page, attackerTokenId, point, { radius: 130, step: 8, settleMs: 150 });
   return opened ? point : null;
 }
 
@@ -259,12 +298,22 @@ async function openAttackPromptOnce(page, attackerTokenId, seedPoint) {
 // not a product regression signal by itself. A short retry absorbs that
 // noise instead of failing the whole run on one unlucky scan.
 async function openAttackPrompt(page, attackerTokenId, opts = {}) {
-  const { attempts = 3, seedPoint } = opts;
+  const { attempts = 2, seedPoint } = opts;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const point = await openAttackPromptOnce(page, attackerTokenId, seedPoint);
     if (point) return point;
-    console.log(`  (attack prompt didn't open on attempt ${attempt}/${attempts} for token ${attackerTokenId} — retrying)`);
+    console.log(`  (attack prompt didn't open on attempt ${attempt}/${attempts} for token ${attackerTokenId} with the fast seeded scan — retrying)`);
     await sleep(500);
+  }
+  // Fall back to the slower, but independently proven (verify-click-to-
+  // attack.mjs's own technique), full blind canvas scan — a different
+  // search strategy rather than repeating the same one, in case the seed
+  // point itself has drifted (camera nudge, animation) rather than the
+  // token being genuinely hard to hit.
+  if (seedPoint) {
+    console.log("  (falling back to a full blind canvas scan)");
+    const point = await openAttackPromptOnce(page, attackerTokenId, undefined);
+    if (point) return point;
   }
   return null;
 }
@@ -398,7 +447,15 @@ try {
   const goblinTokenId = crypto.randomUUID();
   await admin.from("map_tokens").insert([
     { id: aliceTokenId, map_id: mapId, character_id: aliceCharacterId, x: center, y: center, elevation: 0, allegiance: "party" },
-    { id: noTagsTokenId, map_id: mapId, character_id: noTagsCharacterId, x: center - 1, y: center, elevation: 0, allegiance: "party" },
+    // In a straight line past the Goblin (not equidistant with Alice) —
+    // confirmed via a real screenshot during this test's own development
+    // that an equidistant-ish placement lets a widened target-cell scan
+    // (needed for the diagonal case) wander onto ALICE's own token first,
+    // since she was actually the CLOSER token from NoTags's own screen
+    // position, occasionally opening Alice's own (tagged) picker instead
+    // of NoTags's fallback. Placing NoTags two cells past the Goblin keeps
+    // the Goblin unambiguously nearest to her.
+    { id: noTagsTokenId, map_id: mapId, character_id: noTagsCharacterId, x: center, y: center + 2, elevation: 0, allegiance: "party" },
     {
       id: goblinTokenId,
       map_id: mapId,
@@ -412,48 +469,151 @@ try {
   ]);
   await admin.from("campaigns").update({ live_map: mapId }).eq("id", campaignId);
 
-  // A tracked turn with a ZERO remaining movement budget for BOTH PCs —
-  // purely a test-harness safety net (verify-click-to-attack.mjs's own
-  // precedent): with budget zero, every stray scan click that lands on an
-  // ordinary passable cell is a silent, harmless cancel rather than an
-  // accidental move, so the blind scans below can search safely. This has
-  // no bearing on the feature itself, which works with no encounter at all
-  // (handleSelectedTokenCellClick's occupant-check runs before any
-  // reachable-set check).
-  const encounterId = crypto.randomUUID();
-  await admin.from("combat_encounters").insert({ id: encounterId, campaign_id: campaignId });
-  await admin.from("combat_combatants").insert([
-    { encounter_id: encounterId, token_id: aliceTokenId, character_id: aliceCharacterId, initiative: 20, movement_used_feet: 30 },
-    { encounter_id: encounterId, token_id: noTagsTokenId, character_id: noTagsCharacterId, initiative: 15, movement_used_feet: 30 },
-  ]);
+  // Deliberately NO active combat encounter: click-to-attack itself works
+  // whether or not combat is formally active (handleSelectedTokenCellClick's
+  // occupant-check runs unconditionally, before any reachable-set/budget
+  // check), and a real screenshot taken during this test's own development
+  // showed WHY that matters here too — an active encounter engages this
+  // room's "turn camera" (GameTableScene's turnCameraActive) whenever the
+  // viewing player's OWN character has the current turn, which reframes/
+  // re-zooms the board around that turn's token. That's real product
+  // behavior, not a bug, but it makes a blind-click scan's assumed on-
+  // screen token layout unstable across page loads for this test's
+  // purposes. Leaving combat out entirely keeps the camera in its plain
+  // default framing, which is what every scan below assumes — stray scan
+  // clicks are silent moves with no encounter/budget to reject them
+  // against, which is harmless here since every assertion below re-reads
+  // state by row id, never by an assumed board position.
 
-  const aliceContext = await browser.newContext();
+  // Dock every floating panel — by default they cover most of the canvas,
+  // and a DOM panel sitting on top of the canvas at a given pixel swallows
+  // a page.mouse.click() there before it ever reaches the WebGL scene
+  // beneath (verify-click-to-attack.mjs's own confirmed precedent). Also
+  // used to re-settle the page on a fresh load below, ahead of the
+  // nothing-tagged scenario — a clean reload rather than reusing a page
+  // that's already been through several rolls/modal cycles.
+  async function dockAllPanels() {
+    for (const panelId of [
+      "combat",
+      "opportunityAttack",
+      "quickActions",
+      "diceLog",
+      "handout",
+      "diceTray",
+      "hp",
+      "liveObjects",
+      "chatLog",
+      "tokens",
+      "map",
+    ]) {
+      await room.click(`[data-testid="close-toggle-${panelId}"]`, { timeout: 1000 }).catch(() => undefined);
+    }
+    await sleep(300);
+  }
+
+  // A larger-than-default viewport — confirmed via a real screenshot during
+  // this test's own development that Playwright's default (1280x720)
+  // renders this arena's tokens cramped enough to make the coarse blind
+  // scan flaky; at 1400x900 the same three tokens render large and clearly
+  // separated.
+  let aliceContext = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   await aliceContext.addCookies(sessionCookies(alice.session));
-  const room = await aliceContext.newPage();
+  let room = await aliceContext.newPage();
   await room.goto(`${APP_URL}/campaigns/${campaignId}/room`);
   await room.waitForSelector('[data-testid="token-selection-state"]', { state: "attached", timeout: 60000 });
   await sleep(2000);
+  await dockAllPanels();
 
-  // Dock every floating panel first — by default they cover most of the
-  // canvas, and a DOM panel sitting on top of the canvas at a given pixel
-  // swallows a page.mouse.click() there before it ever reaches the WebGL
-  // scene beneath (verify-click-to-attack.mjs's own confirmed precedent).
-  for (const panelId of [
-    "combat",
-    "opportunityAttack",
-    "quickActions",
-    "diceLog",
-    "handout",
-    "diceTray",
-    "hp",
-    "liveObjects",
-    "chatLog",
-    "tokens",
-    "map",
-  ]) {
-    await room.click(`[data-testid="close-toggle-${panelId}"]`, { timeout: 1000 }).catch(() => undefined);
+  // ── 0. Nothing tagged at all: sensible fallback, manual form still
+  //    fully functional (regression against the pre-existing manual path).
+  //    Done FIRST, on the freshest possible page/context, using the same
+  //    full blind canvas scan (no seed) that's reliably found the "first
+  //    thing selected on a fresh page" token in every run of this script —
+  //    so this scenario runs before any of Alice's own multi-roll sequence
+  //    below has a chance to leave anything behind. ──
+  const openedNoTags = await openAttackPrompt(room, noTagsTokenId);
+  check("selecting the untagged character and attacking the Goblin opens the prompt", openedNoTags !== null);
+  const nothingTaggedText = await room.textContent('[data-testid="attack-prompt-nothing-tagged"]').catch(() => "");
+  check(
+    "a character with nothing tagged gets a clear message naming them, not a broken/empty modal",
+    (nothingTaggedText ?? "").includes("Nora Bystander"),
+    nothingTaggedText
+  );
+  check("no picker is shown when there's nothing to pick from", (await isVisible(room, "attack-prompt-picker")) === false);
+  check("the original manual kind/notation form is the fallback", (await isVisible(room, "attack-prompt-kind")) && (await isVisible(room, "attack-prompt-damage")));
+  await room.screenshot({ path: join(SCREENSHOT_DIR, "03-nothing-tagged-fallback.png") });
+
+  // Only a natural 1 misses vs this AC-1 target, and (like rollAndVerify
+  // above) a miss never rolls damage at all — retried up to a few times
+  // so the notation assertion below always has a real hit to check
+  // against, matching verify-quick-actions.mjs's own established
+  // "retry a couple of times so the assertion isn't flaky" convention.
+  let manualLanded = null;
+  let goblinBeforeManualRaw = null;
+  for (let attempt = 1; attempt <= 5 && !manualLanded; attempt++) {
+    const goblinBeforeManual = await tokenRow(goblinTokenId);
+    goblinBeforeManualRaw = goblinBeforeManual.current_hp;
+    await room.selectOption('[data-testid="attack-prompt-kind"]', "melee");
+    await room.fill('[data-testid="attack-prompt-damage"]', "1d6");
+    await room.click('[data-testid="attack-prompt-roll"]');
+    try {
+      await room.waitForFunction(
+        (testid) => !document.querySelector(`[data-testid="${testid}"]`),
+        "attack-prompt-modal",
+        { timeout: 15000 }
+      );
+    } catch (err) {
+      const errorText = await room.textContent('[data-testid="attack-prompt-error"]').catch(() => null);
+      await room.screenshot({ path: join(SCREENSHOT_DIR, "debug-roll-timeout-manual.png") }).catch(() => undefined);
+      throw new Error(`Roll! never closed the modal for the manual fallback — attack-prompt-error: ${errorText}`, { cause: err });
+    }
+    await sleep(1200);
+    const { data: manualRolls } = await admin
+      .from("roll_log")
+      .select()
+      .eq("campaign_id", campaignId)
+      .eq("kind", "attack")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const landed = manualRolls?.[0] ?? null;
+    if (landed?.breakdown?.attack?.hit || attempt === 5) {
+      manualLanded = landed;
+      break;
+    }
+    // A natural-1 miss: re-open the prompt for another try.
+    const reopened = await openAttackPrompt(room, noTagsTokenId);
+    if (!reopened) break;
   }
-  await sleep(300);
+  check(
+    "the manual fallback form still rolls correctly (regression: unrelated to the new picker)",
+    manualLanded?.breakdown?.attack?.attackKind === "melee" &&
+      manualLanded?.breakdown?.attack?.damage?.notation === "1d6" &&
+      manualLanded?.character_id === noTagsCharacterId &&
+      manualLanded?.breakdown?.attack?.targetTokenId === goblinTokenId,
+    JSON.stringify(manualLanded?.breakdown?.attack)
+  );
+  const goblinAfterManual = await tokenRow(goblinTokenId);
+  const manualAttack = manualLanded?.breakdown?.attack;
+  const expectedManualHp = manualAttack?.hit
+    ? Math.max(0, (goblinBeforeManualRaw ?? statBlock.max_hp) - (manualAttack.damage?.total ?? 0))
+    : goblinBeforeManualRaw;
+  check(
+    "the manual fallback's roll still applies damage exactly as it does today",
+    goblinAfterManual.current_hp === expectedManualHp,
+    `before=${goblinBeforeManualRaw} after=${goblinAfterManual.current_hp}`
+  );
+
+  // Fresh context for Alice's own (longer, multi-roll) sequence below —
+  // same reasoning as above, this time so NoTags's own roll/modal cycle
+  // just now can't leave anything behind for Alice's turn either.
+  await aliceContext.close();
+  aliceContext = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  await aliceContext.addCookies(sessionCookies(alice.session));
+  room = await aliceContext.newPage();
+  await room.goto(`${APP_URL}/campaigns/${campaignId}/room`);
+  await room.waitForSelector('[data-testid="token-selection-state"]', { state: "attached", timeout: 60000 });
+  await sleep(2000);
+  await dockAllPanels();
 
   // ── 1. All three tagged actions surface, distinctly grouped, none
   //    blocked (the slot has 1 use left). ──
@@ -482,61 +642,86 @@ try {
 
   // ── 2. Picking the weapon pre-fills kind/damage; Roll! posts the
   //    weapon's own resolved values and applies damage exactly like today. ──
+  // Damage (and so `damage.notation`, the proof the picker's own value
+  // drove the roll) is ONLY rolled on a hit — the roll route leaves
+  // `damage: null` on a miss — so a natural-1 miss against this AC-1
+  // target (only a nat-1 can miss) can't verify the notation from the
+  // landed row alone. Retried up to a few times on a miss, the same
+  // "only a natural 1 misses vs AC 1 — retry so the assertion isn't
+  // flaky" convention verify-quick-actions.mjs's own PC-target phase
+  // already established, rather than weakening the assertion itself.
   async function rollAndVerify(label, actionKey, expectedAttackKind, expectedNotation, expectedModifierLabel) {
-    const before = await tokenRow(goblinTokenId);
-    // map_tokens.current_hp is null until the first HP-affecting event (its
-    // own documented "at full health, derive the ceiling from its linked
-    // stat block" convention) — the RPC coalesces that the same way.
-    const beforeHp = before.current_hp ?? statBlock.max_hp;
-    await room.click(`[data-testid="attack-prompt-action-${actionKey}"]`);
-    await sleep(200);
-    const selected = await room.getAttribute(`[data-testid="attack-prompt-action-${actionKey}"]`, "aria-pressed");
-    check(`picking ${label} highlights its own card as selected`, selected === "true");
-    await room.click('[data-testid="attack-prompt-roll"]');
-    try {
-      await room.waitForFunction(
-        (testid) => !document.querySelector(`[data-testid="${testid}"]`),
-        "attack-prompt-modal",
-        { timeout: 15000 }
-      );
-    } catch (err) {
-      const errorText = await room.textContent('[data-testid="attack-prompt-error"]').catch(() => null);
-      await room.screenshot({ path: join(SCREENSHOT_DIR, `debug-roll-timeout-${actionKey}.png`) }).catch(() => undefined);
-      throw new Error(`Roll! never closed the modal for ${label} — attack-prompt-error: ${errorText}`, { cause: err });
-    }
-    await sleep(1200);
-    const { data: rolls } = await admin
-      .from("roll_log")
-      .select()
-      .eq("campaign_id", campaignId)
-      .eq("kind", "attack")
-      .order("created_at", { ascending: false })
-      .limit(1);
-    const landed = rolls?.[0] ?? null;
-    check(
-      `picking ${label} rolled with its OWN pre-filled kind ("${expectedAttackKind}") and damage notation ("${expectedNotation}") — proof the picker, not stale defaults, drove the roll`,
-      landed?.breakdown?.attack?.attackKind === expectedAttackKind &&
-        landed?.breakdown?.attack?.damage?.notation === expectedNotation &&
-        landed?.character_id === aliceCharacterId &&
-        landed?.breakdown?.attack?.targetTokenId === goblinTokenId,
-      JSON.stringify(landed?.breakdown?.attack)
-    );
-    if (expectedModifierLabel) {
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const before = await tokenRow(goblinTokenId);
+      await room.click(`[data-testid="attack-prompt-action-${actionKey}"]`);
+      await sleep(200);
+      if (attempt === 1) {
+        const selected = await room.getAttribute(`[data-testid="attack-prompt-action-${actionKey}"]`, "aria-pressed");
+        check(`picking ${label} highlights its own card as selected`, selected === "true");
+      }
+      await room.click('[data-testid="attack-prompt-roll"]');
+      try {
+        await room.waitForFunction(
+          (testid) => !document.querySelector(`[data-testid="${testid}"]`),
+          "attack-prompt-modal",
+          { timeout: 15000 }
+        );
+      } catch (err) {
+        const errorText = await room.textContent('[data-testid="attack-prompt-error"]').catch(() => null);
+        await room.screenshot({ path: join(SCREENSHOT_DIR, `debug-roll-timeout-${actionKey}.png`) }).catch(() => undefined);
+        throw new Error(`Roll! never closed the modal for ${label} — attack-prompt-error: ${errorText}`, { cause: err });
+      }
+      await sleep(1200);
+      const { data: rolls } = await admin
+        .from("roll_log")
+        .select()
+        .eq("campaign_id", campaignId)
+        .eq("kind", "attack")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      const landed = rolls?.[0] ?? null;
+      const attack = landed?.breakdown?.attack;
+      if (!attack?.hit && attempt < 5) {
+        // A natural-1 miss: nothing to verify the notation against yet —
+        // re-open the prompt and retry rather than asserting on it.
+        const reopened = await openAttackPrompt(room, aliceTokenId);
+        if (!reopened) break;
+        continue;
+      }
       check(
-        `${label}'s roll used the ${expectedModifierLabel} (the correct ability for this attack kind — unchanged mechanics)`,
-        (landed?.breakdown?.modifiers ?? []).some((m) => m.label === expectedModifierLabel),
-        JSON.stringify(landed?.breakdown?.modifiers)
+        `picking ${label} rolled with its OWN pre-filled kind ("${expectedAttackKind}") and damage notation ("${expectedNotation}") — proof the picker, not stale defaults, drove the roll`,
+        attack?.attackKind === expectedAttackKind &&
+          attack?.damage?.notation === expectedNotation &&
+          landed?.character_id === aliceCharacterId &&
+          attack?.targetTokenId === goblinTokenId,
+        JSON.stringify(attack)
       );
+      if (expectedModifierLabel) {
+        check(
+          `${label}'s roll used the ${expectedModifierLabel} (the correct ability for this attack kind — unchanged mechanics)`,
+          (landed?.breakdown?.modifiers ?? []).some((m) => m.label === expectedModifierLabel),
+          JSON.stringify(landed?.breakdown?.modifiers)
+        );
+      }
+      const after = await tokenRow(goblinTokenId);
+      // map_tokens.current_hp is null until the first HP-affecting event
+      // (its own documented "at full health, derive the ceiling from its
+      // linked stat block" convention) — coalesced for the HIT-case math
+      // exactly like the RPC does, but a MISS never writes anything at
+      // all, so the raw stored value (however it stood before) is the
+      // right expectation there, not the coalesced one.
+      const expectedHp = attack?.hit
+        ? Math.max(0, (before.current_hp ?? statBlock.max_hp) - (attack.damage?.total ?? 0))
+        : before.current_hp;
+      check(
+        `${label}'s roll applies damage to the target's stored HP exactly as it does today (regression, not just the new picker UI)`,
+        after.current_hp === expectedHp,
+        `before=${before.current_hp} after=${after.current_hp} attack=${JSON.stringify(attack)}`
+      );
+      return landed;
     }
-    const attack = landed?.breakdown?.attack;
-    const after = await tokenRow(goblinTokenId);
-    const expectedHp = attack?.hit ? Math.max(0, beforeHp - (attack.damage?.total ?? 0)) : beforeHp;
-    check(
-      `${label}'s roll applies damage to the target's stored HP exactly as it does today (regression, not just the new picker UI)`,
-      after.current_hp === expectedHp,
-      `before=${beforeHp} after=${after.current_hp} attack=${JSON.stringify(attack)}`
-    );
-    return landed;
+    check(`picking ${label} landed a verifiable hit within 5 attempts`, false, "every attempt rolled a natural 1 miss");
+    return null;
   }
 
   await rollAndVerify("the tagged weapon", "weapon-shortsword", "melee", "1d6+3");
@@ -596,69 +781,6 @@ try {
   await sleep(300);
   check("Cancel closes the prompt with nothing fired", !(await isVisible(room, "attack-prompt-modal")));
   await admin.from("character_resources").update({ current_uses: 1 }).eq("id", slotResourceId);
-
-  // ── 4. Nothing tagged at all: sensible fallback, manual form still
-  //    fully functional (regression against the pre-existing manual path). ──
-  // Seeded from Alice's own already-discovered screen point (opened1) —
-  // NoTags sits one cell away in the same tight cluster and never moves,
-  // so a fine local scan around that stable point finds her token far
-  // more reliably than another full blind canvas scan (see
-  // openAttackPromptOnce's own comment).
-  const openedNoTags = await openAttackPrompt(room, noTagsTokenId, { seedPoint: opened1 });
-  check("selecting the untagged character and attacking the Goblin opens the prompt", openedNoTags !== null);
-  const nothingTaggedText = await room.textContent('[data-testid="attack-prompt-nothing-tagged"]').catch(() => "");
-  check(
-    "a character with nothing tagged gets a clear message naming them, not a broken/empty modal",
-    (nothingTaggedText ?? "").includes("Nora Bystander"),
-    nothingTaggedText
-  );
-  check("no picker is shown when there's nothing to pick from", (await isVisible(room, "attack-prompt-picker")) === false);
-  check("the original manual kind/notation form is the fallback", (await isVisible(room, "attack-prompt-kind")) && (await isVisible(room, "attack-prompt-damage")));
-  await room.screenshot({ path: join(SCREENSHOT_DIR, "03-nothing-tagged-fallback.png") });
-
-  const goblinBeforeManual = await tokenRow(goblinTokenId);
-  const goblinBeforeManualHp = goblinBeforeManual.current_hp ?? statBlock.max_hp;
-  await room.selectOption('[data-testid="attack-prompt-kind"]', "melee");
-  await room.fill('[data-testid="attack-prompt-damage"]', "1d6");
-  await room.click('[data-testid="attack-prompt-roll"]');
-  try {
-    await room.waitForFunction(
-      (testid) => !document.querySelector(`[data-testid="${testid}"]`),
-      "attack-prompt-modal",
-      { timeout: 15000 }
-    );
-  } catch (err) {
-    const errorText = await room.textContent('[data-testid="attack-prompt-error"]').catch(() => null);
-    await room.screenshot({ path: join(SCREENSHOT_DIR, "debug-roll-timeout-manual.png") }).catch(() => undefined);
-    throw new Error(`Roll! never closed the modal for the manual fallback — attack-prompt-error: ${errorText}`, { cause: err });
-  }
-  await sleep(1200);
-  const { data: manualRolls } = await admin
-    .from("roll_log")
-    .select()
-    .eq("campaign_id", campaignId)
-    .eq("kind", "attack")
-    .order("created_at", { ascending: false })
-    .limit(1);
-  const manualLanded = manualRolls?.[0] ?? null;
-  check(
-    "the manual fallback form still rolls correctly (regression: unrelated to the new picker)",
-    manualLanded?.breakdown?.attack?.attackKind === "melee" &&
-      manualLanded?.breakdown?.attack?.damage?.notation === "1d6" &&
-      manualLanded?.character_id === noTagsCharacterId &&
-      manualLanded?.breakdown?.attack?.targetTokenId === goblinTokenId,
-    JSON.stringify(manualLanded?.breakdown?.attack)
-  );
-  const goblinAfterManual = await tokenRow(goblinTokenId);
-  const manualAttack = manualLanded?.breakdown?.attack;
-  const expectedManualHp = manualAttack?.hit
-    ? Math.max(0, goblinBeforeManualHp - (manualAttack.damage?.total ?? 0))
-    : goblinBeforeManualHp;
-  check(
-    "the manual fallback's roll still applies damage exactly as it does today",
-    goblinAfterManual.current_hp === expectedManualHp,
-    `before=${goblinBeforeManualHp} after=${goblinAfterManual.current_hp}`
-  );
 
   await aliceContext.close();
 } finally {
