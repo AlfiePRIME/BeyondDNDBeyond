@@ -17,11 +17,28 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * structurally-identical definition of the same shape. scene-3d's own
  * applySeatOffset/getEffectiveSeat are the only place the two are ever
  * actually combined.
+ *
+ * `baseX`/`baseZ`/`baseRotationY` — added by the "DM chair floats off the
+ * table after a new member joins" bug fix — anchor `dx`/`dz`/`dRotationY`
+ * to the seat's own raw default position/rotation at the moment they were
+ * captured, so scene-3d's applySeatOffset can tell whether that default has
+ * since reshaped (ANY member's own seat can rotate to a very different
+ * point on its table's ellipse the moment the roster's composition changes
+ * for anyone sharing that table bucket, not only when a table is literally
+ * appended) and, if so, recompute the delta relative to the new default
+ * instead of blindly re-adding a now-meaningless world-frame vector to it —
+ * see applySeatOffset's own doc comment (scene-3d/seating.ts) for exactly
+ * how. Optional purely for backward compatibility with rows already
+ * written under 0044's original dx/dz/dRotationY-only shape; every write
+ * this app performs from now on always includes all three.
  */
 export interface SeatOffset {
   dx: number;
   dz: number;
   dRotationY: number;
+  baseX?: number;
+  baseZ?: number;
+  baseRotationY?: number;
 }
 
 /**

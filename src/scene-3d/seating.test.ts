@@ -535,9 +535,25 @@ function findSeatByUserId(seats: ReturnType<typeof computeCampaignSeatLayout>["s
   return seat;
 }
 
-describe("applySeatOffset", () => {
-  const offset: SeatOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
+/**
+ * Builds a real, anchor-carrying SeatOffset the way a genuine chair drag
+ * actually persists one now (GameRoom.tsx's handleChairDragEnd /
+ * GameTableScene.tsx's live-drag construction — both stamp in baseX/baseZ/
+ * baseRotationY from the seat's own default at capture time, the "DM chair
+ * floats off the table after a new member joins" bug fix) — anchored
+ * against whichever seat the caller passes, so applySeatOffset's own
+ * "anchor still matches" fast path applies `delta` completely unmodified,
+ * exactly the pre-fix behavior, for every test below that isn't
+ * specifically about a STALE anchor.
+ */
+function offsetFor(
+  seat: { position: readonly [number, number, number]; rotationY: number },
+  delta: { dx: number; dz: number; dRotationY: number }
+): SeatOffset {
+  return { ...delta, baseX: seat.position[0], baseZ: seat.position[2], baseRotationY: seat.rotationY };
+}
 
+describe("applySeatOffset", () => {
   it("returns the seat completely unchanged when there is no override (null or undefined)", () => {
     const { seats } = computeCampaignSeatLayout(makeMembers(4));
     const seat = seats[0];
@@ -545,9 +561,10 @@ describe("applySeatOffset", () => {
     expect(applySeatOffset(seat, undefined)).toEqual(seat);
   });
 
-  it("applies the offset's dx/dz to both position and cameraPosition, and dRotationY to rotationY", () => {
+  it("applies the offset's dx/dz to both position and cameraPosition, and dRotationY to rotationY, when the stored anchor still matches the seat's current default", () => {
     const { seats } = computeCampaignSeatLayout(makeMembers(4));
     const seat = seats[0];
+    const offset = offsetFor(seat, { dx: 0.4, dz: -0.2, dRotationY: 0.15 });
     const effective = applySeatOffset(seat, offset);
 
     expect(effective.position).toEqual([seat.position[0] + offset.dx, seat.position[1], seat.position[2] + offset.dz]);
@@ -562,15 +579,85 @@ describe("applySeatOffset", () => {
   it("preserves every other field on the seat (member identity, tableIndex) untouched", () => {
     const { seats } = computeCampaignSeatLayout(makeMembers(HEAD_SQUARE_SEAT_CAPACITY + 1));
     const seat = seats.find((s) => s.tableIndex === 0)!;
+    const offset = offsetFor(seat, { dx: 0.4, dz: -0.2, dRotationY: 0.15 });
     const effective = applySeatOffset(seat, offset);
     expect(effective.member).toBe(seat.member);
     expect(effective.tableIndex).toBe(seat.tableIndex);
   });
+
+  // Bug report: "I have added another user to test the game and the DM
+  // chair is now not in the right place" (a screenshot showed a seated
+  // chair thrown off the table's own seating ellipse entirely — "elevated
+  // above and behind the table... not touching it at all" — right after a
+  // new member joined a smaller party). Root-caused to this exact function
+  // blindly re-adding a persisted WORLD-FRAME (dx, dz) delta to whatever
+  // computeCampaignSeatLayout's default happens to be NOW, with no check
+  // that it's still the same default the delta was ever calibrated
+  // against. A seat's own default reshapes (rotates around its table's
+  // ellipse, sometimes by tens of degrees — placeDmAtNorthSlot/
+  // dmSeatIndex's own doc comments) every time the roster's composition
+  // changes for ANYONE sharing that seat's table bucket, not only when a
+  // table is literally appended — so a stale delta calibrated against a
+  // now-rotated-away default can point in a direction with no remaining
+  // relationship to the seat, throwing it meaningfully off the ellipse. The
+  // two tests below are this fix's own direct regression coverage.
+  it("ignores a legacy offset with no anchor at all (a pre-fix database row) — treated as no override rather than blindly re-applied", () => {
+    const { seats } = computeCampaignSeatLayout(makeMembers(4));
+    const seat = seats[0];
+    const legacyOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 } as SeatOffset; // 0044's original shape, pre-anchor
+    expect(applySeatOffset(seat, legacyOffset)).toEqual(seat);
+  });
+
+  it("recomputes (rotates) the offset instead of blindly re-applying it once the seat's own default has moved since it was captured", () => {
+    // user-2 — not the very first joiner (FIRST_SEAT_ANGLE's own doc
+    // comment: the first joiner's own seat index, and therefore angle,
+    // never moves for any party size) — at a party size that grows enough
+    // to meaningfully rotate this seat's own default around the head
+    // square's ellipse.
+    const before = computeCampaignSeatLayout(makeMembers(3));
+    const after = computeCampaignSeatLayout(makeMembers(6));
+    const seatBefore = findSeatByUserId(before.seats, "user-2");
+    const seatAfter = findSeatByUserId(after.seats, "user-2");
+    expect(seatAfter.position).not.toEqual(seatBefore.position); // the default genuinely moved
+
+    const rawDelta = { dx: 1.1, dz: -0.6, dRotationY: 0 };
+    const offset = offsetFor(seatBefore, rawDelta);
+    const effective = applySeatOffset(seatAfter, offset);
+    const appliedDx = effective.position[0] - seatAfter.position[0];
+    const appliedDz = effective.position[2] - seatAfter.position[2];
+
+    // Magnitude preserved — a pure rotation of the original delta.
+    expect(Math.hypot(appliedDx, appliedDz)).toBeCloseTo(Math.hypot(rawDelta.dx, rawDelta.dz));
+
+    // Re-derived independently from first principles (plain trig, not
+    // seating.ts's own private rotation helper): rotate the original delta
+    // by exactly how much this seat's own rotationY changed between the
+    // two party sizes — "the same relationship to my own seat", the
+    // property this fix is meant to preserve, rather than a raw world-frame
+    // vector blindly re-added to a since-rotated base.
+    const angleDelta = seatAfter.rotationY - seatBefore.rotationY;
+    expect(Math.abs(angleDelta)).toBeGreaterThan(0.2); // a real, meaningful rotation — not a no-op case
+    const expectedDx = rawDelta.dx * Math.cos(angleDelta) + rawDelta.dz * Math.sin(angleDelta);
+    const expectedDz = rawDelta.dz * Math.cos(angleDelta) - rawDelta.dx * Math.sin(angleDelta);
+    expect(appliedDx).toBeCloseTo(expectedDx);
+    expect(appliedDz).toBeCloseTo(expectedDz);
+
+    // And genuinely NOT the old (buggy) behavior — the raw delta blindly
+    // re-added to the new default, unrotated.
+    expect(Math.abs(appliedDx - rawDelta.dx)).toBeGreaterThan(0.1);
+  });
+
+  it("applies the offset completely unmodified (byte-for-byte the pre-fix behavior) when the seat's own default hasn't moved at all since it was captured", () => {
+    const { seats } = computeCampaignSeatLayout(makeMembers(5));
+    const seat = seats[2];
+    const rawDelta = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
+    const offset = offsetFor(seat, rawDelta);
+    const effective = applySeatOffset(seat, offset);
+    expect(effective.position).toEqual([seat.position[0] + rawDelta.dx, seat.position[1], seat.position[2] + rawDelta.dz]);
+  });
 });
 
 describe("getEffectiveSeat", () => {
-  const offset: SeatOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
-
   it("equals computeCampaignSeatLayout's own default when no override is stored for that member", () => {
     const layout = computeCampaignSeatLayout(makeMembers(5));
     const userId = layout.seats[2].member.user_id;
@@ -580,6 +667,7 @@ describe("getEffectiveSeat", () => {
   it("applies a stored override on top of that member's default seat", () => {
     const layout = computeCampaignSeatLayout(makeMembers(5));
     const userId = layout.seats[2].member.user_id;
+    const offset = offsetFor(layout.seats[2], { dx: 0.4, dz: -0.2, dRotationY: 0.15 });
     const offsets = new Map([[userId, offset]]);
     expect(getEffectiveSeat(layout, userId, offsets)).toEqual(applySeatOffset(layout.seats[2], offset));
   });
@@ -591,9 +679,7 @@ describe("getEffectiveSeat", () => {
 });
 
 describe("effective position tracks a reshaped default instead of going stale", () => {
-  const offset: SeatOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
-
-  it("stays correct as the head square's own ring re-spaces its seats (party growing, table capacity untouched)", () => {
+  it("stays correct (via the rotation-aware recompute) as the head square's own ring re-spaces its seats (party growing, table capacity untouched)", () => {
     // user-2 (a player, not the DM, and deliberately not the very first
     // joiner — placeDmAtNorthSlot's own construction pins the first
     // joiner's seat index, and therefore angle, at 0 for every party size,
@@ -612,30 +698,26 @@ describe("effective position tracks a reshaped default instead of going stale", 
     expect(seatAfter.tableIndex).toBe(seatBefore.tableIndex); // still the head square (-1)
     expect(seatAfter.position).not.toEqual(seatBefore.position); // the default genuinely moved
 
+    const rawDelta = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
+    const offset = offsetFor(seatBefore, rawDelta);
     const effectiveBefore = applySeatOffset(seatBefore, offset);
     const effectiveAfter = applySeatOffset(seatAfter, offset);
 
-    // Not stale: the effective position after growth is the NEW default
-    // plus the same stored offset — not the OLD effective position left
-    // sitting wherever it used to be.
-    expect(effectiveAfter.position).toEqual([
-      seatAfter.position[0] + offset.dx,
-      seatAfter.position[1],
-      seatAfter.position[2] + offset.dz,
-    ]);
+    // Not stale — the effective position after growth is still derived
+    // from the NEW default, not the OLD effective position left sitting
+    // wherever it used to be — but ALSO not the pre-fix bug's own naive
+    // translation: the delta is rotated to match how much this seat's own
+    // orientation changed, so it keeps the SAME magnitude and the SAME
+    // relationship to the seat (e.g. "scooted back a bit") rather than
+    // pointing in a world-frame direction that stopped meaning anything the
+    // moment the seat swung to a different point on the ellipse.
     expect(effectiveAfter.position).not.toEqual(effectiveBefore.position);
-    // The shift in effective position is EXACTLY the shift in the
-    // underlying default — the stored offset never changed, only the
-    // default it's added to did.
-    expect(effectiveAfter.position[0] - effectiveBefore.position[0]).toBeCloseTo(
-      seatAfter.position[0] - seatBefore.position[0]
-    );
-    expect(effectiveAfter.position[2] - effectiveBefore.position[2]).toBeCloseTo(
-      seatAfter.position[2] - seatBefore.position[2]
-    );
+    const appliedDx = effectiveAfter.position[0] - seatAfter.position[0];
+    const appliedDz = effectiveAfter.position[2] - seatAfter.position[2];
+    expect(Math.hypot(appliedDx, appliedDz)).toBeCloseTo(Math.hypot(rawDelta.dx, rawDelta.dz));
   });
 
-  it("stays correct as a table gets appended and its own ring grows (party crossing HEAD_SQUARE_SEAT_CAPACITY)", () => {
+  it("stays correct (via the rotation-aware recompute) as a table gets appended and its own ring grows (party crossing HEAD_SQUARE_SEAT_CAPACITY)", () => {
     // The first three overflow members (index HEAD_SQUARE_SEAT_CAPACITY,
     // +1, +2 in the joined_at order) all land at appended table 0 once the
     // party is this large. At exactly one overflow member, that lone
@@ -655,15 +737,45 @@ describe("effective position tracks a reshaped default instead of going stale", 
     expect(seatAfter.tableIndex).toBe(0); // same appended table both times — append-only bucketing
     expect(seatAfter.position).not.toEqual(seatBefore.position); // this table's own ring reshaped
 
+    const rawDelta = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
+    const offset = offsetFor(seatBefore, rawDelta);
     const effectiveBefore = applySeatOffset(seatBefore, offset);
     const effectiveAfter = applySeatOffset(seatAfter, offset);
 
-    expect(effectiveAfter.position).toEqual([
-      seatAfter.position[0] + offset.dx,
-      seatAfter.position[1],
-      seatAfter.position[2] + offset.dz,
-    ]);
     expect(effectiveAfter.position).not.toEqual(effectiveBefore.position);
+    const appliedDx = effectiveAfter.position[0] - seatAfter.position[0];
+    const appliedDz = effectiveAfter.position[2] - seatAfter.position[2];
+    expect(Math.hypot(appliedDx, appliedDz)).toBeCloseTo(Math.hypot(rawDelta.dx, rawDelta.dz));
+  });
+
+  it("keeps a promoted-to-DM member's leftover player-era offset from ever landing on the DM's throne — transfer_dm updates only role, never seat_offset, so this is the same 'stale anchor' guard covering that path for free", () => {
+    // Simulates a DM-transfer: user-1 was a plain player (their own seat's
+    // default anchored the offset below), then became the DM — a
+    // completely different index/angle/chair (placeDmAtNorthSlot always
+    // pulls the DM out to its own north-ish slot), all done by
+    // transfer_dm's own plain `update ... set role = ...`
+    // (0006_dm_transfer.sql) with no seat_offset column involved at all.
+    const asPlayer = computeCampaignSeatLayout(makeMembers(5)); // user-1 is a player here
+    const seatAsPlayer = findSeatByUserId(asPlayer.seats, "user-1");
+    const offset = offsetFor(seatAsPlayer, { dx: 2.5, dz: 1.8, dRotationY: 0 }); // a real, sizeable drag
+
+    const membersAfterTransfer = makeMembers(5).map((m) =>
+      m.user_id === "user-1" ? { ...m, role: "dm" as const } : m.user_id === "user-0" ? { ...m, role: "player" as const } : m
+    );
+    const afterTransfer = computeCampaignSeatLayout(membersAfterTransfer);
+    const seatAsDm = findSeatByUserId(afterTransfer.seats, "user-1");
+    expect(seatAsDm.member.role).toBe("dm");
+    expect(seatAsDm.position).not.toEqual(seatAsPlayer.position); // a genuinely different chair/seat now
+
+    const effective = applySeatOffset(seatAsDm, offset);
+    // Rotated to the new (DM) default, not blindly re-added — the same
+    // magnitude-preserving guarantee as the party-growth cases above, which
+    // keeps this on/near the DM's own real seating ellipse instead of
+    // thrown off by a delta calibrated against a completely different
+    // former chair.
+    const appliedDx = effective.position[0] - seatAsDm.position[0];
+    const appliedDz = effective.position[2] - seatAsDm.position[2];
+    expect(Math.hypot(appliedDx, appliedDz)).toBeCloseTo(Math.hypot(offset.dx, offset.dz));
   });
 });
 
@@ -674,8 +786,6 @@ describe("effective position tracks a reshaped default instead of going stale", 
 // not the function's own internals) rather than asserting against a
 // hand-copied literal that could silently drift from the real formula.
 describe("computeMemberTrayPosition", () => {
-  const offset: SeatOffset = { dx: 0.4, dz: -0.2, dRotationY: 0.15 };
-
   /** Replicates the fraction-of-the-way-from-center formula independently
    * of seating.ts's own internals, so these assertions actually check the
    * formula rather than just calling it twice. */
@@ -738,6 +848,7 @@ describe("computeMemberTrayPosition", () => {
   it("tracks a stored seat offset: writing an offset moves the derived tray position accordingly", () => {
     const layout = computeCampaignSeatLayout(makeMembers(5));
     const userId = layout.seats[2].member.user_id;
+    const offset = offsetFor(layout.seats[2], { dx: 0.4, dz: -0.2, dRotationY: 0.15 });
 
     const withoutOffset = computeMemberTrayPosition(layout, userId, new Map());
     const withOffset = computeMemberTrayPosition(layout, userId, new Map([[userId, offset]]));
@@ -756,6 +867,7 @@ describe("computeMemberTrayPosition", () => {
   it("clearing a stored offset (back to null) moves the tray back to the un-offset default", () => {
     const layout = computeCampaignSeatLayout(makeMembers(5));
     const userId = layout.seats[2].member.user_id;
+    const offset = offsetFor(layout.seats[2], { dx: 0.4, dz: -0.2, dRotationY: 0.15 });
 
     const withOffset = computeMemberTrayPosition(layout, userId, new Map([[userId, offset]]));
     const cleared = computeMemberTrayPosition(layout, userId, new Map());
@@ -803,6 +915,7 @@ describe("computeMemberTrayPosition", () => {
     const overflowSeat = layout.seats.find((s) => s.tableIndex === 0)!;
     const userId = overflowSeat.member.user_id;
     const tableCenter: [number, number] = [0, singleTableOffsetZ(0)];
+    const offset = offsetFor(overflowSeat, { dx: 0.4, dz: -0.2, dRotationY: 0.15 });
 
     const withoutOffset = computeMemberTrayPosition(layout, userId, new Map());
     const withOffset = computeMemberTrayPosition(layout, userId, new Map([[userId, offset]]));
@@ -814,12 +927,13 @@ describe("computeMemberTrayPosition", () => {
     );
   });
 
-  it("stays correct as the underlying default reshapes (party growth), the same not-stale property getEffectiveSeat guarantees", () => {
+  it("stays correct (via getEffectiveSeat's own rotation-aware recompute) as the underlying default reshapes from party growth — never stale, and never the pre-fix bug's naive translation either", () => {
     const userId = "user-2";
     const before = computeCampaignSeatLayout(makeMembers(3));
     const after = computeCampaignSeatLayout(makeMembers(6));
+    const seatBefore = findSeatByUserId(before.seats, userId);
 
-    const offsets = new Map([[userId, offset]]);
+    const offsets = new Map([[userId, offsetFor(seatBefore, { dx: 0.4, dz: -0.2, dRotationY: 0.15 })]]);
     const positionBefore = computeMemberTrayPosition(before, userId, offsets);
     const positionAfter = computeMemberTrayPosition(after, userId, offsets);
 

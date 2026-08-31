@@ -1868,6 +1868,20 @@ export function GameTableScene({
         dx: clamped.x - session.defaultPosition[0],
         dz: clamped.z - session.defaultPosition[2],
         dRotationY: rotationY - session.defaultRotationY,
+        // "DM chair floats off the table after a new member joins" bug fix
+        // — see seating.ts's SeatOffset/applySeatOffset own doc comments.
+        // This live, in-progress offset is applied via the SAME
+        // applySeatOffset (the `seats` memo above, keyed off
+        // localChairOverride) as any persisted one, so it needs the exact
+        // same anchor or applySeatOffset would treat it as a legacy,
+        // anchor-less offset and ignore it outright — freezing the dragged
+        // chair in place for the whole gesture. session.defaultPosition/
+        // defaultRotationY (captured once at "pointerdown", from THIS same
+        // render's own layout) is exactly that seat's current default, so
+        // this anchor always matches on the very next read.
+        baseX: session.defaultPosition[0],
+        baseZ: session.defaultPosition[2],
+        baseRotationY: session.defaultRotationY,
       };
       session.moved = true;
       session.latestOffset = offset;

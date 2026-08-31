@@ -2026,6 +2026,17 @@ export function GameRoom({
             dx: resolved.x - defaultSeat.position[0],
             dz: resolved.z - defaultSeat.position[2],
             dRotationY: resolved.rotationY - defaultSeat.rotationY,
+            // "DM chair floats off the table after a new member joins" bug
+            // fix — the anchor applySeatOffset needs to detect, on every
+            // later read, whether `defaultSeat`'s own default has since
+            // reshaped (another member joining/leaving can rotate ANY
+            // member's own seat around its table's ellipse — see
+            // seating.ts's SeatOffset doc comment) and, if so, recompute
+            // this delta relative to the new default instead of blindly
+            // re-adding it to a base it was never calibrated against.
+            baseX: defaultSeat.position[0],
+            baseZ: defaultSeat.position[2],
+            baseRotationY: defaultSeat.rotationY,
           };
           await setSeatOffset(supabase, campaignId, userId, finalOffset);
           setSeatOffsets((current) => new Map(current).set(userId, finalOffset));

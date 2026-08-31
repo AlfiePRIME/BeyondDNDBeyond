@@ -672,15 +672,94 @@ export function computeCampaignSeatLayout(members: readonly SeatMember[]): Campa
  * same module-boundary convention as SeatMember above (scene-3d can't
  * import data-access's type directly, so this is scene-3d's independent,
  * structurally-identical definition of the same shape).
+ *
+ * `baseX`/`baseZ`/`baseRotationY` — added by the "DM chair floats off the
+ * table after a new member joins" bug fix — are the seat's own RAW default
+ * `position[0]`/`position[2]`/`rotationY` (computeSeatLayout's pre-offset
+ * output) at the exact moment `dx`/`dz`/`dRotationY` were captured. Before
+ * this fix, `dx`/`dz` were a bare WORLD-FRAME cartesian delta with nothing
+ * recording what default they were ever calibrated against — and
+ * applySeatOffset just blindly re-added them to whatever
+ * computeCampaignSeatLayout's default happens to be on every later call, no
+ * matter how much that default had since moved. That default reshapes (a
+ * SEAT'S OWN angle around its table's ellipse can rotate by tens of
+ * degrees, not just translate — placeDmAtNorthSlot/dmSeatIndex's own doc
+ * comments) every time the roster's composition changes for ANYONE sharing
+ * that seat's table bucket, not only when a table is literally appended —
+ * so a delta calibrated against a now-rotated-away default could point in a
+ * direction with no remaining relationship to the seat at all, throwing a
+ * chair meaningfully off the seating ellipse the moment someone else joined
+ * (the exact live bug report: a party growing from 2 to 3 members left an
+ * existing member's chair "elevated above and behind the table... not
+ * touching it at all"). These three fields are the anchor applySeatOffset
+ * needs to detect that and recompute the delta relative to the CURRENT
+ * default instead of blindly re-adding the raw one — see applySeatOffset's
+ * own doc comment for exactly how.
+ *
+ * Optional, not required, purely for backward compatibility with rows
+ * written by the pre-fix version of this feature (0044's original
+ * dx/dz/dRotationY-only shape) that are already sitting in the database —
+ * applySeatOffset treats a missing anchor as "unknown, assume stale" (the
+ * safe direction: silently falls back to the plain computed default rather
+ * than risk re-applying a delta with no way to tell what it was calibrated
+ * against). Every offset this app itself ever WRITES from now on
+ * (GameTableScene.tsx's live drag, GameRoom.tsx's handleChairDragEnd)
+ * always includes all three.
  */
 export interface SeatOffset {
-  /** Added to position[0]/cameraPosition[0]. */
+  /** Added to position[0]/cameraPosition[0] — see baseX's own doc comment
+   * above for when this gets rotated instead of added as-is. */
   dx: number;
-  /** Added to position[2]/cameraPosition[2]. */
+  /** Added to position[2]/cameraPosition[2] — see baseZ's own doc comment
+   * above for when this gets rotated instead of added as-is. */
   dz: number;
   /** Added to rotationY, radians — same unit computeSeatLayout already
-   * uses (Math.atan2 output). */
+   * uses (Math.atan2 output). Never itself rotated/recomputed — see
+   * applySeatOffset's own doc comment for why adding it on top of whatever
+   * the CURRENT default's own rotationY is already the correct, rotation-
+   * invariant behavior with no transform needed. */
   dRotationY: number;
+  /** This seat's raw default position[0] at capture time — see this type's
+   * own top doc comment. */
+  baseX?: number;
+  /** This seat's raw default position[2] at capture time. */
+  baseZ?: number;
+  /** This seat's raw default rotationY at capture time. */
+  baseRotationY?: number;
+}
+
+// Cross-engine ULP tolerance for comparing a seat's CURRENT computed default
+// position against a stored offset's own anchor (baseX/baseZ) — the exact
+// same "Math.cos/sin aren't bit-identical across JS engines" reasoning as
+// roundCoord's own doc comment above (which already rounds every computed
+// coordinate to 1e-9), just applied here to an EQUALITY check instead of a
+// value. Nine orders of magnitude finer than any REAL default reshape
+// (which moves a seat by at least a meaningful fraction of a scene unit)
+// but comfortably wider than any float noise roundCoord's own rounding
+// could ever leave behind — so this can never mistake "genuinely the same
+// default" for "reshaped" (or vice versa) because of engine-level jitter
+// alone.
+const OFFSET_BASE_MATCH_EPSILON = 1e-6;
+
+/**
+ * Rotates a floor-plane vector by `angle` radians, using this file's own
+ * x = r·sin(rotationY), z = r·cos(rotationY) convention (seatAtAngle's own
+ * formula / rotationY's own Math.atan2(x, z) — NOT the standard
+ * atan2(y, x)-then-rotate convention a generic 2D-rotation helper would
+ * assume) so that rotating a vector by exactly `newRotationY - oldRotationY`
+ * carries it the same way the seat itself visually rotated. Used by
+ * applySeatOffset to re-express a stored (dx, dz) delta — captured relative
+ * to one default position/orientation — in terms of a NEW default that has
+ * since rotated to a different spot on the seating ellipse, preserving the
+ * delta's own magnitude and its relationship to the seat (e.g. "scooted
+ * back and a little to the side") rather than leaving it pointing in a
+ * world-frame direction that no longer means anything relative to where the
+ * seat now actually is.
+ */
+function rotateSeatVector(x: number, z: number, angle: number): { x: number; z: number } {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { x: x * cos + z * sin, z: z * cos - x * sin };
 }
 
 /**
@@ -705,17 +784,66 @@ export interface SeatOffset {
  * to the chair exactly as tuned (CAMERA_SETBACK/CAMERA_EYE_HEIGHT above),
  * rather than re-deriving a camera offset from the new position and getting
  * a different (wrong) relationship to it.
+ *
+ * "DM chair floats off the table after a new member joins" bug fix: before
+ * applying `offset.dx`/`dz` at all, checks them against `seat`'s OWN raw
+ * default (`seat.position`, the argument this function receives — always
+ * the pre-offset computeSeatLayout/computeCampaignSeatLayout output, per
+ * every real call site in this codebase) using the stored anchor
+ * (`baseX`/`baseZ`):
+ *   - No anchor at all (a legacy pre-fix row) — the offset is treated as if
+ *     it were null/undefined entirely (returns `seat` unchanged). There is
+ *     no way to tell what default a bare dx/dz was ever calibrated against,
+ *     so re-applying it would risk exactly the reported bug; falling back
+ *     to the plain computed default is always safe (on the seating ellipse,
+ *     by construction — seatAtAngle's own formula), if less personalized.
+ *     Self-healing: the very next real drag persists a full anchor, so this
+ *     branch only ever fires for a row written before this fix shipped.
+ *   - Anchor present and still (within OFFSET_BASE_MATCH_EPSILON) equal to
+ *     `seat`'s current default — the base this delta was calibrated against
+ *     hasn't moved, so it applies completely unmodified: byte-for-byte the
+ *     original, pre-fix behavior. This is the overwhelmingly common case
+ *     (nobody else's join/leave reshaped THIS member's own seat since their
+ *     last drag) and is exactly why a member who dragged their chair keeps
+ *     their exact chosen spot, not a discarded or only-approximately-
+ *     restored one.
+ *   - Anchor present but stale (the default moved) — rotateSeatVector
+ *     re-expresses the original (dx, dz) relative to the NEW default,
+ *     rotated by exactly how much this seat's own rotationY changed between
+ *     the two. This is what keeps "I scooted my chair back a bit" meaning
+ *     the same thing (same distance, same relative direction) even after
+ *     the seat's default swings to a completely different point on the
+ *     ellipse — a REASONABLE custom position, not a wild misfire, and not a
+ *     silently-wiped customization either.
+ * dRotationY is never transformed by any of this — see its own doc comment
+ * on SeatOffset for why adding it straight onto the new default's own
+ * rotationY is already correct with no rotation needed.
  */
 export function applySeatOffset<S extends Seat>(seat: S, offset: SeatOffset | null | undefined): S {
   if (!offset) return seat;
+
+  const hasAnchor =
+    offset.baseX !== undefined && offset.baseZ !== undefined && offset.baseRotationY !== undefined;
+  if (!hasAnchor) return seat;
+
+  const baseUnchanged =
+    Math.abs(offset.baseX! - seat.position[0]) < OFFSET_BASE_MATCH_EPSILON &&
+    Math.abs(offset.baseZ! - seat.position[2]) < OFFSET_BASE_MATCH_EPSILON;
+
+  const rotated = baseUnchanged
+    ? { x: offset.dx, z: offset.dz }
+    : rotateSeatVector(offset.dx, offset.dz, seat.rotationY - offset.baseRotationY!);
+  const dx = rotated.x;
+  const dz = rotated.z;
+
   return {
     ...seat,
-    position: [seat.position[0] + offset.dx, seat.position[1], seat.position[2] + offset.dz],
+    position: [seat.position[0] + dx, seat.position[1], seat.position[2] + dz],
     rotationY: seat.rotationY + offset.dRotationY,
     cameraPosition: [
-      seat.cameraPosition[0] + offset.dx,
+      seat.cameraPosition[0] + dx,
       seat.cameraPosition[1],
-      seat.cameraPosition[2] + offset.dz,
+      seat.cameraPosition[2] + dz,
     ],
   } as S;
 }
