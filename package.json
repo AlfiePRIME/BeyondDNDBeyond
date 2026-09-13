@@ -26,6 +26,7 @@
     "@react-three/fiber": "^9.7.0",
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.112.4",
+    "@thednp/dommatrix": "^3.1.2",
     "next": "16.3.2",
     "pdfjs-dist": "^6.2.108",
     "react": "19.2.8",
