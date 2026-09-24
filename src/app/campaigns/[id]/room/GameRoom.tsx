@@ -2987,7 +2987,15 @@ export function GameRoom({
       ]);
       if (seq !== combatSeqRef.current) return;
       setCombat(encounter ? { encounter, combatants, conditions, hiddenFrom } : null);
-      setCharacterRows(rows);
+      // Merge per row rather than replace: the live characters subscription
+      // may already hold a newer row than this (slower) fetch returned.
+      setCharacterRows((current) => {
+        const currentById = new Map(current.map((row) => [row.id, row]));
+        return rows.map((row) => {
+          const existing = currentById.get(row.id);
+          return existing && existing.updated_at > row.updated_at ? existing : row;
+        });
+      });
       setStatBlocks(blocks);
       // null (the query failed — most likely 0103 not applied yet) leaves
       // characterRosterNames exactly as it was, never wiping out a good
@@ -6064,16 +6072,23 @@ export function GameRoom({
       if (combatBusy) return;
       setCombatBusy(true);
       setCombatError(null);
+      const supabase = createBrowserSupabaseClient();
       try {
-        const supabase = createBrowserSupabaseClient();
         await action(supabase);
-        await refreshCombat(supabase);
-        await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
       } catch (err) {
         setCombatError(errorMessage(err) ?? fallback);
-      } finally {
         setCombatBusy(false);
+        return;
       }
+      // The action landed — a failed refresh afterwards must not read as
+      // "the action failed", and every other client still needs the poke.
+      try {
+        await refreshCombat(supabase);
+      } catch {
+        setCombatError("Saved, but couldn't refresh the turn order — it will catch up shortly.");
+      }
+      await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId }).catch(() => undefined);
+      setCombatBusy(false);
     },
     [campaignId, combatBusy, refreshCombat]
   );

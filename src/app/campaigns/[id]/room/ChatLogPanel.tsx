@@ -119,12 +119,20 @@ export function ChatLogPanel({
   // assignment on this panel's own scroll container (.chatList), not the
   // whole panel (which also carries the input row/error line below the
   // list and must never itself scroll).
+  // Only when the reader is already at (or near) the bottom — someone
+  // scrolled up to read history shouldn't be yanked away by every arrival.
   const listRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
   useEffect(() => {
     const node = listRef.current;
-    if (!node) return;
+    if (!node || !stickToBottomRef.current) return;
     node.scrollTop = node.scrollHeight;
   }, [messages]);
+  const handleListScroll = () => {
+    const node = listRef.current;
+    if (!node) return;
+    stickToBottomRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 40;
+  };
 
   // The "current time", used only to decide which of the viewer's own
   // messages are still inside their edit window (canStillEdit above) — kept
@@ -222,7 +230,8 @@ export function ChatLogPanel({
     <aside className={styles.chatPanel} data-testid="chat-log-panel">
       <span className={styles.panelLabel}>Chat</span>
 
-      <div className={styles.chatList} ref={listRef} data-testid="chat-log">
+      <div className={styles.chatList} ref={listRef}
+        onScroll={handleListScroll} data-testid="chat-log">
         {messages.length === 0 ? (
           <p className={styles.hint}>No messages yet — say something to the table.</p>
         ) : (

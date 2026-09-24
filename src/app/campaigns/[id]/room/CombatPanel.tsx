@@ -105,6 +105,11 @@ export interface CombatState {
  * (never replacing) the existing token-based add_combatant/start_combat
  * flow that Strict tables keep using unchanged.
  */
+const STRICT_MODE_HINT =
+  "Strict: the app enforces the rules — one action, bonus action, and reaction per turn, and attacks check AC and apply damage automatically.";
+const FREEFORM_MODE_HINT =
+  "Freeform: nothing is enforced — track actions and HP at the table however you like. The DM can switch modes from the DM's book.";
+
 export function CombatPanel({
   isDM,
   currentUserId,
@@ -310,7 +315,11 @@ export function CombatPanel({
       <aside className={styles.combatPanel} data-testid="combat-panel">
         <div className={styles.objectHeader}>
           <span className={styles.panelLabel}>Combat</span>
-          <Badge tone={strict ? "orange" : "teal"} data-testid="economy-mode-badge">
+          <Badge
+          tone={strict ? "orange" : "teal"}
+          title={strict ? STRICT_MODE_HINT : FREEFORM_MODE_HINT}
+          data-testid="economy-mode-badge"
+        >
             {strict ? "Strict" : "Freeform"}
           </Badge>
         </div>
@@ -358,7 +367,11 @@ export function CombatPanel({
         <span className={styles.panelLabel}>Combat</span>
         {/* Table-wide mode visibility: every player sees the current
             enforcement mode here, not just the DM in DM Controls. */}
-        <Badge tone={strict ? "orange" : "teal"} data-testid="economy-mode-badge">
+        <Badge
+          tone={strict ? "orange" : "teal"}
+          title={strict ? STRICT_MODE_HINT : FREEFORM_MODE_HINT}
+          data-testid="economy-mode-badge"
+        >
           {strict ? "Strict" : "Freeform"}
         </Badge>
         <span className={styles.combatRound} data-testid="combat-round">
