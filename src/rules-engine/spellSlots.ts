@@ -141,3 +141,59 @@ export function spellSlotsForClass(className: ClassName, characterLevel: number)
   if (!classDefinition) throw new Error(`Unknown class: ${className}`);
   return getSpellSlots(classDefinition, characterLevel);
 }
+
+/** When a class's spell slots come back: Pact Magic slots on a short (or
+ * long) rest, everyone else's on a long rest. */
+export function spellSlotRecharge(className: ClassName): "short_rest" | "long_rest" {
+  const classDefinition = CLASSES.find((c) => c.name === className);
+  return classDefinition?.casterProgression === "pact" ? "short_rest" : "long_rest";
+}
+
+/** The slot-row slice of a character_resources row. */
+export interface SpellSlotRow {
+  name: string;
+  max_uses: number;
+  recharge: string;
+}
+
+export interface SpellSlotSyncPlan<T extends SpellSlotRow> {
+  recharge: "short_rest" | "long_rest";
+  /** Slot levels with no row yet. */
+  create: { level: SpellSlotLevel; maxUses: number }[];
+  /** Rows whose max_uses is stale. */
+  resize: { row: T; maxUses: number }[];
+  /** Rows for a slot level the class no longer has — only ever a Pact
+   * Magic caster's old slot level once its pact slot level rises. */
+  remove: T[];
+  /** Rows with the wrong recharge (pre-fix warlock rows were long_rest). */
+  fixRecharge: T[];
+}
+
+/**
+ * Everything needed to bring a character's slot rows in line with the SRD
+ * table for `className` at `characterLevel`. Pure; the caller applies it.
+ */
+export function planSpellSlotSync<T extends SpellSlotRow>(
+  className: ClassName,
+  characterLevel: number,
+  rows: readonly T[]
+): SpellSlotSyncPlan<T> {
+  const slots = spellSlotsForClass(className, characterLevel);
+  const recharge = spellSlotRecharge(className);
+  const isPact = CLASSES.find((c) => c.name === className)?.casterProgression === "pact";
+  const plan: SpellSlotSyncPlan<T> = { recharge, create: [], resize: [], remove: [], fixRecharge: [] };
+  for (const level of SPELL_SLOT_LEVELS) {
+    const row = rows.find((r) => r.name === spellSlotResourceName(level));
+    if (slots[level] > 0) {
+      if (!row) {
+        plan.create.push({ level, maxUses: slots[level] });
+        continue;
+      }
+      if (row.max_uses !== slots[level]) plan.resize.push({ row, maxUses: slots[level] });
+      if (row.recharge !== recharge) plan.fixRecharge.push(row);
+    } else if (row && isPact) {
+      plan.remove.push(row);
+    }
+  }
+  return plan;
+}

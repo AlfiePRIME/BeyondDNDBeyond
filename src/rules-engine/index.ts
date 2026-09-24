@@ -69,7 +69,7 @@ export {
   xpThresholdForLevel,
   xpToNextLevel,
 } from "./experience";
-export { levelOneHitPoints, levelUpHitPointGain } from "./hitPoints";
+export { levelOneHitPoints, levelUpHitPointGain, constitutionChangeHitPoints } from "./hitPoints";
 export {
   subclassGateLevel,
   subclassForClass,
@@ -79,6 +79,7 @@ export {
   newSpellsKnownDelta,
   isValidAbilityScoreImprovementChoice,
   applyAbilityScoreImprovement,
+  ABILITY_SCORE_IMPROVEMENT_MAX,
   type AbilityScoreImprovementChoice,
 } from "./levelUp";
 export {
@@ -102,6 +103,10 @@ export {
   spellSlotsForClass,
   getPactMagicSlots,
   spellSlotResourceName,
+  spellSlotRecharge,
+  planSpellSlotSync,
+  type SpellSlotRow,
+  type SpellSlotSyncPlan,
   SPELL_SLOT_LEVELS,
   type SpellSlotLevel,
   type SpellSlots,

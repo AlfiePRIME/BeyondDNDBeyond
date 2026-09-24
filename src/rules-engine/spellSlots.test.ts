@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getPactMagicSlots, spellSlotsForClass } from "./spellSlots";
+import {
+  getPactMagicSlots,
+  planSpellSlotSync,
+  spellSlotRecharge,
+  spellSlotsForClass,
+} from "./spellSlots";
 
 describe("spellSlotsForClass", () => {
   it("gives a full caster (Wizard) the standard slot progression", () => {
@@ -28,5 +33,53 @@ describe("getPactMagicSlots", () => {
   it("always casts at the single highest available slot level", () => {
     expect(getPactMagicSlots(11)).toEqual({ slotLevel: 5, slotCount: 3 });
     expect(getPactMagicSlots(20)).toEqual({ slotLevel: 5, slotCount: 4 });
+  });
+});
+
+describe("spellSlotRecharge", () => {
+  it("recharges Pact Magic on a short rest and everyone else on a long rest", () => {
+    expect(spellSlotRecharge("Warlock")).toBe("short_rest");
+    expect(spellSlotRecharge("Wizard")).toBe("long_rest");
+    expect(spellSlotRecharge("Paladin")).toBe("long_rest");
+  });
+});
+
+describe("planSpellSlotSync", () => {
+  const row = (name: string, max_uses: number, recharge = "long_rest") => ({
+    name,
+    max_uses,
+    recharge,
+  });
+
+  it("creates missing rows with the class's recharge", () => {
+    const plan = planSpellSlotSync("Warlock", 1, []);
+    expect(plan.recharge).toBe("short_rest");
+    expect(plan.create).toEqual([{ level: 1, maxUses: 1 }]);
+  });
+
+  it("moves a warlock's pact slots up a level, removing the old row", () => {
+    const old = row("1st-Level Spell Slots", 2, "short_rest");
+    const plan = planSpellSlotSync("Warlock", 3, [old]);
+    expect(plan.create).toEqual([{ level: 2, maxUses: 2 }]);
+    expect(plan.remove).toEqual([old]);
+  });
+
+  it("flags a warlock row stored as long_rest and removes stale levels", () => {
+    const current = row("5th-Level Spell Slots", 3);
+    const stale = row("3rd-Level Spell Slots", 2, "short_rest");
+    const plan = planSpellSlotSync("Warlock", 11, [current, stale]);
+    expect(plan.fixRecharge).toEqual([current]);
+    expect(plan.resize).toEqual([]);
+    expect(plan.create).toEqual([]);
+    expect(plan.remove).toEqual([stale]);
+  });
+
+  it("resizes but never removes a full caster's rows", () => {
+    const first = row("1st-Level Spell Slots", 3);
+    const ninth = row("9th-Level Spell Slots", 1);
+    const plan = planSpellSlotSync("Wizard", 3, [first, ninth]);
+    expect(plan.resize).toEqual([{ row: first, maxUses: 4 }]);
+    expect(plan.remove).toEqual([]);
+    expect(plan.fixRecharge).toEqual([]);
   });
 });

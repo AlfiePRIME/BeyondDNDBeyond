@@ -6,13 +6,16 @@ import {
   SPELLS,
   SPELL_SLOT_LEVELS,
   abilityModifier,
+  ABILITY_SCORE_IMPROVEMENT_MAX,
   applyAbilityScoreImprovement,
   asiLevelsForClass,
+  constitutionChangeHitPoints,
   featureDescription,
   featuresGainedBetween,
   isValidAbilityScoreImprovementChoice,
   levelUpHitPointGain,
   newSpellsKnownDelta,
+  planSpellSlotSync,
   spellSlotResourceName,
   spellSlotsForClass,
   subclassGateLevel,
@@ -25,8 +28,10 @@ import {
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
 import {
   createCharacterResource,
+  deleteCharacterResource,
   growCharacterResourceMax,
   listCharacterResources,
+  setCharacterResourceRecharge,
   updateCharacter,
   type Character,
   type CharacterResource,
@@ -191,9 +196,13 @@ export function LevelUpWizard({
       ? newSpellsKnownDelta(klass.name, oldLevel, newLevel, abilityModifier(spellcastingAbilityScore))
       : 0;
   const needsSpellStep = isCaster && spellDelta > 0;
-  const availableSpellLevels = newSlots
-    ? [0, ...SPELL_SLOT_LEVELS.filter((level) => newSlots[level] > 0)]
-    : [0];
+  // Every spell level up to the highest slot level now available — a
+  // Warlock's pact slots sit at ONE level, but it can learn any spell of
+  // that level or lower.
+  const highestSlotLevel = newSlots
+    ? Math.max(0, ...SPELL_SLOT_LEVELS.filter((level) => newSlots[level] > 0))
+    : 0;
+  const availableSpellLevels = [0, ...SPELL_SLOT_LEVELS.filter((level) => level <= highestSlotLevel)];
   const learnableSpells = klass
     ? SPELLS.filter(
         (spell) =>
@@ -225,7 +234,16 @@ export function LevelUpWizard({
   };
   const finalScores =
     needsAsiStep && asiChoice ? applyAbilityScoreImprovement(currentScores, asiChoice) : currentScores;
-  const hpGain = klass ? levelUpHitPointGain(klass.hitDie, finalScores.constitution) : 0;
+  // A CON modifier raised by this level's ASI also applies retroactively to
+  // every level already held.
+  const hpGain = klass
+    ? levelUpHitPointGain(klass.hitDie, finalScores.constitution) +
+      constitutionChangeHitPoints(currentScores.constitution, finalScores.constitution, oldLevel)
+    : 0;
+  // An ASI can't raise a score past 20, so maxed scores aren't offered.
+  const improvableAbilities = ABILITIES.filter(
+    (ability) => currentScores[ability] < ABILITY_SCORE_IMPROVEMENT_MAX
+  );
 
   const steps: StepKey[] = ["features"];
   if (needsSubclassChoice) steps.push("subclass");
@@ -280,23 +298,28 @@ export function LevelUpWizard({
       // loading their own sheet) still gets corrected here rather than
       // silently staying wrong. slotDiffLevels itself stays the "what
       // changed at THIS level" figure the Spell Slots step displays.
-      if (isCaster && newSlots) {
-        for (const level of SPELL_SLOT_LEVELS) {
-          if (newSlots[level] <= 0) continue;
-          const existing = resources.find((r) => r.name === spellSlotResourceName(level));
-          if (existing) {
-            if (existing.max_uses !== newSlots[level]) {
-              await growCharacterResourceMax(supabase, existing, newSlots[level] - existing.max_uses);
-            }
-          } else {
-            await createCharacterResource(supabase, {
-              character_id: character.id,
-              name: spellSlotResourceName(level),
-              max_uses: newSlots[level],
-              current_uses: newSlots[level],
-              recharge: "long_rest",
-            });
-          }
+      // Pact Magic also moves ALL its slots up a level at some level-ups,
+      // so the old slot level's row is removed rather than left behind with
+      // its stale count, and pact rows recharge on a short rest.
+      if (isCaster) {
+        const plan = planSpellSlotSync(klass.name, newLevel, resources);
+        for (const { row, maxUses } of plan.resize) {
+          await growCharacterResourceMax(supabase, row, maxUses - row.max_uses);
+        }
+        for (const { level, maxUses } of plan.create) {
+          await createCharacterResource(supabase, {
+            character_id: character.id,
+            name: spellSlotResourceName(level),
+            max_uses: maxUses,
+            current_uses: maxUses,
+            recharge: plan.recharge,
+          });
+        }
+        for (const row of plan.fixRecharge) {
+          await setCharacterResourceRecharge(supabase, row.id, plan.recharge);
+        }
+        for (const row of plan.remove) {
+          await deleteCharacterResource(supabase, row.id);
         }
       }
 
@@ -512,9 +535,10 @@ export function LevelUpWizard({
                       data-testid="levelup-asi-single-ability"
                     >
                       <option value="">Choose an ability…</option>
-                      {ABILITIES.map((ability) => (
+                      {improvableAbilities.map((ability) => (
                         <option key={ability} value={ability}>
-                          {ABILITY_LABEL[ability]} ({currentScores[ability]} → {currentScores[ability] + 2})
+                          {ABILITY_LABEL[ability]} ({currentScores[ability]} →{" "}
+                          {Math.min(ABILITY_SCORE_IMPROVEMENT_MAX, currentScores[ability] + 2)})
                         </option>
                       ))}
                     </Select>
@@ -527,7 +551,7 @@ export function LevelUpWizard({
                         data-testid="levelup-asi-double-ability-a"
                       >
                         <option value="">Choose an ability…</option>
-                        {ABILITIES.filter((a) => a !== asiDoubleB).map((ability) => (
+                        {improvableAbilities.filter((a) => a !== asiDoubleB).map((ability) => (
                           <option key={ability} value={ability}>
                             {ABILITY_LABEL[ability]} ({currentScores[ability]} → {currentScores[ability] + 1})
                           </option>
@@ -540,7 +564,7 @@ export function LevelUpWizard({
                         data-testid="levelup-asi-double-ability-b"
                       >
                         <option value="">Choose an ability…</option>
-                        {ABILITIES.filter((a) => a !== asiDoubleA).map((ability) => (
+                        {improvableAbilities.filter((a) => a !== asiDoubleA).map((ability) => (
                           <option key={ability} value={ability}>
                             {ABILITY_LABEL[ability]} ({currentScores[ability]} → {currentScores[ability] + 1})
                           </option>
@@ -556,8 +580,13 @@ export function LevelUpWizard({
                   {klass ? (
                     <>
                       SRD average hit points for a d{klass.hitDie} hit die at Constitution{" "}
-                      {finalScores.constitution} ({formatModifier(abilityModifier(finalScores.constitution))}):{" "}
-                      <strong>+{hpGain}</strong> — {character.current_hp} → {character.current_hp + hpGain} (max{" "}
+                      {finalScores.constitution} ({formatModifier(abilityModifier(finalScores.constitution))})
+                      {hpGain !== levelUpHitPointGain(klass.hitDie, finalScores.constitution)
+                        ? `, plus ${formatModifier(
+                            hpGain - levelUpHitPointGain(klass.hitDie, finalScores.constitution)
+                          )} for the higher Constitution modifier at your ${oldLevel} earlier level${oldLevel === 1 ? "" : "s"}`
+                        : ""}
+                      : <strong>+{hpGain}</strong> — {character.current_hp} → {character.current_hp + hpGain} (max{" "}
                       {character.max_hp} → {character.max_hp + hpGain}).
                     </>
                   ) : null}

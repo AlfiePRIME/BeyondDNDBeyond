@@ -130,6 +130,19 @@ describe("ability score improvement", () => {
     expect(next.dexterity).toBe(10);
   });
 
+  it("caps raised scores at 20", () => {
+    expect(
+      applyAbilityScoreImprovement({ ...baseScores, strength: 19 }, { mode: "single", ability: "strength" })
+        .strength
+    ).toBe(20);
+    const next = applyAbilityScoreImprovement(
+      { ...baseScores, strength: 20, wisdom: 22 },
+      { mode: "double", abilities: ["strength", "wisdom"] }
+    );
+    expect(next.strength).toBe(20);
+    expect(next.wisdom).toBe(22); // already above the cap from magic: untouched
+  });
+
   it("throws on an invalid choice rather than silently no-op'ing", () => {
     expect(() =>
       applyAbilityScoreImprovement(baseScores, { mode: "double", abilities: ["strength", "strength"] })

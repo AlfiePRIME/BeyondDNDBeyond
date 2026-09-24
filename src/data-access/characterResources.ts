@@ -97,6 +97,34 @@ export async function growCharacterResourceMax(
   return data as CharacterResource;
 }
 
+/** Changes when a resource recharges — the spell-slot resync correcting
+ * Pact Magic rows created as long_rest. Same RLS as the other updates. */
+export async function setCharacterResourceRecharge(
+  supabase: SupabaseClient,
+  resourceId: string,
+  recharge: ResourceRecharge
+): Promise<CharacterResource> {
+  const { data, error } = await supabase
+    .from("character_resources")
+    .update({ recharge })
+    .eq("id", resourceId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as CharacterResource;
+}
+
+/** Deletes a resource row — the spell-slot resync dropping a Pact Magic
+ * caster's old slot level. Owner or campaign DM via 0008's delete policy. */
+export async function deleteCharacterResource(
+  supabase: SupabaseClient,
+  resourceId: string
+): Promise<void> {
+  const { error } = await supabase.from("character_resources").delete().eq("id", resourceId);
+  if (error) throw error;
+}
+
 /**
  * Raise or lower a named resource's current_uses by `delta`, clamped to
  * [0, max_uses], via the apply_character_resource_delta RPC (Map Editor
