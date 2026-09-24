@@ -9,6 +9,7 @@ import {
   overlayFromRows,
   parseCellKey,
   rowsForSave,
+  settleSavedCells,
   type CellState,
   type SculptTool,
 } from "./cellGrid";
@@ -312,6 +313,28 @@ describe("applyTool", () => {
         waterFlow: null,
       };
       expect(applyTool(atFloor, "pit", "normal", "bright", "default")).toBe(atFloor);
+    });
+
+    it("raising a sunken pit back to ground level turns it back into normal terrain", () => {
+      const shallow: CellState = { ...DEFAULT_CELL, elevation: -1, terrain: "pit" };
+      expect(applyTool(shallow, "raise", "normal", "bright", "default")).toEqual({
+        ...DEFAULT_CELL,
+        elevation: 0,
+        terrain: "normal",
+      });
+      const deep: CellState = { ...DEFAULT_CELL, elevation: -3, terrain: "pit" };
+      expect(applyTool(deep, "raise", "normal", "bright", "default")).toEqual({
+        ...deep,
+        elevation: -2,
+      });
+    });
+
+    it("raising a pit dug into a plateau keeps it a pit", () => {
+      const plateauPit: CellState = { ...DEFAULT_CELL, elevation: 3, terrain: "pit" };
+      expect(applyTool(plateauPit, "raise", "normal", "bright", "default")).toEqual({
+        ...plateauPit,
+        elevation: 4,
+      });
     });
 
     it("the brush argument is ignored — pit is the sculpt tool's own concern, not the terrain brush's", () => {
@@ -632,5 +655,42 @@ describe("rowsForSave", () => {
       ],
     ]);
     expect(rowsForSave("map-1", overlay, new Set())).toEqual([]);
+  });
+});
+
+describe("settleSavedCells", () => {
+  const raised: CellState = { ...DEFAULT_CELL, elevation: 1 };
+  const raisedTwice: CellState = { ...DEFAULT_CELL, elevation: 2 };
+
+  it("advances the baseline for saved keys and clears them from dirty", () => {
+    const saved = new Map([["0,0", raised]]);
+    const result = settleSavedCells(new Map(), saved, new Set(["0,0"]), saved, new Set(["0,0"]));
+    expect(result.baseline.get("0,0")).toEqual(raised);
+    expect([...result.dirty]).toEqual([]);
+  });
+
+  it("keeps a saved key dirty when it was edited again mid-save", () => {
+    const saved = new Map([["0,0", raised]]);
+    const current = new Map([["0,0", raisedTwice]]);
+    const result = settleSavedCells(new Map(), saved, new Set(["0,0"]), current, new Set(["0,0"]));
+    expect(result.baseline.get("0,0")).toEqual(raised);
+    expect([...result.dirty]).toEqual(["0,0"]);
+  });
+
+  it("keeps keys first dirtied mid-save, and leaves their baseline untouched", () => {
+    const saved = new Map([["0,0", raised]]);
+    const current = new Map([
+      ["0,0", raised],
+      ["1,1", raised],
+    ]);
+    const result = settleSavedCells(
+      new Map(),
+      saved,
+      new Set(["0,0"]),
+      current,
+      new Set(["0,0", "1,1"])
+    );
+    expect([...result.dirty]).toEqual(["1,1"]);
+    expect(result.baseline.has("1,1")).toBe(false);
   });
 });

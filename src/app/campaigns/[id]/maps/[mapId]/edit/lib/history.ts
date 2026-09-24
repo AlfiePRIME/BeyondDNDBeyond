@@ -47,3 +47,16 @@ export function completeRedo(stacks: HistoryStacks): HistoryStacks {
   if (!entry) return stacks;
   return { past: [...stacks.past, entry], future: stacks.future.slice(0, -1) };
 }
+
+/** Discards the entry an undo (or redo) just failed to run, so one stuck
+ * step — e.g. a reversal the database now rejects — can't wall off every
+ * earlier entry behind it forever. */
+export function dropUndo(stacks: HistoryStacks): HistoryStacks {
+  if (stacks.past.length === 0) return stacks;
+  return { past: stacks.past.slice(0, -1), future: stacks.future };
+}
+
+export function dropRedo(stacks: HistoryStacks): HistoryStacks {
+  if (stacks.future.length === 0) return stacks;
+  return { past: stacks.past, future: stacks.future.slice(0, -1) };
+}

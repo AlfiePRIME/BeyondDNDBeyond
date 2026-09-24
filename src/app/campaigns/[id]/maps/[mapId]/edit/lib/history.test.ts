@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   completeRedo,
   completeUndo,
+  dropRedo,
+  dropUndo,
   EMPTY_HISTORY,
   HISTORY_LIMIT,
   peekRedo,
@@ -76,5 +78,32 @@ describe("undo/redo movement", () => {
     expect(peekRedo(stacks)).toBe(undone);
     stacks = pushEntry(stacks, entry("replacement"));
     expect(peekRedo(stacks)).toBeNull();
+  });
+});
+
+describe("dropUndo / dropRedo", () => {
+  it("discards the top undo entry without touching the redo stack", () => {
+    const a = entry("a");
+    const b = entry("b");
+    const c = entry("c");
+    const stacks: HistoryStacks = { past: [a, b], future: [c] };
+    const dropped = dropUndo(stacks);
+    expect(dropped.past).toEqual([a]);
+    expect(dropped.future).toEqual([c]);
+    expect(peekUndo(dropped)).toBe(a);
+  });
+
+  it("discards the top redo entry without touching the undo stack", () => {
+    const a = entry("a");
+    const b = entry("b");
+    const stacks: HistoryStacks = { past: [a], future: [b] };
+    const dropped = dropRedo(stacks);
+    expect(dropped.past).toEqual([a]);
+    expect(dropped.future).toEqual([]);
+  });
+
+  it("is a no-op on an empty stack", () => {
+    expect(dropUndo(EMPTY_HISTORY)).toBe(EMPTY_HISTORY);
+    expect(dropRedo(EMPTY_HISTORY)).toBe(EMPTY_HISTORY);
   });
 });

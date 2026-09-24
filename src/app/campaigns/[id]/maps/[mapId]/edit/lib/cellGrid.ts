@@ -126,7 +126,14 @@ export function applyTool(
 ): CellState {
   if (tool === "raise") {
     if (current.elevation >= MAX_ELEVATION) return current;
-    return { ...current, elevation: current.elevation + 1 };
+    const elevation = current.elevation + 1;
+    // Raising a sunken pit back up to ground level fills it in. Only when
+    // crossing up out of negative elevation — a pit dug into a plateau is
+    // still a pit relative to its surroundings at elevation >= 0.
+    if (current.terrain === "pit" && current.elevation < 0 && elevation >= 0) {
+      return { ...current, elevation, terrain: "normal" };
+    }
+    return { ...current, elevation };
   }
   if (tool === "lower") {
     if (current.elevation <= 0) return current;
@@ -244,4 +251,40 @@ export function rowsForSave(
       water_flow_direction: state.waterFlow,
     };
   });
+}
+
+export function cellStatesEqual(a: CellState, b: CellState): boolean {
+  return (
+    a.elevation === b.elevation &&
+    a.terrain === b.terrain &&
+    a.light === b.light &&
+    a.ground === b.ground &&
+    a.waterFlow === b.waterFlow
+  );
+}
+
+/** Reconciles editor state after a save that persisted `savedKeys` as they
+ * stood in `savedOverlay` (snapshotted BEFORE the save's first await). The
+ * baseline advances only for those keys; a key stays dirty if it wasn't in
+ * the save, or was edited again while the save was in flight so the live
+ * overlay no longer matches what reached the database. */
+export function settleSavedCells(
+  baseline: ReadonlyMap<string, CellState>,
+  savedOverlay: ReadonlyMap<string, CellState>,
+  savedKeys: ReadonlySet<string>,
+  currentOverlay: ReadonlyMap<string, CellState>,
+  currentDirty: ReadonlySet<string>
+): { baseline: Map<string, CellState>; dirty: Set<string> } {
+  const nextBaseline = new Map(baseline);
+  for (const key of savedKeys) nextBaseline.set(key, savedOverlay.get(key) ?? DEFAULT_CELL);
+  const dirty = new Set<string>();
+  for (const key of currentDirty) {
+    if (!savedKeys.has(key)) {
+      dirty.add(key);
+      continue;
+    }
+    const current = currentOverlay.get(key) ?? DEFAULT_CELL;
+    if (!cellStatesEqual(current, nextBaseline.get(key) ?? DEFAULT_CELL)) dirty.add(key);
+  }
+  return { baseline: nextBaseline, dirty };
 }

@@ -12,6 +12,7 @@ import {
   type MapSurfaceObject,
 } from "./MapSurface";
 import { resolveWallMountOffset, WALL_MOUNT_FACES, type WallMountHost } from "./wallMount";
+import { cellsOnLine } from "./gridLine";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
 // — same hex-mirroring reasoning as GameTableScene.
@@ -21,6 +22,10 @@ const TEAL = "#1ec8c8"; // --teal
 const GROUND = "#1a1338";
 
 const CELL_SIZE = EDITOR_MAP_METRICS.cellSize;
+
+// A right-button press that travels further than this (screen px) before
+// release was an orbit drag, not a click — it must not also lower a cell.
+const RIGHT_CLICK_SLOP_PX = 5;
 
 // Tall enough to stay visible around max-elevation terrain (10 steps at
 // 0.35 world units each, on a 0.14 slab).
@@ -281,6 +286,18 @@ export function MapEditorScene({
   // One application per cell per stroke: without this, a drag lingering on
   // a cell (or crossing it twice) would raise it repeatedly.
   const strokeRef = useRef<Set<string>>(new Set());
+  // The last cell the in-progress left stroke reached, so a fast drag that
+  // skips cells between pointerover events can be filled in along a line.
+  const lastCellRef = useRef<{ x: number; y: number } | null>(null);
+  // A right-button press waiting to learn whether it's a click (lower the
+  // cell) or the start of an OrbitControls orbit drag (do nothing).
+  const pendingRightRef = useRef<{
+    x: number;
+    y: number;
+    clientX: number;
+    clientY: number;
+    moved: boolean;
+  } | null>(null);
 
   const paint = useCallback((x: number, y: number, button: number) => {
     const key = `${x},${y}`;
@@ -297,24 +314,23 @@ export function MapEditorScene({
         // Ignore a right button that lands while a left-button stroke is
         // already in flight — sharing strokeRef/strokeChangesRef with an
         // in-progress drag would either let it repaint an already-touched
-        // cell or prematurely close its history entry. Simultaneous
-        // left+right buttons is a rare enough gesture that "ignored" is the
-        // right answer, not "reconciled".
+        // cell or prematurely close its history entry.
         if (paintingRef.current) return;
-        // The right button never arms the drag-stroke below — that
-        // gesture is OrbitControls' RIGHT: MOUSE.ROTATE (camera orbit), so
-        // paintingRef must stay false and the window "pointerup" listener
-        // (gated on it) will never fire onStrokeEnd for this click. Finalize
-        // it here instead, synchronously, so a right click still becomes
-        // its own one-cell undo/redo entry exactly like a left click/drag
-        // does — same per-stroke dedupe too.
-        strokeRef.current = new Set();
-        paint(x, y, event.button);
-        onStrokeEndRef.current?.();
+        // Right-drag is OrbitControls' RIGHT: MOUSE.ROTATE, so nothing is
+        // painted yet: the window pointerup listener below lowers the cell
+        // only if the button comes back up without having moved.
+        pendingRightRef.current = {
+          x,
+          y,
+          clientX: event.nativeEvent.clientX,
+          clientY: event.nativeEvent.clientY,
+          moved: false,
+        };
         return;
       }
       paintingRef.current = true;
       strokeRef.current = new Set();
+      lastCellRef.current = { x, y };
       paint(x, y, event.button);
       onCellClickRef.current?.(x, y, event);
     },
@@ -334,8 +350,12 @@ export function MapEditorScene({
       event.stopPropagation();
       if (!paintingRef.current) return;
       // paintingRef is only ever armed by a left-button down (above), so a
-      // continued stroke is always the left-button action.
-      paint(x, y, 0);
+      // continued stroke is always the left-button action. Every cell on the
+      // line from the previous one is painted, so a fast drag leaves no gaps.
+      const last = lastCellRef.current;
+      const line = last ? cellsOnLine(last, { x, y }) : [{ x, y }];
+      for (const cell of line) paint(cell.x, cell.y, 0);
+      lastCellRef.current = { x, y };
     },
     [paint]
   );
@@ -343,14 +363,40 @@ export function MapEditorScene({
   // The stroke can end anywhere — off the grid, off the canvas — so the
   // pointerup listener lives on window, not on the meshes.
   useEffect(() => {
-    const endStroke = () => {
+    const trackRightMove = (event: PointerEvent) => {
+      const pending = pendingRightRef.current;
+      if (!pending || pending.moved) return;
+      if (
+        Math.hypot(event.clientX - pending.clientX, event.clientY - pending.clientY) >
+        RIGHT_CLICK_SLOP_PX
+      ) {
+        pending.moved = true;
+      }
+    };
+    const endStroke = (event: PointerEvent) => {
+      if (event.button === 2) {
+        const pending = pendingRightRef.current;
+        pendingRightRef.current = null;
+        if (!pending || pending.moved || paintingRef.current) return;
+        // A genuine right click: its own one-cell stroke, so it becomes its
+        // own undo/redo entry exactly like a left click does.
+        strokeRef.current = new Set();
+        paint(pending.x, pending.y, 2);
+        onStrokeEndRef.current?.();
+        return;
+      }
       if (!paintingRef.current) return;
       paintingRef.current = false;
+      lastCellRef.current = null;
       onStrokeEndRef.current?.();
     };
+    window.addEventListener("pointermove", trackRightMove);
     window.addEventListener("pointerup", endStroke);
-    return () => window.removeEventListener("pointerup", endStroke);
-  }, []);
+    return () => {
+      window.removeEventListener("pointermove", trackRightMove);
+      window.removeEventListener("pointerup", endStroke);
+    };
+  }, [paint]);
 
   const span = Math.max(gridWidth, gridHeight) * CELL_SIZE;
   const cameraPosition = useMemo<[number, number, number]>(
