@@ -100,6 +100,17 @@ export interface Character {
    * exactly once, to the next mode-honoring roll, no matter which surface
    * triggers it. */
   pending_roll_mode: AdvantageMode;
+  /** Temporary hit points (migration 0122) — damage comes off these first
+   * (inside apply_hp_delta and the attack-damage RPCs). Setting them
+   * replaces the old value (they don't stack); a long rest clears them. */
+  temp_hp: number;
+  /** Hit dice used since last recovered (0122). A character has `level`
+   * hit dice, so remaining = level - hit_dice_spent. Moves only through
+   * spend_hit_die / long_rest. */
+  hit_dice_spent: number;
+  /** DM-awarded inspiration (0122). Spending it grants advantage on the
+   * owner's next d20 roll via pending_roll_mode — see spendInspiration. */
+  inspiration: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -119,7 +130,10 @@ type ServerManagedCharacterField =
   | "concentrating_on"
   | "pending_concentration_dc"
   | "xp"
-  | "pending_roll_mode";
+  | "pending_roll_mode"
+  | "temp_hp"
+  | "hit_dice_spent"
+  | "inspiration";
 
 export type CreateCharacterParams = Omit<Character, ServerManagedCharacterField>;
 
@@ -245,6 +259,57 @@ export async function applyHpDelta(
  * total crosses an SRD threshold (rules-engine levelForXp) and offers —
  * never silently applies — the level-up.
  */
+/** Sets a character's temporary HP (they replace, never stack). */
+export async function setTempHp(supabase: SupabaseClient, characterId: string, tempHp: number): Promise<Character> {
+  const { data, error } = await supabase
+    .from("characters")
+    .update({ temp_hp: Math.max(0, Math.floor(tempHp)), updated_at: new Date().toISOString() })
+    .eq("id", characterId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as Character;
+}
+
+/** Marks one hit die spent and heals by `healing` (a total the caller rolled
+ * through the roll route, so the table sees it) — spend_hit_die (0122). */
+export async function spendHitDie(supabase: SupabaseClient, characterId: string, healing: number): Promise<Character> {
+  const { data, error } = await supabase.rpc("spend_hit_die", { p_character_id: characterId, p_healing: healing });
+  if (error) throw error;
+  return data as Character;
+}
+
+/** DM-only (trigger-enforced): award or take back inspiration. */
+export async function setInspiration(
+  supabase: SupabaseClient,
+  characterId: string,
+  inspiration: boolean
+): Promise<Character> {
+  const { data, error } = await supabase
+    .from("characters")
+    .update({ inspiration, updated_at: new Date().toISOString() })
+    .eq("id", characterId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as Character;
+}
+
+/** Spends inspiration for advantage on the character's next d20 roll — the
+ * one self-granted advantage the characters_dm_managed_columns trigger
+ * allows (inspiration true -> false in the same update). */
+export async function spendInspiration(supabase: SupabaseClient, characterId: string): Promise<Character> {
+  const { data, error } = await supabase
+    .from("characters")
+    .update({ inspiration: false, pending_roll_mode: "advantage", updated_at: new Date().toISOString() })
+    .eq("id", characterId)
+    .eq("inspiration", true)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as Character;
+}
+
 export async function awardXp(
   supabase: SupabaseClient,
   characterId: string,

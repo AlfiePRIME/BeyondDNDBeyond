@@ -573,3 +573,25 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+.tempHp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hitDiceRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 0 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--dim2);
+  color: var(--text);
+}
+
+.hitDiceCount {
+  margin-left: auto;
+  font-family: var(--font-m);
+  color: var(--teal);
+}

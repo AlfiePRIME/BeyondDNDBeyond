@@ -41,6 +41,11 @@ import {
   listCombatantConditions,
   requestOverride,
   applyHpDelta,
+  getCharacter,
+  setInspiration,
+  setTempHp,
+  spendHitDie,
+  spendInspiration,
   updateCharacter,
   subscribeToActionOverrides,
   subscribeToCharacterChanges,
@@ -128,6 +133,7 @@ export function CharacterSheet({
   initialCharacterConditions,
   initialPawnModelRef,
   canEdit,
+  viewerIsDm = false,
 }: {
   campaignId: string;
   initialCharacter: Character;
@@ -144,6 +150,8 @@ export function CharacterSheet({
    * PawnModelPicker below, which owns all further reads/writes of it. */
   initialPawnModelRef: string | null;
   canEdit: boolean;
+  /** Inspiration is DM-awarded — only the DM sees the award control. */
+  viewerIsDm?: boolean;
 }) {
   const [character, setCharacter] = useState(initialCharacter);
   const [resources, setResources] = useState(initialResources);
@@ -694,10 +702,71 @@ export function CharacterSheet({
     try {
       await longRest(supabase, character.id);
       setResources((rs) => rs.map((r) => ({ ...r, current_uses: r.max_uses })));
-      setCharacter((c) => ({ ...c, current_hp: c.max_hp }));
-      setHpDraft(String(character.max_hp));
+      // HP, temp HP, hit dice, and death saves all move server-side.
+      const refreshed = await getCharacter(supabase, character.id);
+      if (refreshed) {
+        setCharacter(refreshed);
+        setHpDraft(String(refreshed.current_hp));
+        setTempHpDraft(String(refreshed.temp_hp));
+      }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Could not take a long rest.");
+    }
+  }
+
+  const [tempHpDraft, setTempHpDraft] = useState(String(initialCharacter.temp_hp ?? 0));
+  async function commitTempHp() {
+    const value = parseIntIn(tempHpDraft, 0, 999);
+    if (value === null || value === character.temp_hp) {
+      setTempHpDraft(String(character.temp_hp));
+      return;
+    }
+    setSaveError(null);
+    try {
+      setCharacter(await setTempHp(createBrowserSupabaseClient(), character.id, value));
+    } catch (err) {
+      setTempHpDraft(String(character.temp_hp));
+      setSaveError(err instanceof Error ? err.message : "Could not set temporary HP.");
+    }
+  }
+
+  const hitDiceRemaining = Math.max(0, character.level - character.hit_dice_spent);
+  const [hitDieBusy, setHitDieBusy] = useState(false);
+  // Rolled through the roll route (so the table sees it in the shared log),
+  // then applied by spend_hit_die.
+  async function spendOneHitDie() {
+    if (!klass || hitDieBusy) return;
+    setHitDieBusy(true);
+    setSaveError(null);
+    try {
+      const conMod = abilityModifier(abilityScores.constitution);
+      const notation = `1d${klass.hitDie}${conMod > 0 ? `+${conMod}` : conMod < 0 ? `${conMod}` : ""}`;
+      const roll = await postRoll(campaignId, { kind: "freeform", notation });
+      const updated = await spendHitDie(createBrowserSupabaseClient(), character.id, Math.max(0, roll.total));
+      setCharacter(updated);
+      setHpDraft(String(updated.current_hp));
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not spend a hit die.");
+    } finally {
+      setHitDieBusy(false);
+    }
+  }
+
+  async function toggleInspiration() {
+    setSaveError(null);
+    try {
+      setCharacter(await setInspiration(createBrowserSupabaseClient(), character.id, !character.inspiration));
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not change inspiration.");
+    }
+  }
+
+  async function useInspiration() {
+    setSaveError(null);
+    try {
+      setCharacter(await spendInspiration(createBrowserSupabaseClient(), character.id));
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not spend inspiration.");
     }
   }
 
@@ -891,6 +960,19 @@ export function CharacterSheet({
                     +
                   </Button>
                   <span className={styles.vitalMax}>/ {character.max_hp}</span>
+                  <label className={styles.tempHp} title="Temporary HP — lost first, don't stack, cleared by a long rest">
+                    <span className={styles.vitalMax}>Temp</span>
+                    <input
+                      className={styles.vitalInput}
+                      type="number"
+                      min={0}
+                      value={tempHpDraft}
+                      onChange={(e) => setTempHpDraft(e.target.value)}
+                      onBlur={commitTempHp}
+                      aria-label="Temporary hit points"
+                      data-testid="sheet-temp-hp"
+                    />
+                  </label>
                   <span className={styles.hpAmount}>
                     <input
                       className={styles.vitalInput}
@@ -928,6 +1010,7 @@ export function CharacterSheet({
               ) : (
                 <span className={styles.vitalValue}>
                   {character.current_hp} / {character.max_hp}
+                  {character.temp_hp > 0 ? ` (+${character.temp_hp} temp)` : ""}
                 </span>
               )}
               {character.current_hp === 0 ? (
@@ -967,6 +1050,37 @@ export function CharacterSheet({
                     </Button>
                   ) : null}
                 </span>
+              ) : null}
+            </div>
+            <div className={styles.vital} data-testid="sheet-inspiration">
+              <span className={styles.vitalLabel}>Inspiration</span>
+              <span className={styles.hpControls}>
+                {character.inspiration ? (
+                  <Badge tone="orange" data-testid="sheet-inspiration-badge">
+                    Inspired
+                  </Badge>
+                ) : (
+                  <span className={styles.vitalMax}>None</span>
+                )}
+                {canEdit && character.inspiration ? (
+                  <Button
+                    variant="accent"
+                    size="sm"
+                    onClick={useInspiration}
+                    title="Spend it for advantage on your next d20 roll"
+                    data-testid="sheet-use-inspiration"
+                  >
+                    Use
+                  </Button>
+                ) : null}
+                {viewerIsDm ? (
+                  <Button variant="ghost" size="sm" onClick={toggleInspiration} data-testid="sheet-award-inspiration">
+                    {character.inspiration ? "Remove" : "Award"}
+                  </Button>
+                ) : null}
+              </span>
+              {character.pending_roll_mode === "advantage" ? (
+                <span className={styles.vitalMax}>Next roll has advantage</span>
               ) : null}
             </div>
             <div className={styles.vital}>
@@ -1242,6 +1356,28 @@ export function CharacterSheet({
                 ) : null
               }
             >
+              {klass ? (
+                <div className={styles.hitDiceRow} data-testid="sheet-hit-dice">
+                  <span>
+                    Hit dice <span className={styles.vitalMax}>d{klass.hitDie}</span>
+                  </span>
+                  <span className={styles.hitDiceCount}>
+                    {hitDiceRemaining} / {character.level}
+                  </span>
+                  {canEdit ? (
+                    <Button
+                      variant="teal"
+                      size="sm"
+                      disabled={hitDieBusy || hitDiceRemaining === 0 || character.current_hp >= character.max_hp || character.is_dead}
+                      onClick={() => void spendOneHitDie()}
+                      title="Short rest healing: roll a hit die + CON modifier"
+                      data-testid="sheet-spend-hit-die"
+                    >
+                      {hitDieBusy ? "Rolling…" : "Spend"}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
               {resources.length === 0 ? (
                 <p className={styles.emptyHint}>No limited-use resources tracked.</p>
               ) : (

@@ -259,10 +259,10 @@ export function CombatPanel({
     return isDM && combatant.npc_current_hp !== null && combatantHp(combatant) !== null;
   }
 
-  function combatantHp(combatant: CombatCombatant): { current: number; max: number } | null {
+  function combatantHp(combatant: CombatCombatant): { current: number; max: number; temp?: number } | null {
     if (combatant.character_id) {
       const character = characterById.get(combatant.character_id);
-      return character ? { current: character.current_hp, max: character.max_hp } : null;
+      return character ? { current: character.current_hp, max: character.max_hp, temp: character.temp_hp } : null;
     }
     // A stat-blocked NPC (Prompt 61): instance HP on the combatant, the
     // ceiling from the linked template. A deleted template (FK set null)
@@ -544,7 +544,7 @@ export function CombatPanel({
               <span className={styles.objectName}>{combatantLabel(combatant)}</span>
               {hp ? (
                 <span className={styles.hpValue} data-testid={`combatant-hp-${combatant.id}`}>
-                  {hp.current}/{hp.max} HP
+                  {hp.current}/{hp.max} HP{hp.temp ? ` +${hp.temp} temp` : ""}
                 </span>
               ) : null}
               <span className={styles.initiativeValue} data-testid={`combatant-initiative-${combatant.id}`}>

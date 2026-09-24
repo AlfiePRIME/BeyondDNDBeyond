@@ -42,7 +42,8 @@ export default async function CharacterSheetPage({
   // Anyone who can see the character at all (per the RLS above) is the owner
   // or the DM, both of whom may edit — canEdit is defense-in-depth for the
   // Client Component, not a reachable read-only mode.
-  const canEdit = character.owner_id === user.id || (await isDM(supabase, campaignId, user.id));
+  const viewerIsDm = await isDM(supabase, campaignId, user.id);
+  const canEdit = character.owner_id === user.id || viewerIsDm;
 
   const klass = CLASSES.find((c) => c.name === character.class);
   let resources = await listCharacterResources(supabase, characterId);
@@ -112,6 +113,7 @@ export default async function CharacterSheetPage({
       initialCharacterConditions={initialCharacterConditions}
       initialPawnModelRef={pawn?.pawn_model_ref ?? null}
       canEdit={canEdit}
+      viewerIsDm={viewerIsDm}
     />
   );
 }
