@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MELEE_RANGE_FEET,
   DEFAULT_RANGED_RANGE_FEET,
+  cantripScalingMultiplier,
   computeQuickActions,
+  multiplyDiceNotation,
   weaponRangeFeet,
   type ComputeQuickActionsParams,
 } from "./quickActions";
@@ -285,5 +287,96 @@ describe("computeQuickActions — spells", () => {
       })
     );
     expect(actions.map((a) => a.name)).toEqual(["Longsword", "Longbow", "Fire Bolt", "Witch Bolt"]);
+  });
+});
+
+describe("cantrip scaling", () => {
+  it("multiplies cantrip dice at levels 5, 11 and 17", () => {
+    expect([1, 4, 5, 10, 11, 16, 17, 20].map(cantripScalingMultiplier)).toEqual([
+      1, 1, 2, 2, 3, 3, 4, 4,
+    ]);
+    expect(multiplyDiceNotation("1d10", 3)).toBe("3d10");
+    expect(multiplyDiceNotation("d8+2", 2)).toBe("2d8+2");
+    expect(multiplyDiceNotation("1d8", 1)).toBe("1d8");
+  });
+
+  it("scales a cantrip's damage by character level", () => {
+    const at = (characterLevel?: number) =>
+      computeQuickActions(
+        params({ knownSpellNames: ["Fire Bolt"], hostiles: [hostileAt(1)], characterLevel })
+      )[0];
+    expect(at().damageNotation).toBe("1d10");
+    expect(at(4).damageNotation).toBe("1d10");
+    expect(at(5).damageNotation).toBe("2d10");
+    expect(at(17).damageNotation).toBe("4d10");
+  });
+
+  it("scales Eldritch Blast by beams, not dice", () => {
+    const [blast] = computeQuickActions(
+      params({ knownSpellNames: ["Eldritch Blast"], hostiles: [hostileAt(1)], characterLevel: 11 })
+    );
+    expect(blast.damageNotation).toBe("1d10");
+    expect(blast.attackCount).toBe(3);
+  });
+
+  it("never scales leveled spells", () => {
+    const [bolt] = computeQuickActions(
+      params({
+        knownSpellNames: ["Witch Bolt"],
+        hostiles: [hostileAt(1)],
+        characterLevel: 17,
+        resources: [{ name: "1st-Level Spell Slots", current_uses: 1 }],
+      })
+    );
+    expect(bolt.damageNotation).toBe("1d12");
+    expect(bolt.slotLevel).toBe(1);
+  });
+});
+
+describe("upcast fallback", () => {
+  const pactSlots = [{ name: "3rd-Level Spell Slots", current_uses: 2 }];
+
+  it("spends the lowest higher slot when the spell's own level has none", () => {
+    const [bolt] = computeQuickActions(
+      params({
+        knownSpellNames: ["Witch Bolt"],
+        hostiles: [hostileAt(1)],
+        resources: [
+          { name: "1st-Level Spell Slots", current_uses: 0 },
+          { name: "2nd-Level Spell Slots", current_uses: 1 },
+          ...pactSlots,
+        ],
+        allowUpcast: true,
+      })
+    );
+    expect(bolt).toMatchObject({ spellLevel: 1, slotLevel: 2, blockedReason: null });
+  });
+
+  it("lets a warlock cast a 1st-level spell from its 3rd-level pact slots", () => {
+    const [bolt] = computeQuickActions(
+      params({
+        knownSpellNames: ["Witch Bolt"],
+        hostiles: [hostileAt(1)],
+        resources: pactSlots,
+        allowUpcast: true,
+      })
+    );
+    expect(bolt).toMatchObject({ slotLevel: 3, blockedReason: null });
+  });
+
+  it("stays blocked when no slot at or above the level is left, and without allowUpcast", () => {
+    const [blocked] = computeQuickActions(
+      params({
+        knownSpellNames: ["Scorching Ray"],
+        hostiles: [hostileAt(1)],
+        resources: [{ name: "1st-Level Spell Slots", current_uses: 3 }],
+        allowUpcast: true,
+      })
+    );
+    expect(blocked.blockedReason).toBe("No 2nd-level or higher spell slots remaining");
+    const [strict] = computeQuickActions(
+      params({ knownSpellNames: ["Witch Bolt"], hostiles: [hostileAt(1)], resources: pactSlots })
+    );
+    expect(strict.blockedReason).toBe("No 1st-level spell slots remaining");
   });
 });

@@ -115,6 +115,8 @@ export { attackBonus, attackAbility, type AttackKind } from "./attackBonus";
 
 export {
   computeQuickActions,
+  cantripScalingMultiplier,
+  multiplyDiceNotation,
   weaponRangeFeet,
   DEFAULT_MELEE_RANGE_FEET,
   DEFAULT_RANGED_RANGE_FEET,

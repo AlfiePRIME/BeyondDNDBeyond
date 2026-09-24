@@ -373,8 +373,8 @@ const SPELL_TUPLES: SpellTuple[] = [
  * an entry exists ONLY where the SRD text says "make a melee spell attack"
  * or "make a ranged spell attack" AND the spell deals fixed on-hit damage
  * dice. `damageNotation` is the BASE dice (cantrips at character level 1-4;
- * cantrip level scaling isn't modeled anywhere in the app — the manual
- * attack flow types damage by hand too); per-hit riders (Acid Arrow's
+ * computeQuickActions scales them by character level — see
+ * cantripScalingMultiplier); per-hit riders (Acid Arrow's
  * end-of-turn 2d4, Witch Bolt's sustained arc) and multi-beam repetition
  * (Scorching Ray's three rays are three separate attack rolls at 2d6 each)
  * stay narration, exactly like the manual flow.

@@ -1,5 +1,5 @@
 import { gridDistanceFeet, type GridPoint } from "./movement";
-import { spellSlotResourceName, type SpellSlotLevel } from "./spellSlots";
+import { SPELL_SLOT_LEVELS, spellSlotResourceName, type SpellSlotLevel } from "./spellSlots";
 import { SPELLS } from "./srd/spells";
 import type { SpellLevel } from "./srd/types";
 
@@ -61,6 +61,28 @@ export function weaponRangeFeet(item: {
   return item.attackKind === "ranged" ? DEFAULT_RANGED_RANGE_FEET : DEFAULT_MELEE_RANGE_FEET;
 }
 
+/** SRD cantrip scaling: damage dice multiply at character levels 5, 11
+ * and 17. */
+export function cantripScalingMultiplier(characterLevel: number): number {
+  if (characterLevel >= 17) return 4;
+  if (characterLevel >= 11) return 3;
+  if (characterLevel >= 5) return 2;
+  return 1;
+}
+
+/** Multiplies every "NdS" term's dice count in a notation ("1d10" at level
+ * 5 -> "2d10"); flat modifiers are left alone. */
+export function multiplyDiceNotation(notation: string, multiplier: number): string {
+  if (multiplier === 1) return notation;
+  return notation.replace(/(\d*)d(\d+)/gi, (_, count: string, sides: string) => {
+    return `${(count === "" ? 1 : Number(count)) * multiplier}d${sides}`;
+  });
+}
+
+/** Eldritch Blast scales by firing more beams (separate attack rolls),
+ * not by rolling more dice per beam. */
+const BEAM_CANTRIPS = new Set(["Eldritch Blast"]);
+
 export interface QuickAction {
   source: "weapon" | "spell";
   name: string;
@@ -72,6 +94,13 @@ export interface QuickAction {
   rangeFeet: number;
   /** null for weapons; 0 for cantrips (no resource cost). */
   spellLevel: SpellLevel | null;
+  /** The slot level casting it spends: spellLevel itself, or (with
+   * `allowUpcast`) the lowest higher level with a slot left when its own
+   * level has none. null for weapons and cantrips. */
+  slotLevel: SpellSlotLevel | null;
+  /** Attack rolls the action makes — more than 1 only for a beam cantrip
+   * (Eldritch Blast) at higher character levels. */
+  attackCount: number;
   /** Hostile tokens within `rangeFeet + speed`, in the caller's input
    * order — every qualifying target, so the UI can offer a picker rather
    * than an arbitrary nearest-only default. */
@@ -100,6 +129,13 @@ export interface ComputeQuickActionsParams {
    * "spell" attacks from such classes. */
   knownSpellNames: readonly string[];
   resources: readonly QuickActionResource[];
+  /** The caster's character level, for cantrip damage scaling. Omitted:
+   * cantrips stay at their level-1 dice. */
+  characterLevel?: number;
+  /** When a leveled spell's own slot level has nothing left, fall back to
+   * the lowest higher slot level that does (cast without extra upcast
+   * dice) — the caller must then spend `slotLevel`, not `spellLevel`. */
+  allowUpcast?: boolean;
 }
 
 function reachableTargets(
@@ -117,7 +153,8 @@ function reachableTargets(
  * Every quick action worth showing: each weapon-tagged inventory item in
  * range-with-movement of at least one hostile, then each known spell with
  * attack metadata that's in range-with-movement of at least one hostile.
- * A leveled spell additionally needs a matching-level spell-slot resource
+ * A leveled spell additionally needs a matching-level (or, with
+ * allowUpcast, higher) spell-slot resource
  * with uses remaining (cantrips are unlimited) — since Prompt 52 a spell
  * failing ONLY that resource check is still returned, with
  * `blockedReason` set, so the panel can render it disabled with a "Flag
@@ -129,6 +166,8 @@ function reachableTargets(
  */
 export function computeQuickActions(params: ComputeQuickActionsParams): QuickAction[] {
   const { position, speed, hostiles, inventory, knownSpellNames, resources } = params;
+  const cantripMultiplier =
+    params.characterLevel !== undefined ? cantripScalingMultiplier(params.characterLevel) : 1;
   const actions: QuickAction[] = [];
 
   for (const item of inventory) {
@@ -143,6 +182,8 @@ export function computeQuickActions(params: ComputeQuickActionsParams): QuickAct
       damageNotation: item.damageNotation,
       rangeFeet,
       spellLevel: null,
+      slotLevel: null,
+      attackCount: 1,
       targetTokenIds,
       blockedReason: null,
     });
@@ -165,26 +206,44 @@ export function computeQuickActions(params: ComputeQuickActionsParams): QuickAct
     const targetTokenIds = reachableTargets(position, speed, rangeFeet, hostiles);
     if (targetTokenIds.length === 0) continue;
     let blockedReason: string | null = null;
+    let slotLevel: SpellSlotLevel | null = null;
     if (spell.level > 0) {
-      const slotName = spellSlotResourceName(spell.level as SpellSlotLevel);
-      const slot = resources.find((resource) => resource.name === slotName);
-      // Matching-level slot only — no upcast-from-a-higher-slot fallback
-      // (and so no Pact Magic mapping); a missing row means the slot level
-      // was never provisioned, which is the same "nothing to spend" state
-      // as an exhausted one.
-      if (!slot || slot.current_uses <= 0) {
+      const hasUses = (level: SpellSlotLevel) =>
+        (resources.find((resource) => resource.name === spellSlotResourceName(level))
+          ?.current_uses ?? 0) > 0;
+      // The spell's own level first; with allowUpcast, the lowest higher
+      // level with a slot left (a Warlock's pact slots, or a full caster
+      // out of low slots). A missing row means the slot level was never
+      // provisioned — the same "nothing to spend" state as an exhausted one.
+      const candidates = SPELL_SLOT_LEVELS.filter((level) =>
+        params.allowUpcast ? level >= spell.level : level === spell.level
+      );
+      slotLevel = candidates.find(hasUses) ?? null;
+      if (slotLevel === null) {
         // "1st-Level Spell Slots" -> "No 1st-level spell slots remaining".
-        const ordinal = slotName.replace("-Level Spell Slots", "");
-        blockedReason = `No ${ordinal}-level spell slots remaining`;
+        const ordinal = spellSlotResourceName(spell.level as SpellSlotLevel).replace(
+          "-Level Spell Slots",
+          ""
+        );
+        blockedReason = params.allowUpcast
+          ? `No ${ordinal}-level or higher spell slots remaining`
+          : `No ${ordinal}-level spell slots remaining`;
+        slotLevel = spell.level as SpellSlotLevel;
       }
     }
+    const beams = spell.level === 0 && BEAM_CANTRIPS.has(spell.name);
     actions.push({
       source: "spell",
       name: spell.name,
       attackKind: "spell",
-      damageNotation: spell.attack.damageNotation,
+      damageNotation:
+        spell.level === 0 && !beams
+          ? multiplyDiceNotation(spell.attack.damageNotation, cantripMultiplier)
+          : spell.attack.damageNotation,
       rangeFeet,
       spellLevel: spell.level,
+      slotLevel,
+      attackCount: beams ? cantripMultiplier : 1,
       targetTokenIds,
       blockedReason,
     });

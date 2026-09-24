@@ -210,6 +210,10 @@ export function QuickActionsPanel({
       inventory: actingCharacter.inventory,
       knownSpellNames: spellCapable ? actingCharacter.spells.map((s) => s.name) : [],
       resources,
+      characterLevel: actingCharacter.level,
+      // A spell with no slot at its own level casts from the lowest higher
+      // one (spent below via action.slotLevel).
+      allowUpcast: true,
     });
   }, [canAct, actingCharacter, actingToken, hostiles, resources]);
 
@@ -304,9 +308,9 @@ export function QuickActionsPanel({
       // sheet's concentration toggle deliberately left to this prompt);
       // cantrips are unlimited. A concurrent-spend conflict just leaves
       // the row as-is — the DB CHECK is the authority.
-      if (action.source === "spell" && action.spellLevel !== null && action.spellLevel > 0) {
+      if (action.source === "spell" && action.slotLevel !== null) {
         const slot = resources.find(
-          (resource) => resource.name === spellSlotResourceName(action.spellLevel as SpellSlotLevel)
+          (resource) => resource.name === spellSlotResourceName(action.slotLevel as SpellSlotLevel)
         );
         if (slot && slot.current_uses > 0) {
           const updated = await setCharacterResourceUses(
@@ -397,11 +401,16 @@ export function QuickActionsPanel({
                   {action.name}
                   {action.spellLevel !== null ? (
                     <Badge tone="purple">
-                      {action.spellLevel === 0 ? "cantrip" : `level ${action.spellLevel}`}
+                      {action.spellLevel === 0
+                        ? "cantrip"
+                        : action.slotLevel !== null && action.slotLevel !== action.spellLevel
+                          ? `level ${action.spellLevel}, level ${action.slotLevel} slot`
+                          : `level ${action.spellLevel}`}
                     </Badge>
                   ) : null}
                 </span>
                 <span className={styles.quickActionMeta}>
+                  {action.attackCount > 1 ? `${action.attackCount} beams × ` : ""}
                   {action.damageNotation} · {action.rangeFeet} ft
                 </span>
                 {action.blockedReason ? (
