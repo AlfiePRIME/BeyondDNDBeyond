@@ -4409,6 +4409,13 @@ export function GameRoom({
       // client's own tray never flickers away for the brief moment before
       // its own presence has fully synced.
       setPresentUserIds(new Set([currentUserId, ...present.map((member) => member.userId)]));
+      // Someone who left can't still be selecting a token — drop their
+      // highlight instead of leaving it on everyone's table until reload.
+      const presentIds = new Set(present.map((member) => member.userId));
+      setRemoteSelectionByUser((current) => {
+        if ([...current.keys()].every((userId) => presentIds.has(userId))) return current;
+        return new Map([...current].filter(([userId]) => presentIds.has(userId)));
+      });
     });
 
     const unsubscribeEnded = channel.subscribe(SESSION_ENDED_EVENT, () => {
