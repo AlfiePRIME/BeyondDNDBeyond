@@ -269,6 +269,37 @@ export async function addContainerItem(
   return data;
 }
 
+/** Undo-path re-insert of items a container's delete cascaded away (a
+ * chest's contents when the chest object itself is deleted) — same rows,
+ * same ids, through addContainerItem's DM-only INSERT policy. */
+export async function restoreContainerItems(
+  supabase: SupabaseClient,
+  items: readonly MapObjectItem[]
+): Promise<MapObjectItem[]> {
+  if (items.length === 0) return [];
+  const { data, error } = await supabase
+    .from("map_object_items")
+    .insert(
+      items.map((item) => ({
+        id: item.id,
+        campaign_id: item.campaign_id,
+        map_object_id: item.map_object_id,
+        concealed_pit_id: item.concealed_pit_id,
+        name: item.name,
+        description: item.description,
+        icon: item.icon,
+        tag: item.tag,
+        hidden_dc: item.hidden_dc,
+        curse_blessing: item.curse_blessing,
+        created_at: item.created_at,
+      }))
+    )
+    .select();
+
+  if (error) throw error;
+  return data ?? [];
+}
+
 /** DM-only, enforced by map_object_items' own UPDATE RLS (0060). */
 export async function updateContainerItem(
   supabase: SupabaseClient,

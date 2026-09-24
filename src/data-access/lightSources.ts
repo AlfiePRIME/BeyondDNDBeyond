@@ -107,3 +107,32 @@ export async function deleteLightSource(
 
   if (error) throw error;
 }
+
+/** Undo-path re-insert (restoreMapObject's pattern): recreates lights that
+ * a map_objects delete cascaded away, keeping their original ids and
+ * created_at. DM-only via the same INSERT policy as createLightSource. */
+export async function restoreLightSources(
+  supabase: SupabaseClient,
+  lights: readonly LightSource[]
+): Promise<LightSource[]> {
+  if (lights.length === 0) return [];
+  const { data, error } = await supabase
+    .from("light_sources")
+    .insert(
+      lights.map((light) => ({
+        id: light.id,
+        map_id: light.map_id,
+        radius_feet: light.radius_feet,
+        brightness: light.brightness,
+        x: light.x,
+        y: light.y,
+        object_id: light.object_id,
+        token_id: light.token_id,
+        created_at: light.created_at,
+      }))
+    )
+    .select();
+
+  if (error) throw error;
+  return data ?? [];
+}

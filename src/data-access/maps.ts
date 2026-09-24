@@ -136,29 +136,10 @@ export interface MapCell {
 /**
  * DM-only, enforced by campaign_maps' INSERT RLS policy (0015).
  *
- * CORRECTION as of 0048 (per-viewer map visibility) — the claim below that
- * .insert().select() is "safe here" is no longer true, and this function
- * currently fails for every caller: 0048 rewrote campaign_maps' SELECT
- * policy to `using (can_read_map(id))`, and can_read_map's body does its
- * own separate by-id lookup of campaign_maps — a fresh scan of the very
- * table this INSERT is writing to, executed mid-command via a SECURITY
- * DEFINER function call. Postgres hasn't advanced its command counter past
- * this row's own insertion yet at that point, so that lookup can't see the
- * row: the RETURNING projection gets rejected as an RLS violation
- * ("new row violates row-level security policy for table campaign_maps"),
- * confirmed by hand against the live instance and unrelated to which DM is
- * calling this. Root-caused and reproduced while adding the themed map
- * templates (see scripts/db/verify-map-templates.mjs's header comment); a
- * candidate fix sits as an unapplied, unverified draft at
- * supabase/migrations/0054_campaign_maps_returning_fix.sql pending explicit
- * review/authorization (it changes shared RLS policy on the live
- * instance) — until that lands, treat .insert().select() on campaign_maps
- * as broken and use a bare insert plus a separate select instead (see
- * verify-map-templates.mjs's createTemplateMapForReal for the pattern).
- *
- * [Original comment, now stale — left for context:] Unlike createCampaign,
- * .insert().select() is safe here: the SELECT policy only needs
- * is_campaign_dm, which is already true before the insert runs.
+ * `.insert().select()` on campaign_maps works again as of 0054 (an applied
+ * RLS hotfix): 0048 briefly broke INSERT ... RETURNING here because its
+ * SELECT policy re-looked the row up by id mid-command; see that
+ * migration's header for the root cause.
  *
  * Cells are deliberately NOT pre-populated: map_cells storage is sparse. A
  * cell with no row is the default (elevation 0, normal terrain), so a fresh
@@ -227,13 +208,8 @@ export interface NewMapObjectSeed {
  * Returns the stored cell rows alongside the map so callers can render a
  * thumbnail from the known-upfront terrain without re-fetching.
  *
- * CURRENTLY BROKEN for every caller (this is MapsManager.tsx's "Create &
- * edit" button, for a blank map or any template): this function's first
- * statement below is the exact same `.insert(campaign_maps).select().single()`
- * shape whose "is safe" claim createMap's own doc comment above corrects —
- * see that comment for the full root cause (a 0048 regression, unrelated to
- * which map/template is being created) and the unapplied draft fix at
- * supabase/migrations/0054_campaign_maps_returning_fix.sql.
+ * The `.insert().select().single()` below relies on 0054's RLS fix (see
+ * createMap's comment) — it failed for every caller between 0048 and 0054.
  */
 export async function createPopulatedMap(
   supabase: SupabaseClient,
@@ -576,6 +552,12 @@ export async function listMapsLinkingInto(
  * own RLS, leaking the file forever. Reading map_art BEFORE the map row
  * disappears is required for the same reason.
  *
+ * Those file deletes are best-effort, though: a Storage hiccup must never
+ * block (or half-complete) the delete itself — a leaked file is harmless,
+ * a half-deleted map whose images are gone but whose row survives is not.
+ * A non-DM caller's file deletes are already no-ops (can_write_map again),
+ * so running them first can't damage a map the row delete then refuses.
+ *
  * DM-only, enforced by campaign_maps' DELETE RLS policy (0015) — same
  * zero-rows-affected detection as deleteCampaign/renameCampaign (campaigns.ts)
  * and setLiveMap below: a non-DM caller's delete matches zero rows rather
@@ -586,10 +568,12 @@ export async function deleteMap(supabase: SupabaseClient, mapId: string): Promis
   const map = await getMap(supabase, mapId);
   if (!map) throw new Error("Map not found.");
 
-  if (map.thumbnail_ref) await deleteMapThumbnailFile(supabase, map.thumbnail_ref);
-  if (map.reference_image_ref) await deleteMapReferenceImageFile(supabase, map.reference_image_ref);
-  const art = await getMapArt(supabase, mapId);
-  if (art) await deleteMapArtFile(supabase, art.image_ref);
+  const art = await getMapArt(supabase, mapId).catch(() => null);
+  await Promise.allSettled([
+    map.thumbnail_ref ? deleteMapThumbnailFile(supabase, map.thumbnail_ref) : null,
+    map.reference_image_ref ? deleteMapReferenceImageFile(supabase, map.reference_image_ref) : null,
+    art ? deleteMapArtFile(supabase, art.image_ref) : null,
+  ]);
 
   const { error, count } = await supabase
     .from("campaign_maps")
@@ -715,6 +699,26 @@ export async function renameMapFolder(
 export async function deleteMapFolder(supabase: SupabaseClient, folderId: string): Promise<void> {
   const { error } = await supabase.from("map_folders").delete().eq("id", folderId);
   if (error) throw error;
+}
+
+/** DM-only via campaign_maps' UPDATE policy (0015) — a non-DM caller's
+ * update matches zero rows, which `.single()` surfaces as an error. */
+export async function renameMap(
+  supabase: SupabaseClient,
+  mapId: string,
+  name: string
+): Promise<CampaignMap> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Give the map a name.");
+  const { data, error } = await supabase
+    .from("campaign_maps")
+    .update({ name: trimmed })
+    .eq("id", mapId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
 }
 
 /** Files the map into a folder, or unfiles it with null. */
