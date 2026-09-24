@@ -59,10 +59,11 @@ export interface AttackResolution {
    * pre-61 stored roll (the instantDeath optionality precedent). */
   attackerCombatantId?: string | null;
   attackName?: string | null;
-  /** Death-save fallout of damage landing on an already-0-HP target
-   * (Prompt 49): true when it equalled or exceeded the target's max HP and
-   * killed outright. false when nothing of the sort happened (including
-   * every pre-49 logged roll, where the field is simply absent). */
+  /** True when the hit killed outright: damage on an already-0-HP target
+   * that equalled or exceeded its max HP (Prompt 49), or — since 0120 —
+   * damage that dropped it to 0 with at least its max HP left over
+   * (massive damage). false otherwise (including every pre-49 logged
+   * roll, where the field is simply absent). */
   instantDeath: boolean;
   /** Failures added to the already-0-HP target's tally by this hit: 0
    * (nothing happened), 1 (ordinary damage), or 2 (a critical hit). */
