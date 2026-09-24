@@ -5414,7 +5414,9 @@ export function GameRoom({
     setMonsterJoinBusy(true);
     setMonsterJoinError(null);
     try {
-      const roll = await postRoll(campaignId, { kind: "freeform", notation: "1d20" });
+      // DM-private: a bare "1d20" in every player's dice log is noise, and
+      // it gives away the monster's place in the turn order early.
+      const roll = await postRoll(campaignId, { kind: "freeform", notation: "1d20", visibility: "private" });
       setMonsterInitiativeDraft(String(roll.total));
     } catch (err) {
       setMonsterJoinError(errorMessage(err) ?? "Could not roll initiative.");
