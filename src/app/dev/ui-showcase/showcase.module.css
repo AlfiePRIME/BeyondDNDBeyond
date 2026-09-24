@@ -24,11 +24,11 @@
 
 .heroEyebrow {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--teal);
   margin-bottom: 14px;
+  font-weight: 500;
 }
 
 .heroTitle {
@@ -36,8 +36,7 @@
   font-weight: 400;
   font-size: clamp(34px, 6vw, 58px);
   line-height: 1.05;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--text);
   text-shadow:
     0 0 18px color-mix(in srgb, var(--purple) 66%, transparent),
@@ -93,10 +92,10 @@
 
 .caption {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .mutedCopy {
@@ -112,8 +111,7 @@
   font-family: var(--font-h);
   font-weight: 400;
   font-size: 30px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.1px;
   color: var(--text);
   text-shadow: 0 0 16px color-mix(in srgb, var(--pink) 55%, transparent);
 }

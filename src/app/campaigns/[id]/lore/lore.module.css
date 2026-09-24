@@ -15,14 +15,23 @@
 }
 
 .backLink {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-large-tracking);
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 .backLink:hover {
-  color: var(--purple);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  color: var(--md-sys-color-primary);
 }
 
 .hint {
@@ -32,14 +41,23 @@
 }
 
 .createLink {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--teal);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-large-tracking);
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 .createLink:hover {
-  color: var(--text);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  color: var(--md-sys-color-primary);
 }
 
 .emptyHint {
@@ -58,18 +76,17 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-medium);
   padding: 14px 16px;
 }
 
 .cardTitle {
   font-family: var(--font-m);
   font-size: 14px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.1px;
   color: var(--text);
+  font-weight: 500;
 }
 
 .cardTitle:hover {
@@ -96,16 +113,16 @@
 
 .cardLinksLabel {
   font-family: var(--font-m);
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .cardLinkChip {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--teal);
 }
 
@@ -158,16 +175,15 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-medium);
   padding: 8px 12px;
 }
 
 .pageLink {
   font-family: var(--font-m);
   font-size: 13px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   color: var(--teal);
 }
 
@@ -196,11 +212,11 @@
 
 .textareaLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
   transition: color 0.18s ease;
+  font-weight: 500;
 }
 
 .textareaField:focus-within .textareaLabel {
@@ -211,9 +227,9 @@
   width: 100%;
   min-height: 220px;
   resize: vertical;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
   padding: 10px 12px;
   color: var(--text);
   font-family: var(--font-b);

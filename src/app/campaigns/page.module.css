@@ -36,9 +36,8 @@
   flex-wrap: wrap;
   gap: 4px 16px;
   padding: 10px 12px;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-medium);
 }
 
 .campaignName {
@@ -60,7 +59,7 @@
 .inviteCode code {
   font-family: var(--font-m);
   color: var(--teal);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.1px;
 }
 
 .formsRow {

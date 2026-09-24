@@ -11,7 +11,7 @@ interface NavLinkDef {
 
 const NAV_LINKS: NavLinkDef[] = [
   { href: "/", label: "Lobby", testId: "app-nav-link-lobby" },
-  { href: "/campaigns", label: "Your Campaigns", testId: "app-nav-link-campaigns" },
+  { href: "/campaigns", label: "Campaigns", testId: "app-nav-link-campaigns" },
   { href: "/account", label: "Account", testId: "app-nav-link-account" },
 ];
 

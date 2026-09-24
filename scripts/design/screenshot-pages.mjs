@@ -6,6 +6,7 @@
 // Usage: APP_URL=http://localhost:5871 OUT=/some/dir [PAGES=/,/campaigns/CID]
 //        [VW=1440 VH=900] node scripts/design/screenshot-pages.mjs
 // PAGES placeholders: CID (campaign), MID (map), CHID (character).
+// Signed-out pages (login, signup) are shot once, before the role passes.
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -107,6 +108,19 @@ try {
   )
     .split(",")
     .map((p) => p.replaceAll("CHID", charId).replaceAll("MID", mapId).replaceAll("CID", campaignId));
+
+  {
+    const context = await browser.newContext({
+      viewport: { width: Number(env.VW ?? 1440), height: Number(env.VH ?? 900) },
+    });
+    const page = await context.newPage();
+    for (const path of (process.env.SIGNED_OUT_PAGES ?? "/login,/signup").split(",").filter(Boolean)) {
+      await page.goto(APP_URL + path, { waitUntil: "load", timeout: 90000 });
+      await sleep(2000);
+      await page.screenshot({ path: join(OUT, `signed-out${path.replace(/[/?=&]+/g, "_")}.png`), fullPage: true });
+    }
+    await context.close();
+  }
 
   for (const [user, role] of [[dm, "dm"], [player, "player"]]) {
     const context = await browser.newContext({

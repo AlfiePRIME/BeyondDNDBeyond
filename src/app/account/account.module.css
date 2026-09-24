@@ -89,8 +89,8 @@
 
 .uploadHint {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
   margin: 0;
 }
@@ -105,7 +105,7 @@
   color: var(--teal);
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   margin: 0;
 }
 
@@ -165,15 +165,23 @@
 }
 
 .createLink {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--teal);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-large-tracking);
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 .createLink:hover {
-  color: var(--text);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  color: var(--md-sys-color-primary);
 }
 
 .campaignsGrid {
@@ -188,9 +196,8 @@
   flex-direction: column;
   gap: 12px;
   padding: 14px;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-medium);
 }
 
 .manageHeader {

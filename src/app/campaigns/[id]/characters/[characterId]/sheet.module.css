@@ -57,20 +57,29 @@
 }
 
 .backLink {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-large-tracking);
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 .backLink:hover {
-  color: var(--teal);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  color: var(--md-sys-color-primary);
 }
 
 .saveError {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--red);
   margin: 0;
 }
@@ -109,8 +118,8 @@
 
 .uploadHint {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
   margin: 0;
 }
@@ -125,7 +134,7 @@
   color: var(--teal);
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   margin: 0;
 }
 
@@ -143,10 +152,10 @@
 
 .vitalLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .vitalValue {
@@ -195,9 +204,9 @@
   font-family: var(--font-h);
   font-size: 18px;
   color: var(--text);
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
 }
 
 .vitalInput:focus {
@@ -217,9 +226,8 @@
   flex-direction: column;
   gap: 6px;
   padding: 12px;
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
-  background: var(--surface2);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container-high);
 }
 
 .abilityModifier {
@@ -234,7 +242,7 @@
   gap: 6px;
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--muted);
 }
 
@@ -281,10 +289,10 @@
 
 .skillAbility {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .skillBonus {
@@ -358,10 +366,10 @@
 
 .groupLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .spellGroup {
@@ -377,8 +385,8 @@
 
 .spellMeta {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.05em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--muted);
 }
 
@@ -386,8 +394,8 @@
   flex: 1;
   min-width: 0;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.05em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--muted);
   text-align: right;
 }
@@ -421,14 +429,14 @@
 .rollHeadline {
   font-family: var(--font-m);
   font-size: 15px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
 
 .rollDetail {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.1px;
   line-height: 1.5;
   color: var(--dim);
 }
@@ -443,7 +451,7 @@
 .deathSaveTally {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--red);
 }
 
@@ -464,7 +472,7 @@
 .deathSavePromptText {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
 
@@ -478,7 +486,7 @@
 .concentrationSpell {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--purple);
 }
 

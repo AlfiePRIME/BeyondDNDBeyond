@@ -15,15 +15,23 @@
 }
 
 .backLink {
-  color: var(--muted);
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-large-tracking);
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 .backLink:hover {
-  color: var(--teal);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  color: var(--md-sys-color-primary);
 }
 
 .hint {
@@ -45,7 +53,7 @@
   color: var(--text);
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
 }
 
 .errorText {
@@ -58,7 +66,7 @@
   color: var(--teal);
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   margin: 0;
 }
 
@@ -72,8 +80,7 @@
   font-family: var(--font-m);
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.1px;
   margin: 8px 0 -4px;
   padding-top: 12px;
   border-top: 1px solid var(--dim2);
@@ -109,7 +116,7 @@
 .soundOverrideKey {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.1px;
   color: var(--text);
   min-width: 130px;
 }

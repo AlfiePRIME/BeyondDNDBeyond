@@ -41,8 +41,7 @@
   gap: 8px;
   font-family: var(--font-m);
   font-size: 14px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  letter-spacing: 0.1px;
   color: var(--text);
   padding: 14px 30px;
   border: 1px solid var(--accent);
@@ -52,6 +51,7 @@
   transition:
     background 0.18s ease,
     box-shadow 0.18s ease;
+  font-weight: 500;
 }
 
 .zeroStateCta:hover,
@@ -74,9 +74,8 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-medium);
 }
 
 .dashboardRowHeader {
@@ -148,9 +147,9 @@
 .countLabel {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .memberList {
@@ -169,9 +168,8 @@
   justify-content: space-between;
   gap: 4px 16px;
   padding: 10px 12px;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-medium);
 }
 
 .memberName {
@@ -241,9 +239,8 @@
   justify-content: space-between;
   gap: 8px 16px;
   padding: 8px 10px;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-medium);
 }
 
 .startName {

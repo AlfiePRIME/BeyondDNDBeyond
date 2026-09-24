@@ -48,10 +48,10 @@
 
 .groupLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .cardGrid {
@@ -161,11 +161,11 @@
 
 .summaryLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
   flex: none;
+  font-weight: 500;
 }
 
 .summaryValue {
@@ -184,8 +184,8 @@
 
 .footerError {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--red);
   margin: 0;
 }

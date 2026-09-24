@@ -12,8 +12,7 @@
   font-family: var(--font-h);
   font-weight: 400;
   font-size: clamp(28px, 4vw, 40px);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
 
@@ -41,11 +40,11 @@
 .cellLabel {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
+  letter-spacing: 0.1px;
   color: var(--teal);
   padding: 10px 14px;
   border-bottom: 1px solid var(--dim2);
+  font-weight: 500;
 }
 
 .cell canvas {

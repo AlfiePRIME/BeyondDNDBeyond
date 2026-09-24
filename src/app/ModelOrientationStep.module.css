@@ -33,7 +33,7 @@
   text-align: center;
   font-family: var(--font-m);
   font-size: 13px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   color: var(--teal);
   margin: 10px 0 0;
 }

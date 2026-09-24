@@ -918,20 +918,34 @@
 }
 
 .modeToggle {
+  /* M3 segmented button */
   display: inline-flex;
-  gap: 4px;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-full);
+  overflow: hidden;
 }
 
 .modeButton {
-  padding: 3px 8px;
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--dim);
+  height: 32px;
+  padding: 0 12px;
+  font-family: var(--md-ref-typeface-plain);
+  font-size: var(--md-sys-typescale-label-medium-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-medium-tracking);
+  color: var(--md-sys-color-on-surface);
   background: transparent;
-  border: 1px solid color-mix(in srgb, var(--dim) 35%, transparent);
-  border-radius: 6px;
+  border: none;
+  border-left: 1px solid var(--md-sys-color-outline);
   cursor: pointer;
+  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+
+.modeButton:first-child {
+  border-left: none;
+}
+
+.modeButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
 }
 
 .modeButton:disabled {
@@ -940,8 +954,8 @@
 }
 
 .modeButtonActive {
-  color: var(--accent);
-  border-color: var(--accent);
+  background: var(--md-sys-color-secondary-container) !important;
+  color: var(--md-sys-color-on-secondary-container);
 }
 
 .rollList {

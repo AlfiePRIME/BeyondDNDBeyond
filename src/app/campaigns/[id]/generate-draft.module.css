@@ -26,16 +26,16 @@
 
 .hint {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
   margin: 0;
 }
 
 .unavailable {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   line-height: 1.6;
   color: var(--dim);
   border: 1px dashed var(--dim2);

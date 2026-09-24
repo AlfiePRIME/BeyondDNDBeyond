@@ -32,14 +32,23 @@
 }
 
 .backLink {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-large-tracking);
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 .backLink:hover {
-  color: var(--teal);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  color: var(--md-sys-color-primary);
 }
 
 .grid {
@@ -57,21 +66,10 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px;
-  background: var(--surface);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  padding: 20px;
+  background: var(--md-sys-color-surface-container-low);
+  border-radius: var(--md-sys-shape-corner-large);
   overflow: hidden;
-}
-
-.card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, var(--teal), transparent 75%);
 }
 
 .cardHeader {
@@ -108,18 +106,18 @@
 
 .ownerName {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
 }
 
 .sheetLink {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--teal);
   white-space: nowrap;
+  font-weight: 500;
 }
 
 .sheetLink:hover {
@@ -136,11 +134,11 @@
 
 .statLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
   min-width: 72px;
+  font-weight: 500;
 }
 
 .statValue {
@@ -155,8 +153,7 @@
   min-width: 40px;
   height: 8px;
   border-radius: 4px;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
+  background: var(--md-sys-color-surface-container-high);
   overflow: hidden;
   display: block;
 }
@@ -170,7 +167,6 @@
 
 .hpFillOk {
   background: var(--teal);
-  box-shadow: var(--gt);
 }
 
 .hpFillHurt {
@@ -182,8 +178,7 @@
 }
 
 .xpFill {
-  background: linear-gradient(90deg, var(--purple), var(--accent));
-  box-shadow: var(--ga);
+  background: var(--md-sys-color-primary);
 }
 
 /* ── XP award controls ── */
@@ -201,9 +196,9 @@
   font-family: var(--font-m);
   font-size: 13px;
   color: var(--text);
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
 }
 
 .awardInput:focus {
@@ -230,7 +225,7 @@
 .levelUpText {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
 
@@ -262,13 +257,13 @@
   gap: 4px;
   padding: 2px 4px 2px 8px;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--orange);
   border: 1px solid color-mix(in srgb, var(--orange) 55%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--orange) 12%, transparent);
+  font-weight: 500;
 }
 
 .chipRemove {
@@ -311,9 +306,9 @@
   font-family: var(--font-m);
   font-size: 12px;
   color: var(--text);
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
 }
 
 .conditionSelect:focus {
@@ -331,10 +326,10 @@
 
 .exhaustionLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--muted);
+  font-weight: 500;
 }
 
 /* ── Next-roll grant ── */
@@ -361,13 +356,13 @@
 .modeButton {
   padding: 5px 10px;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--muted);
   background: transparent;
   border: none;
   cursor: pointer;
+  font-weight: 500;
 }
 
 .modeButton + .modeButton {
@@ -391,8 +386,8 @@
 
 .modeHint {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--accent);
 }
 
@@ -401,8 +396,8 @@
 .cardError {
   margin: 0;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--red);
 }
 

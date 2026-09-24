@@ -15,14 +15,23 @@
 }
 
 .backLink {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-large-tracking);
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 .backLink:hover {
-  color: var(--teal);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  color: var(--md-sys-color-primary);
 }
 
 .stepBadges {
@@ -39,10 +48,10 @@
 
 .groupLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .group {
@@ -80,7 +89,7 @@
 .abilityComputed {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--teal);
 }
 
@@ -130,11 +139,11 @@
 
 .summaryLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
   flex: none;
+  font-weight: 500;
 }
 
 .summaryValue {
@@ -152,8 +161,8 @@
 
 .footerError {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--red);
   margin: 0;
 }
