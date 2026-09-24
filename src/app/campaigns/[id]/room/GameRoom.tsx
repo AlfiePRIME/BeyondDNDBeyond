@@ -287,7 +287,7 @@ const noopSubscribe = () => () => undefined;
 // A first visit shouldn't bury the table under every panel at once — these
 // start closed in the left dock strip (one click to open).
 const DM_DEFAULT_DOCKED_PANELS: readonly PanelId[] = ["liveObjects", "diceTray", "handout", "chatLog"];
-const PLAYER_DEFAULT_DOCKED_PANELS: readonly PanelId[] = ["diceTray"];
+const PLAYER_DEFAULT_DOCKED_PANELS: readonly PanelId[] = ["diceTray", "chatLog"];
 import { SoundControl } from "./SoundControl";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TokenModelDebugOverlay, type TokenModelDebugRow } from "./TokenModelDebugOverlay";

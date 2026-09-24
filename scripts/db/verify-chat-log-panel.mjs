@@ -86,6 +86,14 @@ function check(label, condition, detail) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Chat starts docked in a fresh layout (left dock strip) — open it so its
+// controls are clickable.
+async function openChatPanel(page) {
+  const dockButton = page.locator('[data-testid="dock-button-chatLog"]');
+  if (await dockButton.isVisible().catch(() => false)) await dockButton.click();
+  await page.waitForSelector('[data-testid="chat-log-panel"]', { state: "visible", timeout: 30000 });
+}
+
 async function healthOk() {
   return fetch(`${APP_URL}/api/health`).then((res) => res.ok).catch(() => false);
 }
@@ -201,14 +209,17 @@ try {
   const { page: dmPage } = await openContext(dm);
   await dmPage.goto(roomUrl);
   await dmPage.waitForSelector('[data-testid="chat-log-panel"]', { state: "attached", timeout: 30000 });
+  await openChatPanel(dmPage);
 
   const { page: alicePage } = await openContext(alice);
   await alicePage.goto(roomUrl);
   await alicePage.waitForSelector('[data-testid="chat-log-panel"]', { state: "attached", timeout: 30000 });
+  await openChatPanel(alicePage);
 
   const { page: bobPage } = await openContext(bob);
   await bobPage.goto(roomUrl);
   await bobPage.waitForSelector('[data-testid="chat-log-panel"]', { state: "attached", timeout: 30000 });
+  await openChatPanel(bobPage);
 
   // ═══════════════════════════════════════════════════════════════════
   // 1. Full history on open, oldest-to-newest, on every connected client.
@@ -366,6 +377,7 @@ try {
     // step for a similarly out-of-band-seeded row.
     await alicePage.reload();
     await alicePage.waitForSelector('[data-testid="chat-log-panel"]', { state: "attached", timeout: 30000 });
+    await openChatPanel(alicePage);
     await waitForEntry(alicePage, staleMessage.id);
     check(
       "the sender's own Edit control is NOT offered once the 2-minute window has closed",
