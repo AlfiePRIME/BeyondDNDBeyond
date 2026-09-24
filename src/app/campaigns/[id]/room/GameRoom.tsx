@@ -289,6 +289,7 @@ const noopSubscribe = () => () => undefined;
 const DM_DEFAULT_DOCKED_PANELS: readonly PanelId[] = ["liveObjects", "diceTray", "handout", "chatLog"];
 const PLAYER_DEFAULT_DOCKED_PANELS: readonly PanelId[] = ["diceTray"];
 import { SoundControl } from "./SoundControl";
+import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TokenModelDebugOverlay, type TokenModelDebugRow } from "./TokenModelDebugOverlay";
 import { AdvantageToggle, DiceLogPanel } from "./DiceLogPanel";
 import { DiceTrayPicker } from "./DiceTrayPicker";
@@ -9983,6 +9984,7 @@ export function GameRoom({
           >
             {cameraMode === "seat" ? "Free camera" : "Return to seat"}
           </Button>
+          <ShortcutsHelp />
           {/* Sound Effects SP1: master volume slider + mute toggle — see
               SoundControl.tsx's own doc comment for why it lives here
               (alongside every other always-visible top-bar control) rather
