@@ -144,7 +144,10 @@ async function pickAllChoiceCards(page) {
 async function pickSkills(page) {
   await page.waitForSelector('[data-testid^="wizard-skill-"]');
   while (await page.isDisabled('button:has-text("Next")')) {
-    await page.locator('[data-testid^="wizard-skill-"][aria-pressed="false"]:not([disabled])').first().click();
+    await page
+      .locator(
+        '[data-testid^="wizard-skill-"][aria-pressed="false"]:not([disabled]), [data-testid^="wizard-race-skill-"][aria-pressed="false"]:not([disabled])'
+      ).first().click();
   }
   await page.click('button:has-text("Next")');
 }

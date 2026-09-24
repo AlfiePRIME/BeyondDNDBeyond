@@ -48,6 +48,7 @@ export {
 } from "./srd/races";
 export { CLASSES } from "./srd/classes";
 export { CLASS_SKILL_CHOICES, type ClassSkillChoice } from "./srd/classSkills";
+export { raceSkillGrant, type RaceSkillGrant } from "./srd/raceSkills";
 export {
   STANDARD_ARRAY,
   POINT_BUY_BUDGET,

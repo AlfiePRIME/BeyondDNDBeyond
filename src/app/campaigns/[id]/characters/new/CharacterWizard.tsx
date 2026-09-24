@@ -7,6 +7,7 @@ import {
   RACES,
   CLASSES,
   CLASS_SKILL_CHOICES,
+  raceSkillGrant,
   CREATION_SCORE_MAX,
   POINT_BUY_BUDGET,
   POINT_BUY_MAX,
@@ -156,6 +157,7 @@ export function CharacterWizard({
   const [scoreMethod, setScoreMethod] = useState<ScoreMethod>("standard");
   const [baseScores, setBaseScores] = useState(DEFAULT_BASE_SCORES);
   const [chosenSkills, setChosenSkills] = useState<SkillName[]>([]);
+  const [chosenRaceSkills, setChosenRaceSkills] = useState<SkillName[]>([]);
   const [bonusPicks, setBonusPicks] = useState<(AbilityScore | "")[]>([]);
   const [equipmentPicks, setEquipmentPicks] = useState<number[]>([]);
   const [chosenSpells, setChosenSpells] = useState<KnownSpell[]>([]);
@@ -291,6 +293,16 @@ export function CharacterWizard({
     : null;
 
   const skillChoice = klass ? CLASS_SKILL_CHOICES[klass.name] : null;
+  // Racial proficiencies: fixed ones are simply granted (and so can't also
+  // be a class pick); a racial "choose N" is picked alongside the class's.
+  const raceSkills = raceSkillGrant(race?.name);
+  const classSkillOptions = (skillChoice?.options ?? []).filter(
+    (skill) => !raceSkills.fixed.includes(skill) && !chosenRaceSkills.includes(skill)
+  );
+  const raceSkillOptions = (raceSkills.choice?.options ?? []).filter(
+    (skill) => !raceSkills.fixed.includes(skill) && !chosenSkills.includes(skill)
+  );
+  const raceSkillCount = Math.min(raceSkills.choice?.count ?? 0, raceSkillOptions.length + chosenRaceSkills.length);
   const spellCounts =
     klass && isCaster
       ? startingSpellCounts(
@@ -318,6 +330,8 @@ export function CharacterWizard({
     const nextRace = RACES.find((r) => r.name === nextRaceName);
     setRaceName(nextRaceName);
     setSubraceName("");
+    setChosenRaceSkills([]);
+    setChosenSkills([]);
     setBonusPicks(
       Array(nextRace?.abilityScoreIncreases.filter((inc) => inc.ability === "choice").length ?? 0).fill("")
     );
@@ -342,6 +356,16 @@ export function CharacterWizard({
       current.includes(skill)
         ? current.filter((s) => s !== skill)
         : skillChoice && current.length < skillChoice.count
+          ? [...current, skill]
+          : current
+    );
+  }
+
+  function toggleRaceSkill(skill: SkillName) {
+    setChosenRaceSkills((current) =>
+      current.includes(skill)
+        ? current.filter((s) => s !== skill)
+        : current.length < raceSkillCount
           ? [...current, skill]
           : current
     );
@@ -376,7 +400,11 @@ export function CharacterWizard({
       case 1:
         return Boolean(finalScores) && bonusPicks.every((pick) => pick !== "");
       case skillStepIndex:
-        return skillChoice !== null && chosenSkills.length === skillChoice.count;
+        return (
+          skillChoice !== null &&
+          chosenSkills.length === Math.min(skillChoice.count, classSkillOptions.length) &&
+          chosenRaceSkills.length === raceSkillCount
+        );
       case equipmentStepIndex:
         return equipmentPicks.every((pick) => pick >= 0);
       case spellStepIndex: {
@@ -427,7 +455,9 @@ export function CharacterWizard({
           ...klass.savingThrowProficiencies.map(
             (ability) => `${ABILITY_LABEL[ability]} Saving Throws`
           ),
+          ...raceSkills.fixed,
           ...chosenSkills,
+          ...chosenRaceSkills,
         ],
         inventory,
         // Only a class that casts at level 1 keeps picks (a class switch
@@ -812,7 +842,7 @@ export function CharacterWizard({
                   Choose {skillChoice.count} {klass.name} skill proficiencies.
                 </p>
                 <div className={styles.cardGrid}>
-                  {skillChoice.options.map((skill) => {
+                  {classSkillOptions.map((skill) => {
                     const selected = chosenSkills.includes(skill);
                     return (
                       <ChoiceCard
@@ -826,6 +856,41 @@ export function CharacterWizard({
                     );
                   })}
                 </div>
+                {raceSkills.fixed.length > 0 ? (
+                  <p className={styles.detailText} data-testid="wizard-race-fixed-skills">
+                    Your {race?.name} heritage also makes you proficient in {raceSkills.fixed.join(" and ")}.
+                  </p>
+                ) : null}
+                {raceSkillCount > 0 ? (
+                  <>
+                    <div className={styles.detailRow}>
+                      <Badge tone="teal" data-testid="wizard-race-skills-count">
+                        {chosenRaceSkills.length} / {raceSkillCount} chosen
+                      </Badge>
+                    </div>
+                    <p className={styles.detailText}>
+                      Your {race?.name} heritage grants {raceSkillCount} more skill
+                      {raceSkillCount === 1 ? "" : "s"} of your choice.
+                    </p>
+                    <div className={styles.cardGrid}>
+                      {[...chosenRaceSkills, ...raceSkillOptions.filter((skill) => !chosenRaceSkills.includes(skill))].map(
+                        (skill) => {
+                          const selected = chosenRaceSkills.includes(skill);
+                          return (
+                            <ChoiceCard
+                              key={skill}
+                              title={skill}
+                              selected={selected}
+                              disabled={!selected && chosenRaceSkills.length >= raceSkillCount}
+                              onClick={() => toggleRaceSkill(skill)}
+                              data-testid={`wizard-race-skill-${skill.toLowerCase().replace(/[^a-z]+/g, "-")}`}
+                            />
+                          );
+                        }
+                      )}
+                    </div>
+                  </>
+                ) : null}
               </>
             ) : null}
 
@@ -974,7 +1039,7 @@ export function CharacterWizard({
                 <li className={styles.summaryRow}>
                   <span className={styles.summaryLabel}>Skills</span>
                   <span className={styles.summaryValue} data-testid="wizard-summary-skills">
-                    {chosenSkills.join(", ") || "—"}
+                    {[...raceSkills.fixed, ...chosenSkills, ...chosenRaceSkills].join(", ") || "—"}
                   </span>
                 </li>
                 <li className={styles.summaryRow}>
