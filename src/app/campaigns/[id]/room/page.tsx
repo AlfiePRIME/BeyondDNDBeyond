@@ -64,17 +64,23 @@ export const metadata = { title: "Game Room" };
  * batch of concurrent reads made this exact class of failure far more
  * likely to actually happen than on a small/empty campaign.
  */
-async function safe<T>(promise: Promise<T>, fallback: T, label: string): Promise<T> {
+// `failures` collects the label of every load that fell back during this
+// request — surfaced to the room as a "some data didn't load" banner rather
+// than silently rendering a plausible-but-empty table.
+async function safeLoad<T>(promise: Promise<T>, fallback: T, label: string, failures: string[]): Promise<T> {
   try {
     return await promise;
   } catch (err) {
     console.error(`room SSR: ${label} failed, falling back to default`, err);
+    failures.push(label);
     return fallback;
   }
 }
 
 export default async function GameRoomPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
+  const loadFailures: string[] = [];
+  const safe = <T,>(promise: Promise<T>, fallback: T, label: string) => safeLoad(promise, fallback, label, loadFailures);
   const supabase = await createServerSupabaseClient();
   const {
     data: { user },
@@ -402,6 +408,7 @@ export default async function GameRoomPage({ params }: { params: Promise<{ id: s
       initialSessionActive={campaign.session_active}
       initialSessionStartedAt={campaign.session_started_at}
       initialUiPreferences={currentUserProfile?.ui_preferences ?? { panelLayout: {} }}
+      initialLoadFailed={loadFailures.length > 0}
       initialDmNotes={initialDmNotes}
       initialLorePages={initialLorePages}
       initialLorePageLinks={initialLorePageLinks}

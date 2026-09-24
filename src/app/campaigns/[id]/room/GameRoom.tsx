@@ -248,7 +248,7 @@ import {
   type WhiteboardTileUpdate,
   type WhiteboardTool,
 } from "@/scene-3d";
-import { joinCampaignChannel, joinCampaignRoomChannel, type PresenceChannel } from "@/realtime";
+import { joinCampaignChannel, joinCampaignRoomChannel, type ConnectionState, type PresenceChannel } from "@/realtime";
 // Sound Effects SP7: see applyCellChange's own doc comment below for exactly
 // why this is the one correct hook point (never handleTokenLanded directly —
 // that resolution only ever runs on the DM's own client, per its own doc
@@ -1223,6 +1223,7 @@ export function GameRoom({
   initialSessionActive,
   initialSessionStartedAt,
   initialUiPreferences,
+  initialLoadFailed = false,
   initialDmNotes,
   initialLorePages,
   initialLorePageLinks,
@@ -1397,6 +1398,9 @@ export function GameRoom({
    * returning user's saved Game Room panel layout renders on first paint
    * with no loading flash, kept live via subscribeToUiPreferencesChanges. */
   initialUiPreferences: UiPreferences;
+  /** True when any server-side load for this room fell back to an empty
+   * default (see page.tsx's safeLoad) — shows a "reload" banner. */
+  initialLoadFailed?: boolean;
   /** dm_notes at load time (Phase 4), DM-only per its RLS (0020) — an empty
    * array for a player, since GameRoom never fetches them for one (see
    * page.tsx). Handed unmodified to the book's Notes page (DmNotes.tsx). */
@@ -4442,6 +4446,9 @@ export function GameRoom({
     () => false
   );
 
+  const [roomConnectionState, setRoomConnectionState] = useState<ConnectionState>("connecting");
+  const [loadWarningDismissed, setLoadWarningDismissed] = useState(false);
+
   const channelHandlersRef = useRef({
     refreshLiveMap,
     applyTriggered,
@@ -4484,6 +4491,7 @@ export function GameRoom({
       displayName: currentUserDisplayName,
     });
     campaignChannelRef.current = channel;
+    const unsubscribeConnectionState = channel.onConnectionStateChange(setRoomConnectionState);
 
     // 0046: this is now "the campaign's shared DEFAULT map changed", not
     // "everyone goes there NOW regardless of what they're looking at" —
@@ -4841,6 +4849,7 @@ export function GameRoom({
       unsubscribeWhiteboardReconnect();
       unsubscribeWhiteboardHeightChanged();
       unsubscribeWhiteboardHeightReconnect();
+      unsubscribeConnectionState();
       campaignChannelRef.current = null;
       void channel.leave();
     };
@@ -8835,6 +8844,26 @@ export function GameRoom({
         reconciler root, where that same context call would throw. */}
     <DmBookSizeBridge onChange={handleDmBookSizeBridge} />
     <div className={styles.room}>
+      {roomConnectionState === "reconnecting" ? (
+        <div className={styles.statusBanner} role="status" data-testid="room-reconnecting-banner">
+          Connection lost — reconnecting… Changes you make will sync once it&apos;s back.
+        </div>
+      ) : initialLoadFailed && !loadWarningDismissed ? (
+        <div className={styles.statusBanner} role="alert" data-testid="room-load-warning">
+          Some of the table didn&apos;t load properly.{" "}
+          <button type="button" className={styles.statusBannerAction} onClick={() => window.location.reload()}>
+            Reload
+          </button>
+          <button
+            type="button"
+            className={styles.statusBannerAction}
+            onClick={() => setLoadWarningDismissed(true)}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      ) : null}
       <Canvas
         shadows
         dpr={[1, 2]}
