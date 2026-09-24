@@ -226,3 +226,16 @@
   line-height: 1.5;
   margin: 0;
 }
+
+/* Inline map rename inside a narrow card: the field takes its own row,
+   Save/Cancel wrap beneath it. */
+.mapRenameForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.mapRenameForm > div {
+  flex: 1 1 100%;
+}

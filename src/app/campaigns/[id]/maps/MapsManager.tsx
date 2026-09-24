@@ -3,7 +3,16 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Badge, Button, ChoiceCard, Modal, SectionHeader, Select, TextInput } from "@/ui-components";
+import {
+  Badge,
+  Button,
+  ChoiceCard,
+  ConfirmButton,
+  Modal,
+  SectionHeader,
+  Select,
+  TextInput,
+} from "@/ui-components";
 import {
   createMapFolder,
   createPopulatedMap,
@@ -12,6 +21,7 @@ import {
   duplicateMap,
   getMapThumbnailSignedUrl,
   listMapsLinkingInto,
+  renameMap,
   renameMapFolder,
   setMapFolder,
   type CampaignMap,
@@ -32,6 +42,14 @@ const MAX_GRID = 40;
 
 const THUMBNAIL_URL_TTL_SECONDS = 3600;
 
+// Structural message read, not instanceof — same helper as the map editor's
+// (a browser-bundled PostgrestError isn't reliably an Error instance).
+function errorMessage(err: unknown): string | null {
+  return err && typeof err === "object" && "message" in err && typeof err.message === "string"
+    ? err.message
+    : null;
+}
+
 function MapCard({
   campaignId,
   map,
@@ -43,6 +61,7 @@ function MapCard({
   onDuplicate,
   onCopy,
   onDelete,
+  onRename,
 }: {
   campaignId: string;
   map: CampaignMap;
@@ -54,8 +73,21 @@ function MapCard({
   onDuplicate: (map: CampaignMap) => void;
   onCopy: (map: CampaignMap) => void;
   onDelete: (map: CampaignMap) => void;
+  /** Resolves true once the new name is saved (the inline form closes). */
+  onRename: (map: CampaignMap, name: string) => Promise<boolean>;
 }) {
   const editHref = `/campaigns/${campaignId}/maps/${map.id}/edit`;
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(map.name);
+
+  async function submitRename() {
+    const name = draftName.trim();
+    if (!name || name === map.name) {
+      setRenaming(false);
+      return;
+    }
+    if (await onRename(map, name)) setRenaming(false);
+  }
   return (
     <li className={styles.mapCard} data-testid={`map-card-${map.id}`}>
       <Link href={editHref} className={styles.thumbLink}>
@@ -73,14 +105,43 @@ function MapCard({
           <span className={styles.thumbPlaceholder}>No preview yet</span>
         )}
       </Link>
-      <div className={styles.cardBody}>
-        <Link href={editHref} className={styles.mapLink}>
-          {map.name}
-        </Link>
-        <Badge tone="teal">
-          {map.grid_width}×{map.grid_height}
-        </Badge>
-      </div>
+      {renaming ? (
+        <div className={styles.mapRenameForm}>
+          <TextInput
+            label="Map name"
+            value={draftName}
+            autoFocus
+            disabled={busy}
+            onChange={(event) => setDraftName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void submitRename();
+              else if (event.key === "Escape") setRenaming(false);
+            }}
+            data-testid={`map-rename-input-${map.id}`}
+          />
+          <Button
+            size="sm"
+            variant="teal"
+            disabled={busy || !draftName.trim()}
+            onClick={() => void submitRename()}
+            data-testid={`map-rename-save-${map.id}`}
+          >
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setRenaming(false)}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <div className={styles.cardBody}>
+          <Link href={editHref} className={styles.mapLink}>
+            {map.name}
+          </Link>
+          <Badge tone="teal">
+            {map.grid_width}×{map.grid_height}
+          </Badge>
+        </div>
+      )}
       <Select
         label="Folder"
         value={map.folder_id ?? ""}
@@ -96,6 +157,18 @@ function MapCard({
         ))}
       </Select>
       <div className={styles.cardActions}>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy || renaming}
+          onClick={() => {
+            setDraftName(map.name);
+            setRenaming(true);
+          }}
+          data-testid={`rename-map-${map.id}`}
+        >
+          Rename
+        </Button>
         <Button
           size="sm"
           variant="ghost"
@@ -211,8 +284,8 @@ export function MapsManager({
     setOrganizeError(null);
     try {
       await mutate();
-    } catch {
-      setOrganizeError("Couldn't update folders — try again.");
+    } catch (err) {
+      setOrganizeError(errorMessage(err) ?? "Couldn't update folders — try again.");
     } finally {
       setOrganizeBusy(false);
     }
@@ -264,8 +337,24 @@ export function MapsManager({
     try {
       const updated = await setMapFolder(createBrowserSupabaseClient(), map.id, folderId);
       setMaps((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
-    } catch {
-      setOrganizeError("Couldn't move the map — try again.");
+    } catch (err) {
+      setOrganizeError(errorMessage(err) ?? "Couldn't move the map — try again.");
+    } finally {
+      setPendingMapId(null);
+    }
+  }
+
+  async function handleRenameMap(map: CampaignMap, name: string): Promise<boolean> {
+    if (pendingMapId) return false;
+    setPendingMapId(map.id);
+    setOrganizeError(null);
+    try {
+      const updated = await renameMap(createBrowserSupabaseClient(), map.id, name);
+      setMaps((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+      return true;
+    } catch (err) {
+      setOrganizeError(errorMessage(err) ?? "Couldn't rename the map — try again.");
+      return false;
     } finally {
       setPendingMapId(null);
     }
@@ -287,8 +376,8 @@ export function MapsManager({
           // Cosmetic — the copy's first editor save recaptures.
         }
         setMaps((prev) => [...prev, copy]);
-      } catch {
-        setOrganizeError("Couldn't duplicate the map — try again.");
+      } catch (err) {
+        setOrganizeError(errorMessage(err) ?? "Couldn't duplicate the map — try again.");
       } finally {
         setPendingMapId(null);
       }
@@ -327,8 +416,8 @@ export function MapsManager({
       // and links over to it instead.
       const destination = otherDmCampaigns.find((candidate) => candidate.id === copyDestinationId);
       setCopyResult({ id: copyDestinationId, name: destination?.name ?? "the other campaign" });
-    } catch {
-      setCopyError("Couldn't copy the map — try again.");
+    } catch (err) {
+      setCopyError(errorMessage(err) ?? "Couldn't copy the map — try again.");
     } finally {
       setCopyBusy(false);
     }
@@ -372,8 +461,8 @@ export function MapsManager({
       await deleteMap(createBrowserSupabaseClient(), target.id);
       setMaps((prev) => prev.filter((row) => row.id !== target.id));
       setDeleteTarget(null);
-    } catch {
-      setDeleteError("Couldn't delete the map — try again.");
+    } catch (err) {
+      setDeleteError(errorMessage(err) ?? "Couldn't delete the map — try again.");
     } finally {
       setDeleteBusy(false);
     }
@@ -416,9 +505,9 @@ export function MapsManager({
         // recaptures, so creation must not fail over it.
       }
       router.push(`/campaigns/${campaignId}/maps/${map.id}/edit`);
-    } catch {
+    } catch (err) {
       setBusy(false);
-      setError("Couldn't create the map — try again.");
+      setError(errorMessage(err) ?? "Couldn't create the map — try again.");
     }
   }
 
@@ -445,6 +534,7 @@ export function MapsManager({
             onDuplicate={handleDuplicate}
             onCopy={handleOpenCopy}
             onDelete={handleOpenDelete}
+            onRename={handleRenameMap}
           />
         ))}
       </ul>
@@ -507,15 +597,17 @@ export function MapsManager({
                       >
                         Rename
                       </Button>
-                      <Button
+                      <ConfirmButton
                         size="sm"
                         variant="danger"
                         disabled={organizeBusy}
-                        onClick={() => handleDeleteFolder(folder.id)}
+                        onConfirm={() => handleDeleteFolder(folder.id)}
+                        confirmLabel="Delete folder?"
+                        title="Deletes the folder only — its maps move to Unfiled"
                         data-testid={`delete-folder-${folder.id}`}
                       >
                         Delete
-                      </Button>
+                      </ConfirmButton>
                     </div>
                   </>
                 )}
