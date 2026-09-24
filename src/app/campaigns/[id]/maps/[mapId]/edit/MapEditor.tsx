@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { Canvas } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
-import { Badge, Button, ChoiceCard, Select, TextInput } from "@/ui-components";
+import { Badge, Button, ChoiceCard, ConfirmButton, Select, TextInput } from "@/ui-components";
 import {
   acceptMapArt,
   clearMapReferenceImage,
@@ -23,8 +23,11 @@ import {
   getMapArtSignedUrl,
   getMapReferenceImageSignedUrl,
   growMapGrid,
+  listContainerItems,
   MAP_GROWTH_EDGES,
   placeNpcToken,
+  restoreContainerItems,
+  restoreLightSources,
   restoreMapObject,
   setMapObjectBehavior,
   setMapReferenceImage,
@@ -48,6 +51,7 @@ import {
   type MapGrowthEdge,
   type MapObject,
   type MapObjectBehavior,
+  type MapObjectItem,
   type MapToken,
   type MapTransition,
   type MonsterStatBlock,
@@ -76,11 +80,13 @@ import {
   applyTool,
   buildDenseCells,
   cellKey,
+  cellStatesEqual,
   DEFAULT_CELL,
   MIN_PIT_ELEVATION_STEPS,
   overlayFromRows,
   parseCellKey,
   rowsForSave,
+  settleSavedCells,
   type CellState,
   type EditorTool,
   type ElevationDirection,
@@ -89,6 +95,8 @@ import {
 import {
   completeRedo,
   completeUndo,
+  dropRedo,
+  dropUndo,
   EMPTY_HISTORY,
   peekRedo,
   peekUndo,
@@ -132,6 +140,11 @@ const REFERENCE_SIGNED_URL_TTL_SECONDS = 60 * 60;
 // MAX_AREA_PROMPT_LENGTH above isn't imported from @/ai either).
 const MAX_MAP_ART_STYLE_PROMPT_LENGTH = 500;
 const MAP_ART_SIGNED_URL_TTL_SECONDS = 60 * 60;
+
+// Upper bound on either grid side after a grow. New maps are capped at 40
+// (MapsManager's MAX_GRID, a frame-budget limit); growth gets headroom
+// beyond that, but not an unbounded grid nothing can render.
+const MAX_GROWN_GRID_SIDE = 100;
 
 // Nothing is placeable on a cell with no floor — the void-terrain rule the
 // Game Room applies to tokens, applied here to everything the editor anchors
@@ -190,6 +203,18 @@ interface AreaPreview {
   cells: Map<string, CellState>;
   objects: PreviewObject[];
 }
+
+/** What deleting a map_objects row cascades away (or detaches) with it —
+ * captured before the delete so undoing it can put them back. */
+interface ObjectDependents {
+  lights: LightSource[];
+  items: MapObjectItem[];
+  /** Objects wall-mounted on this one (mount_object_id is on delete set
+   * null, so they survive the delete but lose their host). */
+  mountedIds: string[];
+}
+
+const NO_DEPENDENTS: ObjectDependents = { lights: [], items: [], mountedIds: [] };
 
 interface GeneratedAreaPayload {
   cells: { x: number; y: number; elevation: number; terrain: TerrainType }[];
@@ -428,6 +453,7 @@ export function MapEditor({
     monsterTemplates[0]?.id ?? null
   );
   const [npcBusy, setNpcBusy] = useState(false);
+  const npcBusyRef = useRef(false);
   const [npcError, setNpcError] = useState<string | null>(null);
 
   // Light-source authoring (Prompt 55) — the transition tool's form-based
@@ -513,6 +539,7 @@ export function MapEditor({
   const tokensRef = useRef(tokens);
   const monsterStatBlocksRef = useRef(monsterStatBlocks);
   const selectedTemplateIdRef = useRef(selectedTemplateId);
+  const lightSourcesRef = useRef(lightSources);
   // switchTool is a plain function declaration (recreated every render, but
   // behaviorally invariant — it only ever closes over stable useState
   // setters and refs), mirrored into a ref like the rest of this block so
@@ -535,6 +562,7 @@ export function MapEditor({
     tokensRef.current = tokens;
     monsterStatBlocksRef.current = monsterStatBlocks;
     selectedTemplateIdRef.current = selectedTemplateId;
+    lightSourcesRef.current = lightSources;
   }, [
     tool,
     brush,
@@ -551,6 +579,7 @@ export function MapEditor({
     tokens,
     monsterStatBlocks,
     selectedTemplateId,
+    lightSources,
   ]);
 
   // The last PERSISTED cell state: initialCells at mount, advanced whenever
@@ -593,15 +622,7 @@ export function MapEditor({
     setDirty((prev) => {
       const next = new Set(prev);
       for (const [key, state] of states) {
-        const base = baselineRef.current.get(key) ?? DEFAULT_CELL;
-        if (
-          state.elevation === base.elevation &&
-          state.terrain === base.terrain &&
-          state.light === base.light &&
-          state.ground === base.ground &&
-          state.waterFlow === base.waterFlow
-        )
-          next.delete(key);
+        if (cellStatesEqual(state, baselineRef.current.get(key) ?? DEFAULT_CELL)) next.delete(key);
         else next.add(key);
       }
       return next;
@@ -824,9 +845,19 @@ export function MapEditor({
     setObjects(objectsRef.current);
   }, []);
 
+  // Mirrors what the database just did to the row's dependents: lights
+  // anchored to it cascaded away, and anything mounted on it lost its host.
   const removeObjectLocal = useCallback((id: string) => {
-    objectsRef.current = objectsRef.current.filter((object) => object.id !== id);
+    objectsRef.current = objectsRef.current
+      .filter((object) => object.id !== id)
+      .map((object) =>
+        object.mount_object_id === id ? { ...object, mount_object_id: null } : object
+      );
     setObjects(objectsRef.current);
+    if (lightSourcesRef.current.some((light) => light.object_id === id)) {
+      lightSourcesRef.current = lightSourcesRef.current.filter((light) => light.object_id !== id);
+      setLightSources(lightSourcesRef.current);
+    }
     if (selectedObjectIdsRef.current.has(id)) {
       setSelectedObjectIds((prev) => {
         if (!prev.has(id)) return prev;
@@ -844,30 +875,94 @@ export function MapEditor({
   // object's id against a row that no longer exists. `row` is re-read from
   // local state before each delete so behavior edits made in between (which
   // are outside undo's scope) survive the round trip.
-  const makePlacementEntry = useCallback(
-    (created: MapObject): HistoryEntry => {
-      let row = created;
-      return {
-        apply: async () => {
-          row = await restoreMapObject(createBrowserSupabaseClient(), row);
-          addObjectLocal(row);
-        },
-        revert: async () => {
-          row = objectsRef.current.find((object) => object.id === row.id) ?? row;
-          await deleteMapObject(createBrowserSupabaseClient(), row.id);
-          removeObjectLocal(row.id);
-        },
-      };
+  //
+  // A delete cascades the object's anchored lights and container items and
+  // detaches anything wall-mounted on it, so those are captured first
+  // (deleteObjectWithDependents) and put back on restore.
+  const deleteObjectWithDependents = useCallback(
+    async (supabase: SupabaseClient, object: MapObject): Promise<ObjectDependents> => {
+      const items = await listContainerItems(supabase, { mapObjectId: object.id });
+      const lights = lightSourcesRef.current.filter((light) => light.object_id === object.id);
+      const mountedIds = objectsRef.current
+        .filter((candidate) => candidate.mount_object_id === object.id)
+        .map((candidate) => candidate.id);
+      await deleteMapObject(supabase, object.id);
+      removeObjectLocal(object.id);
+      return { lights, items, mountedIds };
     },
-    [addObjectLocal, removeObjectLocal]
+    [removeObjectLocal]
   );
 
-  const makeRemovalEntry = useCallback(
-    (removed: MapObject): HistoryEntry => {
-      const placement = makePlacementEntry(removed);
-      return { apply: placement.revert, revert: placement.apply };
+  const restoreObjectWithDependents = useCallback(
+    async (
+      supabase: SupabaseClient,
+      object: MapObject,
+      dependents: ObjectDependents
+    ): Promise<MapObject> => {
+      // A host deleted since would fail mount_object_id's FK on re-insert.
+      const hostGone =
+        object.mount_object_id !== null &&
+        !objectsRef.current.some((candidate) => candidate.id === object.mount_object_id);
+      const row = await restoreMapObject(
+        supabase,
+        hostGone ? { ...object, mount_object_id: null } : object
+      );
+      addObjectLocal(row);
+      if (dependents.lights.length > 0) {
+        const lights = await restoreLightSources(supabase, dependents.lights);
+        lightSourcesRef.current = [...lightSourcesRef.current, ...lights];
+        setLightSources(lightSourcesRef.current);
+      }
+      await restoreContainerItems(supabase, dependents.items);
+      for (const mountedId of dependents.mountedIds) {
+        // Only re-mount a torch still sitting where the host left it — one
+        // the DM moved in the meantime was deliberately detached.
+        const mounted = objectsRef.current.find((candidate) => candidate.id === mountedId);
+        if (!mounted || mounted.mount_object_id !== null) continue;
+        if (mounted.x !== row.x || mounted.y !== row.y) continue;
+        replaceObject(await updateMapObject(supabase, mountedId, { mount_object_id: row.id }));
+      }
+      return row;
     },
-    [makePlacementEntry]
+    [addObjectLocal, replaceObject]
+  );
+
+  // One history entry for a whole set of objects (a single placement, or a
+  // bulk delete). Each step skips objects already in its target state, so a
+  // step that failed partway can't double-insert or double-delete on redo.
+  const makeObjectsEntry = useCallback(
+    (
+      initial: readonly { row: MapObject; dependents: ObjectDependents }[],
+      kind: "placement" | "removal"
+    ): HistoryEntry => {
+      const records = initial.map((record) => ({ ...record }));
+      const isLive = (id: string) => objectsRef.current.some((object) => object.id === id);
+      const removeAll = async () => {
+        const supabase = createBrowserSupabaseClient();
+        for (const record of records) {
+          if (!isLive(record.row.id)) continue;
+          record.row = objectsRef.current.find((object) => object.id === record.row.id) ?? record.row;
+          record.dependents = await deleteObjectWithDependents(supabase, record.row);
+        }
+      };
+      const restoreAll = async () => {
+        const supabase = createBrowserSupabaseClient();
+        for (const record of records) {
+          if (isLive(record.row.id)) continue;
+          record.row = await restoreObjectWithDependents(supabase, record.row, record.dependents);
+        }
+      };
+      return kind === "placement"
+        ? { apply: restoreAll, revert: removeAll }
+        : { apply: removeAll, revert: restoreAll };
+    },
+    [deleteObjectWithDependents, restoreObjectWithDependents]
+  );
+
+  const makePlacementEntry = useCallback(
+    (created: MapObject): HistoryEntry =>
+      makeObjectsEntry([{ row: created, dependents: NO_DEPENDENTS }], "placement"),
+    [makeObjectsEntry]
   );
 
   const makeObjectPatchEntry = useCallback(
@@ -906,8 +1001,12 @@ export function MapEditor({
         else await entry.apply();
         historyRef.current = direction === "undo" ? completeUndo(stacks) : completeRedo(stacks);
       } catch (err) {
+        // Drop the failing step rather than leaving it on top of the stack,
+        // where it would block every earlier entry behind it forever.
+        historyRef.current = direction === "undo" ? dropUndo(stacks) : dropRedo(stacks);
+        const verb = direction === "undo" ? "undo" : "redo";
         setHistoryError(
-          errorMessage(err) ?? `Could not ${direction === "undo" ? "undo" : "redo"} — try again.`
+          `Couldn't ${verb} that step${errorMessage(err) ? ` (${errorMessage(err)})` : ""} — it was removed from history so you can keep going.`
         );
       } finally {
         historyBusyRef.current = false;
@@ -919,12 +1018,29 @@ export function MapEditor({
     [syncHistoryFlags]
   );
 
+  // Keyboard actions that need the current render's closures (handleSave,
+  // handleRotate, ...) — refreshed every render like switchToolRef, so the
+  // listeners below never resubscribe.
+  const shortcutActionsRef = useRef({
+    save: () => {},
+    rotate: () => {},
+    removeSelected: () => {},
+    escape: () => {},
+  });
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      // Save works even from a focused text field — the browser's own
+      // "save page" dialog is never what a DM means here.
+      if (key === "s") {
+        event.preventDefault();
+        shortcutActionsRef.current.save();
+        return;
+      }
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable]")) return;
-      const key = event.key.toLowerCase();
       if (key === "z") {
         event.preventDefault();
         void runHistoryStep(event.shiftKey ? "redo" : "undo");
@@ -936,6 +1052,32 @@ export function MapEditor({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [runHistoryStep]);
+
+  // Object shortcuts: Delete/Backspace removes the selection, R rotates a
+  // single selected object, Escape cancels an armed move (or, with nothing
+  // armed, clears the selection). Same typing-target guard as above.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable]")) return;
+      const actions = shortcutActionsRef.current;
+      if (event.key === "Escape") {
+        actions.escape();
+        return;
+      }
+      if (toolRef.current !== "object" || selectedObjectIdsRef.current.size === 0) return;
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        actions.removeSelected();
+      } else if (event.key === "r" || event.key === "R") {
+        event.preventDefault();
+        actions.rotate();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Number-key tool shortcuts (§5.5): 1–9 select a tool WITHIN the
   // currently active mode, not across modes — no mode has more than 3
@@ -1248,6 +1390,9 @@ export function MapEditor({
   // from the map editor instead of a live 3D scene.
   const handleNpcCellClick = useCallback(
     (x: number, y: number) => {
+      // A ref, not npcBusy: a second click landing before React re-renders
+      // would otherwise race the first into a duplicate stat block/token.
+      if (npcBusyRef.current) return;
       const templateId = selectedTemplateIdRef.current;
       if (!templateId) return;
       const template = monsterTemplates.find((candidate) => candidate.id === templateId);
@@ -1266,6 +1411,7 @@ export function MapEditor({
       }
 
       const elevation = (overlayRef.current.get(cellKey(x, y)) ?? DEFAULT_CELL).elevation;
+      npcBusyRef.current = true;
       setNpcBusy(true);
       setNpcError(null);
       void (async () => {
@@ -1287,7 +1433,9 @@ export function MapEditor({
               hitDie: template.hit_die,
               spells: template.spells,
             });
-            setMonsterStatBlocks((prev) => [...prev, statBlock!]);
+            // Written ahead of the effect sync so the very next click reuses it.
+            monsterStatBlocksRef.current = [...monsterStatBlocksRef.current, statBlock];
+            setMonsterStatBlocks(monsterStatBlocksRef.current);
           }
           const token = await placeNpcToken(supabase, {
             mapId: map.id,
@@ -1298,10 +1446,12 @@ export function MapEditor({
             monsterStatBlockId: statBlock.id,
             allegiance: statBlock.default_allegiance,
           });
-          setTokens((prev) => [...prev, token]);
+          tokensRef.current = [...tokensRef.current, token];
+          setTokens(tokensRef.current);
         } catch (err) {
           setNpcError(errorMessage(err) ?? "Couldn't place that NPC — try again.");
         } finally {
+          npcBusyRef.current = false;
           setNpcBusy(false);
         }
       })();
@@ -1310,15 +1460,19 @@ export function MapEditor({
   );
 
   const handleRemoveNpcToken = useCallback((tokenId: string) => {
+    if (npcBusyRef.current) return;
+    npcBusyRef.current = true;
     setNpcBusy(true);
     setNpcError(null);
     void (async () => {
       try {
         await deleteMapToken(createBrowserSupabaseClient(), tokenId);
-        setTokens((prev) => prev.filter((token) => token.id !== tokenId));
+        tokensRef.current = tokensRef.current.filter((token) => token.id !== tokenId);
+        setTokens(tokensRef.current);
       } catch (err) {
         setNpcError(errorMessage(err) ?? "Couldn't remove that NPC — try again.");
       } finally {
+        npcBusyRef.current = false;
         setNpcBusy(false);
       }
     })();
@@ -1580,6 +1734,8 @@ export function MapEditor({
   // fresh cell click, and followed by deleting the object it replaces.
   const handleConvertObjectToNpc = useCallback(
     (object: MapObject, template: MonsterTemplate) => {
+      if (npcBusyRef.current) return;
+      npcBusyRef.current = true;
       setNpcBusy(true);
       setNpcError(null);
       void (async () => {
@@ -1601,7 +1757,8 @@ export function MapEditor({
               hitDie: template.hit_die,
               spells: template.spells,
             });
-            setMonsterStatBlocks((prev) => [...prev, statBlock!]);
+            monsterStatBlocksRef.current = [...monsterStatBlocksRef.current, statBlock];
+            setMonsterStatBlocks(monsterStatBlocksRef.current);
           }
           const token = await placeNpcToken(supabase, {
             mapId: map.id,
@@ -1612,18 +1769,19 @@ export function MapEditor({
             monsterStatBlockId: statBlock.id,
             allegiance: statBlock.default_allegiance,
           });
-          setTokens((prev) => [...prev, token]);
-          await deleteMapObject(supabase, object.id);
-          removeObjectLocal(object.id);
+          tokensRef.current = [...tokensRef.current, token];
+          setTokens(tokensRef.current);
+          await deleteObjectWithDependents(supabase, object);
           setSelectedObjectIds(new Set());
         } catch (err) {
           setNpcError(errorMessage(err) ?? "Couldn't convert that object to an NPC — try again.");
         } finally {
+          npcBusyRef.current = false;
           setNpcBusy(false);
         }
       })();
     },
-    [campaignId, map.id, removeObjectLocal]
+    [campaignId, map.id, deleteObjectWithDependents]
   );
 
   function handleRotate() {
@@ -1685,24 +1843,18 @@ export function MapEditor({
     if (!selectedLiveObject) return;
     const removed = selectedLiveObject;
     void runObjectMutation(async (supabase) => {
-      await deleteMapObject(supabase, removed.id);
-      removeObjectLocal(removed.id);
+      const dependents = await deleteObjectWithDependents(supabase, removed);
       setSelectedObjectIds(new Set());
       setMoveArmed(false);
-      pushHistory(makeRemovalEntry(removed));
+      pushHistory(makeObjectsEntry([{ row: removed, dependents }], "removal"));
     });
   }
 
-  // Bulk delete: the whole selection set, one click. Deliberately reuses the
-  // exact same per-object primitives handleRemove uses above (the preview
-  // filter-by-id predicate, and deleteMapObject + removeObjectLocal +
-  // makeRemovalEntry for live objects) rather than a separate bulk-delete
-  // code path — so whatever handleRemove already does for a single object
-  // (including the DB's own on-delete-cascade for anything anchored to it,
-  // e.g. a light source) happens identically per object here. Each live
-  // object gets its own undo entry, same as a single Remove would, rather
-  // than one combined entry — so a delete that fails partway through still
-  // leaves every object actually removed independently undoable.
+  // Bulk delete: the whole selection set, one click, through the same
+  // deleteObjectWithDependents primitive handleRemove uses. The whole batch
+  // is ONE undo entry covering exactly the objects that were actually
+  // deleted — pushed from `finally`, so a delete that fails partway still
+  // leaves everything removed so far undoable in a single step.
   function handleRemoveSelected() {
     const ids = selectedObjectIds;
     if (ids.size === 0) return;
@@ -1728,10 +1880,18 @@ export function MapEditor({
     const liveTargets = objects.filter((object) => ids.has(object.id));
     if (liveTargets.length === 0) return;
     void runObjectMutation(async (supabase) => {
-      for (const target of liveTargets) {
-        await deleteMapObject(supabase, target.id);
-        removeObjectLocal(target.id);
-        pushHistory(makeRemovalEntry(target));
+      const removed: { row: MapObject; dependents: ObjectDependents }[] = [];
+      // Rows snapshotted up front: deleting a wall host mid-loop nulls its
+      // torch's mount locally, and the torch's undo should restore it mounted.
+      const rows = liveTargets.map(
+        (target) => objectsRef.current.find((object) => object.id === target.id) ?? target
+      );
+      try {
+        for (const row of rows) {
+          removed.push({ row, dependents: await deleteObjectWithDependents(supabase, row) });
+        }
+      } finally {
+        if (removed.length > 0) pushHistory(makeObjectsEntry(removed, "removal"));
       }
     });
   }
@@ -2255,24 +2415,29 @@ export function MapEditor({
         return;
       }
       // Region-relative → absolute grid coordinates. The draft defines the
-      // whole region: cells the model left unlisted are flat normal ground.
+      // whole region's shape: cells the model left unlisted are flat normal
+      // ground. It never authors lighting or ground type, so every cell
+      // keeps whatever light/ground/flow the DM already painted there.
       const cells = new Map<string, CellState>();
+      const shapeOnly = (key: string, elevation: number, terrain: TerrainType): CellState => {
+        const existing = overlayRef.current.get(key) ?? DEFAULT_CELL;
+        return {
+          elevation,
+          terrain,
+          light: existing.light,
+          ground: existing.ground,
+          waterFlow: existing.waterFlow,
+        };
+      };
       for (let dy = 0; dy < bounds.height; dy++) {
         for (let dx = 0; dx < bounds.width; dx++) {
-          cells.set(cellKey(bounds.x + dx, bounds.y + dy), DEFAULT_CELL);
+          const key = cellKey(bounds.x + dx, bounds.y + dy);
+          cells.set(key, shapeOnly(key, DEFAULT_CELL.elevation, DEFAULT_CELL.terrain));
         }
       }
       for (const cell of payload.area.cells) {
-        // Generated drafts don't author lighting or ground type — every
-        // draft cell starts bright/default, and the DM paints both
-        // afterwards like on any other cell.
-        cells.set(cellKey(bounds.x + cell.x, bounds.y + cell.y), {
-          elevation: cell.elevation,
-          terrain: cell.terrain,
-          light: "bright",
-          ground: "default",
-          waterFlow: null,
-        });
+        const key = cellKey(bounds.x + cell.x, bounds.y + cell.y);
+        cells.set(key, shapeOnly(key, cell.elevation, cell.terrain));
       }
       const previewObjects = payload.area.objects.map((object) => ({
         id: `preview-${crypto.randomUUID()}`,
@@ -2312,41 +2477,14 @@ export function MapEditor({
         };
       });
       await upsertMapCells(supabase, rows);
-      const created: MapObject[] = [];
-      for (const object of current.objects) {
-        // Persisted elevation comes from the accepted draft's own ground so
-        // the stored rows are internally consistent even after the DM
-        // resculpted cells under placed objects.
-        const ground = current.cells.get(cellKey(object.x, object.y)) ?? DEFAULT_CELL;
-        created.push(
-          await createMapObject(supabase, {
-            mapId: map.id,
-            assetId: object.assetId,
-            x: object.x,
-            y: object.y,
-            elevation: ground.elevation,
-            rotation: object.rotation,
-            // AI-generated drafts never intentionally pick the Bridge/Stairs
-            // preset (its own catalog draws from decorative dressing), but
-            // resolving this the same way as a manual placement means it's
-            // correct-if-it-ever-happens rather than a silent inconsistency.
-            // Same reasoning for the Pressure Plate's default behavior_config.
-            crossingType: crossingTypeForAsset(object.assetId),
-            behaviorConfig: initialBehaviorConfigForAsset(object.assetId),
-          })
-        );
-      }
-      const mergedOverlay = new Map(overlayRef.current);
-      for (const [key, state] of current.cells) {
-        mergedOverlay.set(key, state);
-      }
-      overlayRef.current = mergedOverlay;
-      setOverlay(mergedOverlay);
-      // Accepting persists cells just like Save does, so it refreshes the
-      // snapshot too.
-      await refreshThumbnail(supabase);
       // Accepting IS the commit for these cells — any manual edits the DM
       // had pending on the same cells were just overwritten and persisted.
+      // Merged before the object loop so a partial failure below still
+      // leaves the (already persisted) cells reflected as saved.
+      const mergedOverlay = new Map(overlayRef.current);
+      for (const [key, state] of current.cells) mergedOverlay.set(key, state);
+      overlayRef.current = mergedOverlay;
+      setOverlay(mergedOverlay);
       const nextBaseline = new Map(baselineRef.current);
       for (const [key, state] of current.cells) nextBaseline.set(key, state);
       baselineRef.current = nextBaseline;
@@ -2355,8 +2493,41 @@ export function MapEditor({
         for (const key of current.cells.keys()) next.delete(key);
         return next;
       });
-      objectsRef.current = [...objectsRef.current, ...created];
-      setObjects(objectsRef.current);
+      for (const object of current.objects) {
+        // Persisted elevation comes from the accepted draft's own ground so
+        // the stored rows are internally consistent even after the DM
+        // resculpted cells under placed objects.
+        const ground = current.cells.get(cellKey(object.x, object.y)) ?? DEFAULT_CELL;
+        const created = await createMapObject(supabase, {
+          mapId: map.id,
+          assetId: object.assetId,
+          x: object.x,
+          y: object.y,
+          elevation: ground.elevation,
+          rotation: object.rotation,
+          // AI-generated drafts never intentionally pick the Bridge/Stairs
+          // preset (its own catalog draws from decorative dressing), but
+          // resolving this the same way as a manual placement means it's
+          // correct-if-it-ever-happens rather than a silent inconsistency.
+          // Same reasoning for the Pressure Plate's default behavior_config.
+          crossingType: crossingTypeForAsset(object.assetId),
+          behaviorConfig: initialBehaviorConfigForAsset(object.assetId),
+        });
+        // Each object leaves the draft the moment it's real, so a failure
+        // partway leaves the rest pending and a retried Accept creates only
+        // those — never an orphan the editor can't see, nor a duplicate.
+        addObjectLocal(created);
+        const pending = previewRef.current;
+        if (pending) {
+          setPreviewState({
+            ...pending,
+            objects: pending.objects.filter((candidate) => candidate.id !== object.id),
+          });
+        }
+      }
+      // Accepting persists cells just like Save does, so it refreshes the
+      // snapshot too.
+      await refreshThumbnail(supabase);
       setPreviewState(null);
       setRegion(null);
       setAreaPrompt("");
@@ -2644,28 +2815,50 @@ export function MapEditor({
     ];
   }, [objects, overlay, preview, assetUrlById, assetForwardOffsetById, buildingLinkStatusByObjectId]);
 
+  // A ref alongside `saving`: Ctrl+S can fire twice before a re-render.
+  const savingRef = useRef(false);
   async function handleSave() {
-    if (dirty.size === 0 || saving) return;
+    if (dirty.size === 0 || savingRef.current) return;
+    // Snapshot BEFORE the first await: painting stays live during a save,
+    // and anything edited meanwhile must stay dirty rather than be marked
+    // saved without ever reaching the database.
+    const savedOverlay = overlayRef.current;
+    const savedKeys = dirty;
+    savingRef.current = true;
     setSaving(true);
     setError(null);
     try {
       const supabase = createBrowserSupabaseClient();
-      await upsertMapCells(supabase, rowsForSave(map.id, overlayRef.current, dirty));
-      await refreshThumbnail(supabase);
-      // The persisted baseline moves forward: an undo past this point makes
-      // cells dirty again relative to what was just saved.
-      baselineRef.current = overlayRef.current;
-      setDirty(new Set());
+      await upsertMapCells(supabase, rowsForSave(map.id, savedOverlay, savedKeys));
+      // The persisted baseline moves forward for exactly what was written:
+      // an undo past this point makes those cells dirty again.
+      const previousBaseline = baselineRef.current;
+      const settle = (currentDirty: ReadonlySet<string>) =>
+        settleSavedCells(previousBaseline, savedOverlay, savedKeys, overlayRef.current, currentDirty);
+      baselineRef.current = settle(new Set()).baseline;
+      setDirty((prev) => settle(prev).dirty);
       setSaved(true);
+      await refreshThumbnail(supabase);
     } catch (err) {
       setError(errorMessage(err) ?? "Could not save the map.");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
 
   const growAmountNum = Number(growAmount);
-  const growAmountValid = Number.isInteger(growAmountNum) && growAmountNum > 0;
+  const growSideBefore =
+    growEdge === "east" || growEdge === "west" ? map.grid_width : map.grid_height;
+  const growMaxAmount = Math.max(0, MAX_GROWN_GRID_SIDE - growSideBefore);
+  const growAmountValid =
+    Number.isInteger(growAmountNum) && growAmountNum > 0 && growAmountNum <= growMaxAmount;
+  const growLimitHint =
+    growMaxAmount === 0
+      ? `This side is already at the ${MAX_GROWN_GRID_SIDE}-cell maximum.`
+      : Number.isInteger(growAmountNum) && growAmountNum > growMaxAmount
+        ? `At most ${growMaxAmount} more — maps are capped at ${MAX_GROWN_GRID_SIDE} cells per side.`
+        : null;
 
   // Unsaved paint edits or an in-flight AI draft both hold LOCAL state keyed
   // off today's coordinates — reloading out from under either (see
@@ -2703,6 +2896,55 @@ export function MapEditor({
       setGrowBusy(false);
     }
   }
+
+  // Painted cells live only in local state until Save, and an AI draft
+  // only until Accept — leaving the page silently drops either.
+  const hasUnsavedWork = dirty.size > 0 || preview !== null;
+  useEffect(() => {
+    if (!hasUnsavedWork) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // Legacy browsers only show the prompt when returnValue is set.
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [hasUnsavedWork]);
+
+  // Client-side navigation never fires beforeunload, so the back link asks
+  // for a second click instead (ConfirmButton's arm-then-confirm pattern).
+  const [leaveArmed, setLeaveArmed] = useState(false);
+  const leaveTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (leaveTimerRef.current !== null) window.clearTimeout(leaveTimerRef.current);
+    },
+    []
+  );
+  function handleBackClick(event: MouseEvent<HTMLAnchorElement>) {
+    if (!hasUnsavedWork || leaveArmed) return;
+    event.preventDefault();
+    setLeaveArmed(true);
+    if (leaveTimerRef.current !== null) window.clearTimeout(leaveTimerRef.current);
+    leaveTimerRef.current = window.setTimeout(() => setLeaveArmed(false), 3500);
+  }
+
+  // Refreshed every render so the keyboard listeners call current closures.
+  useEffect(() => {
+    shortcutActionsRef.current = {
+      save: () => void handleSave(),
+      rotate: () => {
+        if (selectedObjectIdsRef.current.size === 1) handleRotate();
+      },
+      removeSelected: handleRemoveSelected,
+      escape: () => {
+        if (moveArmedRef.current) setMoveArmed(false);
+        else if (eyedropperArmedRef.current) setEyedropperArmed(false);
+        else if (quickPlacePopover) setQuickPlacePopover(null);
+        else setSelectedObjectIds(new Set());
+      },
+    };
+  });
 
   const regionCellCount = region ? region.width * region.height : 0;
 
@@ -2932,14 +3174,21 @@ export function MapEditor({
       </div>
 
       <header className={styles.overlay}>
-        <Link href={`/campaigns/${campaignId}/maps`} className={styles.backLink}>
-          ← {campaignName}: maps
+        <Link
+          href={`/campaigns/${campaignId}/maps`}
+          className={styles.backLink}
+          onClick={handleBackClick}
+          onBlur={() => setLeaveArmed(false)}
+          title={hasUnsavedWork ? "You have unsaved changes" : undefined}
+          data-testid="editor-back-link"
+        >
+          {leaveArmed ? "Unsaved changes — click again to leave" : `← ${campaignName}: maps`}
         </Link>
         <div className={styles.overlayControls}>
           <span className={styles.mapLabel}>
             {map.name} · {map.grid_width}×{map.grid_height}
           </span>
-          {saved ? (
+          {saved && dirty.size === 0 ? (
             <span role="status" className={styles.savedText} data-testid="save-status">
               Saved
             </span>
@@ -2954,6 +3203,7 @@ export function MapEditor({
             variant="ghost"
             disabled={!canUndo || historyBusy !== null || Boolean(preview)}
             onClick={() => void runHistoryStep("undo")}
+            title="Undo (Ctrl+Z)"
             data-testid="undo-button"
           >
             {historyBusy === "undo" ? "Undoing…" : "Undo"}
@@ -2963,6 +3213,7 @@ export function MapEditor({
             variant="ghost"
             disabled={!canRedo || historyBusy !== null || Boolean(preview)}
             onClick={() => void runHistoryStep("redo")}
+            title="Redo (Ctrl+Shift+Z or Ctrl+Y)"
             data-testid="redo-button"
           >
             {historyBusy === "redo" ? "Redoing…" : "Redo"}
@@ -2971,7 +3222,8 @@ export function MapEditor({
             size="sm"
             variant="teal"
             disabled={saving || dirty.size === 0}
-            onClick={handleSave}
+            onClick={() => void handleSave()}
+            title="Save painted cells (Ctrl+S)"
             data-testid="save-map"
           >
             {saving ? "Saving…" : "Save map"}
@@ -2984,6 +3236,7 @@ export function MapEditor({
             size="sm"
             variant={mapDrawerOpen ? "accent" : "ghost"}
             onClick={() => setMapDrawerOpen((open) => !open)}
+            title="Grid size, reference image, and map art"
             data-testid="map-drawer-toggle"
           >
             Map
@@ -3032,6 +3285,11 @@ export function MapEditor({
               {growBusy ? "Growing…" : "Grow"}
             </Button>
           </div>
+          {growLimitHint ? (
+            <p className={styles.hint} data-testid="grow-limit-hint">
+              {growLimitHint}
+            </p>
+          ) : null}
           <p className={styles.hint}>
             Adds cells to the chosen edge. Growing north or west shifts the map&apos;s existing
             cells, objects, and tokens so nothing moves relative to the rest of the map — the
@@ -3270,6 +3528,7 @@ export function MapEditor({
             variant={activeMode === "sculpt" ? "primary" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "sculpt" && switchTool(MODE_TOOLS.sculpt[0])}
+            title="Sculpt: elevation, pits, and terrain"
             data-testid="mode-sculpt"
           >
             {MODE_LABELS.sculpt}
@@ -3279,6 +3538,7 @@ export function MapEditor({
             variant={activeMode === "paint" ? "primary" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "paint" && switchTool(MODE_TOOLS.paint[0])}
+            title="Paint: ground type and lighting"
             data-testid="mode-paint"
           >
             {MODE_LABELS.paint}
@@ -3288,6 +3548,7 @@ export function MapEditor({
             variant={activeMode === "place" ? "primary" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "place" && switchTool(MODE_TOOLS.place[0])}
+            title="Place: objects, light sources, and NPCs"
             data-testid="mode-place"
           >
             {MODE_LABELS.place}
@@ -3297,6 +3558,7 @@ export function MapEditor({
             variant={activeMode === "link" ? "primary" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "link" && switchTool(MODE_TOOLS.link[0])}
+            title="Link: transitions to other maps and concealed pits"
             data-testid="mode-link"
           >
             {MODE_LABELS.link}
@@ -3306,6 +3568,7 @@ export function MapEditor({
             variant={activeMode === "region" ? "primary" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "region" && switchTool(MODE_TOOLS.region[0])}
+            title="Region: fill or generate a dragged rectangle"
             data-testid="mode-region"
           >
             {MODE_LABELS.region}
@@ -3373,6 +3636,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "elevation" ? "primary" : "ghost"}
                   onClick={() => switchTool("elevation")}
+                  title="Raise / lower (1): left-click raises, right-click lowers"
                   data-testid="tool-elevation"
                 >
                   Raise / lower <Badge>1</Badge>
@@ -3389,6 +3653,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "pit" ? "primary" : "ghost"}
                   onClick={() => switchTool("pit")}
+                  title="Dig pit (2): each click drops the floor 5 ft"
                   data-testid="tool-pit"
                 >
                   Dig pit −1 <Badge>2</Badge>
@@ -3411,6 +3676,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "terrain" ? "accent" : "ghost"}
                   onClick={() => switchTool("terrain")}
+                  title="Paint terrain (3)"
                   data-testid="tool-terrain"
                 >
                   Paint terrain <Badge>3</Badge>
@@ -3435,6 +3701,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "ground" ? "accent" : "ghost"}
                   onClick={() => switchTool("ground")}
+                  title="Paint ground (1)"
                   data-testid="tool-ground"
                 >
                   Paint ground <Badge>1</Badge>
@@ -3462,6 +3729,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "light" ? "accent" : "ghost"}
                   onClick={() => switchTool("light")}
+                  title="Paint light (2)"
                   data-testid="tool-light"
                 >
                   Paint light <Badge>2</Badge>
@@ -3474,6 +3742,7 @@ export function MapEditor({
                   size="sm"
                   variant={eyedropperArmed ? "accent" : "ghost"}
                   onClick={() => setEyedropperArmed((armed) => !armed)}
+                  title="Eyedropper (3): pick a cell's ground or light as the brush"
                   data-testid="eyedropper"
                 >
                   Eyedropper <Badge>3</Badge>
@@ -3496,6 +3765,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "object" ? "primary" : "ghost"}
                   onClick={() => switchTool("object")}
+                  title="Place objects (1): Ctrl+click for quick place, Shift+click to multi-select"
                   data-testid="tool-object"
                 >
                   Place objects <Badge>1</Badge>
@@ -3522,14 +3792,16 @@ export function MapEditor({
                   {selectedObjectIds.size} objects selected
                 </span>
                 <div className={styles.toolRow}>
-                  <Button
+                  <ConfirmButton
                     size="sm"
                     variant="danger"
-                    onClick={handleRemoveSelected}
+                    onConfirm={handleRemoveSelected}
+                    confirmLabel={`Delete ${selectedObjectIds.size} objects?`}
+                    title="Delete every selected object (Delete) — undoable as one step"
                     data-testid="delete-selected-objects"
                   >
                     Delete selected ({selectedObjectIds.size})
-                  </Button>
+                  </ConfirmButton>
                 </div>
                 <p className={styles.hint}>
                   Shift-click to add or remove objects from the selection, or click any cell to
@@ -3555,18 +3827,31 @@ export function MapEditor({
                   </p>
                 ) : null}
                 <div className={styles.toolRow}>
-                  <Button size="sm" variant="teal" onClick={handleRotate} data-testid="object-rotate">
+                  <Button
+                    size="sm"
+                    variant="teal"
+                    onClick={handleRotate}
+                    title="Rotate 90° (R)"
+                    data-testid="object-rotate"
+                  >
                     Rotate 90°
                   </Button>
                   <Button
                     size="sm"
                     variant={moveArmed ? "accent" : "ghost"}
                     onClick={() => setMoveArmed((armed) => !armed)}
+                    title="Move: click a destination cell (Esc cancels)"
                     data-testid="object-move"
                   >
                     {moveArmed ? "Click a cell…" : "Move"}
                   </Button>
-                  <Button size="sm" variant="danger" onClick={handleRemove} data-testid="object-remove">
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={handleRemove}
+                    title="Remove this object (Delete)"
+                    data-testid="object-remove"
+                  >
                     Remove
                   </Button>
                 </div>
@@ -3678,6 +3963,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "light-source" ? "primary" : "ghost"}
                   onClick={() => switchTool("light-source")}
+                  title="Place lights (2): anchor to a cell, object, or token"
                   data-testid="tool-light-source"
                 >
                   Place lights <Badge>2</Badge>
@@ -3866,6 +4152,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "npc" ? "primary" : "ghost"}
                   onClick={() => switchTool("npc")}
+                  title="Place NPCs (3)"
                   data-testid="tool-npc"
                 >
                   Place NPCs <Badge>3</Badge>
@@ -3943,6 +4230,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "transition" ? "primary" : "ghost"}
                   onClick={() => switchTool("transition")}
+                  title="Link transition (1): a cell that leads to another map"
                   data-testid="tool-transition"
                 >
                   Link transition <Badge>1</Badge>
@@ -4073,6 +4361,7 @@ export function MapEditor({
             size="sm"
             variant={tool === "concealed-pit" ? "primary" : "ghost"}
             onClick={() => switchTool("concealed-pit")}
+            title="Hide a pit (2): a DM-only trap under ordinary-looking floor"
             data-testid="tool-concealed-pit"
           >
             Hide a pit <Badge>2</Badge>
@@ -4188,6 +4477,7 @@ export function MapEditor({
                   size="sm"
                   variant={tool === "fill" ? "primary" : "ghost"}
                   onClick={() => switchTool("fill")}
+                  title="Fill region (1): drag a rectangle, then fill it with one brush"
                   data-testid="tool-fill"
                 >
                   Fill region <Badge>1</Badge>
@@ -4320,6 +4610,7 @@ export function MapEditor({
                 size="sm"
                 variant={tool === "generate" ? "primary" : "ghost"}
                 onClick={() => switchTool("generate")}
+                title="Generate area with AI (2)"
                 data-testid="tool-generate"
               >
                 Generate area <Badge>2</Badge>
