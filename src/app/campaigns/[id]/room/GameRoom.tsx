@@ -7167,6 +7167,8 @@ export function GameRoom({
         ? pendingAttackCharacter.spells.map((spell) => spell.name)
         : [],
       resources: pendingAttackResources,
+      characterLevel: pendingAttackCharacter.level,
+      allowUpcast: true,
     });
   }, [
     pendingAttack,
@@ -7271,9 +7273,11 @@ export function GameRoom({
       handleRollLanded(roll);
       setPendingAttack(null);
       // A leveled spell spends its slot, as it does from Quick Actions.
-      if (picked && picked.source === "spell" && picked.spellLevel !== null && picked.spellLevel > 0) {
+      const slotLevel = picked?.slotLevel ?? picked?.spellLevel ?? null;
+      if (picked && picked.source === "spell" && slotLevel !== null && slotLevel > 0) {
+        // slotLevel: the slot actually spent — a higher one when upcasting.
         const slot = pendingAttackResources.find(
-          (resource) => resource.name === spellSlotResourceName(picked.spellLevel as SpellSlotLevel)
+          (resource) => resource.name === spellSlotResourceName(slotLevel as SpellSlotLevel)
         );
         if (slot && slot.current_uses > 0) {
           await setCharacterResourceUses(createBrowserSupabaseClient(), slot.id, slot.current_uses - 1).catch(
