@@ -7,6 +7,7 @@
 //        [VW=1440 VH=900] node scripts/design/screenshot-pages.mjs
 // PAGES placeholders: CID (campaign), MID (map), CHID (character).
 // Signed-out pages (login, signup) are shot once, before the role passes.
+// START_COMBAT=1 starts an encounter (as the DM) so the combat UI shows.
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,6 +90,33 @@ try {
     { id: crypto.randomUUID(), map_id: mapId, npc_name: "Skeleton", x: 7, y: 6, elevation: 0, allegiance: "hostile" },
   ]);
   await admin.from("campaigns").update({ live_map: mapId }).eq("id", campaignId);
+  if (env.START_COMBAT) {
+    const dmClient = createClient(supabaseUrl, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${dm.session.access_token}` } },
+    });
+    const { error } = await dmClient.rpc("start_combat", { p_campaign_id: campaignId });
+    if (error) throw error;
+    // Scoped to THIS test campaign's encounter only — never touch other rows.
+    const { data: encounter, error: encounterError } = await admin
+      .from("combat_encounters")
+      .select("id")
+      .eq("campaign_id", campaignId)
+      .is("ended_at", null)
+      .single();
+    if (encounterError) throw encounterError;
+    const { data: combatants } = await admin
+      .from("combat_combatants")
+      .select("id, npc_name")
+      .eq("encounter_id", encounter.id);
+    for (const c of combatants ?? []) {
+      await admin
+        .from("combat_combatants")
+        .update({ initiative: c.npc_name ? 12 : 17 })
+        .eq("id", c.id)
+        .eq("encounter_id", encounter.id);
+    }
+  }
 
   const pages = (
     process.env.PAGES ??

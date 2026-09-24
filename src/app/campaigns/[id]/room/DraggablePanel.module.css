@@ -181,24 +181,31 @@
    (position/padding) without !important. */
 .wrapper .panelChrome {
   position: absolute;
-  top: -11px;
-  right: -11px;
+  top: -14px;
+  right: 14px;
   z-index: 1;
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  padding: 2px;
+  background: var(--md-sys-color-surface-container-highest);
+  border-radius: var(--md-sys-shape-corner-full);
+  box-shadow: var(--md-sys-elevation-level1);
 }
 
 .wrapper .chromeButton {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   min-width: 0;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
   line-height: 1;
-  background: var(--surface2);
+  font-size: 12px;
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 /* Panel-resize follow-up: the vertical resize grip along a panel's bottom
@@ -268,16 +275,22 @@
    tsx, 10 and 15) keeps it clickable above a floating panel dragged over
    the left edge. */
 .dockBar {
+  /* M3 navigation-rail-style strip of closed panels */
   position: fixed;
-  top: 64px;
-  left: 24px;
+  top: 72px;
+  left: 16px;
   z-index: 30;
   display: flex;
   flex-direction: column;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  max-height: calc(100vh - 64px - 24px);
+  gap: 4px;
+  padding: 6px;
+  max-height: calc(100vh - 72px - 24px);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-extra-large);
+  box-shadow: var(--md-sys-elevation-level2);
   pointer-events: auto;
 }
 
@@ -288,14 +301,15 @@
 }
 
 .dockButton {
-  width: 30px;
-  height: 30px;
+  width: 40px;
+  height: 40px;
   min-width: 0;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  font-size: 18px;
   line-height: 1;
-  border-radius: 999px;
+  border: none !important;
+  border-radius: var(--md-sys-shape-corner-full);
 }

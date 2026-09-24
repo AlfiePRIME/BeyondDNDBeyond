@@ -16,15 +16,15 @@
   margin: 0;
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   color: var(--dim);
 }
 
 .hint {
   margin: 0;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   line-height: 1.6;
   color: var(--dim);
 }
@@ -43,10 +43,10 @@
 
 .fieldLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .textarea {
@@ -113,8 +113,8 @@
 .highlightCategory {
   flex-shrink: 0;
   font-family: var(--font-m);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--teal);
+  font-weight: 500;
 }

@@ -29,6 +29,12 @@ export type TokenArm =
   | { kind: "place-monster"; statBlockId: string; npcName: string; allegiance: TokenAllegiance }
   | { kind: "move"; tokenId: string; label: string };
 
+const ALLEGIANCE_LABEL: Record<TokenAllegiance, string> = {
+  party: "Party",
+  hostile: "Hostile",
+  neutral: "Neutral",
+};
+
 const ALLEGIANCE_TONE: Record<TokenAllegiance, BadgeTone> = {
   party: "teal",
   hostile: "red",
@@ -228,7 +234,7 @@ export function TokenPanel({
               <div className={styles.objectHeader}>
                 <span className={styles.objectName}>{tokenLabel(token)}</span>
                 <Badge tone={ALLEGIANCE_TONE[token.allegiance]} data-testid={`token-allegiance-${token.id}`}>
-                  {token.allegiance}
+                  {ALLEGIANCE_LABEL[token.allegiance]}
                 </Badge>
                 <span className={styles.tokenPos} data-testid={`token-pos-${token.id}`}>
                   ({token.x}, {token.y})
@@ -282,7 +288,7 @@ export function TokenPanel({
                       onClick={() => onSetAllegiance(token, allegiance)}
                       data-testid={`set-allegiance-${token.id}-${allegiance}`}
                     >
-                      {allegiance}
+                      {ALLEGIANCE_LABEL[allegiance]}
                     </Button>
                   ))}
                 </div>

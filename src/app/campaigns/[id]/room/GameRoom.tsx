@@ -10026,7 +10026,6 @@ export function GameRoom({
             onToggle={() => setModelWorldDebugOverlayEnabled((current) => !current)}
             rows={modelWorldDebugRows}
           />
-          <span className={styles.roomLabel}>Game Room</span>
         </div>
       </header>
       {/* Panel UI rework: docked-panel icons moved off the crowded top bar

@@ -6,31 +6,32 @@
 
 .statusBanner {
   position: fixed;
-  top: 72px;
+  top: 76px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 60;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   max-width: calc(100vw - 32px);
-  padding: 8px 14px;
-  background: var(--surface2);
-  border: 1px solid var(--pink);
-  border-radius: var(--r);
-  box-shadow: var(--gk);
-  color: var(--text);
-  font-size: 13px;
+  min-height: 48px;
+  padding: 4px 8px 4px 16px;
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  box-shadow: var(--md-sys-elevation-level3);
+  font-size: var(--md-sys-typescale-body-medium-size);
 }
 
 .statusBannerAction {
+  height: 36px;
+  padding: 0 12px;
   background: none;
   border: none;
-  color: var(--teal);
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  border-radius: var(--md-sys-shape-corner-full);
+  color: var(--md-sys-color-inverse-primary);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
   cursor: pointer;
 }
 
@@ -42,43 +43,67 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 24px;
+  gap: 12px;
+  padding: 12px 16px;
   pointer-events: none;
 }
 
 .backLink {
   pointer-events: auto;
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 20px;
+  font-size: var(--md-sys-typescale-title-small-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  color: var(--md-sys-color-on-surface);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-full);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .backLink:hover {
-  color: var(--teal);
+  background: var(--md-sys-color-surface-container-high);
 }
 
 .overlayControls {
+  /* M3 floating toolbar */
   pointer-events: auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-full);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 /* The DM's "Manage characters" opener — link-shaped on purpose (it
    navigates to a page in a new tab rather than toggling room state), in
    the top bar's mono-uppercase chrome vocabulary. */
+/* Toolbar buttons are borderless (M3 toolbar), keeping their text color. */
+.overlayControls button {
+  border-color: transparent;
+}
+
 .manageCharactersLink {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--teal);
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-medium-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  color: var(--md-sys-color-primary);
   white-space: nowrap;
 }
 
 .manageCharactersLink:hover {
-  color: var(--text);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
 }
 
 .endError {
@@ -88,14 +113,6 @@
   margin: 0;
   color: var(--red);
   font-size: 13px;
-}
-
-.roomLabel {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--dim);
 }
 
 /* Phase B: .sidePanel/.tokenPanel/.handoutPanel/.combatPanel no longer
@@ -127,9 +144,10 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 70vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .tokenPanel {
@@ -141,9 +159,10 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 70vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .handoutPanel {
@@ -155,9 +174,10 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 26vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--pink) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .combatPanel {
@@ -169,9 +189,10 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 26vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 /* Freeform combat mode's HP self-edit panel (HpPanel.tsx) — .combatPanel's
@@ -187,23 +208,24 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 26vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .combatRound {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--red);
+  font-weight: 500;
 }
 
 .currentTurn {
   font-family: var(--font-m);
   font-size: 13px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
 
@@ -229,7 +251,7 @@
 .economyMovement {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--muted);
 }
 
@@ -268,14 +290,14 @@
 .initiativeValue {
   font-family: var(--font-m);
   font-size: 13px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--teal);
 }
 
 .hpValue {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--orange);
   margin-left: auto;
 }
@@ -312,8 +334,8 @@
 .conditionToggle {
   padding: 2px 8px;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--muted);
   background: var(--surface2);
   border: 1px solid color-mix(in srgb, var(--orange) 30%, transparent);
@@ -340,10 +362,10 @@
 
 .exhaustionLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--muted);
+  font-weight: 500;
 }
 
 .exhaustionValue {
@@ -363,7 +385,7 @@
 .deathSaveTally {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--red);
 }
 
@@ -376,7 +398,7 @@
 .concentrationSpell {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--purple);
 }
 
@@ -410,7 +432,7 @@
 .deathSavePromptText {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
 
@@ -424,8 +446,8 @@
 
 .handoutFileName {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -444,7 +466,7 @@
 .handoutLink {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   color: var(--teal);
 }
 
@@ -476,31 +498,31 @@
   align-items: center;
   gap: 8px;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   line-height: 1.5;
   color: var(--teal);
 }
 
 .tokenPos {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
 }
 
 .panelLabel {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--dim);
+  font-size: var(--md-sys-typescale-title-small-size);
+  line-height: var(--md-sys-typescale-title-small-line-height);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-title-small-tracking);
+  color: var(--md-sys-color-on-surface);
 }
 
 .mapName {
   font-family: var(--font-m);
   font-size: 13px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
 
@@ -541,14 +563,14 @@
 .objectName {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
 
 .characterLink {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
 }
 
@@ -604,12 +626,13 @@
   font-size: 13px;
   line-height: 1;
   color: var(--text);
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
-  border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
   opacity: 0;
   transition: opacity 0.15s ease;
   pointer-events: none;
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .revealedImageButton:hover::after,
@@ -689,8 +712,8 @@
   translate: -50% 0;
   margin: 0;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--muted);
   /* Purely decorative caption — never steal a drag/wheel gesture aimed at
      the image just because it happens to start over this text. */
@@ -700,8 +723,8 @@
 .hint {
   margin: 0;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   line-height: 1.6;
   color: var(--dim);
 }
@@ -716,7 +739,7 @@
   color: var(--teal);
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   margin: 0;
 }
 
@@ -735,9 +758,10 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 42vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 /* Map Editor Batch A10: LiveObjectsPanel — its own standalone DraggablePanel
@@ -763,9 +787,10 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 50vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .diceTrayGrid {
@@ -801,22 +826,23 @@
      underneath (a cell, a token) must still land there. The click-select
      hint's Cancel button is the one exception; see .moveReadoutAction. */
   pointer-events: none;
-  background: color-mix(in srgb, var(--surface2) 85%, transparent);
-  border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .moveReadoutLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
 }
 
 .moveReadoutCost {
   font-family: var(--font-m);
   font-size: 15px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--teal);
 }
 
@@ -846,18 +872,19 @@
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: color-mix(in srgb, var(--surface2) 85%, transparent);
-  border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
   font-family: var(--font-m);
   font-size: 12px;
   color: var(--dim);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .rulerDistance {
   font-family: var(--font-m);
   font-size: 15px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1px;
   color: var(--accent);
 }
 
@@ -873,9 +900,10 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 42vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .quickRollRow {
@@ -886,10 +914,10 @@
 
 .diceSectionLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--accent);
+  font-weight: 500;
 }
 
 .attackForm {
@@ -969,30 +997,31 @@
   flex-direction: column;
   gap: 2px;
   padding: 6px 8px;
-  background: color-mix(in srgb, var(--surface2) 60%, transparent);
-  border: 1px solid color-mix(in srgb, var(--dim) 18%, transparent);
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .rollMeta {
   font-family: var(--font-m);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .rollHeadline {
   font-family: var(--font-m);
   font-size: 13px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
 
 .rollDetail {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   line-height: 1.5;
   color: var(--dim);
 }
@@ -1012,15 +1041,16 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 30vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .quickActionsTurn {
   font-family: var(--font-m);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1px;
   color: var(--accent);
 }
 
@@ -1089,10 +1119,10 @@
 
 .attackPickerGroupLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .attackPickerCardGrid {
@@ -1199,9 +1229,10 @@
   height: var(--panel-height, auto);
   max-height: var(--panel-max-height, 46vh);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--teal) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 /* The scrollable message history — its own inner flex column (rather than
@@ -1238,9 +1269,10 @@
   flex-direction: column;
   gap: 2px;
   padding: 6px 8px;
-  background: color-mix(in srgb, var(--surface2) 60%, transparent);
-  border: 1px solid color-mix(in srgb, var(--dim) 18%, transparent);
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 /* A DM's own message — the .overrideEntry precedent's "accent-tinted card"
@@ -1265,15 +1297,15 @@
 
 .chatTimestamp {
   font-family: var(--font-m);
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
 }
 
 .chatEditedMarker {
   font-family: var(--font-m);
-  font-size: 10px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   font-style: italic;
   color: var(--dim);
 }
@@ -1335,11 +1367,12 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: color-mix(in srgb, var(--surface2) 90%, transparent);
-  border: 1px solid color-mix(in srgb, var(--dim) 35%, transparent);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-radius: var(--md-sys-shape-corner-large);
   pointer-events: auto;
   z-index: 20;
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .chatDockInput {

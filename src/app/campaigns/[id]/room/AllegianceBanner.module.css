@@ -56,6 +56,6 @@
 .text {
   font-family: var(--font-h);
   font-size: 17px;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.1px;
   color: var(--text);
 }
