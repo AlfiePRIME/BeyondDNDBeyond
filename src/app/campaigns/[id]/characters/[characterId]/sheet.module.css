@@ -170,6 +170,25 @@
   gap: 6px;
 }
 
+.hpAmount {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-basis: 100%;
+}
+
+/* Hit points carries the most controls — give it two grid tracks when
+   there's room so "/ max" stays beside the value. */
+.vitalWide {
+  grid-column: span 2;
+}
+
+@media (max-width: 520px) {
+  .vitalWide {
+    grid-column: auto;
+  }
+}
+
 .vitalInput {
   width: 64px;
   padding: 6px 8px;
@@ -241,6 +260,7 @@
 }
 
 .skillToggle {
+  flex: 1;
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -268,6 +288,8 @@
 }
 
 .skillBonus {
+  min-width: 3ch;
+  text-align: right;
   font-family: var(--font-m);
   font-size: 14px;
   color: var(--teal);

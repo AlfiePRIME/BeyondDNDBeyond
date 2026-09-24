@@ -353,6 +353,10 @@ interface PanelLayoutContextValue {
    * always seeds one first), so undocking never hits the fresh-entry
    * branch. */
   toggleDocked(panelId: PanelId, currentPosition?: { x: number; y: number }): void;
+  /** Throws away every saved position/collapse/dock and returns to the
+   * default layout (the role's default-docked panels closed, everything
+   * else on its CSS anchor). */
+  resetLayout(): void;
   /** This panel's current stacking order (for the `zIndex` style). */
   zIndexOf(panelId: PanelId): number;
   /** Raises a panel above every sibling — called on any pointer-down
@@ -450,12 +454,23 @@ const PanelLayoutContext = createContext<PanelLayoutContextValue | null>(null);
  *      itself is just one (the Phase B) consumer of this context, not the
  *      only possible one.
  */
+/** A fresh layout: `defaultDocked` panels start closed (in the dock strip)
+ * so a first visit doesn't bury the table under every panel at once. */
+function buildDefaultLayout(defaultDocked: readonly PanelId[]): Record<string, PanelLayoutEntry> {
+  return Object.fromEntries(
+    defaultDocked.map((id) => [id, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN, collapsed: false, docked: true, anchored: true }])
+  );
+}
+
 export function PanelLayoutProvider({
   userId,
   initialPreferences,
+  defaultDocked = [],
   children,
 }: {
   userId: string;
+  /** Panels that start docked for a user who has never saved a layout. */
+  defaultDocked?: readonly PanelId[];
   /** ui_preferences at page-load time — the same "read once for SSR,
    * subscribe for live sync" shape as GameRoom's initialActionEconomyStrict
    * /initialCombat, so a returning user's saved layout is correct on the
@@ -476,7 +491,7 @@ export function PanelLayoutProvider({
   // input, defaulted read" boundary rather than pushing the null-check
   // onto every caller of getEntry.
   const [layout, setLayout] = useState<Record<string, PanelLayoutEntry>>(
-    initialPreferences.panelLayout ?? {}
+    () => initialPreferences.panelLayout ?? buildDefaultLayout(defaultDocked)
   );
   // Ahead-of-React ref, the tokenDragRef/liveMapRef pattern from GameRoom:
   // the debounced persist timer must read the LATEST layout when it fires,
@@ -698,12 +713,25 @@ export function PanelLayoutProvider({
             y: currentPosition?.y ?? VIEWPORT_MARGIN,
             collapsed: false,
           };
+        if (entry.docked && entry.anchored) {
+          // A default-docked panel was never positioned — reopen it on its
+          // CSS anchor instead of the seeded placeholder x/y.
+          const next = { ...current };
+          delete next[panelId];
+          return next;
+        }
         return { ...current, [panelId]: { ...entry, docked: !entry.docked } };
       });
       schedulePersist();
     },
     [schedulePersist]
   );
+
+  const resetLayout = useCallback(() => {
+    lastMovedPanelRef.current = null;
+    setLayout(buildDefaultLayout(defaultDocked));
+    schedulePersist();
+  }, [defaultDocked, schedulePersist]);
 
   // Sound Effects SP1's three context members — plain get/set pairs, the
   // same shape setPosition/toggleCollapsed already use: update local state
@@ -900,6 +928,7 @@ export function PanelLayoutProvider({
       toggleCollapsed,
       setHeight,
       toggleDocked,
+      resetLayout,
       zIndexOf,
       bringToFront,
       pushOffsetOf,
@@ -917,6 +946,7 @@ export function PanelLayoutProvider({
       toggleCollapsed,
       setHeight,
       toggleDocked,
+      resetLayout,
       zIndexOf,
       bringToFront,
       pushOffsetOf,
@@ -1461,10 +1491,20 @@ export function PanelDockBar() {
   const layout = usePanelLayout();
   const dockedIds = ALL_PANEL_IDS.filter((id) => layout.getEntry(id)?.docked);
 
-  if (dockedIds.length === 0) return null;
-
   return (
     <div className={styles.dockBar} data-testid="panel-dock-bar">
+      <Button
+        size="sm"
+        variant="ghost"
+        className={styles.dockButton}
+        onClick={() => layout.resetLayout()}
+        aria-label="Reset panel layout"
+        title="Reset panel layout"
+        data-testid="reset-panel-layout"
+      >
+        <span aria-hidden="true">↺</span>
+      </Button>
+      {dockedIds.length > 0 ? <span className={styles.dockDivider} aria-hidden="true" /> : null}
       {dockedIds.map((id) => (
         <Button
           key={id}

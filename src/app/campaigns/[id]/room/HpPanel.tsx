@@ -48,14 +48,17 @@ export function HpPanel({
   error: string | null;
   onSetHp: (character: Character, value: number) => void;
 }) {
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, { value: string; basis: number }>>({});
 
   const own = characters.filter((character) => character.owner_id === currentUserId);
 
   if (strict || own.length === 0) return null;
 
+  // A draft only lives until the real HP changes (a save landing, or damage
+  // from anyone else) — after that the input shows the live value again.
   function draftFor(character: Character): string {
-    return drafts[character.id] ?? String(character.current_hp);
+    const draft = drafts[character.id];
+    return draft && draft.basis === character.current_hp ? draft.value : String(character.current_hp);
   }
 
   // Respects the same [0, max_hp] range the characters_current_hp_in_range
@@ -97,7 +100,10 @@ export function HpPanel({
               aria-label={`${character.name}'s current HP`}
               value={draftFor(character)}
               onChange={(event) =>
-                setDrafts((prev) => ({ ...prev, [character.id]: event.target.value }))
+                setDrafts((prev) => ({
+                  ...prev,
+                  [character.id]: { value: event.target.value, basis: character.current_hp },
+                }))
               }
               data-testid={`hp-panel-input-${character.id}`}
             />

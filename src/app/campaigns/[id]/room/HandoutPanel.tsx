@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { Badge, Button, TextInput } from "@/ui-components";
+import { Badge, Button, ConfirmButton, TextInput } from "@/ui-components";
 import { isImageHandout, type RoomHandout } from "./handout-url";
 import styles from "./room.module.css";
 
@@ -438,15 +438,16 @@ export function HandoutPanel({
                 >
                   {handout.revealed ? "Hide" : "Reveal"}
                 </Button>
-                <Button
+                <ConfirmButton
                   size="sm"
                   variant="danger"
                   disabled={busy}
-                  onClick={() => onDelete(handout)}
+                  onConfirm={() => onDelete(handout)}
+                  confirmLabel="Really delete?"
                   data-testid={`delete-handout-${handout.id}`}
                 >
                   Delete
-                </Button>
+                </ConfirmButton>
               </div>
             ) : null}
             <HandoutContent handout={handout} />

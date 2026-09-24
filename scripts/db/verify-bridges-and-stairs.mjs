@@ -319,6 +319,7 @@ async function startCombatAndGetCombatant(dmRoom, campaignId, tokenId) {
 
 async function endCombat(dmRoom, campaignId) {
   await dmRoom.click('[data-testid="end-combat-button"]');
+  await dmRoom.click('[data-testid="end-combat-button"]'); // second click confirms
   await pollUntil(async () => {
     const { data } = await admin
       .from("combat_encounters")

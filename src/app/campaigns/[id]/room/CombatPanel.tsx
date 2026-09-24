@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Badge, Button } from "@/ui-components";
+import { Badge, Button, ConfirmButton } from "@/ui-components";
 import type {
   Character,
   CombatCombatant,
@@ -844,9 +844,16 @@ export function CombatPanel({
           </Button>
         ) : null}
         {isDM ? (
-          <Button size="sm" variant="danger" disabled={busy} onClick={onEnd} data-testid="end-combat-button">
+          <ConfirmButton
+            size="sm"
+            variant="danger"
+            disabled={busy}
+            onConfirm={onEnd}
+            confirmLabel="End combat?"
+            data-testid="end-combat-button"
+          >
             End combat
-          </Button>
+          </ConfirmButton>
         ) : null}
       </div>
 

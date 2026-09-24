@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Badge, Button, TextInput, type BadgeTone } from "@/ui-components";
+import { Badge, Button, ConfirmButton, TextInput, type BadgeTone } from "@/ui-components";
 import {
   TOKEN_ALLEGIANCES,
   type Character,
@@ -259,15 +259,16 @@ export function TokenPanel({
                   >
                     Move
                   </Button>
-                  <Button
+                  <ConfirmButton
                     size="sm"
                     variant="danger"
                     disabled={busy}
-                    onClick={() => onRemove(token)}
+                    onConfirm={() => onRemove(token)}
+                    confirmLabel="Really remove?"
                     data-testid={`remove-token-${token.id}`}
                   >
                     Remove
-                  </Button>
+                  </ConfirmButton>
                 </div>
               ) : null}
               {isDM ? (

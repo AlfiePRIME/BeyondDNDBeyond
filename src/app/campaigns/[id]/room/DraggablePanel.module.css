@@ -281,6 +281,12 @@
   pointer-events: auto;
 }
 
+.dockDivider {
+  width: 18px;
+  height: 1px;
+  background: var(--color-border, rgba(255, 255, 255, 0.2));
+}
+
 .dockButton {
   width: 30px;
   height: 30px;

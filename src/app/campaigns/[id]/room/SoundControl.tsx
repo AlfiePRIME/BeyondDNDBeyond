@@ -16,6 +16,11 @@ import { Button } from "@/ui-components";
 import { useSoundSettings } from "./DraggablePanel";
 import styles from "./SoundControl.module.css";
 
+// The verify scripts' click-driven sound harness (below) and its 200ms
+// debug-mirror poll only exist outside production builds — real players
+// never get stray tab-reachable buttons or a 5Hz re-render.
+const SHOW_TEST_HARNESS = process.env.NODE_ENV !== "production";
+
 interface SoundControlProps {
   /** True for the campaign's DM only — gates the two quick music toggles
    * below, which mirror DmBook.tsx's Day/Night-page controls
@@ -100,6 +105,7 @@ export function SoundControl({
   const [debugSnapshot, setDebugSnapshot] = useState(() => getDebugSnapshot());
   useEffect(() => subscribeDebugState(() => setDebugSnapshot(getDebugSnapshot())), []);
   useEffect(() => {
+    if (!SHOW_TEST_HARNESS) return;
     const interval = setInterval(() => setDebugSnapshot(getDebugSnapshot()), 200);
     return () => clearInterval(interval);
   }, []);
@@ -199,6 +205,7 @@ export function SoundControl({
           API, not a player-facing control; nothing in SP1 itself has a real
           gameplay trigger wired to sound yet (that's SP3-SP8's job — token
           moves, combat hits, dice impacts, etc). */}
+      {SHOW_TEST_HARNESS ? (
       <div className={styles.testHarness} data-testid="sound-test-harness">
         {ALL_SOUND_KEYS.map((key) => (
           <button
@@ -229,6 +236,7 @@ export function SoundControl({
           </span>
         ))}
       </div>
+      ) : null}
     </div>
   );
 }

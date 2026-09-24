@@ -39,6 +39,7 @@ import {
   listCharacterResources,
   listCombatantConditions,
   requestOverride,
+  applyHpDelta,
   updateCharacter,
   subscribeToActionOverrides,
   subscribeToCharacterChanges,
@@ -351,22 +352,56 @@ export function CharacterSheet({
     if (!ok) setScoreDrafts((d) => ({ ...d, [ability]: String(character[ability]) }));
   }
 
+  // HP always moves through apply_hp_delta (never a raw current_hp write)
+  // so the rules ride along: healing from 0 clears death saves/stability,
+  // damage sets a concentration check, dropping to 0 ends concentration.
+  const [hpBusy, setHpBusy] = useState(false);
+  async function applyHp(delta: number): Promise<boolean> {
+    if (delta === 0) return true;
+    const previous = character;
+    const optimistic = Math.min(Math.max(previous.current_hp + delta, 0), previous.max_hp);
+    setCharacter((c) => ({ ...c, current_hp: optimistic }));
+    setHpDraft(String(optimistic));
+    setSaveError(null);
+    setHpBusy(true);
+    try {
+      const updated = await applyHpDelta(createBrowserSupabaseClient(), previous.id, delta);
+      setCharacter(updated);
+      setHpDraft(String(updated.current_hp));
+      return true;
+    } catch (err) {
+      setCharacter(previous);
+      setHpDraft(String(previous.current_hp));
+      setSaveError(err instanceof Error ? err.message : "Could not update hit points.");
+      return false;
+    } finally {
+      setHpBusy(false);
+    }
+  }
+
   async function commitHp() {
     const value = parseIntIn(hpDraft, 0, character.max_hp);
     if (value === null || value === character.current_hp) {
       setHpDraft(String(character.current_hp));
       return;
     }
-    const ok = await persist({ current_hp: value });
-    if (!ok) setHpDraft(String(character.current_hp));
+    await applyHp(value - character.current_hp);
   }
 
   async function adjustHp(delta: number) {
     const next = Math.min(Math.max(character.current_hp + delta, 0), character.max_hp);
     if (next === character.current_hp) return;
-    setHpDraft(String(next));
-    const ok = await persist({ current_hp: next });
-    if (!ok) setHpDraft(String(character.current_hp));
+    await applyHp(next - character.current_hp);
+  }
+
+  const [hpAmountDraft, setHpAmountDraft] = useState("");
+  const hpAmount = parseIntIn(hpAmountDraft, 1, 999);
+  async function applyHpAmount(sign: 1 | -1) {
+    if (hpAmount === null) return;
+    // Damage passes the full amount (overflow matters for instant death);
+    // healing is capped at max HP server-side.
+    const ok = await applyHp(sign * hpAmount);
+    if (ok) setHpAmountDraft("");
   }
 
   async function commitAc() {
@@ -822,7 +857,7 @@ export function CharacterSheet({
                 </div>
               </>
             ) : null}
-            <div className={styles.vital}>
+            <div className={`${styles.vital} ${styles.vitalWide}`}>
               <span className={styles.vitalLabel}>Hit points</span>
               {canEdit ? (
                 <span className={styles.hpControls}>
@@ -855,6 +890,39 @@ export function CharacterSheet({
                     +
                   </Button>
                   <span className={styles.vitalMax}>/ {character.max_hp}</span>
+                  <span className={styles.hpAmount}>
+                    <input
+                      className={styles.vitalInput}
+                      type="number"
+                      min={1}
+                      placeholder="Amt"
+                      value={hpAmountDraft}
+                      onChange={(e) => setHpAmountDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void applyHpAmount(-1);
+                      }}
+                      aria-label="Damage or healing amount"
+                      data-testid="sheet-hp-amount"
+                    />
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      disabled={hpAmount === null || hpBusy}
+                      onClick={() => void applyHpAmount(-1)}
+                      data-testid="sheet-hp-damage"
+                    >
+                      Damage
+                    </Button>
+                    <Button
+                      variant="teal"
+                      size="sm"
+                      disabled={hpAmount === null || hpBusy || character.current_hp >= character.max_hp}
+                      onClick={() => void applyHpAmount(1)}
+                      data-testid="sheet-hp-heal"
+                    >
+                      Heal
+                    </Button>
+                  </span>
                 </span>
               ) : (
                 <span className={styles.vitalValue}>

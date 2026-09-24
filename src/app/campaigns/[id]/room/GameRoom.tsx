@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
@@ -49,6 +49,7 @@ import {
   getMapArtSignedUrl,
   getSeatOffsetsForCampaign,
   listCharacterResources,
+  setCharacterResourceUses,
   listCharacterRosterNames,
   listCharactersForCampaign,
   listCombatCombatants,
@@ -164,6 +165,8 @@ import {
   EXHAUSTION_KEY,
   computeOpportunityAttacks,
   computeQuickActions,
+  spellSlotResourceName,
+  type SpellSlotLevel,
   computeReachableCells,
   computeVisibilityTiers,
   fallDamageDiceCount,
@@ -277,7 +280,14 @@ import { ChatDock } from "./ChatDock";
 import { CombatPanel, type CombatState } from "./CombatPanel";
 import { ChatLogPanel } from "./ChatLogPanel";
 import { ContainerPanel } from "./ContainerPanel";
-import { DraggablePanel, DmBookSizeBridge, PanelDockBar, PanelLayoutProvider } from "./DraggablePanel";
+import { DraggablePanel, DmBookSizeBridge, PanelDockBar, PanelLayoutProvider, type PanelId } from "./DraggablePanel";
+
+const noopSubscribe = () => () => undefined;
+
+// A first visit shouldn't bury the table under every panel at once — these
+// start closed in the left dock strip (one click to open).
+const DM_DEFAULT_DOCKED_PANELS: readonly PanelId[] = ["liveObjects", "diceTray", "handout", "chatLog"];
+const PLAYER_DEFAULT_DOCKED_PANELS: readonly PanelId[] = ["diceTray"];
 import { SoundControl } from "./SoundControl";
 import { TokenModelDebugOverlay, type TokenModelDebugRow } from "./TokenModelDebugOverlay";
 import { AdvantageToggle, DiceLogPanel } from "./DiceLogPanel";
@@ -3420,6 +3430,10 @@ export function GameRoom({
   // with it). `attackerCharacterId` is always the mover's OWN character
   // (token.character_id) — a DM repositioning a bare NPC token never
   // triggers this, by construction (see the interception's own guard).
+  // The quick-add initiative prompt (Prompt 61): set after a
+  // place-monster click lands while combat is active; cleared on add,
+  // dismiss, or a map switch (refreshLiveMap).
+  const [monsterJoin, setMonsterJoin] = useState<{ token: MapToken; name: string } | null>(null);
   const [pendingAttack, setPendingAttack] = useState<{
     attackerCharacterId: string;
     targetToken: MapToken;
@@ -4098,9 +4112,10 @@ export function GameRoom({
   const refreshLiveMap = useCallback(async (supabase: SupabaseClient, mapId: string | null) => {
     const seq = ++refreshSeqRef.current;
     let next: LiveMapData | null = null;
-    if (mapId) {
-      const map = await getMap(supabase, mapId);
-      if (!map) return;
+    // A map that no longer exists (deleted mid-session) is treated as "no
+    // map" rather than silently leaving the old one on screen.
+    const map = mapId ? await getMap(supabase, mapId) : null;
+    if (map && mapId) {
       const [cells, objects, tokens, lightSources, whiteboardTiles, mapArt] = await Promise.all([
         listMapCells(supabase, mapId),
         listMapObjects(supabase, mapId),
@@ -4134,8 +4149,17 @@ export function GameRoom({
       next = { map, cells, objects, tokens, lightSources, whiteboardTiles, mapArt, containerObjectIds };
     }
     if (seq !== refreshSeqRef.current) return;
+    const switchedMap = (liveMapRef.current?.map.id ?? null) !== (next?.map.id ?? null);
     liveMapRef.current = next;
     setLiveMapState(next);
+    if (switchedMap) {
+      // Prompts tied to the old map's tokens/objects make no sense on the
+      // new one (and their buttons would act on things no longer there).
+      setPendingAttack(null);
+      setPendingInteraction(null);
+      setOpenContainer(null);
+      setMonsterJoin(null);
+    }
     // Whatever was armed or selected referred to the previous map's
     // cells/tokens — and so did any pending transition offer, in-flight
     // measurement, or remote selection broadcast (a stale entry there is
@@ -4176,8 +4200,13 @@ export function GameRoom({
       setWeatherMechanicalState(campaign.weather_mechanical);
       setSessionActive(campaign.session_active);
       setSessionStartedAt(campaign.session_started_at);
+      // Fully ended (not merely paused): the durable backstop for a player
+      // who missed the SESSION_ENDED broadcast.
+      if (!campaign.session_active && campaign.session_started_at === null) {
+        router.push(`/campaigns/${campaignId}?sessionEnded=1`);
+      }
     });
-  }, [campaignId]);
+  }, [campaignId, router]);
 
   // Live hidden-from sync (Prompt 60): a postgres_changes poke rather than
   // relying solely on the combat-changed broadcast, because the reveal-on-
@@ -4370,7 +4399,7 @@ export function GameRoom({
     });
 
     const unsubscribeEnded = channel.subscribe(SESSION_ENDED_EVENT, () => {
-      router.push("/");
+      router.push(`/campaigns/${campaignId}?sessionEnded=1`);
     });
 
     return () => {
@@ -4390,6 +4419,51 @@ export function GameRoom({
       void channel.leave();
     };
   }, [campaignId, currentUserId, currentUserDisplayName, router]);
+
+  // The campaign channel must stay joined for the whole visit — re-joining
+  // drops every broadcast sent while the old channel is leaving (token
+  // moves, dice, combat pokes) and flickers presence. Its handlers change
+  // identity whenever state they close over changes (e.g. `combat` on every
+  // HP tick), so the effect reads them through this ref instead of listing
+  // them as dependencies.
+  // DM diagnostic tools (the live model-position overlay) stay out of the
+  // way in production unless the room is opened with ?debug in the URL.
+  const debugToolsEnabled = useSyncExternalStore(
+    noopSubscribe,
+    () => process.env.NODE_ENV !== "production" || new URLSearchParams(window.location.search).has("debug"),
+    () => false
+  );
+
+  const channelHandlersRef = useRef({
+    refreshLiveMap,
+    applyTriggered,
+    applyObjectUpserted,
+    applyObjectRemoved,
+    applyTokenChange,
+    applyCellChange,
+    applyItemTaken,
+    applyPitItemsFound,
+    applyHandoutChange,
+    handleTokenLanded,
+    refreshCombat,
+    pushAllegianceBannerIfNeeded,
+  });
+  useEffect(() => {
+    channelHandlersRef.current = {
+      refreshLiveMap,
+      applyTriggered,
+      applyObjectUpserted,
+      applyObjectRemoved,
+      applyTokenChange,
+      applyCellChange,
+      applyItemTaken,
+      applyPitItemsFound,
+      applyHandoutChange,
+      handleTokenLanded,
+      refreshCombat,
+      pushAllegianceBannerIfNeeded,
+    };
+  });
 
   // A SECOND channel join, on the campaign topic, purely to receive
   // campaign-scoped map broadcasts. Deliberately not the room topic: session
@@ -4419,7 +4493,7 @@ export function GameRoom({
       if (currentUserIsDM) setDmSelectedMapId(payload.mapId);
     });
     const unsubscribeTrigger = channel.subscribe<TriggerPayload>(TRIGGER_EVENT, (payload) => {
-      applyTriggered(payload.objectId, payload.triggered);
+      channelHandlersRef.current.applyTriggered(payload.objectId, payload.triggered);
     });
     // Map Editor Batch A10: see MAP_OBJECT_UPSERTED_EVENT's own doc comment
     // for why this only ever carries a row every receiver may already have.
@@ -4427,7 +4501,7 @@ export function GameRoom({
     // payload's own doc comment).
     const unsubscribeObjectUpserted = channel.subscribe<MapObjectUpsertedPayload>(
       MAP_OBJECT_UPSERTED_EVENT,
-      (payload) => (payload.object ? applyObjectUpserted(payload.object) : applyObjectRemoved(payload.objectId))
+      (payload) => (payload.object ? channelHandlersRef.current.applyObjectUpserted(payload.object) : channelHandlersRef.current.applyObjectRemoved(payload.objectId))
     );
     const unsubscribeToken = channel.subscribe<TokenPayload>(TOKEN_EVENT, (payload) => {
       // Position compared against the pre-update row so only genuine moves
@@ -4444,7 +4518,7 @@ export function GameRoom({
       // read before applyTokenChange splices in the new one.
       const previous =
         campaignTokensRef.current.find((candidate) => candidate.id === payload.tokenId) ?? null;
-      applyTokenChange(payload.tokenId, payload.token);
+      channelHandlersRef.current.applyTokenChange(payload.tokenId, payload.token);
       // Global Party Members: this is the ONLY point every OTHER already-
       // connected client (the DM's own action already ran this same check
       // directly in handleSetAllegiance — broadcasts aren't echoed back to
@@ -4453,10 +4527,10 @@ export function GameRoom({
       // TOKEN_EVENT) is what makes a second, idle client see the banner
       // live. `previous` is already exactly what's needed — the pre-update
       // row this handler computed above for handleTokenLanded's own sake.
-      pushAllegianceBannerIfNeeded(previous, payload.token);
+      channelHandlersRef.current.pushAllegianceBannerIfNeeded(previous, payload.token);
       const token = payload.token;
       if (token && previous && (previous.x !== token.x || previous.y !== token.y)) {
-        void handleTokenLanded(token, previous.elevation, { x: previous.x, y: previous.y });
+        void channelHandlersRef.current.handleTokenLanded(token, previous.elevation, { x: previous.x, y: previous.y });
       }
     });
     // A concealed pit's reveal (docs/design/pits-and-falling.md §5) — see
@@ -4466,7 +4540,7 @@ export function GameRoom({
     // reveal broadcast dropped while disconnected is simply superseded.
     const unsubscribeCellRevealed = channel.subscribe<CellRevealedPayload>(
       CELL_REVEALED_EVENT,
-      (payload) => applyCellChange(payload.cell)
+      (payload) => channelHandlersRef.current.applyCellChange(payload.cell)
     );
     // Sound Effects SP4: see DOOR_TRANSITION_EVENT's own doc comment — every
     // OTHER connected client (the confirming DM's own client already played
@@ -4483,16 +4557,16 @@ export function GameRoom({
     // — see ITEM_TAKEN_EVENT/PIT_ITEMS_FOUND_EVENT's own doc comments for
     // why a dropped broadcast is harmless here.
     const unsubscribeItemTaken = channel.subscribe<ItemTakenPayload>(ITEM_TAKEN_EVENT, (payload) => {
-      applyItemTaken(payload);
+      channelHandlersRef.current.applyItemTaken(payload);
     });
     const unsubscribePitItemsFound = channel.subscribe<PitItemsFoundPayload>(
       PIT_ITEMS_FOUND_EVENT,
-      (payload) => applyPitItemsFound(payload)
+      (payload) => channelHandlersRef.current.applyPitItemsFound(payload)
     );
     const unsubscribeHandout = channel.subscribe<HandoutPayload>(HANDOUT_EVENT, (payload) => {
       const row = payload.handout;
       if (!row) {
-        applyHandoutChange(payload.handoutId, null);
+        channelHandlersRef.current.applyHandoutChange(payload.handoutId, null);
         return;
       }
       void (async () => {
@@ -4500,7 +4574,7 @@ export function GameRoom({
         // broadcast carries only the row, so Storage RLS (0022) stays the
         // authority on who may actually load the file.
         const resolved = await resolveHandout(supabase, row);
-        applyHandoutChange(resolved.id, resolved);
+        channelHandlersRef.current.applyHandoutChange(resolved.id, resolved);
         if (resolved.revealed) setHandoutPopup(resolved);
       })();
     });
@@ -4522,7 +4596,7 @@ export function GameRoom({
         campaignTokensRef.current = freshTokens;
         setCampaignTokensState(freshTokens);
       }
-      await refreshLiveMap(supabase, liveMapRef.current?.map.id ?? null);
+      await channelHandlersRef.current.refreshLiveMap(supabase, liveMapRef.current?.map.id ?? null);
     });
     // Same dropped-broadcast reasoning for handouts — a reveal sent while
     // disconnected is gone, so re-read the RLS-filtered list.
@@ -4532,7 +4606,7 @@ export function GameRoom({
       setHandouts(await Promise.all(rows.map((row) => resolveHandout(supabase, row))));
     });
     const unsubscribeCombat = channel.subscribe<CombatPayload>(COMBAT_EVENT, () => {
-      void refreshCombat(supabase).catch(() => undefined);
+      void channelHandlersRef.current.refreshCombat(supabase).catch(() => undefined);
     });
     // No onReconnect pair — see DICE_ROLLED_EVENT's own comment. Routes to
     // the ROLLER's own personal tray (payload.rollerUserId) — every
@@ -4549,7 +4623,7 @@ export function GameRoom({
     // Same dropped-broadcast reasoning for combat — a start/advance/end sent
     // while disconnected is gone, so re-read the active encounter.
     const unsubscribeCombatReconnect = channel.onReconnect(async () => {
-      await refreshCombat(supabase).catch(() => undefined);
+      await channelHandlersRef.current.refreshCombat(supabase).catch(() => undefined);
     });
     // Click-select-to-move's own poke: fold the sender's current selection
     // into the by-user map (see remoteSelectionByUser's own comment).
@@ -4762,24 +4836,7 @@ export function GameRoom({
       campaignChannelRef.current = null;
       void channel.leave();
     };
-  }, [
-    campaignId,
-    currentUserId,
-    currentUserDisplayName,
-    currentUserIsDM,
-    refreshLiveMap,
-    applyTriggered,
-    applyObjectUpserted,
-    applyObjectRemoved,
-    applyTokenChange,
-    applyCellChange,
-    applyItemTaken,
-    applyPitItemsFound,
-    applyHandoutChange,
-    handleTokenLanded,
-    refreshCombat,
-    pushAllegianceBannerIfNeeded,
-  ]);
+  }, [campaignId, currentUserId, currentUserDisplayName, currentUserIsDM]);
 
   /**
    * The direct-click path (GameTableScene's onSelectMapObject, via
@@ -5233,10 +5290,6 @@ export function GameRoom({
     setDmSelectedMapId(mapId);
   }, []);
 
-  // The quick-add initiative prompt (Prompt 61): set after a
-  // place-monster click lands while combat is active; cleared on add or
-  // dismiss. Declared before handleCellClick, which sets it.
-  const [monsterJoin, setMonsterJoin] = useState<{ token: MapToken; name: string } | null>(null);
   const [monsterInitiativeDraft, setMonsterInitiativeDraft] = useState("");
   const [monsterJoinBusy, setMonsterJoinBusy] = useState(false);
   const [monsterJoinError, setMonsterJoinError] = useState<string | null>(null);
@@ -5474,6 +5527,8 @@ export function GameRoom({
     if (!selectedTokenId) return;
     function handleSelectionEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable]")) return;
       setSelectedTokenId(null);
       void publishTokenSelection(null);
     }
@@ -5906,16 +5961,24 @@ export function GameRoom({
       setTokenBusy(true);
       setTokenError(null);
       try {
-        await deleteMapToken(createBrowserSupabaseClient(), token.id);
+        const supabase = createBrowserSupabaseClient();
+        const wasInCombat = combat?.combatants.some((c) => c.token_id === token.id) ?? false;
+        await deleteMapToken(supabase, token.id);
         applyTokenChange(token.id, null);
         await publishTokenChange(token.id, null);
+        if (wasInCombat) {
+          // Its combatant row went with it (on delete cascade) — every
+          // turn-order view needs to drop it too.
+          await refreshCombat(supabase).catch(() => undefined);
+          await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
+        }
       } catch (err) {
         setTokenError(errorMessage(err) ?? "Could not remove that token.");
       } finally {
         setTokenBusy(false);
       }
     },
-    [tokenBusy, applyTokenChange, publishTokenChange]
+    [tokenBusy, combat, campaignId, refreshCombat, applyTokenChange, publishTokenChange]
   );
 
   const handleSetAllegiance = useCallback(
@@ -6169,7 +6232,10 @@ export function GameRoom({
       void (async () => {
         try {
           const supabase = createBrowserSupabaseClient();
-          await updateCharacter(supabase, character.id, { current_hp: value });
+          // Through apply_hp_delta (not a raw current_hp write) so healing
+          // up from 0 clears death saves/stability and damage raises a
+          // concentration check, exactly like combat damage does.
+          await applyHpDelta(supabase, character.id, value - character.current_hp);
           await refreshCombat(supabase);
           await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId });
         } catch (err) {
@@ -6885,10 +6951,12 @@ export function GameRoom({
     setEndSessionModalOpen(true);
   }
 
-  function handleSessionEnded() {
+  async function handleSessionEnded() {
     setEndSessionModalOpen(false);
-    void channelRef.current?.publish(SESSION_ENDED_EVENT, { campaignId });
-    router.push("/");
+    // Await the broadcast — navigating away unmounts the room, which leaves
+    // this same channel and could drop the send before it went out.
+    await channelRef.current?.publish(SESSION_ENDED_EVENT, { campaignId }).catch(() => undefined);
+    router.push(`/campaigns/${campaignId}?sessionEnded=1`);
   }
 
   // Persist first, then reflect locally — the handleSetEconomyStrict/
@@ -7150,7 +7218,10 @@ export function GameRoom({
     setAttackError(null);
     try {
       const target = pendingAttack.targetToken;
-      await postRoll(campaignId, {
+      const picked = showManualAttackForm
+        ? null
+        : (pendingAttackActions.find((action) => attackPickerActionKey(action) === selectedQuickActionKey) ?? null);
+      const roll = await postRoll(campaignId, {
         kind: "attack",
         characterId: pendingAttack.attackerCharacterId,
         attackKind,
@@ -7161,12 +7232,21 @@ export function GameRoom({
         targetName: target.npc_name ?? null,
         mode: attackMode,
       });
-      // The roll lands in every connected client's dice log (including
-      // this one) via DiceLogPanel's own roll_log subscription — same
-      // "the DB write is the only source of truth this needs" reasoning
-      // every other direct postRoll call in this file already relies on
-      // (initiative, hide, death save, ...). Nothing further to apply here.
+      // Tumble the dice, refresh combat (NPC HP, action economy), and poke
+      // every other client — the same landing path Quick Actions uses.
+      handleRollLanded(roll);
       setPendingAttack(null);
+      // A leveled spell spends its slot, as it does from Quick Actions.
+      if (picked && picked.source === "spell" && picked.spellLevel !== null && picked.spellLevel > 0) {
+        const slot = pendingAttackResources.find(
+          (resource) => resource.name === spellSlotResourceName(picked.spellLevel as SpellSlotLevel)
+        );
+        if (slot && slot.current_uses > 0) {
+          await setCharacterResourceUses(createBrowserSupabaseClient(), slot.id, slot.current_uses - 1).catch(
+            () => undefined
+          );
+        }
+      }
     } catch (err) {
       setAttackError(errorMessage(err) ?? "Could not resolve that attack.");
     } finally {
@@ -7180,6 +7260,11 @@ export function GameRoom({
     attackKind,
     attackMode,
     campaignId,
+    showManualAttackForm,
+    pendingAttackActions,
+    selectedQuickActionKey,
+    pendingAttackResources,
+    handleRollLanded,
   ]);
 
   // Movement Collision & Gated Interaction Checks: pendingInteraction's own
@@ -8722,7 +8807,11 @@ export function GameRoom({
   }, []);
 
   return (
-    <PanelLayoutProvider userId={currentUserId} initialPreferences={initialUiPreferences}>
+    <PanelLayoutProvider
+      userId={currentUserId}
+      initialPreferences={initialUiPreferences}
+      defaultDocked={currentUserIsDM ? DM_DEFAULT_DOCKED_PANELS : PLAYER_DEFAULT_DOCKED_PANELS}
+    >
     {/* Bridges the Provider's dmBookSize state out to a plain callback —
         see DmBookSizeBridge's own doc comment. A DOM-tree sibling of
         <Canvas>, still a real descendant of PanelLayoutProvider above, so
@@ -9873,7 +9962,7 @@ export function GameRoom({
               SoundControl right above. Renders nothing at all for a
               non-DM viewer. */}
           <TokenModelDebugOverlay
-            isDM={currentUserIsDM}
+            isDM={currentUserIsDM && debugToolsEnabled}
             enabled={modelWorldDebugOverlayEnabled}
             onToggle={() => setModelWorldDebugOverlayEnabled((current) => !current)}
             rows={modelWorldDebugRows}
@@ -10462,7 +10551,7 @@ export function GameRoom({
           of the fight (the DM can still add it later by re-quick-adding
           — the token itself is already down). */}
       <Modal
-        open={monsterJoin !== null}
+        open={monsterJoin !== null && combat !== null}
         onClose={() => {
           if (!monsterJoinBusy) setMonsterJoin(null);
         }}

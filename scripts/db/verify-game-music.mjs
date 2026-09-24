@@ -429,6 +429,7 @@ try {
 
   // End combat as the DM.
   await dmPage.click('[data-testid="end-combat-button"]');
+  await dmPage.click('[data-testid="end-combat-button"]'); // second click confirms
   await dmPage.waitForSelector('[data-testid="start-combat-button"]', { timeout: 15000 });
 
   const dmMirrorAfterCombat = await gameMusicState(dmPage);
@@ -530,6 +531,7 @@ try {
   await dmPage.click('[data-testid="combat-music-toggle"]');
   await waitForSoundDebug(dmPage, (d) => musicLoopsMatch(d.activeLoops, { calm: false, combat: true }));
   await dmPage.click('[data-testid="end-combat-button"]');
+  await dmPage.click('[data-testid="end-combat-button"]'); // second click confirms
   await dmPage.waitForSelector('[data-testid="start-combat-button"]', { timeout: 15000 });
 
   // ===========================================================================

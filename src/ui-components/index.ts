@@ -5,6 +5,7 @@
 export const MODULE_NAME = "ui-components" as const;
 
 export { Button, type ButtonProps, type ButtonVariant, type ButtonSize } from "./Button";
+export { ConfirmButton, type ConfirmButtonProps } from "./ConfirmButton";
 export { Panel, type PanelProps, type PanelTone } from "./Panel";
 export { TextInput, type TextInputProps } from "./TextInput";
 export { Select, type SelectProps } from "./Select";

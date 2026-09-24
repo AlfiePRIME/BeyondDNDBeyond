@@ -410,7 +410,9 @@ export function DiceLogPanel({
       ? (statBlockById.get(token.monster_stat_block_id)?.armor_class ?? null)
       : null;
     const knownAc = targetCharacter?.armor_class ?? statBlockAc;
-    if (knownAc !== null && knownAc !== undefined) setAcDraft(String(knownAc));
+    // Always reset — keeping the previous target's AC for a target with no
+    // known AC would silently resolve the attack against the wrong number.
+    setAcDraft(knownAc !== null && knownAc !== undefined ? String(knownAc) : "");
   }
 
   async function run(action: () => Promise<RollLogEntry>) {

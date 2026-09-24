@@ -40,6 +40,10 @@ export interface PanelLayoutEntry {
   collapsed: boolean;
   height?: number;
   docked?: boolean;
+  /** A default-docked entry seeded for a fresh layout (never positioned by
+   * the user) — reopening it drops the entry so the panel returns to its
+   * CSS default anchor rather than the placeholder x/y. */
+  anchored?: boolean;
 }
 
 /**
