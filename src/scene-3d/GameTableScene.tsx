@@ -12,7 +12,8 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { Clone, OrbitControls, PerspectiveCamera, RoundedBox, useGLTF } from "@react-three/drei";
+import { OrbitControls, PerspectiveCamera, RoundedBox, useGLTF } from "@react-three/drei";
+import { ModelInstance } from "./ModelInstance";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
 import { Box3, DoubleSide, Plane, Raycaster, SRGBColorSpace, TextureLoader, Vector2, Vector3 } from "three";
@@ -837,7 +838,7 @@ function TableModel() {
 
   return (
     <group rotation={[0, TABLE_ROTATION_Y, 0]}>
-      <Clone object={scene} scale={scale} position={offset} castShadow receiveShadow />
+      <ModelInstance object={scene} scale={scale} position={offset} castShadow receiveShadow />
     </group>
   );
 }

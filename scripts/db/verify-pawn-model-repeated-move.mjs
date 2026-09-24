@@ -531,6 +531,21 @@ try {
         { expected, lastSeen: await modelWorldState(page).then((s) => s[modeledTokenId]) }
       );
       if (modelWorld) seenModelWorldByMove[clientKey][label] = modelWorld;
+      // The wrapper group above always follows the token — the RIGGED BODY
+      // is drawn from its bones, so check those too (the real root cause:
+      // drei's <Clone> dropped the bones out of the scene graph on the
+      // first re-render, freezing the body while the wrapper kept moving).
+      const boneFollows = await pollUntil(async () => {
+        const entry = (await modelWorldState(page))[modeledTokenId];
+        const bone = entry?.bone;
+        if (!bone || !bone.attached) return null;
+        return closeTo(bone.x, expected.x, 0.6) && closeTo(bone.z, expected.z, 0.6) ? bone : null;
+      });
+      check(
+        `${label} [${clientLabel}]: the rig's root bone is still attached under the token and follows it to the new cell`,
+        boneFollows !== null,
+        { expected, lastSeen: await modelWorldState(page).then((s) => s[modeledTokenId]?.bone) }
+      );
       const modelStateAfter = await modelState(page);
       check(
         `${label} [${clientLabel}]: the model is still resolved and loaded (not vanished/unmounted) after the move`,

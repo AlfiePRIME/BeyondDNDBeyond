@@ -2,9 +2,9 @@
 
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Billboard, Html } from "@react-three/drei";
-import { BufferAttribute, BufferGeometry, CanvasTexture, Color, Euler, Quaternion, SRGBColorSpace, Vector3 } from "three";
+import { BufferAttribute, BufferGeometry, CanvasTexture, Color, Euler, Quaternion, SkinnedMesh, SRGBColorSpace, Vector3 } from "three";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
-import type { Group } from "three";
+import type { Group, Object3D } from "three";
 import { playSound, SOUND_KEYS } from "@/audio";
 import type { TerrainType } from "@/rules-engine";
 import { PlacedObject, PLACED_OBJECT_SIZE } from "./PlacedObject";
@@ -1497,7 +1497,10 @@ const TokenMarker = memo(function TokenMarker({
   /** Verification-only: see MapSurfaceProps.onTokenModelWorldDebug's own doc
    * comment. Only ever fires for a token actually rendering a model
    * (modelUrl set) — a disc-fallback token has no model node to measure. */
-  onModelWorldDebug?: (id: string, world: { x: number; y: number; z: number; yawDeg: number }) => void;
+  onModelWorldDebug?: (
+    id: string,
+    world: { x: number; y: number; z: number; yawDeg: number; bone?: { attached: boolean; x: number; z: number } }
+  ) => void;
   /** See MapSurfaceProps.liveModelWorldDebug's own doc comment — this is
    * just the per-token plumbing for that flag. False for every caller
    * before this feature. */
@@ -1592,11 +1595,28 @@ const TokenMarker = memo(function TokenMarker({
     node.getWorldPosition(worldPosition);
     node.getWorldQuaternion(worldQuaternion);
     const worldEuler = new Euler().setFromQuaternion(worldQuaternion, "YXZ");
+    // A rigged model draws from its BONES' world matrices, not this wrapper
+    // group's — so also report where the skeleton's root bone actually is,
+    // and whether it's still attached under this token at all (a bone
+    // dropped out of the scene graph freezes the rendered body in place
+    // while the wrapper group keeps moving — see ModelInstance.tsx).
+    let bone: { attached: boolean; x: number; z: number } | undefined;
+    node.traverse((child) => {
+      if (bone || !(child as SkinnedMesh).isSkinnedMesh) return;
+      const root = (child as SkinnedMesh).skeleton.bones[0];
+      if (!root) return;
+      let attached = false;
+      for (let p: Object3D | null = root; p; p = p.parent) if (p === node) attached = true;
+      root.updateWorldMatrix(true, false);
+      const bonePosition = root.getWorldPosition(new Vector3());
+      bone = { attached, x: bonePosition.x, z: bonePosition.z };
+    });
     onModelWorldDebug(id, {
       x: worldPosition.x,
       y: worldPosition.y,
       z: worldPosition.z,
       yawDeg: (worldEuler.y * 180) / Math.PI,
+      bone,
     });
   }, [id, modelUrl, onModelWorldDebug]);
   // DM live model/position diagnostic overlay (MapSurfaceProps.

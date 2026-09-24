@@ -1,7 +1,8 @@
 "use client";
 
 import { Component, Suspense, useMemo, type ReactNode } from "react";
-import { Clone, useGLTF } from "@react-three/drei";
+import { useGLTF } from "@react-three/drei";
+import { ModelInstance } from "./ModelInstance";
 import { Box3, Vector3 } from "three";
 import type { Object3D } from "three";
 
@@ -356,7 +357,7 @@ function ChairModel({
   }, [scene, targetHeight, forwardCorrection]);
 
   return (
-    <Clone
+    <ModelInstance
       object={scene}
       scale={scale}
       position={offset}

@@ -2,7 +2,8 @@
 
 import { Component, Suspense, useMemo, type ReactNode } from "react";
 import { Canvas } from "@react-three/fiber";
-import { Clone, OrbitControls, useGLTF } from "@react-three/drei";
+import { OrbitControls, useGLTF } from "@react-three/drei";
+import { ModelInstance } from "./ModelInstance";
 import { Box3, Vector3 } from "three";
 import type { Object3D } from "three";
 
@@ -56,7 +57,7 @@ function PreviewModel({
   const { scale, offset } = useMemo(() => normalizeModel(scene as Object3D, normalize), [scene, normalize]);
 
   return (
-    <Clone
+    <ModelInstance
       object={scene}
       scale={scale}
       position={offset}

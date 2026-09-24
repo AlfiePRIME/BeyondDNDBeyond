@@ -1,18 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { Clone, useAnimations } from "@react-three/drei";
+import { useAnimations } from "@react-three/drei";
 import { Color, Mesh, type Material } from "three";
 import type { AnimationClip } from "three";
 import type { Group, Object3D } from "three";
 import { SkeletonUtils } from "three-stdlib";
 import { buildPoseClip, resolvePoseBones, type PoseName } from "./pose";
+import { ModelInstance } from "./ModelInstance";
 
 export interface PosedCloneProps {
   /** The cached, shared glTF scene from useGLTF — never mutated here;
-   * PosedClone clones it (via drei's Clone, SkeletonUtils-aware — see
-   * SeatAvatar.tsx/PlacedObject.tsx's own comments) the same as every
-   * other model renderer in this project. */
+   * PosedClone mounts a private SkeletonUtils clone of it (ModelInstance)
+   * the same as every other model renderer in this project. */
   scene: Object3D;
   pose: PoseName;
   scale: number;
@@ -85,10 +85,8 @@ function buildTintedScene(scene: Object3D, tint: string): Object3D {
  * (PropModel) — see docs/design/model-orientation-and-posing.md §9. Applies
  * one of this project's two named poses ("sitting"/"idle") ONLY to a model
  * whose skeleton satisfies the documented, tolerantly-matched bone-role
- * convention (pose.ts's resolvePoseBones); any other model — including
- * every unrigged asset in this repo today — renders through exactly the
- * same plain <Clone> today's static rendering already uses, unchanged,
- * never a partial bind and never a hard failure.
+ * convention (pose.ts's resolvePoseBones); any other model renders static
+ * and unposed — never a partial bind and never a hard failure.
  */
 export function PosedClone({ scene, pose, scale, position, rotation, castShadow, tint, onCompatibilityChange }: PosedCloneProps) {
   // Untinted (the overwhelming common case, and every call before A3)
@@ -124,8 +122,9 @@ export function PosedClone({ scene, pose, scale, position, rotation, castShadow,
     // preset in this repo) — exactly today's static, unposed rendering.
     // Never a partial bind (design doc §9).
     return (
-      <Clone
+      <ModelInstance
         object={renderScene}
+        alreadyCloned={!!tint}
         scale={scale}
         position={position as [number, number, number]}
         rotation={rotation as [number, number, number]}
@@ -136,7 +135,7 @@ export function PosedClone({ scene, pose, scale, position, rotation, castShadow,
 
   return (
     <group ref={group} scale={scale} position={position as [number, number, number]} rotation={rotation as [number, number, number]}>
-      <Clone object={renderScene} castShadow={castShadow} />
+      <ModelInstance object={renderScene} alreadyCloned={!!tint} castShadow={castShadow} />
     </group>
   );
 }
