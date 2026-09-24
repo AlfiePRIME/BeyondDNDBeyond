@@ -3,13 +3,21 @@ import type { AbilityScore, AbilityScores } from "./srd/types";
 
 export type AttackKind = "melee" | "ranged" | "finesse" | "spell";
 
-function attackAbility(kind: AttackKind, spellcastingAbility?: AbilityScore): AbilityScore {
+/** The ability an attack of `kind` rolls with. Finesse uses the higher of
+ * Strength and Dexterity (the attacker's choice, and they'd pick the
+ * better one); ties go to Dexterity. */
+export function attackAbility(
+  kind: AttackKind,
+  abilityScores: AbilityScores,
+  spellcastingAbility?: AbilityScore
+): AbilityScore {
   switch (kind) {
     case "melee":
       return "strength";
     case "ranged":
-    case "finesse":
       return "dexterity";
+    case "finesse":
+      return abilityScores.strength > abilityScores.dexterity ? "strength" : "dexterity";
     case "spell":
       if (!spellcastingAbility) {
         throw new Error("spell attack bonus requires a spellcastingAbility");
@@ -27,6 +35,6 @@ export function attackBonus(
   level: number,
   spellcastingAbility?: AbilityScore
 ): number {
-  const ability = attackAbility(kind, spellcastingAbility);
+  const ability = attackAbility(kind, abilityScores, spellcastingAbility);
   return abilityModifier(abilityScores[ability]) + proficiencyBonus(level);
 }

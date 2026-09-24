@@ -79,6 +79,9 @@ export interface AttackResolution {
    * carry both, empty or not. */
   advantageSources?: string[];
   disadvantageSources?: string[];
+  /** Why a non-natural-20 hit was a critical hit (a Paralyzed/Unconscious
+   * target hit from within 5 ft). Absent otherwise. */
+  autoCriticalReason?: string;
 }
 
 /** Death-save resolution detail, nested in a d20 breakdown (Prompt 49) —
@@ -158,6 +161,14 @@ export interface D20RollBreakdown {
   /** The die that counted (higher on advantage, lower on disadvantage). */
   d20Result: number;
   modifiers: RollModifierPart[];
+  /** A non-attack roll's advantage/disadvantage sources (manual toggle,
+   * DM grant, the roller's own conditions) — the attack equivalents live
+   * on `attack`. Absent when nothing contributed. */
+  advantageSources?: string[];
+  disadvantageSources?: string[];
+  /** Set when the roll fails automatically regardless of the die (a STR/DEX
+   * save while Paralyzed, Stunned...): why. */
+  autoFailReason?: string;
   attack?: AttackResolution;
   deathSave?: DeathSaveResolution;
   concentrationSave?: ConcentrationSaveResolution;

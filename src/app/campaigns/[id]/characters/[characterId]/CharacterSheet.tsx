@@ -14,6 +14,7 @@ import {
   featureDescription,
   parseDiceNotation,
   proficiencyBonus,
+  isSavingThrowProficient,
   resolveRaceOption,
   savingThrowBonus,
   skillCheckBonus,
@@ -322,7 +323,7 @@ export function CharacterSheet({
 
   const skillProficient = (skill: SkillName) => character.proficiencies.includes(skill);
   const saveProficient = (ability: AbilityScore) =>
-    klass?.savingThrowProficiencies.includes(ability) ?? false;
+    isSavingThrowProficient(ability, character.class, character.proficiencies);
 
   // Optimistic: apply the patch locally right away (so toggles and steppers
   // feel instant), reconcile with the server's row, revert on failure.

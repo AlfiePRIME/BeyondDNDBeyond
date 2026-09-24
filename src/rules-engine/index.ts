@@ -81,7 +81,22 @@ export {
   applyAbilityScoreImprovement,
   type AbilityScoreImprovementChoice,
 } from "./levelUp";
-export { savingThrowBonus, skillCheckBonus, passiveScore } from "./checks";
+export {
+  savingThrowBonus,
+  skillCheckBonus,
+  passiveScore,
+  isSavingThrowProficient,
+  savingThrowProficiencyLabel,
+} from "./checks";
+export {
+  mergeAppliedConditions,
+  selfConditionRollEffects,
+  targetConditionAttackEffects,
+  type AppliedCondition,
+  type SelfRollKind,
+  type SelfConditionRollEffects,
+  type TargetConditionAttackEffects,
+} from "./conditionRollEffects";
 export {
   getSpellSlots,
   spellSlotsForClass,
@@ -91,7 +106,7 @@ export {
   type SpellSlotLevel,
   type SpellSlots,
 } from "./spellSlots";
-export { attackBonus, type AttackKind } from "./attackBonus";
+export { attackBonus, attackAbility, type AttackKind } from "./attackBonus";
 
 export {
   computeQuickActions,

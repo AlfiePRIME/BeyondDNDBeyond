@@ -14,6 +14,9 @@ const NO_EFFECTS: ConditionEffects = {
   ownAttacksHaveDisadvantage: false,
   abilityChecksHaveDisadvantage: false,
   savingThrowsHaveDisadvantage: false,
+  dexteritySavesHaveDisadvantage: false,
+  attacksAgainstSplitByRange: false,
+  hitsWithin5FtAreCritical: false,
 };
 
 function effects(overrides: Partial<ConditionEffects>): ConditionEffects {
@@ -103,6 +106,7 @@ export const CONDITIONS: ConditionDefinition[] = [
       speedZero: true,
       autoFailStrDexSaves: true,
       attacksAgainstHaveAdvantage: true,
+      hitsWithin5FtAreCritical: true,
     }),
   },
   {
@@ -138,27 +142,27 @@ export const CONDITIONS: ConditionDefinition[] = [
     abbreviation: "PR",
     // Crawling costs 1 extra foot per foot moved — halved speed in effect.
     // Attacks against it split by range (advantage within 5 feet,
-    // disadvantage beyond), so neither attacks-against flag is set — the
-    // split lives in the description for Prompt 59 to resolve by range.
+    // disadvantage beyond), so neither flat attacks-against flag is set;
+    // attacksAgainstSplitByRange carries the split instead.
     description:
       "Can only crawl (each foot of movement costs 1 extra foot) until it stands up. Disadvantage on attack rolls. Attack rolls against the creature have advantage from within 5 feet, and disadvantage from farther away.",
     effects: effects({
       speedHalved: true,
       ownAttacksHaveDisadvantage: true,
+      attacksAgainstSplitByRange: true,
     }),
   },
   {
     key: "restrained",
     name: "Restrained",
     abbreviation: "RS",
-    // Its Dexterity-save disadvantage is DEX-only, narrower than the
-    // all-saves flag, so it stays in the description.
     description:
       "Speed becomes 0, and it can't benefit from any bonus to its speed. Attack rolls against the creature have advantage, and its attack rolls have disadvantage. Disadvantage on Dexterity saving throws.",
     effects: effects({
       speedZero: true,
       attacksAgainstHaveAdvantage: true,
       ownAttacksHaveDisadvantage: true,
+      dexteritySavesHaveDisadvantage: true,
     }),
   },
   {
@@ -187,6 +191,7 @@ export const CONDITIONS: ConditionDefinition[] = [
       blocksHearing: true,
       autoFailStrDexSaves: true,
       attacksAgainstHaveAdvantage: true,
+      hitsWithin5FtAreCritical: true,
     }),
   },
 ];

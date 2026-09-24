@@ -156,6 +156,12 @@ describe("rollD20", () => {
 });
 
 describe("resolveAttackOutcome", () => {
+  it("hitIsCritical turns any hit into a crit but leaves a miss a miss", () => {
+    expect(resolveAttackOutcome(10, 5, 15, true).critical).toBe(true);
+    expect(resolveAttackOutcome(5, 5, 15, true)).toMatchObject({ hit: false, critical: false });
+    expect(resolveAttackOutcome(10, 5, 15).critical).toBe(false);
+  });
+
   it("a natural 20 always hits and crits, even against an unreachable AC", () => {
     expect(resolveAttackOutcome(20, 0, 100)).toEqual({
       natural20: true,

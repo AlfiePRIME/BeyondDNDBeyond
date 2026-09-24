@@ -219,14 +219,17 @@ export function resolveDeathSave(naturalRoll: number): DeathSaveOutcome {
 }
 
 /** Natural 20 always hits and crits regardless of AC; natural 1 always
- * misses regardless of bonus; otherwise meets-it-beats-it. */
+ * misses regardless of bonus; otherwise meets-it-beats-it. `hitIsCritical`
+ * makes any hit a critical hit (a Paralyzed/Unconscious target hit from
+ * within 5 ft). */
 export function resolveAttackOutcome(
   naturalRoll: number,
   attackBonus: number,
-  targetAc: number
+  targetAc: number,
+  hitIsCritical = false
 ): AttackOutcome {
   const natural20 = naturalRoll === 20;
   const natural1 = naturalRoll === 1;
   const hit = natural20 || (!natural1 && naturalRoll + attackBonus >= targetAc);
-  return { natural20, natural1, hit, critical: natural20 };
+  return { natural20, natural1, hit, critical: natural20 || (hit && hitIsCritical) };
 }

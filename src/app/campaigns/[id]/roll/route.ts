@@ -4,11 +4,13 @@ import {
   clearHiddenAsHider,
   consumePendingRollMode,
   getActiveCombatEncounter,
+  getActiveCombatantForCharacter,
   getCharacter,
   getCharacterCurrentToken,
   getEncounterVisionStats,
   getMapToken,
   isDM,
+  listCharacterConditions,
   listCharactersForCampaign,
   listCombatCombatants,
   listCombatantConditions,
@@ -39,14 +41,17 @@ import {
 } from "@/data-access";
 import {
   CLASSES,
-  CONDITION_BY_KEY,
   SKILLS,
   SKILL_ABILITY,
   abilityModifier,
+  attackAbility,
   attackBonus,
   combineAdvantageSources,
   computeVisibilityTier,
   doubleDiceExpression,
+  gridDistanceFeet,
+  isSavingThrowProficient,
+  mergeAppliedConditions,
   parseDiceNotation,
   passiveScore,
   proficiencyBonus,
@@ -55,12 +60,16 @@ import {
   rollD20,
   rollExpression,
   savingThrowBonus,
+  selfConditionRollEffects,
   skillCheckBonus,
+  targetConditionAttackEffects,
   type AbilityScore,
   type AbilityScores,
   type AdvantageMode,
+  type AppliedCondition,
   type AttackKind,
-  type ConditionKey,
+  type DiceExpression,
+  type SelfConditionRollEffects,
   type SkillName,
   type VisibilityTier,
 } from "@/rules-engine";
@@ -128,13 +137,13 @@ function badRequest(message: string) {
 
 /** The saving-throw bonus as displayable parts — ability modifier plus
  * proficiency when the character's class has this ability among its
- * saving-throw proficiencies. Shared by the "save" kind and the
- * concentration save (which is exactly a Constitution save), with the same
+ * saving-throw proficiencies or a stored "X Saving Throws" proficiency
+ * says so. Shared by the "save" kind and the concentration save (which is
+ * exactly a Constitution save), with the same
  * parts-must-sum-to-the-rules-engine-bonus assertion either way. */
 function savingThrowModifiers(character: Character, ability: AbilityScore): RollModifierPart[] {
   const scores = abilityScoresOf(character);
-  const klass = CLASSES.find((c) => c.name === character.class) ?? null;
-  const proficient = klass?.savingThrowProficiencies.includes(ability) ?? false;
+  const proficient = isSavingThrowProficient(ability, character.class, character.proficiencies);
   const modifiers: RollModifierPart[] = [
     { label: `${capitalize(ability)} modifier`, value: abilityModifier(scores[ability]) },
     ...(proficient ? [{ label: "Proficiency", value: proficiencyBonus(character.level) }] : []),
@@ -222,25 +231,75 @@ async function consumeDmGrantedMode(
 }
 
 /**
- * The caller's manual toggle combined with the consumed DM-granted flag
- * under the SRD rule (combineAdvantageSources: sources never stack, any
- * advantage plus any disadvantage cancels to flat) — the whole mode
- * decision for the non-attack kinds, whose breakdowns carry no source
- * strings (mode + the two recorded d20s are the visible evidence). The
- * attack branch instead pushes the DM_GRANTED_* strings into its own
- * source arrays so the stored breakdown names every contributor.
+ * Every condition affecting a roller: their live combatant's rows (by
+ * `combatantId`, or looked up from `characterId`) merged with the
+ * character's combat-independent rows (0101). The character-conditions
+ * read is failure-tolerant like consumeDmGrantedMode — until 0101 is
+ * applied the table doesn't exist, and that must not break every roll.
  */
-function combineWithDmGranted(mode: AdvantageMode, dmGranted: AdvantageMode): AdvantageMode {
-  return combineAdvantageSources(
-    [
-      ...(mode === "advantage" ? ["manually selected"] : []),
-      ...(dmGranted === "advantage" ? [DM_GRANTED_ADVANTAGE] : []),
-    ],
-    [
-      ...(mode === "disadvantage" ? ["manually selected"] : []),
-      ...(dmGranted === "disadvantage" ? [DM_GRANTED_DISADVANTAGE] : []),
-    ]
-  ).mode;
+async function loadRollerConditions(
+  supabase: SupabaseClient,
+  campaignId: string,
+  roller: { characterId: string | null; combatantId?: string | null }
+): Promise<AppliedCondition[]> {
+  let combatantId = roller.combatantId ?? null;
+  if (!combatantId && roller.characterId) {
+    combatantId =
+      (await getActiveCombatantForCharacter(supabase, campaignId, roller.characterId))?.id ?? null;
+  }
+  const combatantConditions = combatantId
+    ? await listCombatantConditions(supabase, [combatantId])
+    : [];
+  let characterConditions: AppliedCondition[] = [];
+  if (roller.characterId) {
+    try {
+      characterConditions = await listCharacterConditions(supabase, [roller.characterId]);
+    } catch {
+      characterConditions = [];
+    }
+  }
+  return mergeAppliedConditions(combatantConditions, characterConditions);
+}
+
+/**
+ * The caller's manual toggle, the consumed DM-granted flag and the
+ * roller's own condition sources, combined under the SRD rule
+ * (combineAdvantageSources: sources never stack, any advantage plus any
+ * disadvantage cancels to flat) — the whole mode decision for the
+ * non-attack kinds. The named sources come back too so the stored
+ * breakdown shows WHY the mode applied.
+ */
+function combineRollSources(
+  mode: AdvantageMode,
+  dmGranted: AdvantageMode,
+  conditionEffects: Pick<SelfConditionRollEffects, "advantageSources" | "disadvantageSources">
+): { mode: AdvantageMode; advantageSources: string[]; disadvantageSources: string[] } {
+  const advantageSources = [
+    ...(mode === "advantage" ? ["manually selected"] : []),
+    ...(dmGranted === "advantage" ? [DM_GRANTED_ADVANTAGE] : []),
+    ...conditionEffects.advantageSources,
+  ];
+  const disadvantageSources = [
+    ...(mode === "disadvantage" ? ["manually selected"] : []),
+    ...(dmGranted === "disadvantage" ? [DM_GRANTED_DISADVANTAGE] : []),
+    ...conditionEffects.disadvantageSources,
+  ];
+  return {
+    mode: combineAdvantageSources(advantageSources, disadvantageSources).mode,
+    advantageSources,
+    disadvantageSources,
+  };
+}
+
+/** A non-attack breakdown's source fields — omitted entirely when nothing
+ * contributed, so a plain roll stores the same shape it always did. */
+function sourceFields(combined: { advantageSources: string[]; disadvantageSources: string[] }) {
+  return combined.advantageSources.length > 0 || combined.disadvantageSources.length > 0
+    ? {
+        advantageSources: combined.advantageSources,
+        disadvantageSources: combined.disadvantageSources,
+      }
+    : {};
 }
 
 async function insertRoll(
@@ -409,21 +468,31 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       return badRequest("No concentration check is pending.");
     }
 
-    // A plain d20 like a death save — no advantage/disadvantage (Prompt
-    // 59's territory), any client-sent mode ignored — but unlike a death
-    // save it carries the Constitution SAVE bonus, computed by exactly the
-    // "save" kind's logic.
+    // Like a death save, any client-sent mode is ignored — but unlike a
+    // death save it carries the Constitution SAVE bonus, computed by
+    // exactly the "save" kind's logic, and the roller's own conditions
+    // (exhaustion 3+) still impose disadvantage.
     const modifiers = savingThrowModifiers(character, "constitution");
-    const d20 = rollD20("normal");
+    const combined = combineRollSources(
+      "normal",
+      "normal",
+      selfConditionRollEffects(
+        await loadRollerConditions(supabase, campaignId, { characterId: character.id }),
+        "saving_throw",
+        "constitution"
+      )
+    );
+    const d20 = rollD20(combined.mode);
     const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
     const passed = total >= dc;
     const breakdown: D20RollBreakdown = {
       type: "d20",
       label: `Concentration save (DC ${dc})`,
-      mode: "normal",
+      mode: combined.mode,
       d20Rolls: d20.rolls,
       d20Result: d20.result,
       modifiers,
+      ...sourceFields(combined),
       concentrationSave: {
         dc,
         total,
@@ -493,7 +562,20 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // honors advantage, so the DM-granted next-roll flag (0101) applies —
     // and is consumed — here too; an NPC has no character and no flag.
     const dmGranted = character ? await consumeDmGrantedMode(supabase, character.id) : "normal";
-    const rolledMode = combineWithDmGranted(mode, dmGranted);
+    // Initiative is a Dexterity check, so the combatant's own conditions
+    // (Poisoned, exhaustion...) apply.
+    const combined = combineRollSources(
+      mode,
+      dmGranted,
+      selfConditionRollEffects(
+        await loadRollerConditions(supabase, campaignId, {
+          characterId: combatant.character_id,
+          combatantId: combatant.id,
+        }),
+        "ability_check"
+      )
+    );
+    const rolledMode = combined.mode;
     const d20 = rollD20(rolledMode);
     const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
 
@@ -523,6 +605,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         d20Rolls: d20.rolls,
         d20Result: d20.result,
         modifiers,
+        ...sourceFields(combined),
       },
       total,
     });
@@ -598,7 +681,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // consumed, here too (after the controllership check above, so an
     // uninvolved caller can never eat it); an NPC hider has no flag.
     const dmGranted = character ? await consumeDmGrantedMode(supabase, character.id) : "normal";
-    const rolledMode = combineWithDmGranted(mode, dmGranted);
+    const combined = combineRollSources(
+      mode,
+      dmGranted,
+      selfConditionRollEffects(
+        await loadRollerConditions(supabase, campaignId, {
+          characterId: combatant.character_id,
+          combatantId: combatant.id,
+        }),
+        "ability_check"
+      )
+    );
+    const rolledMode = combined.mode;
     const d20 = rollD20(rolledMode);
     const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
 
@@ -787,6 +881,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         d20Rolls: d20.rolls,
         d20Result: d20.result,
         modifiers,
+        ...sourceFields(combined),
         hide: { hiddenFrom, noticedBy, couldNotPerceive },
       },
       total,
@@ -933,19 +1028,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           (requestTargetTokenId !== null && candidate.token_id === requestTargetTokenId) ||
           (targetCharacterId !== null && candidate.character_id === targetCharacterId)
       ) ?? null;
-    if (targetCombatant) {
-      for (const condition of conditions) {
-        if (condition.combatant_id !== targetCombatant.id) continue;
-        const definition = CONDITION_BY_KEY.get(condition.condition_key as ConditionKey);
-        if (!definition) continue;
-        if (definition.effects.attacksAgainstHaveAdvantage) {
-          advantageSources.push(`target has ${definition.name} (advantage against)`);
-        }
-        if (definition.effects.attacksAgainstHaveDisadvantage) {
-          disadvantageSources.push(`target has ${definition.name} (disadvantage against)`);
-        }
-      }
-    }
+
+    // The monster's own conditions (Poisoned, Blinded, Prone...) on its
+    // attack roll.
+    const attackerEffects = selfConditionRollEffects(
+      conditions.filter((condition) => condition.combatant_id === attackerCombatant.id),
+      "attack"
+    );
+    advantageSources.push(...attackerEffects.advantageSources);
+    disadvantageSources.push(...attackerEffects.disadvantageSources);
 
     // Attacking from hiding (Prompt 60): a hidden NPC attacker gets the
     // advantage and the reveal-on-attack exactly like a PC.
@@ -968,13 +1059,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // map for there to be anything to compute perception FROM; anything
     // else (either token gone, or the two on different maps) is the same
     // graceful "no visibility source added" fallback as a missing live map
-    // always was.
-    if (requestTargetTokenId) {
+    // always was. The same two tokens give the distance the target's
+    // range-dependent conditions (Prone, the within-5-ft auto-crit) need.
+    let targetDistanceFeet: number | null = null;
+    const targetTokenLookupId = requestTargetTokenId ?? targetCombatant?.token_id ?? null;
+    if (targetTokenLookupId) {
       const [attackerToken, targetToken] = await Promise.all([
         getMapToken(supabase, attackerCombatant.token_id),
-        getMapToken(supabase, requestTargetTokenId),
+        getMapToken(supabase, targetTokenLookupId),
       ]);
       if (attackerToken && targetToken && attackerToken.map_id === targetToken.map_id) {
+        targetDistanceFeet = gridDistanceFeet(attackerToken, targetToken);
         const mapId = attackerToken.map_id;
         const [tokens, cells, lightSources, objects] = await Promise.all([
           listMapTokens(supabase, mapId),
@@ -1000,13 +1095,33 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       }
     }
 
+    // The target's conditions: the flat attacks-against flags plus the
+    // range-dependent ones, now that the distance is known.
+    const targetEffects = targetConditionAttackEffects(
+      targetCombatant
+        ? conditions.filter((condition) => condition.combatant_id === targetCombatant.id)
+        : [],
+      targetDistanceFeet
+    );
+    advantageSources.push(...targetEffects.advantageSources);
+    disadvantageSources.push(...targetEffects.disadvantageSources);
+
     const rolledMode = combineAdvantageSources(advantageSources, disadvantageSources).mode;
     const d20 = rollD20(rolledMode);
     // The stat block's stored number IS the whole bonus — no ability
     // modifier, no proficiency, nothing derived.
     const modifiers: RollModifierPart[] = [{ label: "Attack bonus", value: statAttack.bonus }];
     const total = d20.result + statAttack.bonus;
-    const outcome = resolveAttackOutcome(d20.result, statAttack.bonus, targetAc);
+    const outcome = resolveAttackOutcome(
+      d20.result,
+      statAttack.bonus,
+      targetAc,
+      targetEffects.autoCriticalReason !== null
+    );
+    const autoCritical =
+      outcome.critical && !outcome.natural20 && targetEffects.autoCriticalReason
+        ? { autoCriticalReason: targetEffects.autoCriticalReason }
+        : {};
     const monsterName = attackerCombatant.npc_name ?? statBlock.name;
     const label = `${monsterName} — ${statAttack.name}`;
 
@@ -1039,6 +1154,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           deathSaveFailureAdded: 0,
           advantageSources,
           disadvantageSources,
+          ...autoCritical,
         };
         const breakdown: D20RollBreakdown = {
           type: "d20",
@@ -1118,6 +1234,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           deathSaveFailureAdded: 0,
           advantageSources,
           disadvantageSources,
+          ...autoCritical,
         },
       },
       total,
@@ -1147,7 +1264,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   let label: string;
   let modifiers: RollModifierPart[];
-  let attackContext: { bonus: number; attackKind: AttackKind } | null = null;
+  let attackContext: {
+    bonus: number;
+    attackKind: AttackKind;
+    targetAc: number;
+    damageNotation: string;
+    damageExpression: DiceExpression;
+  } | null = null;
 
   if (roll.kind === "check") {
     if (!isAbility(roll.ability)) return badRequest("Unknown ability.");
@@ -1182,12 +1305,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (roll.attackKind === "spell" && !spellAbility) {
       return badRequest(`${character.name}'s class has no spellcasting ability.`);
     }
-    const ability: AbilityScore =
-      roll.attackKind === "melee"
-        ? "strength"
-        : roll.attackKind === "spell"
-          ? (spellAbility as AbilityScore)
-          : "dexterity";
+    // Finesse picks the higher of STR/DEX — the rules engine's own choice,
+    // so the displayed modifier always matches the bonus.
+    const ability = attackAbility(roll.attackKind, scores, spellAbility);
     const bonus = attackBonus(roll.attackKind, scores, character.level, spellAbility);
     label = `${capitalize(roll.attackKind)} attack`;
     modifiers = [
@@ -1197,7 +1317,28 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (modifiers.reduce((sum, part) => sum + part.value, 0) !== bonus) {
       throw new Error("attack bonus breakdown mismatch");
     }
-    attackContext = { bonus, attackKind: roll.attackKind };
+    // Validated up front, before the DM-granted flag is consumed or any
+    // die is rolled, so a malformed request spends nothing.
+    if (
+      typeof roll.targetAc !== "number" ||
+      !Number.isInteger(roll.targetAc) ||
+      roll.targetAc < 1 ||
+      roll.targetAc > 99
+    ) {
+      return badRequest("Enter the target's AC (1-99).");
+    }
+    if (typeof roll.damageNotation !== "string") return badRequest("Damage dice are required.");
+    const damageExpression = parseDiceNotation(roll.damageNotation);
+    if (!damageExpression) {
+      return badRequest('Those damage dice aren\'t valid — try something like "1d8+3".');
+    }
+    attackContext = {
+      bonus,
+      attackKind: roll.attackKind,
+      targetAc: roll.targetAc,
+      damageNotation: roll.damageNotation,
+      damageExpression,
+    };
   }
 
   // Action economy (Prompt 53), attacks ONLY — checks/saves/skills are
@@ -1219,26 +1360,42 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
   }
 
-  // The DM-granted next-roll flag (0101), consumed exactly once for every
-  // check/save/skill/attack — after the strict-economy gate above (a
-  // rejected attack must not eat it), before the die is rolled. Like the
-  // die itself on the attack path, a later bad-targetAc rejection still
-  // spends it — mirroring the existing "the d20 was already rolled"
-  // ordering rather than special-casing the flag.
-  const dmGranted = await consumeDmGrantedMode(supabase, character.id);
+  // The roller's own conditions (Poisoned, exhaustion, Paralyzed...) for a
+  // check/save/skill. A STR/DEX save while Paralyzed/Stunned/... fails
+  // automatically — still rolled for the log, but flagged, and it doesn't
+  // eat the DM-granted flag (which couldn't change the outcome).
+  const selfEffects: SelfConditionRollEffects | null = attackContext
+    ? null
+    : selfConditionRollEffects(
+        await loadRollerConditions(supabase, campaignId, { characterId: character.id }),
+        roll.kind === "save" ? "saving_throw" : "ability_check",
+        roll.kind === "save" && isAbility(roll.ability) ? roll.ability : undefined
+      );
+  const autoFailReason = selfEffects?.autoFailReason ?? null;
 
-  // Vision/condition-driven advantage and disadvantage (Prompt 59), attacks
-  // ONLY — checks/saves/skills combine just the caller's manual mode with
-  // the DM-granted flag (automating condition-driven modes for those is
-  // still explicitly out of scope, same as the death-save/concentration
-  // comments above). Everything here is computed server-side from
-  // freshly-read rows — like the die itself, never client-reported — then
-  // combined with the player's manual toggle under the SRD rule (sources
-  // never stack; any advantage plus any disadvantage cancels to a flat
-  // roll) by the rules engine's combineAdvantageSources.
-  let rolledMode: AdvantageMode = combineWithDmGranted(mode, dmGranted);
+  // The DM-granted next-roll flag (0101), consumed exactly once for every
+  // check/save/skill/attack — after the strict-economy gate and the
+  // attack's request validation above (a rejected roll must not eat it),
+  // before the die is rolled.
+  const dmGranted = autoFailReason
+    ? "normal"
+    : await consumeDmGrantedMode(supabase, character.id);
+
+  // Vision/condition-driven advantage and disadvantage (Prompt 59).
+  // Checks/saves/skills combine the caller's manual mode, the DM-granted
+  // flag and their own conditions right here; the attack block below adds
+  // the attacker's conditions, the target's conditions, hiding and
+  // perception. Everything is computed server-side from freshly-read rows
+  // — like the die itself, never client-reported — then combined under the
+  // SRD rule (sources never stack; any advantage plus any disadvantage
+  // cancels to a flat roll) by the rules engine's combineAdvantageSources.
+  const nonAttackSources = selfEffects
+    ? combineRollSources(mode, dmGranted, selfEffects)
+    : null;
+  let rolledMode: AdvantageMode = nonAttackSources?.mode ?? "normal";
   const advantageSources: string[] = [];
   const disadvantageSources: string[] = [];
+  let autoCriticalReason: string | null = null;
   // The attacker's combatant when they hold any hidden-from state as hider
   // (Prompt 60) — set inside the attack block below and consumed by the
   // reveal-on-attack deletes after the roll resolves. Order matters:
@@ -1258,10 +1415,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const requestTargetCharacterId =
       typeof roll.targetCharacterId === "string" ? roll.targetCharacterId : null;
 
-    // Conditions only exist for active combatants (the
+    // Combatant conditions only exist for active combatants (the
     // visionBlockedForCharacter reasoning) — one encounter-wide load
-    // covers BOTH sides: the attacker's blocksVision-derived
-    // vision-blocked state and the target's attacks-against flags.
+    // covers BOTH sides: the attacker's own conditions and blocksVision-
+    // derived vision-blocked state, and the target's conditions.
     const encounter = await getActiveCombatEncounter(supabase, campaignId);
     const combatants = encounter ? await listCombatCombatants(supabase, encounter.id) : [];
     const conditions =
@@ -1272,12 +1429,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           )
         : [];
 
-    // The target's condition flags — matched by their token when the
-    // client sent one (covers NPC targets), else by character id. Checked
-    // via the GENERIC catalog flags, both directions independently: any
-    // condition that carries (or ever gains) attacksAgainstHaveAdvantage/
-    // attacksAgainstHaveDisadvantage reports itself here for free, under
-    // its own display name — the blocksVision arrangement exactly.
+    // The target — matched by their token when the client sent one
+    // (covers NPC targets), else by character id. Its conditions apply
+    // below, once the distance is known.
     const targetCombatant =
       combatants.find(
         (combatant) =>
@@ -1285,19 +1439,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           (requestTargetCharacterId !== null &&
             combatant.character_id === requestTargetCharacterId)
       ) ?? null;
-    if (targetCombatant) {
-      for (const condition of conditions) {
-        if (condition.combatant_id !== targetCombatant.id) continue;
-        const definition = CONDITION_BY_KEY.get(condition.condition_key as ConditionKey);
-        if (!definition) continue;
-        if (definition.effects.attacksAgainstHaveAdvantage) {
-          advantageSources.push(`target has ${definition.name} (advantage against)`);
-        }
-        if (definition.effects.attacksAgainstHaveDisadvantage) {
-          disadvantageSources.push(`target has ${definition.name} (disadvantage against)`);
-        }
-      }
-    }
 
     // Attacking from hiding (Prompt 60): the attacker's combatant resolved
     // from the same encounter-wide load the target lookup above rides —
@@ -1310,6 +1451,27 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // the creature they swung at.
     const attackerCombatant =
       combatants.find((candidate) => candidate.character_id === character.id) ?? null;
+
+    // The attacker's own conditions: their combatant rows plus the
+    // character's combat-independent rows (0101, failure-tolerant).
+    let attackerCharacterConditions: AppliedCondition[] = [];
+    try {
+      attackerCharacterConditions = await listCharacterConditions(supabase, [character.id]);
+    } catch {
+      attackerCharacterConditions = [];
+    }
+    const attackerEffects = selfConditionRollEffects(
+      mergeAppliedConditions(
+        attackerCombatant
+          ? conditions.filter((condition) => condition.combatant_id === attackerCombatant.id)
+          : [],
+        attackerCharacterConditions
+      ),
+      "attack"
+    );
+    advantageSources.push(...attackerEffects.advantageSources);
+    disadvantageSources.push(...attackerEffects.disadvantageSources);
+
     if (attackerCombatant) {
       const hiddenRows = await listCombatantHiddenFrom(supabase, [attackerCombatant.id]);
       if (hiddenRows.length > 0) {
@@ -1340,37 +1502,55 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // graceful "no visibility source added" fallback as a missing live map
     // always was. A blinded ATTACKER needs no special case: their
     // vision-blocked tier is "none" for every cell, so this same check
-    // already lands the disadvantage.
-    if (requestTargetTokenId) {
-      const [attackerToken, targetToken] = await Promise.all([
-        getCharacterCurrentToken(supabase, character.id),
-        getMapToken(supabase, requestTargetTokenId),
+    // already lands the disadvantage. The same two tokens give the distance
+    // the target's range-dependent conditions need; with no target token in
+    // the request, a PC target's current token stands in.
+    let targetDistanceFeet: number | null = null;
+    const [attackerToken, targetToken] = await Promise.all([
+      getCharacterCurrentToken(supabase, character.id),
+      requestTargetTokenId
+        ? getMapToken(supabase, requestTargetTokenId)
+        : requestTargetCharacterId
+          ? getCharacterCurrentToken(supabase, requestTargetCharacterId)
+          : Promise.resolve(null),
+    ]);
+    if (attackerToken && targetToken && attackerToken.map_id === targetToken.map_id) {
+      targetDistanceFeet = gridDistanceFeet(attackerToken, targetToken);
+      const mapId = attackerToken.map_id;
+      const [tokens, cells, lightSources, objects] = await Promise.all([
+        listMapTokens(supabase, mapId),
+        listMapCells(supabase, mapId),
+        listLightSources(supabase, mapId),
+        listMapObjects(supabase, mapId),
       ]);
-      if (attackerToken && targetToken && attackerToken.map_id === targetToken.map_id) {
-        const mapId = attackerToken.map_id;
-        const [tokens, cells, lightSources, objects] = await Promise.all([
-          listMapTokens(supabase, mapId),
-          listMapCells(supabase, mapId),
-          listLightSources(supabase, mapId),
-          listMapObjects(supabase, mapId),
-        ]);
-        const targetCell = cells.find(
-          (cell) => cell.x === targetToken.x && cell.y === targetToken.y
-        );
-        const tier = computeVisibilityTier({
-          observerPosition: { x: attackerToken.x, y: attackerToken.y },
-          vision: {
-            darkvisionFeet: character.darkvision_feet,
-            visionBlocked: visionBlockedForCharacter(combatants, conditions, character.id),
-          },
-          cellPosition: { x: targetToken.x, y: targetToken.y },
-          // Sparse storage: a cell with no row is the bright default.
-          cellAmbientLight: targetCell?.light_level ?? "bright",
-          lightSources: resolveLightSourcePositions(lightSources, objects, tokens),
-        });
-        if (tier === "none") disadvantageSources.push("target not perceived");
-      }
+      const targetCell = cells.find(
+        (cell) => cell.x === targetToken.x && cell.y === targetToken.y
+      );
+      const tier = computeVisibilityTier({
+        observerPosition: { x: attackerToken.x, y: attackerToken.y },
+        vision: {
+          darkvisionFeet: character.darkvision_feet,
+          visionBlocked: visionBlockedForCharacter(combatants, conditions, character.id),
+        },
+        cellPosition: { x: targetToken.x, y: targetToken.y },
+        // Sparse storage: a cell with no row is the bright default.
+        cellAmbientLight: targetCell?.light_level ?? "bright",
+        lightSources: resolveLightSourcePositions(lightSources, objects, tokens),
+      });
+      if (tier === "none") disadvantageSources.push("target not perceived");
     }
+
+    // The target's conditions: the flat attacks-against flags plus the
+    // range-dependent ones (Prone's split, the within-5-ft auto-crit).
+    const targetEffects = targetConditionAttackEffects(
+      targetCombatant
+        ? conditions.filter((condition) => condition.combatant_id === targetCombatant.id)
+        : [],
+      targetDistanceFeet
+    );
+    advantageSources.push(...targetEffects.advantageSources);
+    disadvantageSources.push(...targetEffects.disadvantageSources);
+    autoCriticalReason = targetEffects.autoCriticalReason;
 
     rolledMode = combineAdvantageSources(advantageSources, disadvantageSources).mode;
   }
@@ -1380,19 +1560,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const total = d20.result + modifiers.reduce((sum, part) => sum + part.value, 0);
 
   if (attackContext) {
-    if (
-      typeof roll.targetAc !== "number" ||
-      !Number.isInteger(roll.targetAc) ||
-      roll.targetAc < 1 ||
-      roll.targetAc > 99
-    ) {
-      return badRequest("Enter the target's AC (1-99).");
-    }
-    if (typeof roll.damageNotation !== "string") return badRequest("Damage dice are required.");
-    const damageExpression = parseDiceNotation(roll.damageNotation);
-    if (!damageExpression) {
-      return badRequest('Those damage dice aren\'t valid — try something like "1d8+3".');
-    }
+    const { targetAc, damageExpression } = attackContext;
     const targetCharacterId =
       typeof roll.targetCharacterId === "string" ? roll.targetCharacterId : null;
     // Click-to-attack follow-up: captured alongside targetCharacterId so
@@ -1408,7 +1576,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         ? roll.targetName.trim().slice(0, 80)
         : null;
 
-    const outcome = resolveAttackOutcome(d20.result, attackContext.bonus, roll.targetAc);
+    const outcome = resolveAttackOutcome(
+      d20.result,
+      attackContext.bonus,
+      targetAc,
+      autoCriticalReason !== null
+    );
+    const autoCritical =
+      outcome.critical && !outcome.natural20 && autoCriticalReason ? { autoCriticalReason } : {};
 
     let damage: AttackResolution["damage"] = null;
     const applied: AttackResolution["applied"] = null;
@@ -1417,7 +1592,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         outcome.critical ? doubleDiceExpression(damageExpression) : damageExpression
       );
       damage = {
-        notation: roll.damageNotation.trim(),
+        notation: attackContext.damageNotation.trim(),
         doubled: outcome.critical,
         groups: rolled.groups,
         modifier: rolled.modifier,
@@ -1426,7 +1601,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       if (targetCharacterId && damage.total > 0) {
         attack = {
           attackKind: attackContext.attackKind,
-          targetAc: roll.targetAc,
+          targetAc,
           targetName,
           targetCharacterId,
           targetTokenId,
@@ -1439,6 +1614,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           deathSaveFailureAdded: 0,
           advantageSources,
           disadvantageSources,
+          ...autoCritical,
         };
         const breakdown: D20RollBreakdown = {
           type: "d20",
@@ -1504,7 +1680,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         // `applied`, return directly on success so nothing double-logs.
         attack = {
           attackKind: attackContext.attackKind,
-          targetAc: roll.targetAc,
+          targetAc,
           targetName,
           targetCharacterId: null,
           targetTokenId,
@@ -1515,6 +1691,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           deathSaveFailureAdded: 0,
           advantageSources,
           disadvantageSources,
+          ...autoCritical,
         };
         const breakdown: D20RollBreakdown = {
           type: "d20",
@@ -1556,7 +1733,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     attack = {
       attackKind: attackContext.attackKind,
-      targetAc: roll.targetAc,
+      targetAc,
       targetName,
       targetCharacterId,
       targetTokenId,
@@ -1568,6 +1745,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       deathSaveFailureAdded: 0,
       advantageSources,
       disadvantageSources,
+      ...autoCritical,
     };
   }
 
@@ -1596,13 +1774,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     breakdown: {
       type: "d20",
       label,
-      // For a non-attack kind this is the manual toggle combined with the
-      // consumed DM-granted flag (combineWithDmGranted above); only the
-      // attack branch ever folds in further sources.
+      // For a non-attack kind this is the manual toggle, the consumed
+      // DM-granted flag and the roller's own conditions (combineRollSources
+      // above); the attack branch records its sources on `attack` instead.
       mode: rolledMode,
       d20Rolls: d20.rolls,
       d20Result: d20.result,
       modifiers,
+      ...(nonAttackSources ? sourceFields(nonAttackSources) : {}),
+      ...(autoFailReason ? { autoFailReason } : {}),
       ...(attack ? { attack } : {}),
     },
     total,

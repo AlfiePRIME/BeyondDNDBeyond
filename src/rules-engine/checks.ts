@@ -1,6 +1,37 @@
 import { abilityModifier, proficiencyBonus } from "./abilityScores";
+import { CLASSES } from "./srd/classes";
 import { SKILL_ABILITY } from "./srd/skills";
 import type { AbilityScore, AbilityScores, SkillName } from "./srd/types";
+
+const ABILITY_LABEL: Record<AbilityScore, string> = {
+  strength: "Strength",
+  dexterity: "Dexterity",
+  constitution: "Constitution",
+  intelligence: "Intelligence",
+  wisdom: "Wisdom",
+  charisma: "Charisma",
+};
+
+/** The proficiencies-list entry recording a saving-throw proficiency, e.g.
+ * "Dexterity Saving Throws" — the form character creation and the PDF
+ * importer both store. */
+export function savingThrowProficiencyLabel(ability: AbilityScore): string {
+  return `${ABILITY_LABEL[ability]} Saving Throws`;
+}
+
+/** Whether a character is proficient in `ability` saves: their class's
+ * saving-throw proficiencies, unioned with any stored "X Saving Throws"
+ * entry (imported sheets, feats like Resilient). */
+export function isSavingThrowProficient(
+  ability: AbilityScore,
+  className: string | null | undefined,
+  proficiencies: readonly string[]
+): boolean {
+  const klass = CLASSES.find((c) => c.name === className);
+  if (klass?.savingThrowProficiencies.includes(ability)) return true;
+  const label = savingThrowProficiencyLabel(ability).toLowerCase();
+  return proficiencies.some((entry) => entry.trim().toLowerCase() === label);
+}
 
 export function savingThrowBonus(
   ability: AbilityScore,
