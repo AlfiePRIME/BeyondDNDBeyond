@@ -3525,7 +3525,7 @@ export function MapEditor({
         <nav className={styles.modeRail} aria-label="Editor mode">
           <Button
             size="sm"
-            variant={activeMode === "sculpt" ? "primary" : "ghost"}
+            variant={activeMode === "sculpt" ? "accent" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "sculpt" && switchTool(MODE_TOOLS.sculpt[0])}
             title="Sculpt: elevation, pits, and terrain"
@@ -3535,7 +3535,7 @@ export function MapEditor({
           </Button>
           <Button
             size="sm"
-            variant={activeMode === "paint" ? "primary" : "ghost"}
+            variant={activeMode === "paint" ? "accent" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "paint" && switchTool(MODE_TOOLS.paint[0])}
             title="Paint: ground type and lighting"
@@ -3545,7 +3545,7 @@ export function MapEditor({
           </Button>
           <Button
             size="sm"
-            variant={activeMode === "place" ? "primary" : "ghost"}
+            variant={activeMode === "place" ? "accent" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "place" && switchTool(MODE_TOOLS.place[0])}
             title="Place: objects, light sources, and NPCs"
@@ -3555,7 +3555,7 @@ export function MapEditor({
           </Button>
           <Button
             size="sm"
-            variant={activeMode === "link" ? "primary" : "ghost"}
+            variant={activeMode === "link" ? "accent" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "link" && switchTool(MODE_TOOLS.link[0])}
             title="Link: transitions to other maps and concealed pits"
@@ -3565,7 +3565,7 @@ export function MapEditor({
           </Button>
           <Button
             size="sm"
-            variant={activeMode === "region" ? "primary" : "ghost"}
+            variant={activeMode === "region" ? "accent" : "ghost"}
             className={styles.modeButton}
             onClick={() => activeMode !== "region" && switchTool(MODE_TOOLS.region[0])}
             title="Region: fill or generate a dragged rectangle"

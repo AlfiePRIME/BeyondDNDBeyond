@@ -8,6 +8,8 @@
 // PAGES placeholders: CID (campaign), MID (map), CHID (character).
 // Signed-out pages (login, signup) are shot once, before the role passes.
 // START_COMBAT=1 starts an encounter (as the DM) so the combat UI shows.
+// CLICKS=testid1,testid2 clicks each data-testid in turn after a page loads
+// (when present) and takes an extra screenshot after each click.
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,6 +172,13 @@ try {
         await sleep(fullscreen ? 9000 : 2500);
         await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: !fullscreen });
         console.log("shot", name);
+        for (const testId of (env.CLICKS ?? "").split(",").filter(Boolean)) {
+          const target = page.locator(`[data-testid="${testId}"]`);
+          if (!(await target.isVisible().catch(() => false))) continue;
+          await target.click();
+          await sleep(1200);
+          await page.screenshot({ path: join(OUT, `${name}__${testId}.png`), fullPage: !fullscreen });
+        }
       } catch (err) {
         console.log("FAIL", name, err.message.slice(0, 200));
       }

@@ -12,57 +12,59 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 24px;
+  padding: 12px 16px;
   pointer-events: none;
+  z-index: 5000;
 }
 
 .backLink {
+  pointer-events: auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 40px;
-  padding: 0 12px;
-  border-radius: var(--md-sys-shape-corner-full);
-  font-size: var(--md-sys-typescale-label-large-size);
+  height: 48px;
+  padding: 0 20px;
+  font-size: var(--md-sys-typescale-title-small-size);
   font-weight: var(--md-sys-typescale-weight-medium);
-  letter-spacing: var(--md-sys-typescale-label-large-tracking);
-  color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-surface);
   text-decoration: none;
-  transition: background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+  border-radius: var(--md-sys-shape-corner-full);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .backLink:hover {
-  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
-  color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-surface-container-high);
 }
 
 .overlayControls {
+  /* M3 floating toolbar */
   pointer-events: auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  gap: 6px;
+  padding: 4px 4px 4px 16px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .mapLabel {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--dim);
+  font-size: var(--md-sys-typescale-title-small-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  color: var(--md-sys-color-on-surface);
 }
 
 .savedText {
-  color: var(--teal);
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  font-size: var(--md-sys-typescale-label-medium-size);
+  color: var(--md-custom-color-teal);
 }
 
 .dirtyText {
-  color: var(--muted);
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  font-size: var(--md-sys-typescale-label-medium-size);
+  color: var(--md-custom-color-orange);
 }
 
 /* Map editor toolbar redesign (docs/design/map-editor-toolbar-redesign.md
@@ -81,11 +83,12 @@
   display: flex;
   flex-direction: column;
   max-width: 480px;
-  background: color-mix(in srgb, var(--surface2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
-  border-radius: 8px;
+  border-radius: var(--md-sys-shape-corner-large);
   /* Keeps the rounded corners clean even though .contextPanel scrolls. */
   overflow: hidden;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 /* The rail + panel row. min-height: 0 lets .contextPanel actually shrink
@@ -106,7 +109,7 @@
   gap: 4px;
   padding: 12px 8px;
   flex-shrink: 0;
-  border-right: 1px solid color-mix(in srgb, var(--purple) 25%, transparent);
+  border-right: 1px solid var(--md-sys-color-outline-variant);
 }
 
 .modeButton {
@@ -142,10 +145,10 @@
 .footerHint {
   margin: 0;
   padding: 10px 16px;
-  border-top: 1px solid color-mix(in srgb, var(--purple) 25%, transparent);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   line-height: 1.6;
   color: var(--dim);
 }
@@ -169,19 +172,20 @@
   flex-direction: column;
   gap: 8px;
   padding: 16px;
-  background: color-mix(in srgb, var(--surface2) 92%, transparent);
-  border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
-  border-radius: 8px;
+  border-radius: var(--md-sys-shape-corner-large);
   pointer-events: auto;
   z-index: 5;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--md-sys-elevation-level2);
 }
 
 .toolbarLabel {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--dim);
+  font-weight: 500;
 }
 
 .toolRow {
@@ -250,22 +254,22 @@
 }
 
 .tintSwatchActive {
-  border-color: var(--teal);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--teal) 55%, transparent);
+  border-color: transparent;
+  box-shadow: 0 0 0 2px var(--md-sys-color-surface-container), 0 0 0 4px var(--md-sys-color-primary);
 }
 
 .selectedMeta {
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   color: var(--teal);
 }
 
 .hint {
   margin: 6px 0 0;
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   line-height: 1.6;
   color: var(--dim);
 }
@@ -297,8 +301,7 @@
   width: 100%;
   max-height: 200px;
   object-fit: contain;
-  border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: var(--md-sys-shape-corner-small);
   background: var(--surface2);
 }
 
@@ -316,13 +319,12 @@
   gap: 6px;
   margin: 0;
   padding: 6px 8px;
-  border: 1px solid color-mix(in srgb, var(--orange) 55%, transparent);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--orange) 12%, transparent);
-  color: var(--orange);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-custom-color-orange-container);
+  color: var(--md-custom-color-on-orange-container);
   font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: 12px;
+  letter-spacing: 0.1px;
   line-height: 1.5;
 }
 
@@ -347,10 +349,10 @@
   gap: 8px;
   width: 220px;
   padding: 12px;
-  background: color-mix(in srgb, var(--surface2) 94%, transparent);
-  border: 1px solid color-mix(in srgb, var(--purple) 45%, transparent);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  border-radius: var(--md-sys-shape-corner-large);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 94%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--md-sys-elevation-level3);
 }
 
 /* A standalone floating box, not nested inside `.contextPanel` — so unlike

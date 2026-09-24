@@ -20,7 +20,6 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  overflow: hidden;
   font-family: var(--md-ref-typeface-plain);
   font-weight: var(--md-sys-typescale-weight-medium);
   letter-spacing: var(--md-sys-typescale-label-large-tracking);
@@ -43,6 +42,10 @@
   background: currentColor;
   opacity: 0;
   transition: opacity var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+  /* Clip the state layer by shape rather than overflow:hidden on the host —
+     a hidden overflow lets grid/flex parents shrink the host below its
+     content. */
+  border-radius: inherit;
 }
 
 .button:hover:not(:disabled)::after {
@@ -306,6 +309,13 @@ select.fieldInput {
   --badge-tone: var(--md-sys-color-error);
 }
 
+/* A badge inside a button (e.g. a shortcut number) follows the button's own
+   content color so it stays legible on every button variant. */
+.button .badge {
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
 .badgeDot {
   width: 6px;
   height: 6px;
@@ -319,7 +329,6 @@ select.fieldInput {
 .choiceCard {
   position: relative;
   isolation: isolate;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -344,6 +353,10 @@ select.fieldInput {
   background: var(--md-sys-color-on-surface);
   opacity: 0;
   transition: opacity var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+  /* Clip the state layer by shape rather than overflow:hidden on the host —
+     a hidden overflow lets grid/flex parents shrink the host below its
+     content. */
+  border-radius: inherit;
 }
 
 .choiceCard:hover:not(:disabled)::after {
