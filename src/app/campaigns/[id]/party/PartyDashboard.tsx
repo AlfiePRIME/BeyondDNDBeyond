@@ -218,11 +218,12 @@ export function PartyDashboard({
       replaceCharacter(updated);
       setAwardDrafts((current) => ({ ...current, [character.id]: "" }));
       const suggested = levelForXp(xpOf(updated));
+      const signedXp = amount >= 0 ? `+${amount}` : `${amount}`;
       setCardNotice(
         character.id,
         suggested > updated.level
-          ? `+${amount} XP — ${updated.name} has reached the level ${suggested} threshold. Confirm the level-up below.`
-          : `+${amount} XP (now ${xpOf(updated).toLocaleString()}).`
+          ? `${signedXp} XP — ${updated.name} has reached the level ${suggested} threshold. Confirm the level-up below.`
+          : `${signedXp} XP (now ${xpOf(updated).toLocaleString()}).`
       );
     });
   }

@@ -6,17 +6,28 @@ import Link from "next/link";
 import {
   RACES,
   CLASSES,
+  CLASS_SKILL_CHOICES,
+  CREATION_SCORE_MAX,
+  POINT_BUY_BUDGET,
+  POINT_BUY_MAX,
+  POINT_BUY_MIN,
   SPELLS,
+  STANDARD_ARRAY,
   STARTING_EQUIPMENT,
   abilityModifier,
+  isStandardArrayAssignment,
+  pointBuyTotal,
   proficiencyBonus,
   resolveRaceOption,
   savingThrowBonus,
   attackBonus,
   spellSlotsForClass,
   levelOneHitPoints,
+  startingArmorClass,
+  startingSpellCounts,
   type AbilityScore,
   type AbilityScores,
+  type SkillName,
   type SpellRange,
 } from "@/rules-engine";
 import { createBrowserSupabaseClient } from "@/data-access/supabase-browser";
@@ -43,7 +54,7 @@ const ABILITY_LABEL: Record<AbilityScore, string> = {
 };
 
 // SRD standard array, pre-assigned in the conventional order as a starting
-// point — every field is freely editable.
+// point — the player reassigns it (or switches method) freely.
 const DEFAULT_BASE_SCORES: Record<AbilityScore, string> = {
   strength: "15",
   dexterity: "14",
@@ -51,6 +62,23 @@ const DEFAULT_BASE_SCORES: Record<AbilityScore, string> = {
   intelligence: "12",
   wisdom: "10",
   charisma: "8",
+};
+
+const POINT_BUY_START: Record<AbilityScore, string> = {
+  strength: "8",
+  dexterity: "8",
+  constitution: "8",
+  intelligence: "8",
+  wisdom: "8",
+  charisma: "8",
+};
+
+type ScoreMethod = "standard" | "pointBuy" | "manual";
+
+const SCORE_METHOD_LABEL: Record<ScoreMethod, string> = {
+  standard: "Standard array",
+  pointBuy: `Point buy (${POINT_BUY_BUDGET})`,
+  manual: "Manual",
 };
 
 // Sentinel `raceName` value for the homebrew card — never a real RACES
@@ -125,7 +153,9 @@ export function CharacterWizard({
     DEFAULT_HOMEBREW_ABILITY_BONUSES
   );
   const [className, setClassName] = useState<string | null>(null);
+  const [scoreMethod, setScoreMethod] = useState<ScoreMethod>("standard");
   const [baseScores, setBaseScores] = useState(DEFAULT_BASE_SCORES);
+  const [chosenSkills, setChosenSkills] = useState<SkillName[]>([]);
   const [bonusPicks, setBonusPicks] = useState<(AbilityScore | "")[]>([]);
   const [equipmentPicks, setEquipmentPicks] = useState<number[]>([]);
   const [chosenSpells, setChosenSpells] = useState<KnownSpell[]>([]);
@@ -158,6 +188,9 @@ export function CharacterWizard({
     increases.filter((inc) => inc.ability !== "choice").map((inc) => inc.ability)
   );
 
+  // The method's own rule decides validity: each standard-array value used
+  // once, point buy within 8-15 and the 27-point budget, or any 1-20.
+  const pointsSpent = pointBuyTotal(ABILITIES.map((ability) => Number(baseScores[ability])));
   const parsedBaseScores = useMemo(() => {
     const out = {} as AbilityScores;
     for (const ability of ABILITIES) {
@@ -165,8 +198,14 @@ export function CharacterWizard({
       if (value === null) return null;
       out[ability] = value;
     }
+    const values = ABILITIES.map((ability) => out[ability]);
+    if (scoreMethod === "standard" && !isStandardArrayAssignment(values)) return null;
+    if (scoreMethod === "pointBuy") {
+      const spent = pointBuyTotal(values);
+      if (spent === null || spent > POINT_BUY_BUDGET) return null;
+    }
     return out;
-  }, [baseScores]);
+  }, [baseScores, scoreMethod]);
 
   // A homebrew race's ability bonuses come straight from the manual fields
   // instead of a catalog `abilityScoreIncreases` list — direct player
@@ -198,6 +237,7 @@ export function CharacterWizard({
       if (!parsedHomebrewBonuses) return null;
       for (const ability of ABILITIES) out[ability] += parsedHomebrewBonuses[ability];
     }
+    for (const ability of ABILITIES) out[ability] = Math.min(CREATION_SCORE_MAX, out[ability]);
     return out;
   }, [parsedBaseScores, increases, choiceIncreases, bonusPicks, isHomebrewRace, parsedHomebrewBonuses]);
 
@@ -240,16 +280,38 @@ export function CharacterWizard({
       : null
     : raceStats?.darkvisionFeet ?? null;
   const maxHp = klass && finalScores ? levelOneHitPoints(klass.hitDie, finalScores.constitution) : null;
-  const armorClass = finalScores ? 10 + abilityModifier(finalScores.dexterity) : null;
+  // Unarmored Defense (Barbarian/Monk) or the best armor picked on the
+  // Equipment step, whichever is higher.
+  const armorClass = finalScores
+    ? startingArmorClass(
+        klass?.name ?? null,
+        finalScores,
+        inventory.map((item) => item.name)
+      )
+    : null;
+
+  const skillChoice = klass ? CLASS_SKILL_CHOICES[klass.name] : null;
+  const spellCounts =
+    klass && isCaster
+      ? startingSpellCounts(
+          klass.name,
+          finalScores && klass.spellcastingAbility ? finalScores[klass.spellcastingAbility] : null
+        )
+      : { cantrips: 0, spells: 0 };
+  // Paladins and Rangers have no spellcasting until level 2.
+  const hasSpellStep = spellCounts.cantrips + spellCounts.spells > 0;
 
   const stepTitles = [
     "Race & Class",
     "Ability Scores",
+    "Skills",
     "Equipment",
-    ...(isCaster ? ["Spells"] : []),
+    ...(hasSpellStep ? ["Spells"] : []),
     "Review & Create",
   ];
-  const spellStepIndex = isCaster ? 3 : -1;
+  const skillStepIndex = 2;
+  const equipmentStepIndex = 3;
+  const spellStepIndex = hasSpellStep ? 4 : -1;
   const reviewStepIndex = stepTitles.length - 1;
 
   function selectRace(nextRaceName: string) {
@@ -266,14 +328,34 @@ export function CharacterWizard({
     setClassName(nextClassName);
     setEquipmentPicks(Array(nextEquipment?.choices.length ?? 0).fill(-1));
     setChosenSpells([]);
+    setChosenSkills([]);
+  }
+
+  function selectScoreMethod(method: ScoreMethod) {
+    setScoreMethod(method);
+    if (method === "standard") setBaseScores(DEFAULT_BASE_SCORES);
+    if (method === "pointBuy") setBaseScores(POINT_BUY_START);
+  }
+
+  function toggleSkill(skill: SkillName) {
+    setChosenSkills((current) =>
+      current.includes(skill)
+        ? current.filter((s) => s !== skill)
+        : skillChoice && current.length < skillChoice.count
+          ? [...current, skill]
+          : current
+    );
   }
 
   function toggleSpell(spellName: string, level: number) {
-    setChosenSpells((current) =>
-      current.some((s) => s.name === spellName)
-        ? current.filter((s) => s.name !== spellName)
-        : [...current, { name: spellName, level }]
-    );
+    setChosenSpells((current) => {
+      if (current.some((s) => s.name === spellName)) {
+        return current.filter((s) => s.name !== spellName);
+      }
+      const cap = level === 0 ? spellCounts.cantrips : spellCounts.spells;
+      if (current.filter((s) => (s.level === 0) === (level === 0)).length >= cap) return current;
+      return [...current, { name: spellName, level }];
+    });
   }
 
   function stepIsValid(index: number): boolean {
@@ -293,8 +375,19 @@ export function CharacterWizard({
         );
       case 1:
         return Boolean(finalScores) && bonusPicks.every((pick) => pick !== "");
-      case 2:
+      case skillStepIndex:
+        return skillChoice !== null && chosenSkills.length === skillChoice.count;
+      case equipmentStepIndex:
         return equipmentPicks.every((pick) => pick >= 0);
+      case spellStepIndex: {
+        // Picks are optional, but can't exceed the level-1 allowance (which
+        // can shrink if the spellcasting score is lowered afterwards).
+        const cantripPicks = chosenSpells.filter((s) => s.level === 0).length;
+        return (
+          cantripPicks <= spellCounts.cantrips &&
+          chosenSpells.length - cantripPicks <= spellCounts.spells
+        );
+      }
       default:
         return true;
     }
@@ -330,11 +423,16 @@ export function CharacterWizard({
         armor_class: armorClass,
         speed,
         darkvision_feet: darkvisionFeet,
-        proficiencies: klass.savingThrowProficiencies.map(
-          (ability) => `${ABILITY_LABEL[ability]} Saving Throws`
-        ),
+        proficiencies: [
+          ...klass.savingThrowProficiencies.map(
+            (ability) => `${ABILITY_LABEL[ability]} Saving Throws`
+          ),
+          ...chosenSkills,
+        ],
         inventory,
-        spells: chosenSpells,
+        // Only a class that casts at level 1 keeps picks (a class switch
+        // clears them anyway).
+        spells: hasSpellStep ? chosenSpells : [],
       });
       router.push(`/campaigns/${campaignId}`);
       router.refresh();
@@ -344,9 +442,12 @@ export function CharacterWizard({
     }
   }
 
-  const slots = klass && isCaster ? spellSlotsForClass(klass.name, 1) : null;
-  const cantrips = SPELLS.filter((s) => s.level === 0);
-  const firstLevelSpells = SPELLS.filter((s) => s.level === 1);
+  const slots = klass && hasSpellStep ? spellSlotsForClass(klass.name, 1) : null;
+  const classSpells = klass ? SPELLS.filter((s) => s.classes.includes(klass.name)) : [];
+  const cantrips = classSpells.filter((s) => s.level === 0);
+  const firstLevelSpells = classSpells.filter((s) => s.level === 1);
+  const chosenCantripCount = chosenSpells.filter((s) => s.level === 0).length;
+  const chosenLeveledCount = chosenSpells.length - chosenCantripCount;
 
   return (
     <div className={styles.page}>
@@ -513,40 +614,111 @@ export function CharacterWizard({
 
             {stepIndex === 1 && raceChosen && klass ? (
               <>
+                <div className={styles.detailRow}>
+                  {(Object.keys(SCORE_METHOD_LABEL) as ScoreMethod[]).map((method) => (
+                    <Button
+                      key={method}
+                      size="sm"
+                      variant={scoreMethod === method ? "accent" : "ghost"}
+                      onClick={() => selectScoreMethod(method)}
+                      data-testid={`wizard-score-method-${method}`}
+                    >
+                      {SCORE_METHOD_LABEL[method]}
+                    </Button>
+                  ))}
+                  {scoreMethod === "pointBuy" ? (
+                    <Badge
+                      tone={pointsSpent !== null && pointsSpent <= POINT_BUY_BUDGET ? "teal" : "orange"}
+                      data-testid="wizard-point-buy-budget"
+                    >
+                      {pointsSpent ?? "?"} / {POINT_BUY_BUDGET} points
+                    </Badge>
+                  ) : null}
+                </div>
                 <p className={styles.detailText}>
-                  Seeded with the standard array (15/14/13/12/10/8) — edit freely.{" "}
+                  {scoreMethod === "standard"
+                    ? `Assign ${STANDARD_ARRAY.join("/")} — each value once.`
+                    : scoreMethod === "pointBuy"
+                      ? `Each score ${POINT_BUY_MIN}-${POINT_BUY_MAX}: 9-13 cost 1 point per step, 14 and 15 cost 2.`
+                      : "Enter any scores from 1 to 20 (rolled, or set by your DM)."}{" "}
                   {isHomebrewRace
                     ? "Set the ability score bonuses for your homebrew race below — they're applied to the final scores."
-                    : `Racial increases from ${resolvedRaceName} are applied to the final scores.`}
+                    : `Racial increases from ${resolvedRaceName} are applied to the final scores (max ${CREATION_SCORE_MAX}).`}
                 </p>
                 <div className={styles.abilityGrid}>
                   {ABILITIES.map((ability) => {
                     const bonus = racialBonus(ability);
                     const parsed = parseScore(baseScores[ability]);
+                    const final = parsed !== null ? Math.min(CREATION_SCORE_MAX, parsed + bonus) : null;
+                    const hint =
+                      parsed !== null && final !== null ? (
+                        <span className={styles.abilityComputed}>
+                          {bonus > 0 ? `${parsed} + ${bonus} = ` : ""}
+                          {final} ({formatModifier(abilityModifier(final))})
+                        </span>
+                      ) : undefined;
+                    if (scoreMethod === "standard") {
+                      const usedElsewhere = ABILITIES.filter((a) => a !== ability).map(
+                        (a) => baseScores[a]
+                      );
+                      return (
+                        <Select
+                          key={ability}
+                          label={ABILITY_LABEL[ability]}
+                          value={baseScores[ability]}
+                          onChange={(e) =>
+                            setBaseScores((s) => ({ ...s, [ability]: e.target.value }))
+                          }
+                          hint={hint}
+                          data-testid={`wizard-score-${ability}`}
+                        >
+                          {STANDARD_ARRAY.map((value) => (
+                            <option key={value} value={String(value)}>
+                              {value}
+                              {usedElsewhere.includes(String(value)) ? " (in use)" : ""}
+                            </option>
+                          ))}
+                        </Select>
+                      );
+                    }
+                    const isPointBuy = scoreMethod === "pointBuy";
+                    const inRange =
+                      parsed !== null &&
+                      (!isPointBuy || (parsed >= POINT_BUY_MIN && parsed <= POINT_BUY_MAX));
                     return (
                       <TextInput
                         key={ability}
                         label={ABILITY_LABEL[ability]}
                         type="number"
-                        min={1}
-                        max={20}
+                        min={isPointBuy ? POINT_BUY_MIN : 1}
+                        max={isPointBuy ? POINT_BUY_MAX : 20}
                         value={baseScores[ability]}
                         onChange={(e) =>
                           setBaseScores((s) => ({ ...s, [ability]: e.target.value }))
                         }
-                        error={parsed === null ? "Enter a score from 1 to 20" : undefined}
-                        hint={
-                          parsed !== null ? (
-                            <span className={styles.abilityComputed}>
-                              {bonus > 0 ? `${parsed} + ${bonus} = ` : ""}
-                              {parsed + bonus} ({formatModifier(abilityModifier(parsed + bonus))})
-                            </span>
-                          ) : undefined
+                        error={
+                          inRange
+                            ? undefined
+                            : isPointBuy
+                              ? `Enter a score from ${POINT_BUY_MIN} to ${POINT_BUY_MAX}`
+                              : "Enter a score from 1 to 20"
                         }
+                        hint={hint}
+                        data-testid={`wizard-score-${ability}`}
                       />
                     );
                   })}
                 </div>
+                {scoreMethod === "standard" &&
+                !isStandardArrayAssignment(ABILITIES.map((a) => Number(baseScores[a]))) ? (
+                  <p className={styles.footerError}>Use each standard-array value exactly once.</p>
+                ) : null}
+                {scoreMethod === "pointBuy" && pointsSpent !== null && pointsSpent > POINT_BUY_BUDGET ? (
+                  <p className={styles.footerError}>
+                    Over budget by {pointsSpent - POINT_BUY_BUDGET} point
+                    {pointsSpent - POINT_BUY_BUDGET === 1 ? "" : "s"}.
+                  </p>
+                ) : null}
 
                 {choiceIncreases.length > 0 ? (
                   <div className={styles.group}>
@@ -629,7 +801,35 @@ export function CharacterWizard({
               </>
             ) : null}
 
-            {stepIndex === 2 && equipment ? (
+            {stepIndex === skillStepIndex && klass && skillChoice ? (
+              <>
+                <div className={styles.detailRow}>
+                  <Badge tone="purple" data-testid="wizard-skills-count">
+                    {chosenSkills.length} / {skillChoice.count} chosen
+                  </Badge>
+                </div>
+                <p className={styles.detailText}>
+                  Choose {skillChoice.count} {klass.name} skill proficiencies.
+                </p>
+                <div className={styles.cardGrid}>
+                  {skillChoice.options.map((skill) => {
+                    const selected = chosenSkills.includes(skill);
+                    return (
+                      <ChoiceCard
+                        key={skill}
+                        title={skill}
+                        selected={selected}
+                        disabled={!selected && chosenSkills.length >= skillChoice.count}
+                        onClick={() => toggleSkill(skill)}
+                        data-testid={`wizard-skill-${skill.toLowerCase().replace(/[^a-z]+/g, "-")}`}
+                      />
+                    );
+                  })}
+                </div>
+              </>
+            ) : null}
+
+            {stepIndex === equipmentStepIndex && equipment ? (
               <>
                 {equipment.fixed.length > 0 ? (
                   <div className={styles.group}>
@@ -676,28 +876,43 @@ export function CharacterWizard({
                   <Badge tone="teal">
                     Spellcasting: {ABILITY_LABEL[klass.spellcastingAbility!]}
                   </Badge>
-                  <Badge>{chosenSpells.length} selected</Badge>
+                  <Badge data-testid="wizard-cantrips-count">
+                    Cantrips {chosenCantripCount} / {spellCounts.cantrips}
+                  </Badge>
+                  <Badge data-testid="wizard-spells-count">
+                    1st-level {chosenLeveledCount} / {spellCounts.spells}
+                  </Badge>
                 </div>
                 <div className={styles.spellScroll}>
                   {[
-                    { label: "Cantrips", spells: cantrips },
-                    { label: "1st-level spells", spells: firstLevelSpells },
-                  ].map((group) => (
-                    <div key={group.label} className={styles.group}>
-                      <span className={styles.groupLabel}>{group.label}</span>
-                      <div className={styles.cardGrid}>
-                        {group.spells.map((spell) => (
-                          <ChoiceCard
-                            key={spell.name}
-                            title={spell.name}
-                            meta={`${spell.school} · ${formatRange(spell.range)}${spell.concentration ? " · conc." : ""}`}
-                            selected={chosenSpells.some((s) => s.name === spell.name)}
-                            onClick={() => toggleSpell(spell.name, spell.level)}
-                          />
-                        ))}
+                    { label: "Cantrips", spells: cantrips, full: chosenCantripCount >= spellCounts.cantrips },
+                    {
+                      label: klass.name === "Wizard" ? "1st-level spells (spellbook)" : "1st-level spells",
+                      spells: firstLevelSpells,
+                      full: chosenLeveledCount >= spellCounts.spells,
+                    },
+                  ]
+                    .filter((group) => group.spells.length > 0)
+                    .map((group) => (
+                      <div key={group.label} className={styles.group}>
+                        <span className={styles.groupLabel}>{group.label}</span>
+                        <div className={styles.cardGrid}>
+                          {group.spells.map((spell) => {
+                            const selected = chosenSpells.some((s) => s.name === spell.name);
+                            return (
+                              <ChoiceCard
+                                key={spell.name}
+                                title={spell.name}
+                                meta={`${spell.school} · ${formatRange(spell.range)}${spell.concentration ? " · conc." : ""}`}
+                                selected={selected}
+                                disabled={!selected && group.full}
+                                onClick={() => toggleSpell(spell.name, spell.level)}
+                              />
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               </>
             ) : null}
@@ -757,12 +972,18 @@ export function CharacterWizard({
                   </span>
                 </li>
                 <li className={styles.summaryRow}>
+                  <span className={styles.summaryLabel}>Skills</span>
+                  <span className={styles.summaryValue} data-testid="wizard-summary-skills">
+                    {chosenSkills.join(", ") || "—"}
+                  </span>
+                </li>
+                <li className={styles.summaryRow}>
                   <span className={styles.summaryLabel}>Inventory</span>
                   <span className={styles.summaryValue}>
                     {inventory.map((item) => item.name).join(", ") || "—"}
                   </span>
                 </li>
-                {isCaster ? (
+                {hasSpellStep ? (
                   <li className={styles.summaryRow}>
                     <span className={styles.summaryLabel}>Spells</span>
                     <span className={styles.summaryValue}>

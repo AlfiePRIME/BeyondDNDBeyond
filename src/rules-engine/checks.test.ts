@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { passiveScore, savingThrowBonus, skillCheckBonus } from "./checks";
+import {
+  isSavingThrowProficient,
+  passiveScore,
+  savingThrowBonus,
+  savingThrowProficiencyLabel,
+  skillCheckBonus,
+} from "./checks";
 import type { AbilityScores } from "./srd/types";
 
 const abilityScores: AbilityScores = {
@@ -38,5 +44,19 @@ describe("passiveScore", () => {
     // Wisdom 13 -> +1 modifier, proficient at level 1 -> +2 proficiency
     expect(passiveScore("Perception", abilityScores, 1, true)).toBe(13);
     expect(passiveScore("Insight", abilityScores, 1, false)).toBe(11);
+  });
+});
+
+describe("isSavingThrowProficient", () => {
+  it("uses the class's saving-throw proficiencies", () => {
+    expect(isSavingThrowProficient("dexterity", "Rogue", [])).toBe(true);
+    expect(isSavingThrowProficient("constitution", "Rogue", [])).toBe(false);
+  });
+
+  it("honors stored 'X Saving Throws' proficiencies on top of the class list", () => {
+    expect(isSavingThrowProficient("constitution", "Rogue", ["Constitution Saving Throws"])).toBe(true);
+    expect(isSavingThrowProficient("wisdom", "Homebrew", ["wisdom saving throws "])).toBe(true);
+    expect(isSavingThrowProficient("wisdom", null, ["Perception"])).toBe(false);
+    expect(savingThrowProficiencyLabel("charisma")).toBe("Charisma Saving Throws");
   });
 });

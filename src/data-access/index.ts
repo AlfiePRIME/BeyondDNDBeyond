@@ -381,6 +381,8 @@ export {
   createCharacterResource,
   setCharacterResourceUses,
   growCharacterResourceMax,
+  setCharacterResourceRecharge,
+  deleteCharacterResource,
   applyResourceDelta,
   shortRest,
   longRest,

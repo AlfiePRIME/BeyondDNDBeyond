@@ -39,6 +39,7 @@ export function groupsText(groups: RolledDiceGroup[], modifier: number): string 
 export function attackOutcomeText(attack: AttackResolution): string {
   if (attack.natural20) return "Natural 20 — critical hit";
   if (attack.natural1) return "Natural 1 — miss";
+  if (attack.hit && attack.critical) return "Critical hit";
   return attack.hit ? "Hit" : "Miss";
 }
 
@@ -49,10 +50,21 @@ export function attackOutcomeText(attack: AttackResolution): string {
  * rather than the roll silently looking unmodified. Null when nothing
  * contributed at all (a plain normal attack, or any pre-59 logged roll,
  * where the fields are simply absent — the damageText falsy-check
- * convention). */
-export function advantageReasonText(attack: AttackResolution): string | null {
-  const advantage = attack.advantageSources ?? [];
-  const disadvantage = attack.disadvantageSources ?? [];
+ * convention). Takes an attack resolution or a non-attack d20 breakdown,
+ * which carry the same two fields; an attack's auto-crit reason is
+ * appended. */
+export function advantageReasonText(
+  source: Pick<AttackResolution, "advantageSources" | "disadvantageSources" | "autoCriticalReason">
+): string | null {
+  const advantage = source.advantageSources ?? [];
+  const disadvantage = source.disadvantageSources ?? [];
+  const crit = source.autoCriticalReason ? `Critical — ${source.autoCriticalReason}` : null;
+  const reason = advantageSourcesText(advantage, disadvantage);
+  if (reason && crit) return `${reason} · ${crit}`;
+  return reason ?? crit;
+}
+
+function advantageSourcesText(advantage: string[], disadvantage: string[]): string | null {
   if (advantage.length === 0 && disadvantage.length === 0) return null;
   if (advantage.length > 0 && disadvantage.length > 0) {
     return `Advantage and disadvantage canceled to a flat roll — advantage: ${advantage.join(
@@ -162,6 +174,9 @@ export function rollHeadline(entry: RollLogEntry): string {
       breakdown.hide.noticedBy.length +
       breakdown.hide.couldNotPerceive.length
     } observers`;
+  }
+  if (breakdown.autoFailReason) {
+    return `${breakdown.label} — automatic failure (${breakdown.autoFailReason})`;
   }
   return `${breakdown.label} — ${entry.total}`;
 }

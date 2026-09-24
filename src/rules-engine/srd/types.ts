@@ -253,6 +253,13 @@ export interface ConditionEffects {
   ownAttacksHaveDisadvantage: boolean;
   abilityChecksHaveDisadvantage: boolean;
   savingThrowsHaveDisadvantage: boolean;
+  /** Restrained's DEX-only save disadvantage. */
+  dexteritySavesHaveDisadvantage: boolean;
+  /** Prone: attacks against have advantage from within 5 ft, disadvantage
+   * from farther away. */
+  attacksAgainstSplitByRange: boolean;
+  /** Paralyzed/Unconscious: any hit from within 5 ft is a critical hit. */
+  hitsWithin5FtAreCritical: boolean;
 }
 
 export interface ConditionDefinition {

@@ -723,12 +723,13 @@ export function DiceLogPanel({
               roll.breakdown.type === "d20" && roll.breakdown.attack
                 ? damageText(roll.breakdown.attack)
                 : null;
-            // WHY an attack rolled with advantage/disadvantage (or why
-            // opposing sources canceled to flat) — shown, not just stored
-            // in the breakdown (Prompt 59).
+            // WHY a roll had advantage/disadvantage (or why opposing
+            // sources canceled to flat) — shown, not just stored in the
+            // breakdown (Prompt 59). Non-attack rolls carry their sources
+            // on the breakdown itself.
             const advantageLine =
-              roll.breakdown.type === "d20" && roll.breakdown.attack
-                ? advantageReasonText(roll.breakdown.attack)
+              roll.breakdown.type === "d20"
+                ? advantageReasonText(roll.breakdown.attack ?? roll.breakdown)
                 : null;
             // The per-observer Hide verdict (Prompt 60) — shown like the
             // damage line, so the whole table reads who it worked against.

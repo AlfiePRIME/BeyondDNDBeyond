@@ -98,6 +98,16 @@ async function ensureDevServer() {
 const COOKIE_NAME = `sb-${new URL(supabaseUrl).hostname.split(".")[0]}-auth-token`;
 const MAX_CHUNK = 3180;
 
+// Picks the class's required number of skills on the wizard's Skills step:
+// clicks enabled skill cards until Next unlocks, then advances.
+async function pickSkills(page) {
+  await page.waitForSelector('[data-testid^="wizard-skill-"]');
+  while (await page.isDisabled('button:has-text("Next")')) {
+    await page.locator('[data-testid^="wizard-skill-"][aria-pressed="false"]:not([disabled])').first().click();
+  }
+  await page.click('button:has-text("Next")');
+}
+
 function sessionCookies(session) {
   const value = "base64-" + Buffer.from(JSON.stringify(session)).toString("base64url");
   if (value.length <= MAX_CHUNK) return [{ name: COOKIE_NAME, value, url: APP_URL }];
@@ -194,6 +204,7 @@ try {
   await page.fill('[data-testid="wizard-homebrew-bonus-charisma"]', "-1");
   check("Next is enabled on the ability step with valid homebrew bonuses", !(await page.isDisabled('button:has-text("Next")')));
   await page.click('button:has-text("Next")');
+  await pickSkills(page);
 
   // -- 3. Equipment step (Fighter's four choice groups — pick the first
   //    option in each, same as any other class). --
@@ -278,6 +289,7 @@ try {
     (await page.locator('[data-testid="wizard-homebrew-bonus-strength"]').count()) === 0
   );
   await page.click('button:has-text("Next")');
+  await pickSkills(page);
 
   await page.waitForSelector('button:has-text("Chain Mail")');
   await page.getByRole("button", { name: "Chain Mail", exact: true }).click();

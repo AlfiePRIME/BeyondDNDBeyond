@@ -47,6 +47,19 @@ export {
   type RaceOptionStats,
 } from "./srd/races";
 export { CLASSES } from "./srd/classes";
+export { CLASS_SKILL_CHOICES, type ClassSkillChoice } from "./srd/classSkills";
+export {
+  STANDARD_ARRAY,
+  POINT_BUY_BUDGET,
+  POINT_BUY_MIN,
+  POINT_BUY_MAX,
+  CREATION_SCORE_MAX,
+  pointBuyCost,
+  pointBuyTotal,
+  isStandardArrayAssignment,
+  startingSpellCounts,
+  startingArmorClass,
+} from "./characterCreation";
 export { SUBCLASSES } from "./srd/subclasses";
 export { FEATURE_DESCRIPTIONS, featureDescription } from "./srd/featureDescriptions";
 export { SKILLS, SKILL_ABILITY } from "./srd/skills";
@@ -69,7 +82,7 @@ export {
   xpThresholdForLevel,
   xpToNextLevel,
 } from "./experience";
-export { levelOneHitPoints, levelUpHitPointGain } from "./hitPoints";
+export { levelOneHitPoints, levelUpHitPointGain, constitutionChangeHitPoints } from "./hitPoints";
 export {
   subclassGateLevel,
   subclassForClass,
@@ -79,22 +92,44 @@ export {
   newSpellsKnownDelta,
   isValidAbilityScoreImprovementChoice,
   applyAbilityScoreImprovement,
+  ABILITY_SCORE_IMPROVEMENT_MAX,
   type AbilityScoreImprovementChoice,
 } from "./levelUp";
-export { savingThrowBonus, skillCheckBonus, passiveScore } from "./checks";
+export {
+  savingThrowBonus,
+  skillCheckBonus,
+  passiveScore,
+  isSavingThrowProficient,
+  savingThrowProficiencyLabel,
+} from "./checks";
+export {
+  mergeAppliedConditions,
+  selfConditionRollEffects,
+  targetConditionAttackEffects,
+  type AppliedCondition,
+  type SelfRollKind,
+  type SelfConditionRollEffects,
+  type TargetConditionAttackEffects,
+} from "./conditionRollEffects";
 export {
   getSpellSlots,
   spellSlotsForClass,
   getPactMagicSlots,
   spellSlotResourceName,
+  spellSlotRecharge,
+  planSpellSlotSync,
+  type SpellSlotRow,
+  type SpellSlotSyncPlan,
   SPELL_SLOT_LEVELS,
   type SpellSlotLevel,
   type SpellSlots,
 } from "./spellSlots";
-export { attackBonus, type AttackKind } from "./attackBonus";
+export { attackBonus, attackAbility, type AttackKind } from "./attackBonus";
 
 export {
   computeQuickActions,
+  cantripScalingMultiplier,
+  multiplyDiceNotation,
   weaponRangeFeet,
   DEFAULT_MELEE_RANGE_FEET,
   DEFAULT_RANGED_RANGE_FEET,

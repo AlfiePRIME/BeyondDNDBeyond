@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 // until Prompt 51 extracted them into the rules engine, so the
 // quick-actions availability check reads the exact names this page
 // provisions.
-import { CLASSES, SPELL_SLOT_LEVELS, spellSlotResourceName, spellSlotsForClass, type ClassName } from "@/rules-engine";
+import { CLASSES, planSpellSlotSync, spellSlotResourceName, type ClassName } from "@/rules-engine";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import {
   getActiveCombatantForCharacter,
@@ -14,6 +14,8 @@ import {
   listCharacterResources,
   listCombatantConditions,
   createCharacterResource,
+  deleteCharacterResource,
+  setCharacterResourceRecharge,
   type CharacterCondition,
   type CharacterResource,
 } from "@/data-access";
@@ -47,28 +49,36 @@ export default async function CharacterSheetPage({
 
   // Spell slots are tracked as ordinary character_resources rows. Character
   // creation doesn't provision them, so create any missing slot-level rows
-  // on first load of a caster's sheet (idempotent by name).
-  if (klass?.spellcastingAbility) {
-    const slots = spellSlotsForClass(klass.name as ClassName, character.level);
-    const missing = SPELL_SLOT_LEVELS.filter(
-      (level) =>
-        slots[level] > 0 && !resources.some((r) => r.name === spellSlotResourceName(level))
-    );
-    if (missing.length > 0) {
-      const created: CharacterResource[] = [];
-      for (const level of missing) {
-        created.push(
-          await createCharacterResource(supabase, {
-            character_id: characterId,
-            name: spellSlotResourceName(level),
-            max_uses: slots[level],
-            current_uses: slots[level],
-            recharge: "long_rest",
-          })
-        );
-      }
-      resources = [...resources, ...created];
+  // on first load of a caster's sheet (idempotent by name). Pact Magic
+  // rows also get their short-rest recharge fixed and a stale lower slot
+  // level (left behind by an older level-up) removed. Existing maxima are
+  // left to the level-up wizard's resync.
+  if (klass?.spellcastingAbility && canEdit) {
+    const plan = planSpellSlotSync(klass.name as ClassName, character.level, resources);
+    const created: CharacterResource[] = [];
+    for (const { level, maxUses } of plan.create) {
+      created.push(
+        await createCharacterResource(supabase, {
+          character_id: characterId,
+          name: spellSlotResourceName(level),
+          max_uses: maxUses,
+          current_uses: maxUses,
+          recharge: plan.recharge,
+        })
+      );
     }
+    const updated = new Map<string, CharacterResource>();
+    for (const row of plan.fixRecharge) {
+      updated.set(row.id, await setCharacterResourceRecharge(supabase, row.id, plan.recharge));
+    }
+    for (const row of plan.remove) {
+      await deleteCharacterResource(supabase, row.id);
+    }
+    const removed = new Set(plan.remove.map((row) => row.id));
+    resources = [
+      ...resources.filter((r) => !removed.has(r.id)).map((r) => updated.get(r.id) ?? r),
+      ...created,
+    ];
   }
 
   // Conditions come from TWO sources as of 0101: the character's combatant

@@ -209,11 +209,15 @@ export function isValidAbilityScoreImprovementChoice(
   return false;
 }
 
+/** SRD: an Ability Score Improvement can't raise a score above 20. */
+export const ABILITY_SCORE_IMPROVEMENT_MAX = 20;
+
 /** Applies a validated ASI choice to a set of ability scores, returning a
  * NEW object (scores are otherwise plain character columns the caller
  * patches in one updateCharacter call alongside everything else the
- * level-up wizard changes). Throws on an invalid choice rather than
- * silently no-op'ing — callers gate the confirm button on
+ * level-up wizard changes). Each raised score is capped at 20 (a score
+ * already above 20 from magic is left as-is). Throws on an invalid choice
+ * rather than silently no-op'ing — callers gate the confirm button on
  * isValidAbilityScoreImprovementChoice first. */
 export function applyAbilityScoreImprovement(
   scores: AbilityScores,
@@ -223,12 +227,18 @@ export function applyAbilityScoreImprovement(
     throw new Error("An Ability Score Improvement must be +2 to one score or +1 to two different scores.");
   }
   const next = { ...scores };
+  const raise = (ability: AbilityScore, amount: number) => {
+    next[ability] = Math.max(
+      scores[ability],
+      Math.min(ABILITY_SCORE_IMPROVEMENT_MAX, scores[ability] + amount)
+    );
+  };
   if (choice.mode === "single") {
-    next[choice.ability] += 2;
+    raise(choice.ability, 2);
   } else {
     const [a, b] = choice.abilities;
-    next[a] += 1;
-    next[b] += 1;
+    raise(a, 1);
+    raise(b, 1);
   }
   return next;
 }
