@@ -139,11 +139,23 @@ async function pickAllChoiceCards(page) {
   }
 }
 
-// Walks the wizard from the Equipment step through to a saved character,
-// clicking through an intervening Spells step (casters only) with no picks
-// required, then Create character. Returns nothing; caller re-queries the
-// DB row afterward.
+// Picks the class's required number of skills on the Skills step: clicks
+// enabled skill cards until Next unlocks.
+async function pickSkills(page) {
+  await page.waitForSelector('[data-testid^="wizard-skill-"]');
+  while (await page.isDisabled('button:has-text("Next")')) {
+    await page.locator('[data-testid^="wizard-skill-"][aria-pressed="false"]:not([disabled])').first().click();
+  }
+  await page.click('button:has-text("Next")');
+}
+
+// Walks the wizard from the Skills step through to a saved character,
+// picking skills, then every equipment card, clicking through an
+// intervening Spells step (casters only) with no picks required, then
+// Create character. Returns nothing; caller re-queries the DB row
+// afterward.
 async function finishFromEquipmentStep(page) {
+  await pickSkills(page);
   await page.waitForSelector('button[aria-pressed]');
   await pickAllChoiceCards(page);
   await page.click('button:has-text("Next")');
@@ -195,7 +207,7 @@ try {
   );
   await page.locator('button:has(span:text-is("Barbarian"))').click();
   await page.click('button:has-text("Next")');
-  await page.waitForSelector('input[type="number"][min="1"][max="20"]');
+  await page.waitForSelector('[data-testid="wizard-score-strength"]');
   const goliathText = await page.locator("main").textContent();
   check(
     "Goliath's STR +2 / CON +1 racial increases are applied to the standard array (STR 15→17, CON 13→14)",
@@ -259,7 +271,7 @@ try {
   );
   await page.locator('button:has(span:text-is("Sorcerer"))').click();
   await page.click('button:has-text("Next")');
-  await page.waitForSelector('input[type="number"][min="1"][max="20"]');
+  await page.waitForSelector('[data-testid="wizard-score-strength"]');
   const genasiText = await page.locator("main").textContent();
   check(
     "Genasi base CON +2 and Air Genasi's own DEX +1 both applied (CON 13→15, DEX 14→15)",
@@ -298,7 +310,7 @@ try {
   check("picking Tortle shows its Shell Defense trait badge", (await page.locator("text=Shell Defense").count()) === 1);
   await page.locator('button:has(span:text-is("Ranger"))').click();
   await page.click('button:has-text("Next")');
-  await page.waitForSelector('input[type="number"][min="1"][max="20"]');
+  await page.waitForSelector('[data-testid="wizard-score-strength"]');
   const tortleText = await page.locator("main").textContent();
   check(
     "Tortle's STR +2 / WIS +1 racial increases are applied (STR 15→17, WIS 10→11)",

@@ -47,6 +47,19 @@ export {
   type RaceOptionStats,
 } from "./srd/races";
 export { CLASSES } from "./srd/classes";
+export { CLASS_SKILL_CHOICES, type ClassSkillChoice } from "./srd/classSkills";
+export {
+  STANDARD_ARRAY,
+  POINT_BUY_BUDGET,
+  POINT_BUY_MIN,
+  POINT_BUY_MAX,
+  CREATION_SCORE_MAX,
+  pointBuyCost,
+  pointBuyTotal,
+  isStandardArrayAssignment,
+  startingSpellCounts,
+  startingArmorClass,
+} from "./characterCreation";
 export { SUBCLASSES } from "./srd/subclasses";
 export { FEATURE_DESCRIPTIONS, featureDescription } from "./srd/featureDescriptions";
 export { SKILLS, SKILL_ABILITY } from "./srd/skills";
