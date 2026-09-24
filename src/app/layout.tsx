@@ -1,18 +1,15 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { JetBrains_Mono, Roboto_Flex } from "next/font/google";
 import { GlobalMusic } from "./GlobalMusic";
 import "./globals.css";
 
-// Backs --font-b (body copy) in tokens.css. A body font can safely go
-// through next/font since nothing references its exact family name as a
-// literal string (unlike --font-h, see the raw <link> below).
-const inter = Inter({
-  variable: "--font-inter",
+// Material 3's typeface (variable, so every type-scale weight is one file).
+const robotoFlex = Roboto_Flex({
+  variable: "--font-roboto-flex",
   subsets: ["latin"],
 });
 
-// Backs --font-m (the monospace label/eyebrow convention used throughout
-// the app) in tokens.css. Same reasoning as Inter above.
+// Backs --font-mono (dice totals, numerals, code) in tokens.css.
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains-mono",
   subsets: ["latin"],
@@ -25,24 +22,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
+    <html lang="en" className={`${robotoFlex.variable} ${jetbrainsMono.variable}`}>
       <body>
-        {/*
-          Display faces for the ported neon/CRT tokens: the locked token
-          stacks reference the literal family names 'Share Tech' and
-          'Orbitron' (see src/ui-components/tokens.css), so they must be
-          loaded under those exact names — next/font registers hashed
-          family names the verbatim stacks could never match.
-        */}
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        {/* eslint-disable-next-line @next/next/no-page-custom-font --
-            Pages-Router rule misfiring on the App Router root layout,
-            which applies to every route (exactly what the rule asks for). */}
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400..700&family=Share+Tech&display=swap"
-        />
         <GlobalMusic />
         {children}
       </body>

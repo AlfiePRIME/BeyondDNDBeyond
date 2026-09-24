@@ -1,191 +1,195 @@
 /*
- * Shared styles for the ui-components library. Every color, radius, font
- * and glow below comes from the ported design tokens in ./tokens.css —
- * no hardcoded theme hex values in this file or in component files.
- *
- * Legibility rule (see tokens.css header): actual content — button
- * labels, input text, panel body copy — stays on solid --text/--muted;
- * the neon treatment is reserved for borders, chrome, and hover/focus
- * glows.
+ * Shared styles for the ui-components library — Material 3 (m3.material.io).
+ * Colors, type, shape, elevation, state layers, and motion all come from
+ * the --md-sys-* tokens (m3-tokens.css / m3-system.css). No hardcoded
+ * theme hex values here or in component files.
  */
 
-/* ───────────────────────── Button ───────────────────────── */
+/* ───────────────────────── Button ─────────────────────────
+ * Variants map onto M3 button types:
+ *   primary → filled            accent → filled tonal (secondary)
+ *   teal    → tonal "confirm"   danger → outlined, error-colored
+ *   ghost   → outlined
+ * Every variant gets an M3 state layer (::after, currentColor at the
+ * hover/focus/pressed opacities). */
 
 .button {
   position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5em;
-  font-family: var(--font-m);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  border: 1px solid;
-  border-radius: var(--r);
+  gap: 8px;
+  overflow: hidden;
+  font-family: var(--md-ref-typeface-plain);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-large-tracking);
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: var(--md-sys-shape-corner-full);
   background: transparent;
   cursor: pointer;
   transition:
-    background 0.18s ease,
-    color 0.18s ease,
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
+    background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+    color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+    box-shadow var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+
+.button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+}
+
+.button:hover:not(:disabled)::after {
+  opacity: var(--md-sys-state-hover-opacity);
+}
+
+.button:focus-visible::after {
+  opacity: var(--md-sys-state-focus-opacity);
+}
+
+.button:active:not(:disabled)::after {
+  opacity: var(--md-sys-state-pressed-opacity);
 }
 
 .button:focus-visible {
-  outline: 2px solid var(--teal);
+  outline: 2px solid var(--md-sys-color-secondary);
   outline-offset: 2px;
 }
 
 .button:disabled {
-  opacity: 0.45;
   cursor: not-allowed;
-  box-shadow: none;
+  color: color-mix(in srgb, var(--md-sys-color-on-surface) 38%, transparent) !important;
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.buttonGhost:disabled,
+.buttonDanger:disabled {
+  background: transparent !important;
+  border-color: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent) !important;
 }
 
 .buttonSm {
-  font-size: 11px;
-  padding: 6px 12px;
+  height: 32px;
+  padding: 0 14px;
+  font-size: var(--md-sys-typescale-label-medium-size);
 }
 
 .buttonMd {
-  font-size: 12px;
-  padding: 9px 18px;
+  height: 40px;
+  padding: 0 24px;
+  font-size: var(--md-sys-typescale-label-large-size);
 }
 
 .buttonLg {
-  font-size: 13px;
-  padding: 12px 26px;
+  height: 56px;
+  padding: 0 28px;
+  font-size: var(--md-sys-typescale-title-medium-size);
 }
 
 .buttonPrimary {
-  border-color: var(--purple);
-  color: var(--text);
-  background: color-mix(in srgb, var(--purple) 20%, transparent);
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
 }
 
-.buttonPrimary:hover:not(:disabled),
-.buttonPrimary:focus-visible {
-  background: color-mix(in srgb, var(--purple) 36%, transparent);
-  box-shadow: var(--gp);
+.buttonPrimary:hover:not(:disabled) {
+  box-shadow: var(--md-sys-elevation-level1);
 }
 
 .buttonAccent {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.buttonAccent:hover:not(:disabled),
-.buttonAccent:focus-visible {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--text);
-  box-shadow: var(--ga);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
 }
 
 .buttonTeal {
-  border-color: var(--teal);
-  color: var(--teal);
-}
-
-.buttonTeal:hover:not(:disabled),
-.buttonTeal:focus-visible {
-  background: color-mix(in srgb, var(--teal) 14%, transparent);
-  color: var(--text);
-  box-shadow: var(--gt);
+  background: var(--md-custom-color-teal-container);
+  color: var(--md-custom-color-on-teal-container);
 }
 
 .buttonDanger {
-  border-color: var(--red);
-  color: var(--red);
-}
-
-.buttonDanger:hover:not(:disabled),
-.buttonDanger:focus-visible {
-  background: color-mix(in srgb, var(--red) 16%, transparent);
-  color: var(--text);
-  box-shadow: 0 0 18px color-mix(in srgb, var(--red) 33%, transparent);
+  border-color: var(--md-sys-color-outline);
+  color: var(--md-sys-color-error);
 }
 
 .buttonGhost {
-  border-color: var(--dim2);
-  color: var(--muted);
+  border-color: var(--md-sys-color-outline);
+  color: var(--md-sys-color-primary);
 }
 
-.buttonGhost:hover:not(:disabled),
-.buttonGhost:focus-visible {
-  border-color: var(--dim);
-  color: var(--text);
-}
-
-/* ───────────────────────── Panel ───────────────────────── */
+/* ───────────────────────── Panel (M3 filled card) ───────────────────────── */
 
 .panel {
   position: relative;
-  background: var(--surface);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
+  background: var(--md-sys-color-surface-container-low);
+  border-radius: var(--md-sys-shape-corner-medium);
   overflow: hidden;
 }
 
-/* 1px energized top edge in the panel's tone color. */
-.panel::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, var(--panel-tone, var(--dim2)), transparent 75%);
-}
-
+/* The tone is now just a small accent dot beside the title. */
 .panelTonePurple {
-  --panel-tone: var(--purple);
+  --panel-tone: var(--md-sys-color-primary);
 }
 
 .panelTonePink {
-  --panel-tone: var(--pink);
+  --panel-tone: var(--md-sys-color-tertiary);
 }
 
 .panelToneTeal {
-  --panel-tone: var(--teal);
+  --panel-tone: var(--md-custom-color-teal);
 }
 
-.panelGlowPurple {
-  box-shadow: var(--gp);
-}
-
-.panelGlowPink {
-  box-shadow: var(--gk);
-}
-
+/* "glow" panels are the page's primary card — one elevation step up. */
+.panelGlowPurple,
+.panelGlowPink,
 .panelGlowTeal {
-  box-shadow: var(--gt);
+  background: var(--md-sys-color-surface-container);
+  box-shadow: var(--md-sys-elevation-level1);
 }
 
 .panelHeader {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--dim2);
+  gap: 8px 12px;
+  padding: 16px 20px 0;
 }
 
 .panelTitle {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--panel-tone, var(--dim));
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--md-ref-typeface-brand);
+  font-size: var(--md-sys-typescale-title-medium-size);
+  line-height: var(--md-sys-typescale-title-medium-line-height);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-title-medium-tracking);
+  color: var(--md-sys-color-on-surface);
+}
+
+.panelTitle::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--panel-tone, var(--md-sys-color-outline));
 }
 
 .panelBody {
-  padding: 18px;
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.55;
+  padding: 16px 20px 20px;
+  color: var(--md-sys-color-on-surface);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
 }
 
-/* ───────────────────────── TextInput ───────────────────────── */
+/* ───────────────────────── TextInput / Select (M3 outlined field) ───────────────────────── */
 
 .field {
   display: flex;
@@ -194,115 +198,112 @@
 }
 
 .fieldLabel {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--dim);
-  transition: color 0.18s ease;
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: var(--md-sys-typescale-body-small-line-height);
+  color: var(--md-sys-color-on-surface-variant);
+  transition: color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
 .field:focus-within .fieldLabel {
-  color: var(--accent);
+  color: var(--md-sys-color-primary);
 }
 
 .fieldInput {
   width: 100%;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
-  padding: 10px 12px;
-  /* Content stays solidly legible: full-strength text on a flat surface. */
-  color: var(--text);
-  font-family: var(--font-b);
-  font-size: 14px;
-  caret-color: var(--pink);
-  transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
+  min-height: 48px;
+  background: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  padding: 12px 16px;
+  color: var(--md-sys-color-on-surface);
+  font-family: var(--md-ref-typeface-plain);
+  font-size: var(--md-sys-typescale-body-large-size);
+  caret-color: var(--md-sys-color-primary);
+  transition: border-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+
+select.fieldInput {
+  background: var(--md-sys-color-surface-container-low);
 }
 
 .fieldInput::placeholder {
-  color: var(--dim);
+  color: var(--md-sys-color-on-surface-variant);
+  opacity: 0.7;
 }
 
 .fieldInput:hover:not(:disabled) {
-  border-color: var(--dim);
+  border-color: var(--md-sys-color-on-surface);
 }
 
 .fieldInput:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: var(--ga);
+  border-color: var(--md-sys-color-primary);
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-primary);
 }
 
 .fieldInput:disabled {
-  opacity: 0.5;
+  opacity: var(--md-sys-state-disabled-content-opacity);
   cursor: not-allowed;
 }
 
-.fieldError .fieldInput {
-  border-color: var(--red);
-}
-
+.fieldError .fieldInput,
 .fieldError .fieldInput:focus {
-  box-shadow: 0 0 18px color-mix(in srgb, var(--red) 33%, transparent);
+  border-color: var(--md-sys-color-error);
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-error);
 }
 
 .fieldError .fieldLabel,
 .field:focus-within.fieldError .fieldLabel {
-  color: var(--red);
+  color: var(--md-sys-color-error);
 }
 
 .fieldHint {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--muted);
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: var(--md-sys-typescale-body-small-line-height);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .fieldErrorText {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--red);
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: var(--md-sys-typescale-body-small-line-height);
+  color: var(--md-sys-color-error);
 }
 
-/* ───────────────────────── Badge ───────────────────────── */
+/* ───────────────────────── Badge (M3 tonal label) ───────────────────────── */
 
 .badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-family: var(--font-m);
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  padding: 3px 9px;
-  border-radius: var(--r);
-  color: var(--badge-tone, var(--muted));
-  border: 1px solid color-mix(in srgb, var(--badge-tone, var(--dim)) 55%, transparent);
-  background: color-mix(in srgb, var(--badge-tone, var(--dim)) 12%, transparent);
+  height: 24px;
+  padding: 0 10px;
+  font-size: var(--md-sys-typescale-label-medium-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-medium-tracking);
+  white-space: nowrap;
+  border-radius: var(--md-sys-shape-corner-small);
+  color: var(--badge-tone, var(--md-sys-color-on-surface-variant));
+  background: color-mix(in srgb, var(--badge-tone, var(--md-sys-color-on-surface-variant)) 14%, transparent);
 }
 
 .badgeTonePurple {
-  --badge-tone: var(--accent);
+  --badge-tone: var(--md-sys-color-primary);
 }
 
 .badgeTonePink {
-  --badge-tone: var(--pink);
+  --badge-tone: var(--md-sys-color-tertiary);
 }
 
 .badgeToneTeal {
-  --badge-tone: var(--teal);
+  --badge-tone: var(--md-custom-color-teal);
 }
 
 .badgeToneOrange {
-  --badge-tone: var(--orange);
+  --badge-tone: var(--md-custom-color-orange);
 }
 
 .badgeToneRed {
-  --badge-tone: var(--red);
+  --badge-tone: var(--md-sys-color-error);
 }
 
 .badgeDot {
@@ -310,73 +311,82 @@
   height: 6px;
   border-radius: 50%;
   background: currentColor;
-  /* Ambient idle motion — ported breathe vocabulary, not a new effect. */
   animation: breathe-opacity 4.5s ease-in-out infinite;
 }
 
-/* ───────────────────────── ChoiceCard ───────────────────────── */
+/* ───────────────────────── ChoiceCard (M3 selectable card) ───────────────────────── */
 
 .choiceCard {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 5px;
+  gap: 4px;
   text-align: left;
-  background: var(--surface2);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
-  padding: 10px 12px;
+  background: var(--md-sys-color-surface-container-high);
+  border: 1px solid transparent;
+  border-radius: var(--md-sys-shape-corner-medium);
+  padding: 12px 14px;
+  color: var(--md-sys-color-on-surface);
   cursor: pointer;
   transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease,
-    background 0.18s ease;
+    background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+    border-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
 }
 
-.choiceCard:hover:not(:disabled) {
-  border-color: var(--dim);
+.choiceCard::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--md-sys-color-on-surface);
+  opacity: 0;
+  transition: opacity var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+}
+
+.choiceCard:hover:not(:disabled)::after {
+  opacity: var(--md-sys-state-hover-opacity);
 }
 
 .choiceCard:focus-visible {
-  outline: 2px solid var(--teal);
+  outline: 2px solid var(--md-sys-color-secondary);
   outline-offset: 2px;
 }
 
 .choiceCard:disabled {
-  opacity: 0.45;
+  opacity: var(--md-sys-state-disabled-content-opacity);
   cursor: not-allowed;
 }
 
 .choiceCardSelected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
-  box-shadow: var(--ga);
+  background: var(--md-sys-color-secondary-container);
+  border-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-secondary-container);
 }
 
 .choiceCardTitle {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text);
-}
-
-.choiceCardSelected .choiceCardTitle {
-  color: var(--accent);
+  font-size: var(--md-sys-typescale-title-small-size);
+  line-height: var(--md-sys-typescale-title-small-line-height);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-title-small-tracking);
 }
 
 .choiceCardMeta {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--muted);
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: var(--md-sys-typescale-body-small-line-height);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.choiceCardSelected .choiceCardMeta {
+  color: var(--md-sys-color-on-secondary-container);
 }
 
 .choiceCardBody {
-  font-family: var(--font-b);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted);
+  font-size: var(--md-sys-typescale-body-small-size);
+  line-height: var(--md-sys-typescale-body-small-line-height);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 /* ───────────────────────── SectionHeader ───────────────────────── */
@@ -384,7 +394,8 @@
 .sectionHeader {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+  margin-bottom: 12px;
 }
 
 /* A header that follows other content in the same panel starts a new
@@ -394,16 +405,11 @@
 }
 
 .sectionEyebrow {
-  font-family: var(--font-m);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--dim);
-}
-
-.sectionEyebrow::before {
-  content: "// ";
-  color: var(--teal);
+  font-size: var(--md-sys-typescale-label-medium-size);
+  line-height: var(--md-sys-typescale-label-medium-line-height);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  letter-spacing: var(--md-sys-typescale-label-medium-tracking);
+  color: var(--md-sys-color-primary);
 }
 
 .sectionTitleRow {
@@ -419,91 +425,61 @@
 }
 
 .sectionTitle {
-  font-family: var(--font-h);
-  font-size: 22px;
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text);
-  text-shadow: 0 0 14px color-mix(in srgb, var(--purple) 55%, transparent);
+  font-family: var(--md-ref-typeface-brand);
+  font-size: var(--md-sys-typescale-headline-small-size);
+  line-height: var(--md-sys-typescale-headline-small-line-height);
+  font-weight: var(--md-sys-typescale-weight-regular);
+  color: var(--md-sys-color-on-surface);
 }
 
-/* CRT glitch layers — reuse the ported glitch-a/glitch-b keyframes. */
+/* The old CRT glitch layers — retired with the neon theme. */
 .sectionGlitchLayer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  user-select: none;
-  font-family: var(--font-h);
-  font-size: 22px;
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  opacity: 0;
-}
-
-.sectionGlitchA {
-  color: var(--pink);
-  animation: glitch-a 5s linear infinite;
-}
-
-.sectionGlitchB {
-  color: var(--teal);
-  animation: glitch-b 5s linear infinite;
+  display: none;
 }
 
 .sectionRule {
-  height: 1px;
-  background: linear-gradient(90deg, var(--purple), var(--pink) 35%, transparent 80%);
+  display: none;
 }
 
-/* ───────────────────────── Modal ───────────────────────── */
+/* ───────────────────────── Modal (M3 dialog) ───────────────────────── */
 
 .modalOverlay {
   position: fixed;
   inset: 0;
-  /* Above the ap-scanlines/ap-crt-vignette fixed layers (z 9998/9999). */
   z-index: 10000;
   display: grid;
   place-items: center;
   padding: 24px;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
-  backdrop-filter: blur(3px);
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 40%, transparent);
 }
 
 .modalDialog {
-  width: min(92vw, 480px);
+  width: min(92vw, 560px);
   max-height: 85vh;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--dim2);
-  border-radius: var(--r);
-  box-shadow:
-    var(--gp),
-    0 24px 60px rgba(0, 0, 0, 0.55);
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-extra-large);
+  box-shadow: var(--md-sys-elevation-level3);
   overflow: hidden;
-  /* Ported entrance vocabulary — no bespoke easing. */
-  animation: fade-up 0.3s ease both;
+  animation: m3-dialog-enter var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-emphasized-decelerate) both;
   outline: none;
 }
 
-/* Modal's own `size="wide"` variant (default stays exactly the 480px cap
-   above, unchanged for every other caller) — for content that's
-   genuinely dense at 480px (LevelUpWizard's own multi-column step bodies:
-   subclass card grids, side-by-side ability selects, spell groups), which
-   previously demanded its own min-width wider than .modalDialog ever
-   allowed, forcing the dialog into a horizontal-scroll state instead of
-   ever actually growing. */
-.modalDialogWide {
-  width: min(94vw, 720px);
+@keyframes m3-dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-.modalDialog::before {
-  content: "";
-  height: 1px;
-  flex: none;
-  background: linear-gradient(90deg, var(--purple), var(--pink) 50%, transparent 90%);
+/* size="wide" — for genuinely dense dialogs (the level-up wizard). */
+.modalDialogWide {
+  width: min(94vw, 760px);
 }
 
 .modalHeader {
@@ -511,55 +487,53 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--dim2);
+  padding: 24px 24px 12px;
 }
 
 .modalTitle {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--accent);
+  font-family: var(--md-ref-typeface-brand);
+  font-size: var(--md-sys-typescale-headline-small-size);
+  line-height: var(--md-sys-typescale-headline-small-line-height);
+  color: var(--md-sys-color-on-surface);
 }
 
 .modalClose {
-  font-family: var(--font-m);
-  font-size: 16px;
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
   line-height: 1;
-  padding: 4px 8px;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--r);
-  color: var(--dim);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  color: var(--md-sys-color-on-surface-variant);
   cursor: pointer;
-  transition: color 0.18s ease, border-color 0.18s ease;
+  transition: background-color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
 }
 
 .modalClose:hover {
-  color: var(--pink);
-  border-color: var(--dim2);
+  background: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 8%, transparent);
 }
 
 .modalClose:focus-visible {
-  outline: 2px solid var(--teal);
+  outline: 2px solid var(--md-sys-color-secondary);
   outline-offset: 2px;
 }
 
 .modalBody {
-  padding: 18px;
+  padding: 0 24px 16px;
   overflow-y: auto;
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.55;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
 }
 
 .modalFooter {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  padding: 14px 18px;
-  border-top: 1px solid var(--dim2);
+  gap: 8px;
+  padding: 8px 24px 24px;
 }
 
 /* ───────────────────────── ChatText ───────────────────────── */

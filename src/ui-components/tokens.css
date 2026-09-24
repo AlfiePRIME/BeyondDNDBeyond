@@ -1,59 +1,56 @@
 /*
- * BeyondDNDBeyond — ported design tokens (Prompt 3).
+ * BeyondDNDBeyond design tokens.
  *
- * Source of truth: AlfiePrime Hub's
- * /home/alfie/git/sex/hub/app/frontend/src/lib/theme/tokens.css, which is
- * itself a verbatim port of that project's original index.html `:root`
- * block and its scanline/vignette/glitch/fade-up vocabulary. Values below
- * are copied verbatim — this is a port, not a reinterpretation. Do not
- * "improve" or retune these colors; the neon/CRT theme is locked in.
+ * The app now follows Material 3 (m3.material.io): m3-tokens.css holds the
+ * generated dark color scheme and m3-system.css the type/shape/elevation/
+ * state/motion tokens. New code should use those --md-sys-* roles.
  *
- * Every UI component imports this file (transitively via
- * src/app/globals.css) and should reference these custom properties
- * rather than hardcoding hex values, so the theme stays centrally
- * editable.
- *
- * Note for later prompts: the tabletop game surface (character sheets,
- * HP numbers, map text) has stricter legibility needs than dashboard
- * chrome — keep body copy on --text/--surface pairs and reserve the glow
- * treatment for accents and chrome.
+ * The short legacy names below (--bg, --text, --teal, --r, ...) are kept as
+ * ALIASES onto M3 roles so every existing CSS module picks up the new
+ * scheme; they're being replaced by direct --md-sys-* use page by page.
+ * The old neon glow shadows now resolve to M3 equivalents (a focus ring or
+ * nothing) rather than glowing.
  */
+
+@import "./m3-tokens.css";
+@import "./m3-system.css";
 
 :root {
   /* Surfaces */
-  --bg: #12082a;
-  --surface: #060012;
-  --surface2: #0d0520;
+  --bg: var(--md-sys-color-surface);
+  --surface: var(--md-sys-color-surface-container-low);
+  --surface2: var(--md-sys-color-surface-container);
 
-  /* Accent palette */
-  --purple: #9b00ff;
-  --pink: #ff2d78;
-  --accent: #cc55ff;
-  --teal: #1ec8c8;
-  --orange: #ff9a3c;
-  --red: #ff3b3b;
+  /* Accent palette → M3 roles */
+  --purple: var(--md-sys-color-primary);
+  --accent: var(--md-sys-color-primary);
+  --pink: var(--md-sys-color-tertiary);
+  --teal: var(--md-custom-color-teal);
+  --orange: var(--md-custom-color-orange);
+  --red: var(--md-sys-color-error);
 
   /* Text */
-  --text: #ede0ff;
-  --dim: #6b4f8c;
-  --dim2: #3d2560;
-  --muted: #9b8bbb;
+  --text: var(--md-sys-color-on-surface);
+  --muted: var(--md-sys-color-on-surface-variant);
+  --dim: var(--md-sys-color-outline);
+  --dim2: var(--md-sys-color-outline-variant);
 
-  /* Fonts */
-  --font-h: 'Share Tech', 'Orbitron', 'Rajdhani', 'Trebuchet MS', system-ui, sans-serif;
-  --font-b: var(--font-inter), 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
-  --font-m: var(--font-jetbrains-mono), 'Courier New', 'Lucida Console', monospace;
+  /* Fonts — one M3 family everywhere; --font-mono for real numerals/code */
+  --font-h: var(--md-ref-typeface-brand);
+  --font-b: var(--md-ref-typeface-plain);
+  --font-m: var(--md-ref-typeface-plain);
+  --font-mono: var(--md-ref-typeface-mono);
 
   /* Layout constants */
-  --nav-h: 60px;
+  --nav-h: 64px;
   --max: 1180px;
-  --r: 6px;
+  --r: var(--md-sys-shape-corner-medium);
 
-  /* Glow shadows — gp: purple glow, gk: pink glow ("kiss"), ga: accent glow, gt: teal glow */
-  --gp: 0 0 18px #9b00ff55, 0 0 40px #9b00ff22;
-  --gk: 0 0 18px #ff2d7855, 0 0 40px #ff2d7822;
-  --ga: 0 0 18px #cc55ff55;
-  --gt: 0 0 18px #1ec8c855;
+  /* Former neon glows */
+  --gp: none;
+  --gk: none;
+  --gt: none;
+  --ga: 0 0 0 1px var(--md-sys-color-primary);
 }
 
 /*

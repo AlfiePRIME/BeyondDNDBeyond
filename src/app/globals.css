@@ -1,5 +1,5 @@
 /*
- * Global styles. The neon/CRT design tokens live in the ui-components
+ * Global styles. The Material 3 design tokens live in the ui-components
  * module and are pulled in here so they apply app-wide (the root layout
  * imports this file). Components should use those custom properties —
  * never hardcoded hex values.
@@ -21,9 +21,11 @@ body {
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  color: var(--text);
-  background: var(--bg);
-  font-family: var(--font-b);
+  color: var(--md-sys-color-on-surface);
+  background: var(--md-sys-color-surface);
+  font-family: var(--md-ref-typeface-plain);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -40,6 +42,10 @@ a {
 }
 
 ::selection {
-  background: var(--purple);
-  color: var(--text);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+
+* {
+  scrollbar-color: var(--md-sys-color-outline-variant) transparent;
 }
