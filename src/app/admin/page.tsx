@@ -7,6 +7,8 @@ import { AdminSettingsForm } from "./AdminSettingsForm";
 import { SoundEffectsSection } from "./SoundEffectsSection";
 import styles from "./admin.module.css";
 
+export const metadata = { title: "Admin" };
+
 /**
  * AI Backend & Admin D2 — the admin-only provider/settings page. Per the
  * project owner, this is a plain page-level access gate matching how every

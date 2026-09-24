@@ -8,6 +8,8 @@ import { CreateCampaignForm } from "./CreateCampaignForm";
 import { JoinCampaignForm } from "./JoinCampaignForm";
 import styles from "./page.module.css";
 
+export const metadata = { title: "Your campaigns" };
+
 export default async function CampaignsPage() {
   const supabase = await createServerSupabaseClient();
   const {

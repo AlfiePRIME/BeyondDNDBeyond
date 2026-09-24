@@ -7,6 +7,8 @@ import { AppNav } from "./AppNav";
 import { LobbyPresence } from "./LobbyPresence";
 import styles from "./page.module.css";
 
+export const metadata = { title: "Lobby" };
+
 export default async function LobbyPage() {
   const supabase = await createServerSupabaseClient();
   const {

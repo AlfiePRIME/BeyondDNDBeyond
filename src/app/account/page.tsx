@@ -13,6 +13,8 @@ import { CharacterLibraryRow } from "./CharacterLibraryRow";
 import { CampaignManageRow } from "./CampaignManageRow";
 import styles from "./account.module.css";
 
+export const metadata = { title: "Account" };
+
 export default async function AccountPage() {
   const supabase = await createServerSupabaseClient();
   const {

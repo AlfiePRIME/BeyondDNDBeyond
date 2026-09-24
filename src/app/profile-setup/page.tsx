@@ -5,6 +5,8 @@ import { getProfile, isProfileComplete } from "@/data-access";
 import { ProfileSetupForm } from "./ProfileSetupForm";
 import styles from "../auth.module.css";
 
+export const metadata = { title: "Set up your profile" };
+
 export default async function ProfileSetupPage({
   searchParams,
 }: {

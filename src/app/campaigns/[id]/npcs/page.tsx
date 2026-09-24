@@ -7,6 +7,8 @@ import { isAiConfigured } from "@/ai";
 import { NpcRoster, type RosterNpc } from "./NpcRoster";
 import styles from "./npcs.module.css";
 
+export const metadata = { title: "NPC roster" };
+
 // Same known limitation (deliberate) as the asset palette's URL resolution:
 // no refresh before expiry — a roster tab left open past this window shows
 // broken portraits until reload.

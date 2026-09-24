@@ -3,6 +3,8 @@ import { Panel, SectionHeader } from "@/ui-components";
 import { LoginForm } from "./LoginForm";
 import styles from "../auth.module.css";
 
+export const metadata = { title: "Log in" };
+
 export default function LoginPage() {
   return (
     <div className={styles.wrap}>

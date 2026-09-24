@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 
+export const metadata = { title: "Live map" };
+
 /**
  * Prompt 28's standalone live-map viewer, retired in Prompt 29: the live map
  * now renders on the physical table in the Game Room, which also owns the

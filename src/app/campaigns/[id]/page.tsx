@@ -11,8 +11,17 @@ import { HouseRules } from "./HouseRules";
 import { InviteCodeBadge } from "./InviteCodeBadge";
 import styles from "./campaign.module.css";
 
-export default async function CampaignDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export const metadata = { title: "Campaign" };
+
+export default async function CampaignDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { id: campaignId } = await params;
+  const sessionEnded = (await searchParams).sessionEnded !== undefined;
   const supabase = await createServerSupabaseClient();
   const {
     data: { user },
@@ -45,6 +54,31 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   // explicit role check the new campaign_members DELETE policy itself uses
   // (0099_dm_remove_member.sql): this control must never target another DM.
   const otherPlayers = otherMembers.filter((m) => m.role === "player");
+  const sessionState: "live" | "paused" | "none" = campaign.session_active
+    ? "live"
+    : campaign.session_started_at
+      ? "paused"
+      : "none";
+  const base = `/campaigns/${campaignId}`;
+  const tools: { href: string; icon: string; name: string; blurb: string; testId?: string }[] = [
+    ...(currentUserIsDM
+      ? [
+          { href: `${base}/maps`, icon: "🗺️", name: "Maps", blurb: "Build and organize battle maps" },
+          {
+            href: `${base}/party`,
+            icon: "🛡️",
+            name: "Party dashboard",
+            blurb: "XP, levels, conditions",
+            testId: "party-dashboard-link",
+          },
+          { href: `${base}/dm-notes`, icon: "🔒", name: "DM notes", blurb: "Private prep notes", testId: "dm-notes-link" },
+        ]
+      : []),
+    { href: `${base}/npcs`, icon: "🎭", name: "NPC roster", blurb: "Who the party has met" },
+    { href: `${base}/lore`, icon: "📖", name: "World & lore", blurb: "Places, factions, history" },
+    { href: `${base}/session-log`, icon: "📜", name: "Session log", blurb: "Recaps of past sessions" },
+    { href: `${base}/assets`, icon: "📦", name: "Asset palette", blurb: "3D props and models" },
+  ];
   const characterNamesByOwner = characters.reduce<Record<string, string[]>>((acc, character) => {
     (acc[character.owner_id] ??= []).push(character.name);
     return acc;
@@ -59,50 +93,51 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           title={campaign.name}
           tone="purple"
           glow
-          headerActions={
-            <span className={styles.charactersActions}>
-              {currentUserIsDM ? <InviteCodeBadge inviteCode={campaign.invite_code} /> : null}
-              {currentUserIsDM ? (
-                <Link href={`/campaigns/${campaignId}/maps`} className={styles.createLink}>
-                  Map editor
-                </Link>
-              ) : null}
-              {currentUserIsDM ? (
-                <Link
-                  href={`/campaigns/${campaignId}/dm-notes`}
-                  className={styles.createLink}
-                  data-testid="dm-notes-link"
-                >
-                  DM notes
-                </Link>
-              ) : null}
-              {currentUserIsDM ? (
-                <Link
-                  href={`/campaigns/${campaignId}/party`}
-                  className={styles.createLink}
-                  data-testid="party-dashboard-link"
-                >
-                  Party dashboard
-                </Link>
-              ) : null}
-              <Link href={`/campaigns/${campaignId}/assets`} className={styles.createLink}>
-                Asset palette
-              </Link>
-              <Link href={`/campaigns/${campaignId}/npcs`} className={styles.createLink}>
-                NPC roster
-              </Link>
-              <Link href={`/campaigns/${campaignId}/lore`} className={styles.createLink}>
-                World &amp; lore
-              </Link>
-              <Link href={`/campaigns/${campaignId}/session-log`} className={styles.createLink}>
-                Session log
-              </Link>
-              <Link href={`/campaigns/${campaignId}/room`} className={styles.createLink}>
-                Enter the Game Room →
-              </Link>
-            </span>
-          }
+          headerActions={currentUserIsDM ? <InviteCodeBadge inviteCode={campaign.invite_code} /> : null}
         >
+          {sessionEnded ? (
+            <p className={styles.sessionNotice} role="status" data-testid="session-ended-notice">
+              The session has ended — thanks for playing.
+            </p>
+          ) : null}
+          <div className={styles.sessionBar} data-testid="session-status">
+            <span className={styles.sessionState}>
+              <span
+                className={`${styles.sessionDot} ${
+                  sessionState === "live" ? styles.sessionDotLive : sessionState === "paused" ? styles.sessionDotPaused : ""
+                }`}
+                aria-hidden="true"
+              />
+              {sessionState === "live"
+                ? "Session in progress"
+                : sessionState === "paused"
+                  ? "Session paused"
+                  : "No session running"}
+              {sessionState === "none" ? (
+                <span className={styles.sessionHint}>
+                  — start one from the <Link href="/">Lobby</Link> once the party is online
+                </span>
+              ) : null}
+            </span>
+            <Link href={`/campaigns/${campaignId}/room`} className={styles.enterRoom}>
+              Enter the Game Room →
+            </Link>
+          </div>
+
+          <nav className={styles.toolGrid} aria-label="Campaign tools">
+            {tools.map((tool) => (
+              <Link key={tool.href} href={tool.href} className={styles.toolTile} data-testid={tool.testId}>
+                <span className={styles.toolIcon} aria-hidden="true">
+                  {tool.icon}
+                </span>
+                <span className={styles.toolText}>
+                  <span className={styles.toolName}>{tool.name}</span>
+                  <span className={styles.toolBlurb}>{tool.blurb}</span>
+                </span>
+              </Link>
+            ))}
+          </nav>
+
           <SectionHeader eyebrow="Campaign" title="Roster" />
           <CampaignRoster
             campaignId={campaignId}
@@ -127,9 +162,14 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           }
         >
           {!currentUserHasCharacter ? (
-            <div className={styles.personalCta} data-testid="personal-character-cta">
+            <div
+              className={`${styles.personalCta} ${currentUserIsDM ? styles.personalCtaSoft : ""}`}
+              data-testid="personal-character-cta"
+            >
               <p className={styles.personalCtaText}>
-                You don&apos;t have a character in this campaign yet — create one to join the adventure.
+                {currentUserIsDM
+                  ? "You're running this campaign, so you don't need a character — but you can make one if you also play."
+                  : "You don't have a character in this campaign yet — create one to join the adventure."}
               </p>
               <span className={styles.charactersActions}>
                 <Link href={`/campaigns/${campaignId}/characters/new`} className={styles.createLink}>

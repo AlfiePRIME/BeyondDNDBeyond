@@ -6,6 +6,8 @@ import { listDmNotes, isDM } from "@/data-access";
 import { DmNotes } from "./DmNotes";
 import styles from "./dm-notes.module.css";
 
+export const metadata = { title: "DM notes" };
+
 export default async function CampaignDmNotesPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
   const supabase = await createServerSupabaseClient();

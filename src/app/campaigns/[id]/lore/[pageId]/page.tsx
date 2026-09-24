@@ -6,6 +6,8 @@ import { isAiConfigured } from "@/ai";
 import { LorePageView } from "./LorePageView";
 import styles from "../lore.module.css";
 
+export const metadata = { title: "Lore" };
+
 export default async function LorePageDetailPage({
   params,
 }: {

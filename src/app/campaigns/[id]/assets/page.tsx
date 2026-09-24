@@ -6,6 +6,8 @@ import { listAssetsForCampaign, isDM } from "@/data-access";
 import { AssetPalette } from "./AssetPalette";
 import styles from "./assets.module.css";
 
+export const metadata = { title: "Asset palette" };
+
 export default async function CampaignAssetsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
   const supabase = await createServerSupabaseClient();

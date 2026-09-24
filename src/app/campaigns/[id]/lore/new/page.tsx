@@ -7,6 +7,8 @@ import { isAiConfigured } from "@/ai";
 import { NewLorePageForm } from "./NewLorePageForm";
 import styles from "../lore.module.css";
 
+export const metadata = { title: "New lore page" };
+
 export default async function NewLorePagePage({ params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
   const supabase = await createServerSupabaseClient();

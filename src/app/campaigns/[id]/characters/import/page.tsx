@@ -2,6 +2,8 @@ import { notFound, redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/data-access/supabase-server";
 import { ImportFlow } from "./ImportFlow";
 
+export const metadata = { title: "Import a character" };
+
 export default async function ImportCharacterPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
   const supabase = await createServerSupabaseClient();

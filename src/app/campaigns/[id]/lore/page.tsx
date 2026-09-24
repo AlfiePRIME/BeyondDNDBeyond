@@ -6,6 +6,8 @@ import { listLorePages, listLorePageLinksForCampaign, isDM } from "@/data-access
 import { LoreIndex } from "./LoreIndex";
 import styles from "./lore.module.css";
 
+export const metadata = { title: "World & lore" };
+
 export default async function CampaignLorePage({ params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
   const supabase = await createServerSupabaseClient();

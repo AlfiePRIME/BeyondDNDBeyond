@@ -2,6 +2,8 @@ import { Panel, SectionHeader } from "@/ui-components";
 import { SignupForm } from "./SignupForm";
 import styles from "../auth.module.css";
 
+export const metadata = { title: "Sign up" };
+
 export default function SignupPage() {
   return (
     <div className={styles.wrap}>

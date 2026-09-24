@@ -6,6 +6,8 @@ import { listSessionLogEntries, isDM } from "@/data-access";
 import { SessionLog } from "./SessionLog";
 import styles from "./session-log.module.css";
 
+export const metadata = { title: "Session log" };
+
 export default async function CampaignSessionLogPage({
   params,
 }: {

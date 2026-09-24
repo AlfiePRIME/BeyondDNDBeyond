@@ -50,6 +50,8 @@ import { mostRecentOwnToken } from "./vision";
 import type { CombatState } from "./CombatPanel";
 import { GameRoom, type LiveMapData } from "./GameRoom";
 
+export const metadata = { title: "Game Room" };
+
 /**
  * Every one of this page's "initial*" reads is a nice-to-have — a fresh
  * fallback lets the client's own live subscriptions fill it in a moment
