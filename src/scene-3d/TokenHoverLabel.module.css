@@ -13,14 +13,14 @@
   width: max-content;
   max-width: 200px;
   padding: 3px 10px;
-  border-radius: 8px;
+  border-radius: var(--md-sys-shape-corner-small);
   font-family: var(--font-b);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.25;
-  background: color-mix(in srgb, var(--surface2) 90%, transparent);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 96%, transparent);
   border: 1px solid currentColor;
-  box-shadow: var(--ga);
+  box-shadow: var(--md-sys-elevation-level2);
   white-space: nowrap;
   text-align: center;
 }

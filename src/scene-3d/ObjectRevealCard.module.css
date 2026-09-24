@@ -12,11 +12,11 @@
   width: max-content;
   max-width: 260px;
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--md-sys-shape-corner-large);
   font-family: var(--font-b);
-  background: color-mix(in srgb, var(--surface2) 92%, transparent);
-  border: 1px solid color-mix(in srgb, var(--teal) 45%, transparent);
-  box-shadow: var(--gt);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 96%, transparent);
+  border-top: 3px solid var(--md-custom-color-teal);
+  box-shadow: var(--md-sys-elevation-level2);
   text-align: center;
 }
 
@@ -24,7 +24,7 @@
   margin: 0;
   font-size: 14px;
   line-height: 1.4;
-  color: var(--teal);
+  color: var(--md-sys-color-on-surface);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -33,5 +33,5 @@
   display: block;
   max-width: 240px;
   max-height: 180px;
-  border-radius: 6px;
+  border-radius: var(--md-sys-shape-corner-small);
 }

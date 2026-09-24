@@ -36,23 +36,12 @@ describe("parseChatFormatting", () => {
     ]);
   });
 
-  it("covers every one of the app's six accent colors plus a handful of standard colors", () => {
-    // Every accent from src/ui-components/tokens.css must be reachable.
-    const accentValues = Object.values(CHAT_COLOR_CODES);
-    for (const token of [
-      "var(--purple)",
-      "var(--pink)",
-      "var(--accent)",
-      "var(--teal)",
-      "var(--orange)",
-      "var(--red)",
-    ]) {
-      expect(accentValues).toContain(token);
-    }
-    // Plus a handful of standard colors with no app-token equivalent.
+  it("maps every color code to a distinct literal hex color", () => {
+    const values = Object.values(CHAT_COLOR_CODES);
+    for (const value of values) expect(value).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(new Set(values.map((v) => v.toLowerCase())).size).toBe(values.length);
     expect(CHAT_COLOR_CODES["0"]).toBe("#000000");
-    expect(CHAT_COLOR_CODES["1"]).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(CHAT_COLOR_CODES["2"]).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(CHAT_COLOR_CODES["4"]).toBe("#ff3b3b");
   });
 
   it("applies bold, italic, underline, and strikethrough independently", () => {

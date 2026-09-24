@@ -10,7 +10,7 @@
   position: fixed;
   top: 64px;
   right: 24px;
-  z-index: 500;
+  z-index: 5000;
   width: 340px;
   max-height: 50vh;
   overflow-y: auto;

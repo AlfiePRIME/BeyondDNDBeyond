@@ -12,14 +12,13 @@
   width: max-content;
   max-width: 260px;
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--md-sys-shape-corner-large);
   font-family: var(--font-b);
   font-size: 14px;
   line-height: 1.35;
-  color: var(--text);
-  background: color-mix(in srgb, var(--surface2) 92%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  box-shadow: var(--ga);
+  color: var(--md-sys-color-on-surface);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 96%, transparent);
+  box-shadow: var(--md-sys-elevation-level2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   text-align: center;
@@ -39,9 +38,8 @@
    speech rather than a player's, matching every other DM-distinct treatment
    in this room. */
 .bubbleDm {
-  border-color: color-mix(in srgb, var(--purple) 70%, transparent);
-  background: color-mix(in srgb, var(--purple) 24%, var(--surface2));
-  box-shadow: var(--gp);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
 }
 
 .bubbleFading {

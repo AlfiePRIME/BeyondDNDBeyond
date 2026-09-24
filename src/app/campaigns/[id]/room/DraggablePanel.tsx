@@ -192,7 +192,9 @@ const PANEL_ICON: Record<PanelId, string> = {
  */
 const PERSIST_DEBOUNCE_MS = 500;
 
-const BASE_Z_INDEX = 10;
+// Above the 3D scene's <Html> labels and chat bubbles (drei zIndexRange tops
+// out at 500), so a panel always covers the scene behind it.
+const BASE_Z_INDEX = 1000;
 
 /**
  * The opportunity-attack banner is a transient, time-critical prompt — its

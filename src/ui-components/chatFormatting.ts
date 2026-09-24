@@ -27,11 +27,9 @@ export type ChatFormatFlag = "bold" | "italic" | "underline" | "strikethrough" |
  * at every call site. */
 export interface ChatSpan {
   text: string;
-  /** A CSS color value (either a literal hex string for the "handful of
-   * standard colors" this scheme adds beyond the app's own palette, or a
-   * `var(--token)` reference for anything that already has an app design
-   * token — see CHAT_COLOR_CODES below) — or `undefined` for "use the
-   * renderer's own default text color" (never set as its own code). */
+  /** A CSS color value (a literal hex string from CHAT_COLOR_CODES below)
+   * — or `undefined` for "use the renderer's own default text color"
+   * (never set as its own code). */
   color?: string;
   bold: boolean;
   italic: boolean;
@@ -42,19 +40,12 @@ export interface ChatSpan {
 
 /**
  * Color codes. A practical subset of Minecraft's own 16-code table, not a
- * verbatim port of it — remapped so the codes that matter most in THIS app
- * pull from its existing accent palette (src/ui-components/tokens.css)
- * rather than Minecraft's original (unrelated) hex values, plus a small
- * handful of standard colors tokens.css has no equivalent for (black, a
- * plain blue, a plain green) so players aren't limited to only the app's
- * six accents.
- *
- * Every code that DOES have a matching design token references it via
- * `var(--token)` rather than copying its hex value, so a future retune of
- * tokens.css is picked up here for free (the same "reference custom
- * properties, don't hardcode hex" rule tokens.css's own header states) —
- * `0`/`1`/`2` are the only genuinely hardcoded hex values, because black/
- * blue/green have no corresponding token to reference.
+ * verbatim port of it. These are CONTENT colors a player picks on purpose,
+ * so they're fixed, distinct hex values rather than theme tokens — under
+ * the Material 3 theme several app tokens resolve to the same soft role
+ * color (purple and lavender are both `primary`, red is a pastel `error`),
+ * which would make "&4" stop reading as red. Values are the app's original
+ * vivid accents, plus black/blue/green.
  *
  * Single-character keys only (never a multi-character code) — both to keep
  * `&<code>` exactly two characters like Minecraft's own scheme, and because
@@ -62,18 +53,18 @@ export interface ChatSpan {
  * Object.prototype property name when looked up.
  */
 export const CHAT_COLOR_CODES: Readonly<Record<string, string>> = {
-  "0": "#000000", // black — standard color, no matching app token
-  "1": "#3c6dff", // blue — standard color, no matching app token
-  "2": "#3ecf5c", // green — standard color, no matching app token
-  "3": "var(--teal)", // app accent
-  "4": "var(--red)", // app accent
-  "5": "var(--purple)", // app accent
-  "6": "var(--orange)", // app accent
-  "7": "var(--muted)", // standard-ish gray, reusing the app's existing muted token
-  "8": "var(--dim)", // darker gray, reusing the app's existing dim token
-  "9": "var(--pink)", // app accent
-  a: "var(--accent)", // app accent (lavender)
-  f: "var(--text)", // "white" / the renderer's own default text color, made explicit
+  "0": "#000000", // black
+  "1": "#3c6dff", // blue
+  "2": "#3ecf5c", // green
+  "3": "#1ec8c8", // teal
+  "4": "#ff3b3b", // red
+  "5": "#9b00ff", // purple
+  "6": "#ff9a3c", // orange
+  "7": "#9b8bbb", // gray
+  "8": "#6b4f8c", // dark gray
+  "9": "#ff2d78", // pink
+  a: "#cc55ff", // lavender
+  f: "#ede0ff", // white
 };
 
 /** Format codes (fixed by the prompt spec, one letter each) mapped to the
