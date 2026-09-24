@@ -387,6 +387,12 @@
   gap: 8px;
 }
 
+/* A header that follows other content in the same panel starts a new
+   section — give it room to breathe instead of butting up against it. */
+* + .sectionHeader {
+  margin-top: 28px;
+}
+
 .sectionEyebrow {
   font-family: var(--font-m);
   font-size: 11px;
