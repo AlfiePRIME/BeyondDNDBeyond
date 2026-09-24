@@ -267,6 +267,7 @@ export function QuickActionsPanel({
     if (busy || !actingCharacter) return;
     setBusy(true);
     setError(null);
+    let landed = false;
     try {
       // The exact request shape DiceLogPanel's manual attack form sends —
       // verified byte-identical roll_log output in verify-quick-actions.
@@ -286,6 +287,7 @@ export function QuickActionsPanel({
         mode,
       });
       onRollLanded(roll);
+      landed = true;
       if (override) {
         // The one-time bypass is spent the moment the roll lands. NO slot
         // decrement here, by design: the override grants the action
@@ -325,7 +327,15 @@ export function QuickActionsPanel({
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The attack failed — try again.");
+      // Once the roll has landed, retrying would roll a SECOND attack — say
+      // what actually failed instead of inviting a retry.
+      setError(
+        landed
+          ? "Attack rolled, but updating spell slots/overrides failed — adjust them by hand."
+          : err instanceof Error
+            ? err.message
+            : "The attack failed — try again."
+      );
     } finally {
       setBusy(false);
     }
