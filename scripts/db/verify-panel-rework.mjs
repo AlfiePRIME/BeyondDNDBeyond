@@ -357,6 +357,8 @@ try {
   const { data: encounterId, error: startError } = await dm.client.rpc("start_combat", {
     p_campaign_id: campaignId,
   });
+  // Skip the initiative phase (0123) — this script tests what comes after.
+  if (!startError) await dm.client.rpc("begin_combat_round", { p_encounter_id: encounterId });
   check("start_combat succeeded (test setup, not the feature under test)", !startError, startError?.message);
   await room.reload();
   await room.waitForSelector('[data-testid="draggable-panel-map"]', { state: "attached", timeout: 60000 });

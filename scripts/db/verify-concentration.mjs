@@ -193,6 +193,8 @@ try {
   ]);
   await admin.from("campaigns").update({ live_map: mapId }).eq("id", campaignId);
   const { data: encounterId, error: startError } = await dm.client.rpc("start_combat", { p_campaign_id: campaignId });
+  // Skip the initiative phase (0123) — this script tests what comes after.
+  if (!startError) await dm.client.rpc("begin_combat_round", { p_encounter_id: encounterId });
   if (startError) throw new Error(`starting combat: ${startError.message}`);
   const { data: combatants } = await admin.from("combat_combatants").select().eq("encounter_id", encounterId);
   const aliceCombatant = combatants.find((c) => c.character_id === aliceCharacterId);

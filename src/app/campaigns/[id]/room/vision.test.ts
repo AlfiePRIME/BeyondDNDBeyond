@@ -83,6 +83,7 @@ function combatant(overrides: Partial<CombatCombatant>): CombatCombatant {
     monster_stat_block_id: null,
     npc_current_hp: null,
     initiative: null,
+    initiative_roll: null,
     action_used: false,
     bonus_action_used: false,
     reaction_used: false,

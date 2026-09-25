@@ -491,6 +491,8 @@ try {
   // this script checks "prone" (conditions are combatant-scoped, per
   // GameRoom's own handleTokenLanded doc comment).
   await dmRoom.click('[data-testid="start-combat-button"]');
+  // Skip the initiative roster (0123): the DM rolls the rest and begins.
+  await dmRoom.click('[data-testid="initiative-begin-now"]');
   const encounterRow = await pollUntil(async () => {
     const { data } = await admin
       .from("combat_encounters")

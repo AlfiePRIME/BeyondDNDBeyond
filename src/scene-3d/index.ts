@@ -88,6 +88,7 @@ export { AVATAR_HEIGHT } from "./SeatAvatar";
 export { OrientationPreview, type OrientationPreviewProps, type ModelNormalize } from "./OrientationPreview";
 export {
   DiceTumble,
+  RollingDie,
   type DiceFaceSettledInfo,
   type DiceTumbleHandle,
   type DiceTumbleProps,
@@ -191,3 +192,4 @@ export {
   DEFAULT_WHITEBOARD_BRUSH_SIZE,
   type WhiteboardBrushSize,
 } from "./whiteboardMath";
+export { RosterCanvas, RosterModelSlot, RosterDieSlot } from "./InitiativeRosterViews";

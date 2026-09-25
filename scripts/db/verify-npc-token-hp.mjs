@@ -373,6 +373,8 @@ try {
   // not a product behavior).
   await dmPage.waitForSelector('[data-testid="start-combat-button"]', { timeout: 15000 });
   await dmPage.click('[data-testid="start-combat-button"]');
+  // Skip the initiative roster (0123): the DM rolls the rest and begins.
+  await dmPage.click('[data-testid="initiative-begin-now"]');
   await dmPage
     .waitForFunction(
       (testId) => document.querySelector(testId) === null,

@@ -405,6 +405,8 @@ try {
   // so this exercises the exact combat-changed broadcast every real DM
   // click already goes through.
   await dmPage.click('[data-testid="start-combat-button"]');
+  // Skip the initiative roster (0123): the DM rolls the rest and begins.
+  await dmPage.click('[data-testid="initiative-begin-now"]');
   await dmPage.waitForSelector('[data-testid="end-combat-button"]', { timeout: 15000 });
 
   const dmMirrorDuringCombat = await gameMusicState(dmPage);
@@ -506,6 +508,8 @@ try {
   );
 
   await dmPage.click('[data-testid="start-combat-button"]');
+  // Skip the initiative roster (0123): the DM rolls the rest and begins.
+  await dmPage.click('[data-testid="initiative-begin-now"]');
   await dmPage.waitForSelector('[data-testid="end-combat-button"]', { timeout: 15000 });
   const dmSilentDuringCombat = await waitForSoundDebug(
     dmPage,

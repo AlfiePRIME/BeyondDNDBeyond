@@ -583,7 +583,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // player. Persist the initiative BEFORE logging so a rejected write
     // logs nothing.
     try {
-      await setCombatantInitiative(supabase, combatant.id, total);
+      await setCombatantInitiative(supabase, combatant.id, total, d20.result);
     } catch {
       return NextResponse.json(
         { ok: false, message: "You may not roll initiative for that combatant." },

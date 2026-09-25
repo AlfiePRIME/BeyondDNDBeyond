@@ -266,6 +266,8 @@ try {
   const { data: encounterId, error: startError } = await dm.client.rpc("start_combat", {
     p_campaign_id: campaignId,
   });
+  // Skip the initiative phase (0123) — this script tests what comes after.
+  if (!startError) await dm.client.rpc("begin_combat_round", { p_encounter_id: encounterId });
   check("combat starts normally in a Freeform campaign", !startError && !!encounterId, startError?.message);
 
   // -- 1a. add_freeform_combatant: DM-only, name alone, no token/stat
@@ -511,6 +513,8 @@ try {
   const { data: strictEncounterId, error: strictStartError } = await dm.client.rpc("start_combat", {
     p_campaign_id: strictCampaignId,
   });
+  // Skip the initiative phase (0123) — this script tests what comes after.
+  if (!strictStartError) await dm.client.rpc("begin_combat_round", { p_encounter_id: strictEncounterId });
   check("combat starts normally in the Strict campaign, exactly as before", !strictStartError && !!strictEncounterId, strictStartError?.message);
 
   // Both PCs seed with initiative null — the canonical order's tiebreak

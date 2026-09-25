@@ -242,6 +242,8 @@ try {
   // -- 4. Roll initiative from the combat panel: stored values, sorted
   //    order, manual entry still present. --
   await dmRoom.click('[data-testid="start-combat-button"]');
+  // Skip the initiative roster (0123): the DM rolls the rest and begins.
+  await dmRoom.click('[data-testid="initiative-begin-now"]');
   await dmRoom.waitForSelector('[data-testid="advance-turn-button"]', { timeout: 15000 });
   const rollButtons = await dmRoom.$$('[data-testid^="combatant-roll-initiative-"]');
   check("every combatant offers a Roll initiative button to the DM", rollButtons.length === 2);

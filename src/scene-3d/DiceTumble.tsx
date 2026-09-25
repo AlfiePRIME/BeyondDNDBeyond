@@ -502,10 +502,14 @@ function Die({
   spec,
   animator,
   onSettled,
+  showBadge = true,
 }: {
   spec: DiceTumbleDieSpec;
   animator: DiceAnimator;
   onSettled: (id: string, positionY: number) => void;
+  /** The floating result label once settled (off where the result is shown
+   * elsewhere, like the initiative roster's totals). */
+  showBadge?: boolean;
 }) {
   // Per-die, per-mount rate-limit state — a fresh -Infinity every time this
   // component (re)mounts, matching every other piece of this die's own
@@ -569,7 +573,7 @@ function Die({
       <group ref={rotationRef}>
         <DieMesh sides={spec.sides} labelSet={spec.labelSet} />
       </group>
-      {phase === "settled" ? <ResultBadge label={label} /> : null}
+      {phase === "settled" && showBadge ? <ResultBadge label={label} /> : null}
     </group>
   );
 }
@@ -1015,3 +1019,38 @@ export const DiceTumble = forwardRef<DiceTumbleHandle, DiceTumbleProps>(function
     </group>
   );
 });
+
+const noopSettled = () => undefined;
+
+/**
+ * A single die that rolls once and lands on `result` — the same physics
+ * replay as the table's dice trays (see diceAnimator.ts), for places that
+ * want one die of their own, like the initiative roster. Mount a fresh one
+ * (new `rollId`) per roll; the recording is freed on unmount.
+ */
+export function RollingDie({
+  rollId,
+  sides,
+  result,
+  scale = 1,
+  showBadge = true,
+}: {
+  rollId: string;
+  sides: number;
+  result: number;
+  /** Shrinks how far across the tray it travels (like a personal tray). */
+  scale?: number;
+  showBadge?: boolean;
+}) {
+  const spec = useMemo<DiceTumbleDieSpec>(() => ({ id: `${rollId}:0`, sides, result }), [rollId, sides, result]);
+  const animator = useMemo(() => {
+    const picked = pickDiceAnimator(1);
+    if (picked === physicsDiceAnimator) prepareDicePhysicsRoll(rollId, [spec]);
+    return scaledDiceAnimator(picked, scale);
+  }, [rollId, spec, scale]);
+  useEffect(() => {
+    preloadDicePhysics();
+    return () => disposeDicePhysicsRoll(rollId);
+  }, [rollId]);
+  return <Die spec={spec} animator={animator} onSettled={noopSettled} showBadge={showBadge} />;
+}

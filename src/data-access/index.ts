@@ -318,6 +318,7 @@ export {
   advanceTurn,
   endCombat,
   setCombatantInitiative,
+  beginCombatRound,
   setCombatantEconomyFlag,
   declareDisengage,
   addCombatant,

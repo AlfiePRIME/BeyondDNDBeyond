@@ -1,0 +1,216 @@
+/* "Roll for initiative!" — party vs enemies, with models and 3D dice. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 7000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 45%, transparent);
+  animation: roster-fade-in var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-standard) both;
+}
+
+.card {
+  position: relative;
+  width: min(1040px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 28px;
+  border-radius: var(--md-sys-shape-corner-extra-large);
+  background: var(--md-sys-color-surface-container-high);
+  box-shadow: var(--md-sys-elevation-level3);
+  animation: m3-rise-in var(--md-sys-motion-duration-medium4) var(--md-sys-motion-easing-emphasized-decelerate) both;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--md-sys-typescale-headline-medium-size);
+  line-height: var(--md-sys-typescale-headline-medium-line-height);
+  font-weight: var(--md-sys-typescale-weight-regular);
+  color: var(--md-sys-color-on-surface);
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-body-large-size);
+}
+
+.timer {
+  width: min(420px, 100%);
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--md-sys-color-surface-container-highest);
+  overflow: hidden;
+}
+
+.timer span {
+  display: block;
+  height: 100%;
+  background: var(--md-sys-color-primary);
+  transform-origin: left center;
+  transition: transform 250ms linear;
+}
+
+.sides {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .sides {
+    grid-template-columns: 1fr;
+  }
+
+  .versus {
+    display: none;
+  }
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sideTitle {
+  margin: 0;
+  font-size: var(--md-sys-typescale-title-medium-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  color: var(--md-custom-color-teal);
+}
+
+.sideTitleEnemy {
+  color: var(--md-sys-color-error);
+}
+
+.versus {
+  align-self: center;
+  font-size: var(--md-sys-typescale-headline-small-size);
+  color: var(--md-sys-color-outline);
+  font-style: italic;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 72px 1fr 88px 56px;
+  align-items: center;
+  gap: 12px;
+  min-height: 88px;
+  padding: 8px 14px 8px 8px;
+  border-radius: var(--md-sys-shape-corner-large);
+  background: color-mix(in srgb, var(--md-custom-color-teal-container) 35%, var(--md-sys-color-surface-container-highest));
+  animation: m3-rise-in var(--md-sys-motion-duration-medium4) var(--md-sys-motion-easing-emphasized-decelerate) both;
+}
+
+.rowEnemy {
+  background: color-mix(in srgb, var(--md-sys-color-error-container) 35%, var(--md-sys-color-surface-container-highest));
+}
+
+.portrait {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+}
+
+.portraitView {
+  position: absolute;
+  inset: 0;
+}
+
+.picture {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-size: var(--md-sys-typescale-title-medium-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 50%);
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--md-sys-typescale-title-medium-size);
+  color: var(--md-sys-color-on-surface);
+}
+
+.dieSlot {
+  position: relative;
+  width: 88px;
+  height: 72px;
+}
+
+.dieView {
+  position: absolute;
+  inset: 0;
+}
+
+.result {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.total {
+  min-width: 44px;
+  font-family: var(--font-mono);
+  font-size: var(--md-sys-typescale-headline-small-size);
+  text-align: right;
+  color: var(--md-sys-color-on-surface);
+  animation: m3-pop-in var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-emphasized-decelerate) 1.2s both;
+}
+
+.waiting {
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.empty {
+  padding: 16px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-body-medium-size);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@keyframes roster-fade-in {
+  from {
+    opacity: 0;
+  }
+}

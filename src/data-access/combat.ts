@@ -7,6 +7,10 @@ export interface CombatEncounter {
   current_turn_index: number;
   started_at: string;
   ended_at: string | null;
+  /** 'initiative' while everyone rolls (migration 0123), then 'active'. */
+  phase: "initiative" | "active";
+  /** When the initiative phase auto-rolls for anyone still waiting. */
+  initiative_deadline: string | null;
 }
 
 /**
@@ -39,6 +43,8 @@ export interface CombatCombatant {
    * and bare unstatted NPCs (no HP anywhere, as before Prompt 61). */
   npc_current_hp: number | null;
   initiative: number | null;
+  /** The natural d20 behind `initiative` (0123) — null for a hand-entered value. */
+  initiative_roll: number | null;
   action_used: boolean;
   bonus_action_used: boolean;
   reaction_used: boolean;
@@ -150,6 +156,7 @@ export async function getActiveCombatantForCharacter(
     monster_stat_block_id: row.monster_stat_block_id,
     npc_current_hp: row.npc_current_hp,
     initiative: row.initiative,
+    initiative_roll: row.initiative_roll ?? null,
     action_used: row.action_used,
     bonus_action_used: row.bonus_action_used,
     reaction_used: row.reaction_used,
@@ -240,11 +247,13 @@ export async function applyNpcHpDelta(
 export async function setCombatantInitiative(
   supabase: SupabaseClient,
   combatantId: string,
-  initiative: number
+  initiative: number,
+  /** The natural d20 when rolled (null for a hand-typed initiative). */
+  naturalRoll: number | null = null
 ): Promise<CombatCombatant> {
   const { data, error } = await supabase
     .from("combat_combatants")
-    .update({ initiative })
+    .update({ initiative, initiative_roll: naturalRoll })
     .eq("id", combatantId)
     .select()
     .single();
@@ -311,4 +320,11 @@ export async function declareDisengage(
 
   if (error) throw error;
   return data;
+}
+
+/** DM-only: ends the initiative phase and starts round 1 at the top of the
+ * order (begin_combat_round, migration 0123). */
+export async function beginCombatRound(supabase: SupabaseClient, encounterId: string): Promise<void> {
+  const { error } = await supabase.rpc("begin_combat_round", { p_encounter_id: encounterId });
+  if (error) throw error;
 }

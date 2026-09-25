@@ -556,6 +556,8 @@ try {
   // -- 12. Initiative: start combat, roll for every combatant, confirm
   //    stored values and turn-order sorting. --
   const { data: encounterId, error: startError } = await dm.client.rpc("start_combat", { p_campaign_id: campaignId });
+  // Skip the initiative phase (0123) — this script tests what comes after.
+  if (!startError) await dm.client.rpc("begin_combat_round", { p_encounter_id: encounterId });
   check("combat starts for the initiative test", !startError, startError?.message);
   const { data: combatants } = await admin.from("combat_combatants").select().eq("encounter_id", encounterId);
 

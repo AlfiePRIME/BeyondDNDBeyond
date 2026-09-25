@@ -386,6 +386,8 @@ try {
   const { data: encounterId, error: startError } = await dm.client.rpc("start_combat", {
     p_campaign_id: campaignId,
   });
+  // Skip the initiative phase (0123) — this script tests what comes after.
+  if (!startError) await dm.client.rpc("begin_combat_round", { p_encounter_id: encounterId });
   const seeded = await turnOrder(encounterId);
   const bossCombatant = seeded.find((row) => row.token_id === bossToken.id);
   const timCombatant = seeded.find((row) => row.token_id === timTokenId);

@@ -66,12 +66,16 @@ export function useDiceTumble(
 ): DiceAnimationHandle {
   const ref = useRef<Group>(null);
   const rotationRef = useRef<Group>(null);
-  const startElapsedRef = useRef<number | null>(null);
+  // Accumulated from each frame's delta rather than read off state.clock —
+  // inside a drei <View> (the initiative roster's dice) the portal's own
+  // clock doesn't advance, which froze the die on its first frame.
+  const elapsedRef = useRef<number | null>(null);
   const [phase, setPhase] = useState<DiceAnimationPhase>("tumbling");
 
-  useFrame((state) => {
-    if (startElapsedRef.current === null) startElapsedRef.current = state.clock.elapsedTime;
-    const elapsedSeconds = state.clock.elapsedTime - startElapsedRef.current;
+  useFrame((_state, delta) => {
+    // The first frame starts at 0; clamp a huge delta (a backgrounded tab).
+    elapsedRef.current = elapsedRef.current === null ? 0 : elapsedRef.current + Math.min(delta, 0.1);
+    const elapsedSeconds = elapsedRef.current;
     const pose = animator.step(spec, elapsedSeconds);
 
     const group = ref.current;

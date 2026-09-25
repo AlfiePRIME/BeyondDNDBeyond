@@ -341,7 +341,8 @@ export function CombatPanel({
   const { encounter, combatants } = combat;
   const currentIndex = Math.min(encounter.current_turn_index, Math.max(combatants.length - 1, 0));
   const current = combatants[currentIndex] ?? null;
-  const canAdvance = isDM || (current !== null && ownsCombatant(current));
+  const rollingInitiative = encounter.phase === "initiative";
+  const canAdvance = !rollingInitiative && (isDM || (current !== null && ownsCombatant(current)));
 
   function draftFor(combatant: CombatCombatant): string {
     return drafts[combatant.id] ?? (combatant.initiative !== null ? String(combatant.initiative) : "");
@@ -380,7 +381,11 @@ export function CombatPanel({
       </div>
 
       <span className={styles.currentTurn} data-testid="current-turn-indicator">
-        {current ? `${combatantLabel(current)}'s turn` : "No combatants"}
+        {rollingInitiative
+          ? "Rolling for initiative…"
+          : current
+            ? `${combatantLabel(current)}'s turn`
+            : "No combatants"}
       </span>
 
       {isDM && !strict ? (

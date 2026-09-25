@@ -10,6 +10,7 @@ import {
   addCombatant,
   addFreeformCombatant,
   advanceTurn,
+  beginCombatRound,
   applyCondition,
   applyExhaustionDelta,
   applyHpDelta,
@@ -278,6 +279,7 @@ import { buildDiceTumbleSpec } from "../roll/tumble";
 import { AllegianceBanner, type AllegianceBannerEvent } from "./AllegianceBanner";
 import { ChatDock } from "./ChatDock";
 import { CombatPanel, type CombatState } from "./CombatPanel";
+import { InitiativeRoster, type RosterEntry } from "./InitiativeRoster";
 import { ChatLogPanel } from "./ChatLogPanel";
 import { ContainerPanel } from "./ContainerPanel";
 import { DraggablePanel, DmBookSizeBridge, PanelDockBar, PanelLayoutProvider, type PanelId } from "./DraggablePanel";
@@ -6127,6 +6129,68 @@ export function GameRoom({
     );
   }, [combat, runCombatAction]);
 
+  // ── Initiative phase (migration 0123) ──
+  // Every client can roll for combatants it's allowed to; the DM's client is
+  // the timekeeper — at the deadline it rolls for anyone still waiting, and
+  // once everyone has rolled it starts round 1 after a short beat so the
+  // table sees the results land.
+  const combatLatestRef = useRef(combat);
+  useEffect(() => {
+    combatLatestRef.current = combat;
+  }, [combat]);
+  const initiativeInFlightRef = useRef(new Set<string>());
+  const [initiativeRollingIds, setInitiativeRollingIds] = useState<ReadonlySet<string>>(new Set());
+
+  const rollInitiativeFor = useCallback(
+    async (combatantIds: readonly string[]) => {
+      const ids = combatantIds.filter((id) => !initiativeInFlightRef.current.has(id));
+      if (ids.length === 0) return;
+      ids.forEach((id) => initiativeInFlightRef.current.add(id));
+      setInitiativeRollingIds(new Set(initiativeInFlightRef.current));
+      try {
+        for (const id of ids) {
+          await postRoll(campaignId, { kind: "initiative", combatantId: id }).catch(() => undefined);
+        }
+        await refreshCombat(createBrowserSupabaseClient()).catch(() => undefined);
+        await campaignChannelRef.current?.publish<CombatPayload>(COMBAT_EVENT, { campaignId }).catch(() => undefined);
+      } finally {
+        ids.forEach((id) => initiativeInFlightRef.current.delete(id));
+        setInitiativeRollingIds(new Set(initiativeInFlightRef.current));
+      }
+    },
+    [campaignId, refreshCombat]
+  );
+
+  const unrolledCombatantIds = useCallback(
+    () => (combatLatestRef.current?.combatants ?? []).filter((c) => c.initiative === null).map((c) => c.id),
+    []
+  );
+
+  const beginInitiativeRound = useCallback(async () => {
+    const encounter = combatLatestRef.current?.encounter;
+    if (!encounter || encounter.phase !== "initiative") return;
+    await rollInitiativeFor(unrolledCombatantIds());
+    await runCombatAction((supabase) => beginCombatRound(supabase, encounter.id), "Could not begin the round.");
+  }, [rollInitiativeFor, unrolledCombatantIds, runCombatAction]);
+
+  const initiativePhase = combat?.encounter.phase === "initiative";
+  const initiativeDeadline = initiativePhase ? (combat?.encounter.initiative_deadline ?? null) : null;
+  const everyoneRolled =
+    initiativePhase && (combat?.combatants.length ?? 0) > 0 && combat!.combatants.every((c) => c.initiative !== null);
+
+  useEffect(() => {
+    if (!currentUserIsDM || !initiativeDeadline) return;
+    const delay = Math.max(0, new Date(initiativeDeadline).getTime() - Date.now());
+    const timer = setTimeout(() => void rollInitiativeFor(unrolledCombatantIds()), delay);
+    return () => clearTimeout(timer);
+  }, [currentUserIsDM, initiativeDeadline, rollInitiativeFor, unrolledCombatantIds]);
+
+  useEffect(() => {
+    if (!currentUserIsDM || !everyoneRolled) return;
+    const timer = setTimeout(() => void beginInitiativeRound(), 3500);
+    return () => clearTimeout(timer);
+  }, [currentUserIsDM, everyoneRolled, beginInitiativeRound]);
+
   const handleEndCombat = useCallback(() => {
     void runCombatAction(
       (supabase) => endCombat(supabase, campaignId),
@@ -8844,6 +8908,34 @@ export function GameRoom({
     dmBookSetSizeRef.current(size);
   }, []);
 
+  // Party vs enemies for the initiative roster: each combatant's name,
+  // model/color from its token on the table, and its roll so far.
+  const initiativeEntries = useMemo<RosterEntry[] | null>(() => {
+    if (!combat || combat.encounter.phase !== "initiative") return null;
+    const tokensById = new Map((tableMap?.tokens ?? []).map((token) => [token.id, token]));
+    return combat.combatants.map((combatant) => {
+      const token = combatant.token_id ? tokensById.get(combatant.token_id) : undefined;
+      const character = combatant.character_id ? characterById.get(combatant.character_id) : undefined;
+      const name =
+        token?.name ??
+        combatant.npc_name ??
+        character?.name ??
+        (combatant.character_id ? characterRosterNames.get(combatant.character_id)?.name : undefined) ??
+        "Party member";
+      const partySide = token ? token.allegiance === "party" : Boolean(combatant.character_id);
+      return {
+        combatantId: combatant.id,
+        name,
+        side: partySide ? "party" : "enemies",
+        modelUrl: token?.modelUrl ?? null,
+        color: token?.colorOverride ?? null,
+        initiative: combatant.initiative,
+        naturalRoll: combatant.initiative_roll,
+        canRoll: currentUserIsDM || character?.owner_id === currentUserId,
+      };
+    });
+  }, [combat, tableMap, characterById, characterRosterNames, currentUserIsDM, currentUserId]);
+
   return (
     <PanelLayoutProvider
       userId={currentUserId}
@@ -8858,6 +8950,21 @@ export function GameRoom({
         reconciler root, where that same context call would throw. */}
     <DmBookSizeBridge onChange={handleDmBookSizeBridge} />
     <div className={styles.room}>
+      {initiativeEntries ? (
+        <InitiativeRoster
+          entries={initiativeEntries}
+          deadline={combat?.encounter.initiative_deadline ?? null}
+          isDM={currentUserIsDM}
+          rollingIds={initiativeRollingIds}
+          onRoll={(combatantId) => void rollInitiativeFor([combatantId])}
+          onRollAllEnemies={() =>
+            void rollInitiativeFor(
+              initiativeEntries.filter((e) => e.side === "enemies" && e.initiative === null).map((e) => e.combatantId)
+            )
+          }
+          onBeginNow={() => void beginInitiativeRound()}
+        />
+      ) : null}
       {roomConnectionState === "reconnecting" ? (
         <div className={styles.statusBanner} role="status" data-testid="room-reconnecting-banner">
           Connection lost — reconnecting… Changes you make will sync once it&apos;s back.

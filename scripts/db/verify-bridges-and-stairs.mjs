@@ -300,6 +300,8 @@ async function voidExcept(dmClient, mapId, width, height, keep) {
 
 async function startCombatAndGetCombatant(dmRoom, campaignId, tokenId) {
   await dmRoom.click('[data-testid="start-combat-button"]');
+  // Skip the initiative roster (0123): the DM rolls the rest and begins.
+  await dmRoom.click('[data-testid="initiative-begin-now"]');
   const encounter = await pollUntil(async () => {
     const { data } = await admin
       .from("combat_encounters")
