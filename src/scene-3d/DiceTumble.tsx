@@ -28,6 +28,7 @@ import {
   DICE_START_RADIUS_BASE,
   DICE_START_RADIUS_JITTER,
   disposeDicePhysicsRoll,
+  prepareDicePhysicsRoll,
   physicsDiceAnimator,
   pickDiceAnimator,
   preloadDicePhysics,
@@ -977,7 +978,19 @@ export const DiceTumble = forwardRef<DiceTumbleHandle, DiceTumbleProps>(function
   // afterward, exactly the same "wrap the output, don't touch the step math"
   // seam it already used for the scripted animator, so this needs no
   // physics-specific scaling logic of its own.
-  const rawAnimator = useMemo(() => pickDiceAnimator(active?.dice.length ?? 0), [active]);
+  const rawAnimator = useMemo(() => {
+    const picked = pickDiceAnimator(active?.dice.length ?? 0);
+    // Simulate the whole roll up front (every die together) so each die
+    // replays a real trajectory that lands on its server-given number.
+    if (active && picked === physicsDiceAnimator) {
+      // Same per-die ids ActiveTumble gives each die (`${rollId}:${index}`).
+      prepareDicePhysicsRoll(
+        active.id,
+        active.dice.map((die, index) => ({ ...die, id: `${active.id}:${index}` }))
+      );
+    }
+    return picked;
+  }, [active]);
   const usingPhysics = rawAnimator === physicsDiceAnimator;
   const animator = useMemo(() => scaledDiceAnimator(rawAnimator, scale), [rawAnimator, scale]);
   const radius = useMemo(() => trayRadiusForScale(scale), [scale]);

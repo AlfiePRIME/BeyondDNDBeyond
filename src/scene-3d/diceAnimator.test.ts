@@ -7,13 +7,15 @@ import {
   disposeDicePhysicsRoll,
   isDicePhysicsReady,
   physicsDiceAnimator,
+  prepareDicePhysicsRoll,
+  dieSymmetryBetweenFaces,
   pickDiceAnimator,
   preloadDicePhysics,
   scriptedDiceAnimator,
   type DiceAnimator,
   type DiceTumbleDieSpec,
 } from "./diceAnimator";
-import { DIE_KINDS, DIE_SIZE, facePlaneDistance, faceNormalForResult, type DieKind } from "./diceGeometry";
+import { DIE_FACE_NORMALS, DIE_KINDS, DIE_SIZE, facePlaneDistance, faceNormalForResult, type DieKind } from "./diceGeometry";
 
 const SPEC: DiceTumbleDieSpec = { id: "roll-1:0", sides: 20, result: 17 };
 
@@ -188,11 +190,64 @@ describe("physicsDiceAnimator (after the WASM engine has loaded)", () => {
       const quaternion = new Quaternion().setFromEuler(new Euler(...finalPose.rotation));
       const targetNormal = new Vector3(...faceNormalForResult(kind as DieKind, result));
       const rotated = targetNormal.clone().applyQuaternion(quaternion);
-      expect(rotated.x).toBeCloseTo(0, 3);
-      expect(rotated.y).toBeCloseTo(1, 3);
-      expect(rotated.z).toBeCloseTo(0, 3);
+      if (kind === "d4") {
+        // A tetrahedron rests on a face — its result face is the most
+        // upward-pointing one rather than pointing straight up.
+        const ys = DIE_FACE_NORMALS.d4.map((n) => new Vector3(...n).applyQuaternion(quaternion).y);
+        expect(rotated.y).toBeCloseTo(Math.max(...ys), 3);
+      } else {
+        // It genuinely landed that way — flat, as a real die rests.
+        expect(rotated.y).toBeGreaterThan(0.95);
+      }
       disposeDicePhysicsRoll(rollId);
     }
+  });
+
+  it.each(DIE_KINDS.filter((kind) => kind !== "d4"))(
+    "%s comes to rest on its number — no spin to the result at the end",
+    (kind) => {
+      const sides = { d4: 4, d6: 6, d8: 8, d10: 10, d12: 12, d20: 20 }[kind as DieKind];
+      const rollId = nextRollId(`no-spin-${kind}`);
+      const spec: DiceTumbleDieSpec = { id: `${rollId}:0`, sides, result: sides };
+      let settledAt = 0;
+      for (let t = 0; t <= 6; t += 1 / 60) {
+        if (physicsDiceAnimator.step(spec, t).settled) {
+          settledAt = t;
+          break;
+        }
+      }
+      expect(settledAt).toBeGreaterThan(0);
+      const before = new Quaternion().setFromEuler(new Euler(...physicsDiceAnimator.step(spec, settledAt - 0.2).rotation));
+      const after = new Quaternion().setFromEuler(new Euler(...physicsDiceAnimator.step(spec, settledAt).rotation));
+      // Under ~6° of turn in the last 0.2s: the die is already resting on the
+      // right face, not being rotated onto it.
+      expect(before.angleTo(after)).toBeLessThan(0.1);
+      disposeDicePhysicsRoll(rollId);
+    }
+  );
+
+  it("replays deterministically: the same (spec, elapsed) always gives the same pose", () => {
+    const rollId = nextRollId("replay");
+    const spec: DiceTumbleDieSpec = { id: `${rollId}:0`, sides: 20, result: 7 };
+    const first = physicsDiceAnimator.step(spec, 0.3);
+    physicsDiceAnimator.step(spec, 0.9);
+    expect(physicsDiceAnimator.step(spec, 0.3)).toEqual(first);
+    disposeDicePhysicsRoll(rollId);
+  });
+
+  it("simulates every die of a prepared roll together (they share one tray)", () => {
+    const rollId = nextRollId("prepared");
+    const specs: DiceTumbleDieSpec[] = [0, 1, 2, 3].map((i) => ({ id: `${rollId}:${i}`, sides: 6, result: i + 1 }));
+    prepareDicePhysicsRoll(rollId, specs);
+    for (const spec of specs) {
+      let pose = physicsDiceAnimator.step(spec, 0);
+      for (let t = 0; t <= 6 && !pose.settled; t += 1 / 30) pose = physicsDiceAnimator.step(spec, t);
+      const up = new Vector3(...faceNormalForResult("d6", spec.result)).applyQuaternion(
+        new Quaternion().setFromEuler(new Euler(...pose.rotation))
+      );
+      expect(up.y).toBeGreaterThan(0.95);
+    }
+    disposeDicePhysicsRoll(rollId);
   });
 
   it("settles a non-standard side count (e.g. an odd free-form roll) without throwing, face pointing up", () => {
@@ -371,11 +426,35 @@ describe("physicsDiceAnimator (after the WASM engine has loaded)", () => {
         const quaternion = new Quaternion().setFromEuler(new Euler(...pose.rotation));
         const targetNormal = new Vector3(...faceNormalForResult(kind, 1));
         const rotated = targetNormal.clone().applyQuaternion(quaternion);
-        expect(rotated.y).toBeCloseTo(1, 2);
+        if (kind === "d4") {
+          const ys = DIE_FACE_NORMALS.d4.map((n) => new Vector3(...n).applyQuaternion(quaternion).y);
+          expect(rotated.y).toBeCloseTo(Math.max(...ys), 3);
+        } else {
+          expect(rotated.y).toBeGreaterThan(0.95);
+        }
         disposeDicePhysicsRoll(rollId);
       }
     } finally {
       randomSpy.mockRestore();
+    }
+  });
+});
+
+describe("dieSymmetryBetweenFaces", () => {
+  it.each(DIE_KINDS)("maps every %s face onto every other face with a true symmetry of the solid", (kind) => {
+    const normals = DIE_FACE_NORMALS[kind as DieKind];
+    for (let from = 0; from < normals.length; from++) {
+      for (let to = 0; to < normals.length; to++) {
+        const symmetry = dieSymmetryBetweenFaces(kind as DieKind, from, to);
+        const moved = new Vector3(...normals[from]).applyQuaternion(symmetry);
+        const target = new Vector3(...normals[to]).normalize();
+        expect(moved.normalize().dot(target)).toBeGreaterThan(0.999);
+        // A symmetry maps the whole face set onto itself.
+        for (const normal of normals) {
+          const image = new Vector3(...normal).applyQuaternion(symmetry).normalize();
+          expect(normals.some((n) => new Vector3(...n).normalize().dot(image) > 0.999)).toBe(true);
+        }
+      }
     }
   });
 });

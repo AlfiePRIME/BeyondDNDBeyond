@@ -1,5 +1,13 @@
 import { Euler, Quaternion, Vector3, type BufferGeometry } from "three";
-import { DIE_SIZE, buildDieGeometry, dieKindForSides, facePlaneDistance, faceNormalForResult, type DieKind } from "./diceGeometry";
+import {
+  DIE_FACE_NORMALS,
+  DIE_SIZE,
+  buildDieGeometry,
+  dieKindForSides,
+  facePlaneDistance,
+  faceNormalForResult,
+  type DieKind,
+} from "./diceGeometry";
 
 /** One physical die's roll input, already flattened out of whatever
  * roll_log breakdown shape produced it (the app layer's job — see
@@ -433,18 +441,6 @@ function colliderDescFor(Rapier: RapierNamespace, kind: DieKind | null): Instanc
  * kinds uniformly, no d4 special case needed. Computed once per die at body-
  * creation time (the target orientation is fixed for a die's whole
  * lifetime), never per frame. */
-const restingVertexScratch = new Vector3();
-function restingOriginHeight(kind: DieKind | null, quaternion: Quaternion): number {
-  const geometry = dieGeometryForPhysics(kind ?? "d20");
-  const position = geometry.attributes.position;
-  let minY = Infinity;
-  for (let i = 0; i < position.count; i++) {
-    restingVertexScratch.set(position.getX(i), position.getY(i), position.getZ(i));
-    restingVertexScratch.applyQuaternion(quaternion);
-    if (restingVertexScratch.y < minY) minY = restingVertexScratch.y;
-  }
-  return -minY;
-}
 
 // ---- Defensive floor clamp (tunneling safety net, alongside CCD below) ----
 
@@ -504,34 +500,41 @@ export function clampDieOriginY(rawY: number, minOriginHeight: number): number {
   return Math.max(rawY, minOriginHeight - FLOOR_CLAMP_SLOP);
 }
 
-// ---- Reconciliation timing (§7) ----
+// ---- Simulate first, then replay (supersedes §7's blend-to-target) ----
+//
+// §7 originally ran live physics and, once a die went quiet, slerped it
+// round to the server's face — the visible "it lands, then spins to the
+// right number" players noticed. Now each roll is simulated headlessly to
+// rest up front (a few milliseconds of Rapier), the face each die NATURALLY
+// lands on is read off, and the die's rendering is offset by one of its own
+// rotational symmetries that carries the server's face onto that landed
+// face. Because the offset is a symmetry of the solid, the rendered die
+// occupies exactly the space the simulated body does; it simply wears its
+// numbers rotated, so the physically-landed face shows the server's number.
+// Playback is the recorded trajectory — nothing is ever corrected on screen.
 
-// Same neighborhood as the scripted animator's own TUMBLE_SECONDS/
-// SETTLE_SECONDS above, widened slightly since a real simulation's natural
-// settle time genuinely varies (unlike the scripted version's fixed
-// schedule) — the spike's own suggested starting point, tuned by feel.
-const MIN_PHYSICS_SECONDS = 0.4;
-const MAX_PHYSICS_SECONDS = 1.2;
-const SETTLE_BLEND_SECONDS = 0.3;
+const SIM_DT = 1 / 120;
+// A roll is finished once every die has been quiet for this long…
+const SIM_QUIET_SECONDS = 0.25;
+// …but never simulates longer than this (a die balanced on a wall edge).
+const SIM_MAX_SECONDS = 5;
+const SIM_MIN_SECONDS = 0.4;
 // A body under both of these is considered "quiet" — units are the physics
-// world's own m/s and rad/s at this scene's real-world-meter scale (three.js
-// AVATAR_HEIGHT === 1.7 for a human — confirmed, not assumed — so ordinary
-// Earth gravity and everyday velocity/angular-velocity numbers both apply
-// directly here with no separate scale factor to invent).
+// world's own m/s and rad/s at this scene's real-world-meter scale.
 const LINEAR_SETTLE_THRESHOLD = 0.05;
 const ANGULAR_SETTLE_THRESHOLD = 0.3;
+// How flat a die must land to count: the landed face's normal·up. A d4 rests
+// on a face, so its best upward face only ever reaches 1/3.
+const FLAT_ENOUGH = 0.96;
+const D4_FLAT_ENOUGH = 0.3;
+// Re-throw (fresh random toss) when a die lands cocked, at most this often.
+const MAX_THROW_ATTEMPTS = 6;
+// Non-standard dice (no number layout to re-map) ease upright, and a die
+// that stays tilted after every re-throw tips flat, over this long.
+const UPRIGHT_BLEND_SECONDS = 0.3;
 
-// Physics-engine hygiene against a slow/janky real animation frame: never
-// advance the simulation by one huge, unstable timestep — sub-step in
-// bounded increments, capped so one pathological stall (a backgrounded tab
-// resuming) can't spend unbounded CPU catching up in a single step() call.
-const MAX_SUBSTEP_SECONDS = 1 / 60;
-const MAX_SUBSTEPS_PER_FRAME = 6;
-
-// A relatively gentle, honestly-randomized toss (§7: since the settle is
-// unconditionally corrected regardless of the natural outcome, there is no
-// reason to bias — or even carefully tune — these numbers toward "looking
-// like it might land right"; they only need to look like a real toss).
+// A relatively gentle, honestly-randomized toss — the landed face is never
+// steered; the numbers are re-mapped onto whatever face comes up.
 const THROW_MAX_SPIN = 16; // rad/s per axis
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
@@ -546,145 +549,148 @@ function parseDieIndexWithinRoll(dieId: string): number {
   return Number.isFinite(index) ? index : 0;
 }
 
-interface DiePhysicsRecord {
-  body: InstanceType<RapierNamespace["RigidBody"]>;
-  /** Fixed for this die's whole lifetime — the exact orientation
-   * faceNormalForResult(kind, spec.result) demands, computed once at body
-   * creation (same technique scriptedDiceAnimator's own targetQuaternion
-   * uses). */
-  targetQuaternion: Quaternion;
-  targetHeight: number;
-  /** This die's own real geometric floor-clamp bound — see
-   * minOriginHeightFor's own doc comment. Computed once at body-creation
-   * time (this die's shape never changes), same lifecycle as
-   * targetHeight/targetQuaternion above. */
+/** One die's recorded trajectory, at SIM_DT. */
+interface RecordedDie {
+  kind: DieKind | null;
+  frames: number;
+  /** xyz per frame. */
+  positions: Float32Array;
+  /** xyzw per frame. */
+  quaternions: Float32Array;
+  /** 1 on frames where this die started a real collision (for dice sounds). */
+  impacts: Uint8Array;
+  /** Applied after the body's rotation when rendering: a symmetry of the
+   * die that puts the server's face where the body's landed face is. */
+  labelOffset: Quaternion;
+  /** Only when every re-throw still left this die resting tilted (leaning
+   * on a wall or another die): the small world-space turn that lays the
+   * landed face flat, eased in over the last moment like a die toppling. */
+  tipFlat: Quaternion | null;
   minOriginHeight: number;
-  /** Non-null once this die has transitioned from "live physics" to
-   * "blending into the guaranteed target" — set exactly once, at the first
-   * frame that trips MIN_PHYSICS_SECONDS+quiet or MAX_PHYSICS_SECONDS. */
-  transitionElapsed: number | null;
-  snapshotPosition: [number, number, number] | null;
-  snapshotQuaternion: Quaternion | null;
 }
 
-interface RollPhysicsWorld {
-  world: InstanceType<RapierNamespace["World"]>;
-  dice: Map<string, DiePhysicsRecord>;
-  lastSteppedElapsed: number;
-  /** Count of this roll's own dice that haven't transitioned yet — once this
-   * hits 0, the shared world no longer needs stepping at all (every die's
-   * pose is now a pure function of its own frozen snapshot + elapsed time),
-   * a real (if modest) CPU saving during a roll's LINGER_MS tail. */
-  pendingCount: number;
-  /** SP8: this roll's own Rapier EventQueue — real collision-started/-ended
-   * events, drained every low-level world.step() call below (see the
-   * physicsDiceAnimator step() function's own comment on exactly why "every
-   * call", not just once per outer frame, matters: Rapier's own
-   * autoDrain=true silently DISCARDS a step's events if a second step()
-   * runs before they're drained — confirmed directly by real prototyping
-   * against this exact package version before choosing this approach; see
-   * this feature's own design notes). One per roll, matching `world`'s own
-   * per-roll lifetime — freed alongside it in disposeDicePhysicsRoll. */
-  eventQueue: InstanceType<RapierNamespace["EventQueue"]>;
-  /** Maps a die's own collider handle (Rapier's internal id, assigned at
-   * `createCollider` time — collider handles are scoped PER WORLD, so this
-   * map must live on the per-roll RollPhysicsWorld, never a single
-   * module-global map, or two different rolls' dice could collide on the
-   * same handle value) back to that die's `spec.id`, so a drained collision
-   * event (which only carries raw collider handles) can be attributed to
-   * the right die. Only dice are registered here — the tray floor/wall
-   * colliders (buildTrayBoundary) are never a lookup target, only ever the
-   * OTHER side of a die's collision. */
-  handleToDieId: Map<number, string>;
-  /** The set of this roll's own die ids that had a genuine collision-started
-   * event during THIS macro frame's world-step burst — reset to empty right
-   * before the burst (if one runs), populated during it, then read
-   * (non-destructively — every die in the roll reads this same frame's set,
-   * regardless of call order) by every die's own step() call this same
-   * frame. Reset-but-not-repopulated on a frame where every die has already
-   * transitioned (pendingCount === 0, so the world no longer steps) — see
-   * physicsDiceAnimator's own step() for why this must still be cleared
-   * every frame even when nothing steps, not just when something does. */
-  impactedDieIdsThisFrame: Set<string>;
+interface RecordedRoll {
+  dice: Map<string, RecordedDie>;
 }
 
-const rollWorlds = new Map<string, RollPhysicsWorld>();
+const recordedRolls = new Map<string, RecordedRoll>();
 
-function getOrCreateRollWorld(Rapier: RapierNamespace, rollId: string): RollPhysicsWorld {
-  let roll = rollWorlds.get(rollId);
-  if (!roll) {
-    const world = new Rapier.World({ x: 0, y: -9.81, z: 0 });
-    buildTrayBoundary(Rapier, world);
-    // autoDrain=true per Rapier's own strong recommendation (EventQueue's
-    // own doc comment) — this module always drains explicitly and
-    // immediately after every step() call anyway (see the note on
-    // RollPhysicsWorld.eventQueue above), so autoDrain never has anything
-    // left to silently clean up; it's just defense in depth against a
-    // theoretical future call site that steps without draining.
-    const eventQueue = new Rapier.EventQueue(true);
-    roll = {
-      world,
-      dice: new Map(),
-      lastSteppedElapsed: 0,
-      pendingCount: 0,
-      eventQueue,
-      handleToDieId: new Map(),
-      impactedDieIdsThisFrame: new Set(),
-    };
-    rollWorlds.set(rollId, roll);
+// ---- Die symmetries ----
+
+const symmetryCache = new Map<string, Quaternion>();
+const uniqueVerticesCache = new Map<DieKind, Vector3[]>();
+
+function uniqueVertices(kind: DieKind): Vector3[] {
+  let vertices = uniqueVerticesCache.get(kind);
+  if (vertices) return vertices;
+  const position = dieGeometryForPhysics(kind).attributes.position;
+  vertices = [];
+  for (let i = 0; i < position.count; i++) {
+    const vertex = new Vector3(position.getX(i), position.getY(i), position.getZ(i));
+    if (!vertices.some((existing) => existing.distanceToSquared(vertex) < 1e-8)) vertices.push(vertex);
   }
-  return roll;
+  uniqueVerticesCache.set(kind, vertices);
+  return vertices;
 }
 
-function createDieBody(Rapier: RapierNamespace, roll: RollPhysicsWorld, spec: DiceTumbleDieSpec): DiePhysicsRecord {
-  const kind = dieKindForSides(spec.sides);
-  const targetNormal = kind ? faceNormalForResult(kind, spec.result) : ([0, 1, 0] as const);
-  // Same Quaternion().setFromUnitVectors technique scriptedDiceAnimator's own
-  // targetQuaternion (above) and DiceTumble.tsx's decal placement both
-  // already use: the rotation that carries this face's local normal onto
-  // world +Y.
-  const targetQuaternion = new Quaternion().setFromUnitVectors(new Vector3(...targetNormal), new Vector3(0, 1, 0));
-  const targetHeight = restingOriginHeight(kind, targetQuaternion);
-  const minOriginHeight = minOriginHeightFor(kind);
+/** Largest distance any vertex moves to its nearest image vertex under
+ * `rotation` (0 for an exact symmetry). */
+function symmetryError(kind: DieKind, rotation: Quaternion): number {
+  const vertices = uniqueVertices(kind);
+  const moved = new Vector3();
+  let worst = 0;
+  for (const vertex of vertices) {
+    moved.copy(vertex).applyQuaternion(rotation);
+    let nearest = Infinity;
+    for (const other of vertices) nearest = Math.min(nearest, other.distanceToSquared(moved));
+    worst = Math.max(worst, nearest);
+  }
+  return Math.sqrt(worst);
+}
 
-  // Spread multiple dice in the same roll around the tray via a golden-angle
-  // spiral keyed on each die's own index (ActiveTumble's `${rollId}:${index}`
-  // id convention) — avoids stacking near-identical starting positions for a
-  // large multi-die roll (which would otherwise resolve as a small explosive
-  // initial-overlap correction) without needing to know the roll's total
-  // die count up front. Actual throw velocity/spin is genuinely randomized
-  // (Math.random(), not this id-derived spread) — §7/§10's own explicit
-  // point that a client-local physics throw is free to be honestly random
-  // with zero coupling to correctness, and different clients replaying the
-  // identical roll id are EXPECTED to see different-looking tumbles.
+/**
+ * A rotation S that is a symmetry of `kind`'s solid and carries face
+ * `fromIndex`'s normal onto face `toIndex`'s normal. Every standard die's
+ * rotation group acts transitively on its faces, so one always exists: the
+ * minimal rotation between the two normals, then the exact turn about the
+ * destination normal that lines a vertex up with another vertex (tried for
+ * every candidate vertex; the best-fitting one wins — the d10's kite faces
+ * make that turn an irregular angle, so it has to be solved, not stepped).
+ */
+export function dieSymmetryBetweenFaces(kind: DieKind, fromIndex: number, toIndex: number): Quaternion {
+  const key = `${kind}:${fromIndex}:${toIndex}`;
+  const cached = symmetryCache.get(key);
+  if (cached) return cached.clone();
+  const normals = DIE_FACE_NORMALS[kind];
+  const from = new Vector3(...normals[fromIndex]).normalize();
+  const axis = new Vector3(...normals[toIndex]).normalize();
+  const align = new Quaternion().setFromUnitVectors(from, axis);
+  const vertices = uniqueVertices(kind);
+
+  // A reference vertex well off the axis, after alignment.
+  const project = (v: Vector3) => v.clone().sub(axis.clone().multiplyScalar(v.dot(axis)));
+  const reference = vertices
+    .map((v) => v.clone().applyQuaternion(align))
+    .reduce((best, v) => (project(v).lengthSq() > project(best).lengthSq() ? v : best));
+  const referenceHeight = reference.dot(axis);
+  const referenceFlat = project(reference);
+
+  let best = align;
+  let bestError = symmetryError(kind, align);
+  for (const candidate of vertices) {
+    // Only vertices at the same height along the axis and the same distance
+    // from it can be the reference vertex's image.
+    if (Math.abs(candidate.dot(axis) - referenceHeight) > DIE_SIZE * 0.02) continue;
+    const candidateFlat = project(candidate);
+    if (Math.abs(candidateFlat.length() - referenceFlat.length()) > DIE_SIZE * 0.02) continue;
+    const angle = Math.atan2(
+      referenceFlat.clone().cross(candidateFlat).dot(axis),
+      referenceFlat.dot(candidateFlat)
+    );
+    const rotation = new Quaternion().setFromAxisAngle(axis, angle).multiply(align);
+    const error = symmetryError(kind, rotation);
+    if (error < bestError) {
+      best = rotation;
+      bestError = error;
+    }
+  }
+  symmetryCache.set(key, best.clone());
+  return best;
+}
+
+function landedFace(kind: DieKind, rotation: Quaternion): { index: number; flatness: number } {
+  const up = new Vector3(0, 1, 0).applyQuaternion(rotation.clone().invert());
+  let index = 0;
+  let flatness = -Infinity;
+  DIE_FACE_NORMALS[kind].forEach((normal, i) => {
+    const dot = up.x * normal[0] + up.y * normal[1] + up.z * normal[2];
+    if (dot > flatness) {
+      flatness = dot;
+      index = i;
+    }
+  });
+  return { index, flatness };
+}
+
+// ---- Headless simulation ----
+
+function throwDie(
+  Rapier: RapierNamespace,
+  world: InstanceType<RapierNamespace["World"]>,
+  spec: DiceTumbleDieSpec,
+  kind: DieKind | null
+) {
   const dieIndex = parseDieIndexWithinRoll(spec.id);
   const startAngle = dieIndex * GOLDEN_ANGLE + Math.random() * 0.8;
   const startRadius = Math.random() * (DICE_START_RADIUS_BASE * 0.7);
-  const startX = Math.cos(startAngle) * startRadius;
-  const startZ = Math.sin(startAngle) * startRadius;
-  const startY = 0.32 + Math.random() * 0.15;
-
-  // Tuned (empirically, against real screenshots) so a thrown die's real
-  // worst-case horizontal travel — starting radius + outwardSpeed × real
-  // hang time under gravity — stays in the same rough visual envelope
-  // scriptedDiceAnimator's own DICE_START_RADIUS_BASE/JITTER (~0.42) always
-  // guaranteed deterministically: real physics with unconstrained energy
-  // could otherwise throw a die past a tight camera's own framing
-  // (confirmed directly — /dev/dice-showcase's close-up preview camera,
-  // sized for the old scripted animator's own bounded arc, visibly lost
-  // dice off-frame before this tuning) or, in a small personal tray, closer
-  // to PHYSICS_TRAY_RADIUS's own wall than looks natural. Still genuinely
-  // randomized per-throw (§7/§10 — no coupling to correctness either way).
   const throwAngle = Math.random() * Math.PI * 2;
   const outwardSpeed = 0.25 + Math.random() * 0.35;
   const upSpeed = 0.9 + Math.random() * 0.6;
-
   const startRotation = new Quaternion().setFromEuler(
     new Euler(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2)
   );
-
   const bodyDesc = Rapier.RigidBodyDesc.dynamic()
-    .setTranslation(startX, startY, startZ)
+    .setTranslation(Math.cos(startAngle) * startRadius, 0.32 + Math.random() * 0.15, Math.sin(startAngle) * startRadius)
     .setRotation({ x: startRotation.x, y: startRotation.y, z: startRotation.z, w: startRotation.w })
     .setLinvel(Math.cos(throwAngle) * outwardSpeed, upSpeed, Math.sin(throwAngle) * outwardSpeed)
     .setAngvel({
@@ -694,266 +700,240 @@ function createDieBody(Rapier: RapierNamespace, roll: RollPhysicsWorld, spec: Di
     })
     .setLinearDamping(0.25)
     .setAngularDamping(0.35)
-    // Continuous Collision Detection — the root-cause tunneling guard, not
-    // just this file's own defensive floor clamp (below/minOriginHeightFor's
-    // own doc comment) belt-and-braces backstop. buildTrayBoundary's own
-    // floor/wall colliders are deliberately thin analytic shapes (a 0.02-
-    // unit-thick floor cylinder, 0.03-unit-thick wall segments), and a
-    // freshly-thrown die can carry real linear speed up to ~1.5 (upSpeed
-    // above) plus up to THROW_MAX_SPIN rad/s of spin — fast enough, at a
-    // high enough physics framerate hiccup, to move farther in one discrete
-    // substep than that floor is thick, which is exactly the textbook
-    // tunneling failure mode for thin static colliders paired with fast
-    // dynamic bodies under ordinary discrete collision detection. Enabling
-    // CCD per-body (RigidBodyDesc.setCcdEnabled, not a world-level setting —
-    // Rapier's own API scopes it per-body) makes Rapier sweep this body's
-    // motion for the floor/wall/other-dice contacts it would otherwise skip
-    // past, catching a fast throw BEFORE it tunnels rather than after.
-    // Purely a safety net: CCD only ever engages when a body's own motion
-    // this substep would otherwise miss a thin collider entirely, so it
-    // changes nothing about an ordinary, non-tunneling throw's real
-    // trajectory, tumble feel, or settle timing (confirmed directly —
-    // diceAnimator.test.ts's existing settle-orientation assertions, which
-    // predate this comment, already exercise real physics-driven throws at
-    // these exact same velocity ranges end to end and continue to pass
-    // unchanged).
     .setCcdEnabled(true);
-  const body = roll.world.createRigidBody(bodyDesc);
-  // SP8: COLLISION_EVENTS makes this specific die's contacts (against the
-  // floor, a wall, or another die — buildTrayBoundary already opts every
-  // boundary collider in too) show up in roll.eventQueue's own drain below.
-  const colliderDesc = colliderDescFor(Rapier, kind)
-    .setFriction(0.7)
-    .setRestitution(0.35)
-    .setDensity(1)
-    .setActiveEvents(Rapier.ActiveEvents.COLLISION_EVENTS);
-  const collider = roll.world.createCollider(colliderDesc, body);
-  roll.handleToDieId.set(collider.handle, spec.id);
-
-  const record: DiePhysicsRecord = {
-    body,
-    targetQuaternion,
-    targetHeight,
-    minOriginHeight,
-    transitionElapsed: null,
-    snapshotPosition: null,
-    snapshotQuaternion: null,
-  };
-  roll.dice.set(spec.id, record);
-  roll.pendingCount++;
-  return record;
+  const body = world.createRigidBody(bodyDesc);
+  const collider = world.createCollider(
+    colliderDescFor(Rapier, kind)
+      .setFriction(0.7)
+      .setRestitution(0.35)
+      .setDensity(1)
+      .setActiveEvents(Rapier.ActiveEvents.COLLISION_EVENTS),
+    body
+  );
+  return { body, colliderHandle: collider.handle };
 }
 
-/** Frees a finished roll's Rapier World (and, per Rapier's own docs, every
- * body/collider it owns — no need to free those individually) AND its own
- * EventQueue (SP8 — a second, independent piece of WASM-owned memory
- * `world.free()` does NOT also release). Rapier's WASM memory is NOT
- * garbage-collected by the JS engine, so skipping either would be a real,
- * slow memory leak across a long session with many rolls (docs/design/
- * dice-numbers-and-physics.md §7's own explicit warning, which SP8's own
- * EventQueue addition is equally subject to). Safe to call for any roll id,
- * including one that never used physics at all (scripted-animator-only
- * rolls never appear in `rollWorlds`) — a plain no-op in that case, so
- * DiceTumble.tsx's own onDone hook can call this unconditionally for every
- * finished roll without knowing which animator it used.
+interface SimulatedThrow {
+  dice: Map<string, Omit<RecordedDie, "labelOffset" | "tipFlat">>;
+  /** The worst (least flat) landing among the roll's standard dice. */
+  worstFlatnessMargin: number;
+}
+
+function simulateThrow(Rapier: RapierNamespace, specs: readonly DiceTumbleDieSpec[]): SimulatedThrow {
+  const world = new Rapier.World({ x: 0, y: -9.81, z: 0 });
+  const eventQueue = new Rapier.EventQueue(true);
+  try {
+    world.timestep = SIM_DT;
+    buildTrayBoundary(Rapier, world);
+    const maxFrames = Math.ceil(SIM_MAX_SECONDS / SIM_DT) + 1;
+    const dice = specs.map((spec) => {
+      const kind = dieKindForSides(spec.sides);
+      const { body, colliderHandle } = throwDie(Rapier, world, spec, kind);
+      return {
+        spec,
+        kind,
+        body,
+        colliderHandle,
+        positions: new Float32Array(maxFrames * 3),
+        quaternions: new Float32Array(maxFrames * 4),
+        impacts: new Uint8Array(maxFrames),
+      };
+    });
+    const handleToDie = new Map(dice.map((die) => [die.colliderHandle, die]));
+
+    let frame = 0;
+    let quietFrames = 0;
+    const quietNeeded = Math.ceil(SIM_QUIET_SECONDS / SIM_DT);
+    const record = () => {
+      for (const die of dice) {
+        const t = die.body.translation();
+        const r = die.body.rotation();
+        die.positions.set([t.x, t.y, t.z], frame * 3);
+        die.quaternions.set([r.x, r.y, r.z, r.w], frame * 4);
+      }
+    };
+    record();
+    while (frame < maxFrames - 1) {
+      world.step(eventQueue);
+      frame++;
+      eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+        if (!started) return;
+        const a = handleToDie.get(handle1);
+        if (a) a.impacts[frame] = 1;
+        const b = handleToDie.get(handle2);
+        if (b) b.impacts[frame] = 1;
+      });
+      record();
+      const allQuiet = dice.every((die) => {
+        const v = die.body.linvel();
+        const w = die.body.angvel();
+        return (
+          Math.hypot(v.x, v.y, v.z) < LINEAR_SETTLE_THRESHOLD && Math.hypot(w.x, w.y, w.z) < ANGULAR_SETTLE_THRESHOLD
+        );
+      });
+      quietFrames = allQuiet ? quietFrames + 1 : 0;
+      if (frame * SIM_DT >= SIM_MIN_SECONDS && quietFrames >= quietNeeded) break;
+    }
+
+    const frames = frame + 1;
+    let worstFlatnessMargin = Infinity;
+    const recorded = new Map<string, Omit<RecordedDie, "labelOffset" | "tipFlat">>();
+    for (const die of dice) {
+      const base = (frames - 1) * 4;
+      const finalRotation = new Quaternion(
+        die.quaternions[base],
+        die.quaternions[base + 1],
+        die.quaternions[base + 2],
+        die.quaternions[base + 3]
+      );
+      const finite = [finalRotation.x, finalRotation.y, finalRotation.z, finalRotation.w].every(Number.isFinite);
+      if (!finite) worstFlatnessMargin = -Infinity;
+      else if (die.kind) {
+        const { flatness } = landedFace(die.kind, finalRotation);
+        worstFlatnessMargin = Math.min(worstFlatnessMargin, flatness - (die.kind === "d4" ? D4_FLAT_ENOUGH : FLAT_ENOUGH));
+      }
+      recorded.set(die.spec.id, {
+        kind: die.kind,
+        frames,
+        positions: die.positions.subarray(0, frames * 3),
+        quaternions: die.quaternions.subarray(0, frames * 4),
+        impacts: die.impacts.subarray(0, frames),
+        minOriginHeight: minOriginHeightFor(die.kind),
+      });
+    }
+    return { dice: recorded, worstFlatnessMargin };
+  } finally {
+    // Rapier's WASM memory isn't garbage-collected — the recording is plain
+    // JS arrays, so the world can go the moment simulation ends.
+    eventQueue.free();
+    world.free();
+  }
+}
+
+/**
+ * Simulates a whole roll (all its dice together, so they still collide with
+ * each other and the tray) and stores the recording the animator replays.
+ * Idempotent per roll id. DiceTumble calls this with every die in the roll
+ * as the roll starts; a die the animator meets without a prepared roll is
+ * simulated on its own as a fallback.
  */
+export function prepareDicePhysicsRoll(rollId: string, specs: readonly DiceTumbleDieSpec[]): void {
+  if (!rapierModule || recordedRolls.has(rollId) || specs.length === 0) return;
+  const Rapier = rapierModule;
+  let best: SimulatedThrow | null = null;
+  for (let attempt = 0; attempt < MAX_THROW_ATTEMPTS; attempt++) {
+    const simulated = simulateThrow(Rapier, specs);
+    if (!best || simulated.worstFlatnessMargin > best.worstFlatnessMargin) best = simulated;
+    if (simulated.worstFlatnessMargin >= 0) break;
+  }
+  const dice = new Map<string, RecordedDie>();
+  for (const spec of specs) {
+    const die = best!.dice.get(spec.id)!;
+    let labelOffset = new Quaternion();
+    let tipFlat: Quaternion | null = null;
+    if (die.kind) {
+      const base = (die.frames - 1) * 4;
+      const finalRotation = new Quaternion(
+        die.quaternions[base],
+        die.quaternions[base + 1],
+        die.quaternions[base + 2],
+        die.quaternions[base + 3]
+      );
+      const landed = landedFace(die.kind, finalRotation).index;
+      const faceCount = DIE_FACE_NORMALS[die.kind].length;
+      const target = Math.min(Math.max(Math.round(spec.result) - 1, 0), faceCount - 1);
+      labelOffset = dieSymmetryBetweenFaces(die.kind, target, landed);
+      const { flatness } = landedFace(die.kind, finalRotation);
+      if (die.kind !== "d4" && flatness < FLAT_ENOUGH) {
+        const landedUp = new Vector3(...DIE_FACE_NORMALS[die.kind][landed]).normalize().applyQuaternion(finalRotation);
+        tipFlat = new Quaternion().setFromUnitVectors(landedUp, new Vector3(0, 1, 0));
+      }
+    }
+    dice.set(spec.id, { ...die, labelOffset, tipFlat });
+  }
+  recordedRolls.set(rollId, { dice });
+}
+
+/** Drops a finished roll's recording. Safe for any roll id, including one
+ * that never used physics. (The physics world itself is already freed as
+ * soon as the roll's simulation finishes.) */
 export function disposeDicePhysicsRoll(rollId: string): void {
-  const roll = rollWorlds.get(rollId);
-  if (!roll) return;
-  roll.eventQueue.free();
-  roll.world.free();
-  rollWorlds.delete(rollId);
+  recordedRolls.delete(rollId);
 }
 
 const eulerScratch = new Euler();
 const quaternionScratch = new Quaternion();
-
-// Rapier's own translation()/rotation()/linvel()/angvel() accept an optional
-// `target` object to write into instead of allocating a fresh one — the
-// standard hot-path pattern for a physics binding read every frame for
-// every body (confirmed directly: passing a target returns that SAME
-// object, mutated in place). With up to MAX_PHYSICS_DICE_PER_ROLL dice per
-// tray across every connected member's own tray simultaneously, this read
-// happens up to a few hundred times per animation frame in the real
-// multi-tray worst case (§9) — reusing one shared set of Rapier-native
-// scratch objects (lazily constructed once real Rapier types exist, below)
-// measurably cuts GC pressure versus 4 fresh allocations per die per frame.
-// Safe to share a single pool: each step() call fully consumes these values
-// (copying whatever it needs into this module's own three.js scratch
-// objects or a plain array) before any other die's step() call can run.
-let rapierTranslationScratch: InstanceType<RapierNamespace["Vector3"]> | null = null;
-let rapierRotationScratch: InstanceType<RapierNamespace["Quaternion"]> | null = null;
-let rapierLinvelScratch: InstanceType<RapierNamespace["Vector3"]> | null = null;
-let rapierAngvelScratch: InstanceType<RapierNamespace["Vector3"]> | null = null;
+const nextQuaternionScratch = new Quaternion();
+const tipScratch = new Quaternion();
 
 /**
- * The physics-backed DiceAnimator (docs/design/dice-numbers-and-physics.md
- * §7-§9) — selected via `pickDiceAnimator`, never constructed/used directly
- * by DiceTumble.tsx. One Rapier World per ROLL (not per die), lazily created
- * on first sight of that roll's id (parsed back out of `spec.id`'s
- * `${rollId}:${index}` convention) and explicitly freed by
- * `disposeDicePhysicsRoll` once the roll finishes.
- *
- * Unlike `scriptedDiceAnimator`, this is NOT a pure function of its
- * arguments — a live physics world is unavoidably stateful, exactly as this
- * file's own `DiceAnimator` doc comment anticipates. Calling `step` twice
- * with identical `(spec, elapsedSeconds)` is safe and returns the same pose
- * (the shared world only ever advances past an `elapsedSeconds` value it has
- * already seen once), but calling it with strictly increasing
- * `elapsedSeconds` values is the only supported usage — exactly what
- * useDiceTumble.ts's own useFrame loop already does for every DiceAnimator.
+ * The physics-backed DiceAnimator — selected via `pickDiceAnimator`. Replays
+ * the roll's pre-simulated trajectory (see prepareDicePhysicsRoll), so a
+ * given (spec, elapsedSeconds) always returns the same pose, and the die
+ * comes to rest on the server's number exactly where physics put it.
  */
 export const physicsDiceAnimator: DiceAnimator = {
   step(spec, elapsedSeconds) {
     if (!rapierModule) {
-      // Defensive only — pickDiceAnimator never selects this animator until
-      // isDicePhysicsReady() is true. Falling back per-call here (rather
-      // than throwing) keeps this animator safe to call directly too, e.g.
-      // from a test that wants to exercise it before awaiting readiness.
       return scriptedDiceAnimator.step(spec, elapsedSeconds);
     }
-    const Rapier = rapierModule;
-    if (!rapierTranslationScratch) {
-      rapierTranslationScratch = new Rapier.Vector3(0, 0, 0);
-      rapierRotationScratch = new Rapier.Quaternion(0, 0, 0, 1);
-      rapierLinvelScratch = new Rapier.Vector3(0, 0, 0);
-      rapierAngvelScratch = new Rapier.Vector3(0, 0, 0);
-    }
     const rollId = parseRollId(spec.id);
-    const roll = getOrCreateRollWorld(Rapier, rollId);
-    let record = roll.dice.get(spec.id);
-    if (!record) record = createDieBody(Rapier, roll, spec);
-
-    // Step the shared world AT MOST ONCE PER FRAME (docs/design/dice-numbers-
-    // and-physics.md §7) — the first die of this roll to call step() at a
-    // new elapsedSeconds value advances the whole world by the elapsed gap;
-    // every other die's own step() call at that SAME elapsedSeconds this
-    // frame just reads its already-updated transform below, without
-    // stepping again.
-    if (elapsedSeconds > roll.lastSteppedElapsed) {
-      // Reset every frame this world genuinely advances to a NEW elapsed
-      // time, even on a frame where pendingCount has already hit 0 and the
-      // substep loop below doesn't run — otherwise a stale "impacted" from
-      // the LAST real physics frame would read as true forever afterward
-      // (SP8: this field has no other reset path, unlike lastSteppedElapsed/
-      // pendingCount which the substep loop itself keeps current).
-      roll.impactedDieIdsThisFrame.clear();
-      // Skipped entirely once every die in the roll has already transitioned
-      // (pendingCount === 0) — nothing left that needs live physics.
-      if (roll.pendingCount > 0) {
-        let remaining = Math.min(
-          elapsedSeconds - roll.lastSteppedElapsed,
-          MAX_SUBSTEP_SECONDS * MAX_SUBSTEPS_PER_FRAME
-        );
-        while (remaining > 1e-9) {
-          const dt = Math.min(remaining, MAX_SUBSTEP_SECONDS);
-          roll.world.timestep = dt;
-          roll.world.step(roll.eventQueue);
-          // Drained immediately after EVERY individual step() call, not
-          // just once after the whole substep loop — confirmed by real
-          // prototyping (this feature's own design investigation) that
-          // Rapier's autoDrain=true silently discards a step's events if a
-          // second step() runs before they're drained, which this substep
-          // loop can genuinely do (a stalled/backgrounded tab catching up
-          // several substeps in one JS-visible frame). Accumulating into
-          // impactedDieIdsThisFrame (rather than overwriting) across
-          // however many substeps this one macro-frame needed is what makes
-          // "drained per-substep" and "read once per macro-frame by every
-          // die" both correct at the same time.
-          roll.eventQueue.drainCollisionEvents((handle1, handle2, started) => {
-            if (!started) return;
-            const dieId1 = roll.handleToDieId.get(handle1);
-            if (dieId1) roll.impactedDieIdsThisFrame.add(dieId1);
-            const dieId2 = roll.handleToDieId.get(handle2);
-            if (dieId2) roll.impactedDieIdsThisFrame.add(dieId2);
-          });
-          remaining -= dt;
-        }
+    if (!recordedRolls.get(rollId)?.dice.has(spec.id)) {
+      // Not prepared with the whole roll (or a die the roll didn't list) —
+      // simulate this die on its own under its own sub-roll id.
+      const soloId = `${rollId}#${spec.id}`;
+      prepareDicePhysicsRoll(soloId, [spec]);
+      const solo = recordedRolls.get(soloId);
+      if (solo) {
+        const roll = recordedRolls.get(rollId) ?? { dice: new Map<string, RecordedDie>() };
+        roll.dice.set(spec.id, solo.dice.get(spec.id)!);
+        recordedRolls.set(rollId, roll);
+        recordedRolls.delete(soloId);
       }
     }
-    roll.lastSteppedElapsed = elapsedSeconds;
-    // Read (never consumed/cleared here) by every die's own step() call this
-    // same frame, regardless of which die's call actually triggered the
-    // stepping above — see impactedDieIdsThisFrame's own doc comment.
-    const impacted = roll.impactedDieIdsThisFrame.has(spec.id);
+    const die = recordedRolls.get(rollId)?.dice.get(spec.id);
+    if (!die) return scriptedDiceAnimator.step(spec, elapsedSeconds);
 
-    if (record.transitionElapsed === null) {
-      const linvel = record.body.linvel(rapierLinvelScratch!);
-      const angvel = record.body.angvel(rapierAngvelScratch!);
-      const linSpeed = Math.hypot(linvel.x, linvel.y, linvel.z);
-      const angSpeed = Math.hypot(angvel.x, angvel.y, angvel.z);
-      const quiet = linSpeed < LINEAR_SETTLE_THRESHOLD && angSpeed < ANGULAR_SETTLE_THRESHOLD;
-      const reachedMin = elapsedSeconds >= MIN_PHYSICS_SECONDS;
-      const reachedMax = elapsedSeconds >= MAX_PHYSICS_SECONDS;
+    const exactFrame = Math.max(0, elapsedSeconds / SIM_DT);
+    const frameA = Math.min(Math.floor(exactFrame), die.frames - 1);
+    const frameB = Math.min(frameA + 1, die.frames - 1);
+    const t = frameB === frameA ? 0 : exactFrame - frameA;
 
-      const translation = record.body.translation(rapierTranslationScratch!);
-      const rotation = record.body.rotation(rapierRotationScratch!);
-      const isFinitePose =
-        Number.isFinite(translation.x) &&
-        Number.isFinite(translation.y) &&
-        Number.isFinite(translation.z) &&
-        Number.isFinite(rotation.x) &&
-        Number.isFinite(rotation.y) &&
-        Number.isFinite(rotation.z) &&
-        Number.isFinite(rotation.w);
+    const px = die.positions[frameA * 3] + (die.positions[frameB * 3] - die.positions[frameA * 3]) * t;
+    const py = die.positions[frameA * 3 + 1] + (die.positions[frameB * 3 + 1] - die.positions[frameA * 3 + 1]) * t;
+    const pz = die.positions[frameA * 3 + 2] + (die.positions[frameB * 3 + 2] - die.positions[frameA * 3 + 2]) * t;
+    quaternionScratch.fromArray(die.quaternions, frameA * 4);
+    nextQuaternionScratch.fromArray(die.quaternions, frameB * 4);
+    quaternionScratch.slerp(nextQuaternionScratch, t);
+    quaternionScratch.multiply(die.labelOffset);
 
-      if (!isFinitePose || reachedMax || (reachedMin && quiet)) {
-        // Snapshot exactly once, at this fixed transition instant — from
-        // here on, this die's pose is a pure function of elapsed time and
-        // this frozen snapshot, never physics again (§7's own "the natural
-        // outcome of the physics phase is simply never consulted"). A
-        // non-finite pose (a real, if rare, numerical edge case — e.g. an
-        // unlucky simultaneous multi-body collision) snapshots to the
-        // guaranteed-correct target directly rather than ever risking a
-        // NaN/garbage frame reaching the screen.
-        // clampDieOriginY (defensive floor clamp, alongside CCD above) never
-        // fires for ordinary physics here — only for the rare edge case
-        // (ideally none, with CCD enabled) where the body's own natural
-        // resting/timeout position ended up genuinely below the floor.
-        record.snapshotPosition = isFinitePose
-          ? [translation.x, clampDieOriginY(translation.y, record.minOriginHeight), translation.z]
-          : [0, record.targetHeight, 0];
-        record.snapshotQuaternion = isFinitePose
-          ? new Quaternion(rotation.x, rotation.y, rotation.z, rotation.w)
-          : record.targetQuaternion.clone();
-        record.transitionElapsed = elapsedSeconds;
-        roll.pendingCount = Math.max(0, roll.pendingCount - 1);
-      } else {
-        eulerScratch.setFromQuaternion(quaternionScratch.set(rotation.x, rotation.y, rotation.z, rotation.w));
-        return {
-          position: [translation.x, clampDieOriginY(translation.y, record.minOriginHeight), translation.z],
-          rotation: [eulerScratch.x, eulerScratch.y, eulerScratch.z],
-          settled: false,
-          impacted,
-        };
-      }
+    const endSeconds = (die.frames - 1) * SIM_DT;
+    let settled = elapsedSeconds >= endSeconds;
+    if (die.tipFlat) {
+      const blend = Math.min(Math.max((elapsedSeconds - endSeconds) / UPRIGHT_BLEND_SECONDS, 0), 1);
+      tipScratch.identity().slerp(die.tipFlat, easeOutCubic(blend));
+      quaternionScratch.premultiply(tipScratch);
+      settled = blend >= 1;
     }
-
-    // Blend from the frozen live snapshot into the guaranteed-correct target
-    // pose (§7) — rotation slerps into targetQuaternion exactly like
-    // scriptedDiceAnimator's own settle phase; position keeps physics's own
-    // natural (x, z) landing spot (there is no "wrong" landing spot, only a
-    // wrong FACE, so nothing there needs correcting) but eases height into
-    // targetHeight, the exact resting height THIS orientation demands — a
-    // die that settled face-down on the "wrong" side needs a small
-    // lift-and-settle to end up flush on the corrected face, which reads as
-    // a real die's own last damped wobble, not a snap. No separate clamp
-    // needed on `y` below: snapshotY was already floor-clamped at the
-    // transition instant above, targetHeight is always a real, safe,
-    // on-the-floor value by construction (restingOriginHeight), and a
-    // convex ease between two values that are both >= the floor can never
-    // dip below it.
-    const [snapshotX, snapshotY, snapshotZ] = record.snapshotPosition!;
-    const blendT = Math.min((elapsedSeconds - record.transitionElapsed!) / SETTLE_BLEND_SECONDS, 1);
-    const eased = easeOutCubic(blendT);
-    quaternionScratch.copy(record.snapshotQuaternion!).slerp(record.targetQuaternion, eased);
+    if (!die.kind) {
+      // Non-standard die: no numbers to re-map, so ease it upright at the end.
+      const blend = Math.min(Math.max((elapsedSeconds - endSeconds) / UPRIGHT_BLEND_SECONDS, 0), 1);
+      quaternionScratch.slerp(new Quaternion(), easeOutCubic(blend));
+      settled = blend >= 1;
+    }
     eulerScratch.setFromQuaternion(quaternionScratch);
-    const y = snapshotY + (record.targetHeight - snapshotY) * eased;
 
+    // Any collision since the previous display frame counts (the recording
+    // is finer-grained than the display's frame rate).
+    const previousFrame = Math.max(0, Math.floor(Math.max(0, elapsedSeconds - 1 / 60) / SIM_DT));
+    let impacted = false;
+    for (let f = previousFrame + 1; f <= frameA && !impacted; f++) impacted = die.impacts[f] === 1;
+
+    const finite = [px, py, pz].every(Number.isFinite);
     return {
-      position: [snapshotX, y, snapshotZ],
+      position: finite ? [px, clampDieOriginY(py, die.minOriginHeight), pz] : [0, die.minOriginHeight, 0],
       rotation: [eulerScratch.x, eulerScratch.y, eulerScratch.z],
-      settled: blendT >= 1,
+      settled,
       impacted,
     };
   },
