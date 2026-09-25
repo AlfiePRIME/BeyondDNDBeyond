@@ -51,3 +51,4 @@ next-env.d.ts
 # whoever ran it, not a build artifact to keep in source control
 scripts/perf/posed-npc-benchmark.png
 /.design-screenshots
+/prod-server.log
