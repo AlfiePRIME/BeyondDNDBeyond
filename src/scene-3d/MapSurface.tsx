@@ -498,6 +498,8 @@ interface VoidCellPickProps {
   worldX: number;
   worldZ: number;
   height: number;
+  /** Local Y the box rests on — the lifted map's floor (MapSurface floorY). */
+  bottomY: number;
   span: number;
   onDown?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
   onOver?: (x: number, y: number, event: ThreeEvent<PointerEvent>) => void;
@@ -518,13 +520,14 @@ const VoidCellPick = memo(function VoidCellPick({
   worldX,
   worldZ,
   height,
+  bottomY,
   span,
   onDown,
   onOver,
 }: VoidCellPickProps) {
   return (
     <mesh
-      position={[worldX, height / 2, worldZ]}
+      position={[worldX, bottomY + height / 2, worldZ]}
       onPointerDown={onDown ? (event) => onDown(x, y, event) : undefined}
       onPointerOver={onOver ? (event) => onOver(x, y, event) : undefined}
     >
@@ -1929,6 +1932,12 @@ function GridOverlay({
 export interface MapSurfaceProps {
   gridWidth: number;
   gridHeight: number;
+  /** Where cell columns start, in the map's local Y (default 0, the datum).
+   * The game table lifts a map whose pits go below the datum and passes the
+   * negated lift here, so every column reaches down to the table and the
+   * map reads as a solid block; with it set, a pit is a column topped at its
+   * own floor (a real depression) rather than a box capped at the datum. */
+  floorY?: number;
   /** Full dense grid — one entry per cell; the caller overlays sparse
    * storage onto defaults before passing it in (scene-3d can't fetch). */
   cells: readonly MapSurfaceCell[];
@@ -2094,6 +2103,7 @@ export function mapCellOffsets(
 export function MapSurface({
   gridWidth,
   gridHeight,
+  floorY = 0,
   cells,
   metrics = EDITOR_MAP_METRICS,
   objects,
@@ -2136,6 +2146,10 @@ export function MapSurface({
               worldX={cell.x * cellSize - offsetX}
               worldZ={cell.y * cellSize - offsetZ}
               height={baseHeight}
+              // On a lifted map the pick rests on the table like the deepest
+              // floor does — left at the datum it would float above a pit's
+              // top and swallow every click aimed at the pit.
+              bottomY={Math.min(0, floorY)}
               span={span}
               onDown={onCellPointerDown}
               onOver={onCellPointerOver}
@@ -2164,7 +2178,12 @@ export function MapSurface({
             // without going below the global datum) it spans [0, topY],
             // identical in shape to an ordinary raised cell at that height.
             const topY = baseHeight + cell.elevation * elevationStepHeight;
-            const blockHeight = cell.terrain === "pit" ? Math.abs(topY) : topY;
+            // Lifted map (floorY < 0): every column runs from the shared base
+            // up to its own top. Otherwise the original shapes: [0, topY], or
+            // [topY, 0] for a pit below the datum.
+            const bottomY = floorY < 0 ? floorY : Math.min(0, topY);
+            const blockTopY = floorY < 0 ? topY : Math.max(0, topY);
+            const blockHeight = blockTopY - bottomY;
             const worldX = cell.x * cellSize - offsetX;
             const worldZ = cell.y * cellSize - offsetZ;
             return (
@@ -2174,7 +2193,7 @@ export function MapSurface({
                   y={cell.y}
                   worldX={worldX}
                   worldZ={worldZ}
-                  centerY={topY / 2}
+                  centerY={(bottomY + blockTopY) / 2}
                   blockHeight={blockHeight}
                   span={span}
                   elevation={cell.elevation}

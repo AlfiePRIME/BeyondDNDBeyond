@@ -731,6 +731,10 @@ try {
     return row.map_id === mapLinkedId && row.x === linkedX && row.y === linkedY;
   });
   check("the token falls into the linked pit on its source map first", linkedLanded !== null);
+  if (linkedLanded === null) {
+    await dmRoom.screenshot({ path: join(SCRATCH_DIR, "DEBUG-linked-pit-scan-failed.png") });
+    console.log(`DEBUG screenshot: ${join(SCRATCH_DIR, "DEBUG-linked-pit-scan-failed.png")}`);
+  }
 
   const linkedFallHp = await pollUntil(async () => {
     const row = await characterRow(aliceCharacterId);

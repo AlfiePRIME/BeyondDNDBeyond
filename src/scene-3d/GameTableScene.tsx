@@ -2331,6 +2331,24 @@ export function GameTableScene({
     [liveMap, mapMetrics]
   );
 
+  // How far the map's lowest floor (a pit dug below the datum) would sink
+  // into the tabletop. The whole map is lifted by exactly that much — and
+  // its cell columns extended down to the new base (MapSurface floorY) — so
+  // the deepest ground rests ON the table instead of being swallowed by the
+  // wood. 0 for any map without below-datum ground: unchanged rendering.
+  const mapLift = useMemo(() => {
+    if (!liveMap || !mapMetrics) return 0;
+    let lowest = 0;
+    for (const cell of liveMap.cells) {
+      if (cell.terrain === "void") continue;
+      lowest = Math.min(lowest, mapMetrics.baseHeight + cell.elevation * mapMetrics.elevationStepHeight);
+    }
+    // Keep the usual base thickness under the deepest floor too — otherwise
+    // that cell's column would be zero-height (nothing to see or click).
+    return lowest < 0 ? mapMetrics.baseHeight - lowest : 0;
+  }, [liveMap, mapMetrics]);
+  const mapGroupY = TABLE_SURFACE_Y + 0.002 + mapLift;
+
   // Live-room object placement preview + move-drag: the ghost's own current
   // target cell, mutated directly by handlePlacementHoverCell below (a real
   // per-cell hover event) and by the move-drag effect further down (never by
@@ -2410,7 +2428,7 @@ export function GameTableScene({
     // skew the resolved cell for any camera angle that isn't perfectly
     // top-down, exactly the perspective-raycast sensitivity
     // floorPointFromClientXY's own doc comment already warns about).
-    const planeY = TABLE_SURFACE_Y + 0.002 + metrics.baseHeight;
+    const planeY = mapGroupY + metrics.baseHeight;
     function handleMove(event: PointerEvent) {
       const session = objectDragSessionRef.current;
       if (!session) return;
@@ -2436,7 +2454,7 @@ export function GameTableScene({
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
     };
-  }, [isDraggingObject, liveMap, mapMetrics, camera, gl]);
+  }, [isDraggingObject, liveMap, mapMetrics, mapGroupY, camera, gl]);
 
   // The currently-draggable object's own row, if any — resolved once here
   // rather than re-found at each of the two JSX/useFrame call sites below
@@ -2466,11 +2484,7 @@ export function GameTableScene({
     }
     const worldX = draggableObject.x * mapMetrics.cellSize - mapOffsets.offsetX;
     const worldZ = draggableObject.y * mapMetrics.cellSize - mapOffsets.offsetZ;
-    const topY =
-      TABLE_SURFACE_Y +
-      0.002 +
-      mapMetrics.baseHeight +
-      draggableObject.elevation * mapMetrics.elevationStepHeight;
+    const topY = mapGroupY + mapMetrics.baseHeight + draggableObject.elevation * mapMetrics.elevationStepHeight;
     const handleHeight = 0.9 * mapMetrics.cellSize * OBJECT_DRAG_HANDLE_OVERSIZE;
     objectDragHandleProjPoint.set(worldX, topY + handleHeight / 2, worldZ);
     camera.updateMatrixWorld();
@@ -2692,7 +2706,7 @@ export function GameTableScene({
               single-table-sized fit (mapFit.ts's computeTableMapMetrics,
               completely unchanged) centered on that seam, straddling both
               tables equally, rather than pushed flush against either one. */}
-          <group position={[0, TABLE_SURFACE_Y + 0.002, 0]}>
+          <group position={[0, mapGroupY, 0]}>
             {/* Map Art Generation E5: rendered BEFORE MapSurface for
                 readability only — three.js's own depth test (not JSX
                 order) is what actually makes this show through the floor
@@ -2709,6 +2723,7 @@ export function GameTableScene({
               />
             ) : null}
             <MapSurface
+              floorY={-mapLift}
               gridWidth={liveMap.gridWidth}
               gridHeight={liveMap.gridHeight}
               cells={liveMap.cells}
@@ -2808,14 +2823,14 @@ export function GameTableScene({
               visible plane costs nothing when blank and is what lets
               players see the DM's ink with no toggle of their own; only the
               invisible hit-plane is gated on whiteboardInteractive. */}
-          <group position={[0, TABLE_SURFACE_Y + whiteboardHeight, 0]}>
+          <group position={[0, TABLE_SURFACE_Y + mapLift + whiteboardHeight, 0]}>
             <WhiteboardPlane
               ref={onWhiteboardHandleReady}
               mapId={liveMap.id}
               gridWidth={liveMap.gridWidth}
               gridHeight={liveMap.gridHeight}
               cellSize={mapMetrics.cellSize}
-              worldY={TABLE_SURFACE_Y + whiteboardHeight}
+              worldY={TABLE_SURFACE_Y + mapLift + whiteboardHeight}
               interactive={whiteboardInteractive}
               tool={whiteboardTool}
               color={whiteboardColor}
