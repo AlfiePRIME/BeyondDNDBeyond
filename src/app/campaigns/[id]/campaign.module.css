@@ -7,7 +7,7 @@
 
 .main {
   width: 100%;
-  max-width: 960px;
+  max-width: 1080px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -381,4 +381,41 @@
 .toolBlurb {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* Page content below the nav — the part that animates between pages
+   (PageTransition). */
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sessionActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.hostControl {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.prepLink {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  color: var(--md-sys-color-primary);
+}
+
+.prepLink:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
 }

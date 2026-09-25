@@ -11,6 +11,7 @@ import { DisplayNameForm } from "./DisplayNameForm";
 import { CharacterCreateLauncher } from "./CharacterCreateLauncher";
 import { CharacterLibraryRow } from "./CharacterLibraryRow";
 import { CampaignManageRow } from "./CampaignManageRow";
+import { PageTransition } from "../PageTransition";
 import styles from "./account.module.css";
 
 export const metadata = { title: "Account" };
@@ -32,6 +33,7 @@ export default async function AccountPage() {
     <div className={styles.page}>
       <main className={styles.main}>
         <AppNav currentPath="/account" userLabel={profile?.display_name || user.email} />
+        <PageTransition className={styles.content}>
 
         <Panel title="Profile" tone="purple" glow>
           <SectionHeader eyebrow="Account" title="Display name" />
@@ -82,7 +84,7 @@ export default async function AccountPage() {
           <CharacterCreateLauncher memberships={memberships} />
           {memberships.length === 0 ? (
             <p className={styles.emptyHint}>
-              Join or create a campaign from the <Link href="/campaigns">dashboard</Link> first — characters
+              Join or create a campaign from the <Link href="/">Home page</Link> first — characters
               live inside a campaign.
             </p>
           ) : null}
@@ -92,7 +94,7 @@ export default async function AccountPage() {
           {memberships.length === 0 ? (
             <p className={styles.emptyHint}>
               You&apos;re not in any campaigns yet — create one or join with an invite code from the{" "}
-              <Link href="/campaigns">dashboard</Link>.
+              <Link href="/">Home page</Link>.
             </p>
           ) : (
             <div className={styles.campaignsGrid}>
@@ -102,6 +104,7 @@ export default async function AccountPage() {
             </div>
           )}
         </Panel>
+        </PageTransition>
       </main>
     </div>
   );

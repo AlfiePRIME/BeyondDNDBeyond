@@ -7,7 +7,7 @@
 
 .main {
   width: 100%;
-  max-width: 960px;
+  max-width: 1080px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -238,4 +238,12 @@
 .confirmHint {
   color: var(--muted);
   line-height: 1.5;
+}
+
+/* Page content below the nav — the part that animates between pages
+   (PageTransition). */
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }

@@ -18,7 +18,7 @@ export default function ErrorPage({ error, reset }: { error: Error & { digest?: 
             Try again
           </Button>
           <Link href="/" className={styles.link}>
-            ← Back to the Lobby
+            ← Back home
           </Link>
         </div>
       </Panel>

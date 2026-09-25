@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { ViewTransition } from "react";
 import { Button } from "@/ui-components";
 import { logout } from "./actions";
+import { OnlineIndicator } from "./OnlineIndicator";
 import styles from "./AppNav.module.css";
 
 interface NavLinkDef {
@@ -9,9 +11,10 @@ interface NavLinkDef {
   testId: string;
 }
 
+// Home is the merged Lobby + Campaigns page; every campaign page lives
+// under it, so it stays highlighted inside a campaign too.
 const NAV_LINKS: NavLinkDef[] = [
-  { href: "/", label: "Lobby", testId: "app-nav-link-lobby" },
-  { href: "/campaigns", label: "Campaigns", testId: "app-nav-link-campaigns" },
+  { href: "/", label: "Home", testId: "app-nav-link-home" },
   { href: "/account", label: "Account", testId: "app-nav-link-account" },
 ];
 
@@ -26,7 +29,7 @@ export interface AppNavProps {
 }
 
 function isActive(href: string, currentPath: string): boolean {
-  if (href === "/") return currentPath === "/";
+  if (href === "/") return currentPath === "/" || currentPath.startsWith("/campaigns");
   return currentPath === href || currentPath.startsWith(`${href}/`);
 }
 
@@ -39,16 +42,25 @@ function isActive(href: string, currentPath: string): boolean {
  */
 export function AppNav({ currentPath, userLabel }: AppNavProps) {
   return (
-    <nav className={styles.nav} aria-label="Main" data-testid="app-nav">
-      <ul className={styles.navList}>
-        {NAV_LINKS.map(({ href, label, testId }) => {
+    // Anchored during page transitions (see globals.css) so only the content
+    // below it moves; the active pill morphs from one link to the next.
+    <nav className={styles.nav} aria-label="Main" data-testid="app-nav" style={{ viewTransitionName: "app-nav" }}>
+      <ul className={styles.navList} style={{ viewTransitionName: "app-nav-links" }}>
+        {NAV_LINKS.map(({ href, label, testId }, index) => {
           const active = isActive(href, currentPath);
+          const currentIndex = NAV_LINKS.findIndex((link) => isActive(link.href, currentPath));
           return (
-            <li key={href}>
+            <li key={href} className={styles.navItem}>
+              {active ? (
+                <ViewTransition name="app-nav-active" share="nav-pill" default="none">
+                  <span className={styles.navPill} aria-hidden="true" />
+                </ViewTransition>
+              ) : null}
               <Link
                 href={href}
                 className={active ? `${styles.navLink} ${styles.navLinkActive}` : styles.navLink}
                 aria-current={active ? "page" : undefined}
+                transitionTypes={index > currentIndex ? ["nav-forward"] : ["nav-back"]}
                 data-testid={testId}
               >
                 {label}
@@ -58,6 +70,7 @@ export function AppNav({ currentPath, userLabel }: AppNavProps) {
         })}
       </ul>
       <span className={styles.navActions}>
+        <OnlineIndicator />
         {userLabel ? <span className={styles.navUser}>{userLabel}</span> : null}
         <form action={logout}>
           <Button type="submit" variant="ghost" size="sm" data-testid="app-nav-logout">

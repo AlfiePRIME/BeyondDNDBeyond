@@ -39,10 +39,54 @@
   color: var(--md-sys-color-on-surface);
 }
 
+.navItem {
+  position: relative;
+}
+
+/* The active indicator is its own element behind the link, so a page
+   change can morph it from one link to the next (view transition
+   "app-nav-active"). */
+.navPill {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-secondary-container);
+}
+
+.navLink {
+  position: relative;
+}
+
 .navLinkActive,
 .navLinkActive:hover {
-  background: var(--md-sys-color-secondary-container);
+  background: transparent;
   color: var(--md-sys-color-on-secondary-container);
+}
+
+.online {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: color-mix(in srgb, var(--md-custom-color-teal) 12%, transparent);
+  color: var(--md-custom-color-teal);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  white-space: nowrap;
+}
+
+.online:hover {
+  background: color-mix(in srgb, var(--md-custom-color-teal) 20%, transparent);
+}
+
+.onlineDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: breathe-opacity 3s ease-in-out infinite;
 }
 
 .navActions {

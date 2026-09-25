@@ -1,3 +1,5 @@
+/* Home — the merged Lobby + Campaigns page (Material 3). */
+
 .page {
   min-height: 100vh;
   display: flex;
@@ -5,219 +7,169 @@
   padding: 24px;
 }
 
-.lobby {
+.main {
   width: 100%;
-  max-width: 960px;
+  max-width: 1080px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 28px;
   padding-top: 40px;
 }
 
-.lobbyHint {
-  margin: 0 0 16px;
-  color: var(--muted);
-  line-height: 1.6;
-}
+/* ── "Ready to play?" hero ── */
 
-.zeroState {
+.hero {
+  animation: m3-rise-in var(--md-sys-motion-duration-medium4) var(--md-sys-motion-easing-emphasized-decelerate) both;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 8px 0 4px;
+  gap: 20px;
+  padding: 32px;
+  border-radius: var(--md-sys-shape-corner-extra-large);
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--md-sys-color-primary-container) 70%, transparent), transparent 60%),
+    var(--md-sys-color-surface-container);
 }
 
-.zeroStateText {
+.heroText {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.heroEyebrow {
   margin: 0;
-  color: var(--muted);
-  line-height: 1.6;
-  max-width: 52ch;
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  color: var(--md-sys-color-primary);
 }
 
-.zeroStateCta {
+.heroTitle {
+  margin: 0;
+  font-size: var(--md-sys-typescale-display-small-size);
+  line-height: var(--md-sys-typescale-display-small-line-height);
+  font-weight: var(--md-sys-typescale-weight-regular);
+  color: var(--md-sys-color-on-surface);
+}
+
+.heroSubtitle {
+  margin: 0;
+  max-width: 60ch;
+  font-size: var(--md-sys-typescale-body-large-size);
+  line-height: var(--md-sys-typescale-body-large-line-height);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.heroFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px 24px;
+}
+
+.partyRow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.onlineCount {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--font-m);
-  font-size: 14px;
-  letter-spacing: 0.1px;
-  color: var(--text);
-  padding: 14px 30px;
-  border: 1px solid var(--accent);
-  border-radius: var(--r);
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  box-shadow: var(--ga);
-  transition:
-    background 0.18s ease,
-    box-shadow 0.18s ease;
-  font-weight: 500;
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
-.zeroStateCta:hover,
-.zeroStateCta:focus-visible {
-  background: color-mix(in srgb, var(--accent) 38%, transparent);
-  box-shadow: 0 0 24px #cc55ff88, 0 0 52px #cc55ff33;
+.onlineDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--md-custom-color-teal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-custom-color-teal) 25%, transparent);
+  animation: breathe-opacity 3s ease-in-out infinite;
 }
 
-.dashboardList {
-  list-style: none;
+.party {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 0;
   padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px;
-}
-
-.dashboardRow {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  background: var(--md-sys-color-surface-container-high);
-  border-radius: var(--md-sys-shape-corner-medium);
-}
-
-.dashboardRowHeader {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 12px;
-}
-
-.campaignName {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.campaignName:hover {
-  color: var(--teal);
-}
-
-.characterStatus {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.characterLink {
-  color: var(--text);
-}
-
-.characterLink:hover {
-  color: var(--teal);
-}
-
-.noCharacterHint {
-  color: var(--dim);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.noCharacterHint a {
-  color: var(--teal);
-}
-
-.connectionStatus {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 10px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.countRow {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin: 0 0 14px;
-}
-
-.count {
-  font-family: var(--font-m);
-  font-size: 40px;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--teal);
-}
-
-.countLabel {
-  font-family: var(--font-m);
-  font-size: 12px;
-  letter-spacing: 0.1px;
-  color: var(--dim);
-  font-weight: 500;
-}
-
-.memberList {
   list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 12px;
 }
 
-.memberRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px 16px;
-  padding: 10px 12px;
-  background: var(--md-sys-color-surface-container-high);
-  border-radius: var(--md-sys-shape-corner-medium);
-}
-
-.memberName {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.memberBadges {
-  display: flex;
+.partyMember {
+  display: inline-flex;
   align-items: center;
   gap: 8px;
+  height: 36px;
+  padding: 0 14px 0 4px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  font-size: var(--md-sys-typescale-label-large-size);
+  animation: m3-pop-in var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-emphasized-decelerate) both;
 }
 
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-size: 11px;
+  font-weight: var(--md-sys-typescale-weight-medium);
+}
+
+.partyName {
+  white-space: nowrap;
+}
+
+.youTag {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.connectionStatus,
 .sessionNotice {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 14px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-body-medium-size);
 }
+
+/* ── Start control (StartSessionControl) ── */
 
 .startControl {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--dim2);
+  align-items: flex-end;
+  gap: 6px;
 }
 
 .startHint {
   margin: 0;
-  color: var(--dim);
-  font-size: 13px;
+  max-width: 34ch;
+  text-align: right;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-body-small-size);
 }
 
 .startModalHint {
   margin: 0 0 16px;
-  color: var(--muted);
+  color: var(--md-sys-color-on-surface-variant);
   line-height: 1.6;
 }
 
 .startModalStatus {
   margin: 0;
-  color: var(--dim);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .startList {
@@ -225,11 +177,7 @@
   margin: 0;
   padding: 0;
   display: grid;
-  /* The modal shell caps its own width (see Modal.tsx / ui.module.css),
-     so this mostly renders as a single column there — the auto-fill
-     still lets it pick up a second column if that shell ever widens. */
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .startRow {
@@ -238,14 +186,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px 16px;
-  padding: 8px 10px;
-  background: var(--md-sys-color-surface-container-high);
+  padding: 10px 12px 10px 16px;
+  background: var(--md-sys-color-surface-container-highest);
   border-radius: var(--md-sys-shape-corner-medium);
 }
 
 .startName {
-  color: var(--text);
-  font-weight: 600;
+  color: var(--md-sys-color-on-surface);
+  font-weight: var(--md-sys-typescale-weight-medium);
 }
 
 .startRowActions {
@@ -256,6 +204,279 @@
 
 .startError {
   margin: 12px 0 0;
-  color: var(--red);
-  font-size: 13px;
+  color: var(--md-sys-color-error);
+  font-size: var(--md-sys-typescale-body-medium-size);
+}
+
+/* ── Sections ── */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--md-sys-typescale-title-large-size);
+  line-height: var(--md-sys-typescale-title-large-line-height);
+  font-weight: var(--md-sys-typescale-weight-regular);
+  color: var(--md-sys-color-on-surface);
+}
+
+.emptyState {
+  margin: 0;
+  padding: 24px;
+  border-radius: var(--md-sys-shape-corner-large);
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-body-large-size);
+  line-height: var(--md-sys-typescale-body-large-line-height);
+}
+
+/* ── Campaign cards ── */
+
+.campaignGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.campaignCard {
+  /* Cards rise in one after another on load (--stagger is the card's index). */
+  animation: m3-rise-in var(--md-sys-motion-duration-medium4) var(--md-sys-motion-easing-emphasized-decelerate) both;
+  animation-delay: calc(80ms + min(var(--stagger, 0), 8) * 50ms);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+  border-radius: var(--md-sys-shape-corner-large);
+  background: var(--md-sys-color-surface-container-low);
+  transition:
+    background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+    transform var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+    box-shadow var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+
+.campaignCard:hover {
+  background: var(--md-sys-color-surface-container);
+  box-shadow: var(--md-sys-elevation-level1);
+  transform: translateY(-2px);
+}
+
+.campaignCardLive {
+  background: color-mix(in srgb, var(--md-custom-color-teal-container) 45%, var(--md-sys-color-surface-container-low));
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.campaignName {
+  font-size: var(--md-sys-typescale-title-large-size);
+  line-height: var(--md-sys-typescale-title-large-line-height);
+  color: var(--md-sys-color-on-surface);
+}
+
+.campaignName:hover {
+  color: var(--md-sys-color-primary);
+}
+
+.cardStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--md-sys-typescale-label-large-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--md-sys-color-outline);
+}
+
+.statusDotLive {
+  background: var(--md-custom-color-teal);
+  animation: breathe-opacity 2.4s ease-in-out infinite;
+}
+
+.statusDotPaused {
+  background: var(--md-custom-color-orange);
+}
+
+.characterStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--md-sys-typescale-body-medium-size);
+}
+
+.characterLink {
+  color: var(--md-sys-color-on-surface);
+  font-weight: var(--md-sys-typescale-weight-medium);
+}
+
+.characterLink:hover {
+  color: var(--md-sys-color-primary);
+}
+
+.characterMeta,
+.noCharacterHint {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.noCharacterHint a {
+  color: var(--md-sys-color-primary);
+}
+
+.inviteCode {
+  margin: 0;
+  font-size: var(--md-sys-typescale-body-small-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.inviteCode code {
+  font-family: var(--font-mono);
+  color: var(--md-sys-color-on-surface);
+  letter-spacing: 0.05em;
+}
+
+.cardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.primaryAction,
+.tonalAction,
+.secondaryAction {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 20px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  transition:
+    box-shadow var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+    background-color var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+
+.primaryAction {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+
+.primaryAction:hover {
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+.tonalAction {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.tonalAction:hover {
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+.secondaryAction {
+  border: 1px solid var(--md-sys-color-outline);
+  color: var(--md-sys-color-primary);
+}
+
+.secondaryAction:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+/* ── Create / join ── */
+
+.formsRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  gap: 14px;
+}
+
+.formCard {
+  animation: m3-rise-in var(--md-sys-motion-duration-medium4) var(--md-sys-motion-easing-emphasized-decelerate) 200ms both;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+  border-radius: var(--md-sys-shape-corner-large);
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.formTitle {
+  margin: 0;
+  font-size: var(--md-sys-typescale-title-medium-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  color: var(--md-sys-color-on-surface);
+}
+
+.formHint {
+  margin: 0 0 8px;
+  font-size: var(--md-sys-typescale-body-medium-size);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* Page content below the nav — the part that animates between pages
+   (PageTransition). */
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* ── Live games (hero) ── */
+
+.liveGames {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.liveGame {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 12px 12px 12px 20px;
+  border-radius: var(--md-sys-shape-corner-large);
+  background: var(--md-sys-color-surface-container-highest);
+  animation: m3-rise-in var(--md-sys-motion-duration-medium4) var(--md-sys-motion-easing-emphasized-decelerate) both;
+}
+
+.liveGameText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.liveGameName {
+  font-size: var(--md-sys-typescale-title-medium-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+  color: var(--md-sys-color-on-surface);
+}
+
+.liveGameMeta {
+  font-size: var(--md-sys-typescale-body-medium-size);
+  color: var(--md-sys-color-on-surface-variant);
 }

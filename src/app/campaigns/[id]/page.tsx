@@ -9,6 +9,9 @@ import { RemoveMemberForm } from "./RemoveMemberForm";
 import { CampaignRoster } from "./CampaignRoster";
 import { HouseRules } from "./HouseRules";
 import { InviteCodeBadge } from "./InviteCodeBadge";
+import { PageTransition } from "../../PageTransition";
+import { HostThisGameButton } from "./HostThisGameButton";
+import { LiveGamesRefresher } from "../../LiveGamesRefresher";
 import styles from "./campaign.module.css";
 
 export const metadata = { title: "Campaign" };
@@ -88,6 +91,7 @@ export default async function CampaignDetailPage({
     <div className={styles.page}>
       <main className={styles.main}>
         <AppNav currentPath={`/campaigns/${campaignId}`} userLabel={currentUserDisplayName ?? user.email} />
+        <PageTransition className={styles.content}>
 
         <Panel
           title={campaign.name}
@@ -95,6 +99,7 @@ export default async function CampaignDetailPage({
           glow
           headerActions={currentUserIsDM ? <InviteCodeBadge inviteCode={campaign.invite_code} /> : null}
         >
+          <LiveGamesRefresher campaignIds={[campaignId]} />
           {sessionEnded ? (
             <p className={styles.sessionNotice} role="status" data-testid="session-ended-notice">
               The session has ended — thanks for playing.
@@ -109,19 +114,34 @@ export default async function CampaignDetailPage({
                 aria-hidden="true"
               />
               {sessionState === "live"
-                ? "Session in progress"
+                ? "A game is in progress"
                 : sessionState === "paused"
-                  ? "Session paused"
-                  : "No session running"}
+                  ? "The game is paused"
+                  : "No game running"}
               {sessionState === "none" ? (
-                <span className={styles.sessionHint}>
-                  — start one from the <Link href="/">Lobby</Link> once the party is online
-                </span>
+                <span className={styles.sessionHint}>— host one and the rest of the party can join</span>
               ) : null}
             </span>
-            <Link href={`/campaigns/${campaignId}/room`} className={styles.enterRoom}>
-              Enter the Game Room →
-            </Link>
+            <span className={styles.sessionActions}>
+              {sessionState === "none" ? (
+                <>
+                  <Link href={`/campaigns/${campaignId}/room`} className={styles.prepLink} data-testid="enter-room-prep">
+                    Open the table to prep
+                  </Link>
+                  <HostThisGameButton
+                    campaignId={campaignId}
+                    campaignName={campaign.name}
+                    currentUserId={user.id}
+                    currentUserDisplayName={currentUserDisplayName}
+                    currentUserIsDM={currentUserIsDM}
+                  />
+                </>
+              ) : (
+                <Link href={`/campaigns/${campaignId}/room`} className={styles.enterRoom} data-testid="join-this-game">
+                  {sessionState === "live" ? "Join the game ▸" : "Rejoin"}
+                </Link>
+              )}
+            </span>
           </div>
 
           <nav className={styles.toolGrid} aria-label="Campaign tools">
@@ -235,6 +255,7 @@ export default async function CampaignDetailPage({
             <TransferDMForm campaignId={campaignId} otherMembers={otherMembers} />
           </Panel>
         ) : null}
+        </PageTransition>
       </main>
     </div>
   );

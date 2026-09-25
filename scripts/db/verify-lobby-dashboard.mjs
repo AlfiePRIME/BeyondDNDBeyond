@@ -185,19 +185,15 @@ try {
       await page.getByTestId("app-nav").isVisible()
     );
     check(
-      "ForceField canvas background renders",
-      (await page.locator("canvas").count()) > 0
-    );
-    const cta = page.getByTestId("lobby-campaigns-cta");
-    await check(
-      "zero-campaigns user sees the prominent zero-state CTA",
+      "zero-campaigns user sees the empty-state explanation",
       await page.getByTestId("lobby-campaigns-zero-state").isVisible()
     );
-    check("the zero-state CTA is visible/unmissable", await cta.isVisible());
-    check("the zero-state CTA links to /campaigns", (await cta.getAttribute("href")) === "/campaigns");
-    await cta.click();
-    await page.waitForURL(`${APP_URL}/campaigns`, { timeout: 10000 });
-    check("clicking the zero-state CTA actually navigates to /campaigns", page.url() === `${APP_URL}/campaigns`);
+    check(
+      "the create and join forms are right there on Home (no separate Campaigns page)",
+      (await page.getByLabel("Campaign name").isVisible()) && (await page.getByLabel("Invite code").isVisible())
+    );
+    await page.goto(`${APP_URL}/campaigns`, { waitUntil: "networkidle" });
+    check("the old /campaigns URL redirects to Home", page.url() === `${APP_URL}/`, page.url());
 
     check(
       "no duplicate 'zero campaigns' CTA row rendered for a campaign that doesn't exist",
@@ -274,7 +270,7 @@ try {
     await context.close();
   }
 
-  // ── Presence panel + Start control still work, alongside the new dashboard ──
+  // ── Presence + Host a game still work alongside the dashboard ──
   {
     const dmContext = await browser.newContext();
     await dmContext.addCookies(sessionCookies(dm2.session));
@@ -289,27 +285,12 @@ try {
     const playerPage = await playerContext.newPage();
     await playerPage.goto(`${APP_URL}/`, { waitUntil: "networkidle" });
 
-    const baseline = Number(await dmPage.getByTestId("lobby-count").textContent());
-    await dmPage.waitForFunction(
-      (expected) => document.querySelector('[data-testid="lobby-count"]')?.textContent === String(expected),
-      baseline + 1,
-      { timeout: 20000 }
-    );
-    const afterJoin = baseline + 1;
     const startBtn = dmPage.getByTestId("start-session-button");
-    check(
-      "Start button state still matches the >= 2 presence formula alongside the new dashboard",
-      (await startBtn.isDisabled()) === !(afterJoin >= 2)
-    );
-
-    if (afterJoin >= 2) {
-      await startBtn.click();
-      await dmPage.getByTestId(`start-campaign-${campaignWithChar}`).click();
-      await dmPage.waitForURL(`${APP_URL}/campaigns/${campaignWithChar}/room`, { timeout: 15000 });
-      check("Start session still works end-to-end from the redesigned Lobby", true);
-    } else {
-      check("Start session end-to-end skipped (ambient presence < 2 on this shared dev server)", true);
-    }
+    check("Host a game is enabled regardless of how many people are online", await startBtn.isEnabled());
+    await startBtn.click();
+    await dmPage.getByTestId(`start-campaign-${campaignWithChar}`).click();
+    await dmPage.waitForURL(`${APP_URL}/campaigns/${campaignWithChar}/room`, { timeout: 15000 });
+    check("hosting still works end-to-end from Home", true);
 
     await dmContext.close();
     await playerContext.close();

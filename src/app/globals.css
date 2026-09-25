@@ -49,3 +49,126 @@ a {
 * {
   scrollbar-color: var(--md-sys-color-outline-variant) transparent;
 }
+
+/* ── Page transitions (Material 3 motion, via React <ViewTransition>) ──
+ * fade-through: between top-level destinations — the old page fades out
+ * fast, the new one fades in while scaling up slightly.
+ * nav-forward / nav-back: shared-axis X for going deeper into a campaign
+ * and back out. The nav bar is anchored so only the content moves, and
+ * its active pill morphs between links. */
+
+::view-transition-old(.fade-through) {
+  animation: 90ms cubic-bezier(0.4, 0, 1, 1) both vt-fade-out;
+}
+
+::view-transition-new(.fade-through) {
+  animation: 210ms cubic-bezier(0, 0, 0.2, 1) 90ms both vt-fade-scale-in;
+}
+
+::view-transition-old(.nav-forward) {
+  animation:
+    90ms cubic-bezier(0.4, 0, 1, 1) both vt-fade-out,
+    300ms cubic-bezier(0.2, 0, 0, 1) both vt-slide-out-left;
+}
+
+::view-transition-new(.nav-forward) {
+  animation:
+    210ms cubic-bezier(0, 0, 0.2, 1) 90ms both vt-fade-in,
+    300ms cubic-bezier(0.2, 0, 0, 1) both vt-slide-in-right;
+}
+
+::view-transition-old(.nav-back) {
+  animation:
+    90ms cubic-bezier(0.4, 0, 1, 1) both vt-fade-out,
+    300ms cubic-bezier(0.2, 0, 0, 1) both vt-slide-out-right;
+}
+
+::view-transition-new(.nav-back) {
+  animation:
+    210ms cubic-bezier(0, 0, 0.2, 1) 90ms both vt-fade-in,
+    300ms cubic-bezier(0.2, 0, 0, 1) both vt-slide-in-left;
+}
+
+/* The nav bar stays put; only the content below it transitions. Its link
+   labels are a separate layer so the sliding pill passes between the bar's
+   background (below) and the labels (above). */
+::view-transition-group(app-nav),
+::view-transition-group(app-nav-links) {
+  animation: none;
+}
+
+::view-transition-group(app-nav) {
+  z-index: 100;
+}
+
+::view-transition-group(app-nav-links) {
+  z-index: 102;
+}
+
+::view-transition-old(app-nav),
+::view-transition-old(app-nav-links) {
+  display: none;
+}
+
+::view-transition-new(app-nav),
+::view-transition-new(app-nav-links) {
+  animation: none;
+}
+
+/* The active nav pill slides between links. */
+::view-transition-group(.nav-pill) {
+  animation-duration: 350ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  z-index: 101;
+}
+
+@keyframes vt-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes vt-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes vt-fade-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes vt-slide-out-left {
+  to {
+    translate: -48px 0;
+  }
+}
+
+@keyframes vt-slide-in-right {
+  from {
+    translate: 48px 0;
+  }
+}
+
+@keyframes vt-slide-out-right {
+  to {
+    translate: 48px 0;
+  }
+}
+
+@keyframes vt-slide-in-left {
+  from {
+    translate: -48px 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

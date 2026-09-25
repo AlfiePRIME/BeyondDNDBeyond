@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Roboto_Flex } from "next/font/google";
 import { GlobalMusic } from "./GlobalMusic";
+import { LobbyProvider } from "./LobbyProvider";
 import "./globals.css";
 
 // Material 3's typeface (variable, so every type-scale weight is one file).
@@ -25,7 +26,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${robotoFlex.variable} ${jetbrainsMono.variable}`}>
       <body>
         <GlobalMusic />
-        {children}
+        <LobbyProvider>{children}</LobbyProvider>
       </body>
     </html>
   );

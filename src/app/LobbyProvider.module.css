@@ -1,0 +1,64 @@
+/* The "X is hosting Y — Join" invitation: an M3 snackbar, bottom-centre. */
+.invite {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 9000;
+  translate: -50% 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  min-height: 56px;
+  padding: 6px 8px 6px 20px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  box-shadow: var(--md-sys-elevation-level3);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  animation: m3-snackbar-in var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-emphasized-decelerate) both;
+}
+
+.inviteText {
+  margin-right: 8px;
+}
+
+.inviteJoin {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 20px;
+  border-radius: var(--md-sys-shape-corner-full);
+  color: var(--md-sys-color-inverse-primary);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: var(--md-sys-typescale-weight-medium);
+}
+
+.inviteJoin:hover {
+  background: color-mix(in srgb, var(--md-sys-color-inverse-primary) 10%, transparent);
+}
+
+.inviteDismiss {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.inviteDismiss:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+@keyframes m3-snackbar-in {
+  from {
+    opacity: 0;
+    translate: -50% 16px;
+  }
+  to {
+    opacity: 1;
+    translate: -50% 0;
+  }
+}

@@ -15,10 +15,10 @@ export default function NotFound() {
         </p>
         <div className={styles.actions}>
           <Link href="/" className={styles.link}>
-            ← Back to the Lobby
+            ← Back home
           </Link>
-          <Link href="/campaigns" className={styles.link}>
-            Your campaigns
+          <Link href="/account" className={styles.link}>
+            Your account
           </Link>
         </div>
       </Panel>
