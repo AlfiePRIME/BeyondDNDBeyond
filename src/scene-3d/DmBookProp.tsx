@@ -594,7 +594,11 @@ export function DmBookProp({
           zIndexRange={[4500, 4000]}
           pointerEvents="auto"
         >
-          {children}
+          {/* drei renders this inside the canvas's own event wrapper — the
+              element OrbitControls listens on — so a wheel over the book
+              would bubble up and zoom the free camera instead of scrolling
+              the page it's over. */}
+          <div onWheel={(event) => event.stopPropagation()}>{children}</div>
         </Html>
       ) : null}
     </group>

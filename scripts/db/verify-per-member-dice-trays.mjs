@@ -46,6 +46,7 @@ import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
 import { GPU_LAUNCH_ARGS } from "./lib/browser.mjs";
+import { orbitOwnChairIntoView } from "./lib/orbitToOwnChair.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PORT = process.env.PORT ?? "3000";
@@ -338,25 +339,17 @@ try {
   //    too. Testing the drag on a pristine, roll-free room sidesteps that
   //    unrelated risk entirely for this script's own purposes.
   // -------------------------------------------------------------------
-  async function ownChairScreen(page, timeoutMs = 20000) {
-    const deadline = Date.now() + timeoutMs;
-    let last = null;
-    while (Date.now() < deadline) {
-      const text = await page.textContent('[data-testid="chair-drag-state"]');
-      last = JSON.parse(text ?? "{}");
-      if (last.ownChairScreen) return last;
-      await sleep(200);
-    }
-    throw new Error(`chair-drag-state never reported an own chair screen position — last: ${JSON.stringify(last)}`);
-  }
-
-  const beforeDragState = await trayLayoutState(alicePage);
+  // alice's own copy of the layout, once her presence has seen all four.
+  const beforeDragState = await waitForTrayCount(alicePage, 4);
   const aliceBefore = beforeDragState.trays.find((t) => t.userId === alice.id).position;
   const bobBefore = beforeDragState.trays.find((t) => t.userId === bob.id).position;
   const carolBefore = beforeDragState.trays.find((t) => t.userId === carol.id).position;
 
   const aliceCanvasBox = await alicePage.locator("canvas").boundingBox();
-  const aliceChair = await ownChairScreen(alicePage);
+  // A seated player's own chair sits behind their own camera — orbit it
+  // into view first, exactly as a real player (and verify-chair-drag.mjs)
+  // does to grab it.
+  const aliceChair = await orbitOwnChairIntoView(alicePage, aliceCanvasBox);
   await alicePage.mouse.move(aliceCanvasBox.x + aliceChair.ownChairScreen[0], aliceCanvasBox.y + aliceChair.ownChairScreen[1]);
   await alicePage.mouse.down();
   await sleep(150);
@@ -489,6 +482,14 @@ try {
   // 4. A DM-uploaded custom tray model can be selected, and every
   //    connected client sees it flip live.
   // -------------------------------------------------------------------
+  // The Dice Tray panel starts closed in the panel dock — open it first.
+  async function openTrayPicker(page) {
+    if (!(await page.isVisible('[data-testid="dice-tray-picker"]'))) {
+      await page.click('[data-testid="dock-button-diceTray"]');
+    }
+    await page.waitForSelector('[data-testid="dice-tray-picker"]', { state: "visible", timeout: 10000 });
+  }
+  await openTrayPicker(dmPage);
   await dmPage.fill('[data-testid="dice-tray-upload-name"]', "Carved Oak Tray");
   const [fileChooser] = await Promise.all([
     dmPage.waitForEvent("filechooser"),
@@ -548,6 +549,7 @@ try {
   // A non-DM player is never offered the upload control (DM-only, the
   // AssetPalette.tsx canUpload gate reused unchanged), though they CAN
   // still pick from whatever custom models already exist.
+  await openTrayPicker(alicePage);
   check(
     "a non-DM player is not offered the tray-model upload control",
     (await alicePage.$('[data-testid="dice-tray-upload-button"]')) === null
@@ -564,6 +566,7 @@ try {
     // player — she only sees it after her own next reload.
     await alicePage.reload();
     await alicePage.waitForSelector('[data-testid="dice-tray-layout-state"]', { state: "attached", timeout: 30000 });
+    await openTrayPicker(alicePage);
     check(
       "a non-DM player CAN still pick an existing custom tray model",
       (await alicePage.$(`[data-testid="dice-tray-choice-${uploadedAsset.id}"]`)) !== null

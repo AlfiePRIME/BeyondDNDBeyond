@@ -989,6 +989,40 @@ function minPairwiseDistance(points: readonly [number, number][]): number {
 }
 
 describe("resolveMemberTrayLayout", () => {
+  it("hops a rim tray wedged between a rim-dropped chair and the DM's corner throne round to clear rim", () => {
+    // The exact live case: alice's chair dropped onto the rim right beside
+    // bob's tray, with the DM's big chair just round the corner.
+    const chairs = [
+      { x: 1.8518518554761978, z: -2.269480881609793, radius: PLAYER_CHAIR_FRONTAGE / 2 },
+      { x: -3.016353981, z: -1.68492424, radius: PLAYER_CHAIR_FRONTAGE / 2 },
+      { x: 3.016353981, z: -1.68492424, radius: DM_CHAIR_FRONTAGE / 2 },
+    ];
+    const seeds: MemberTraySeed[] = [
+      { userId: "alice", position: [1.351260678, 1.41, 2.268] },
+      { userId: "bob", position: [2.292611135, 1.41, -2.268] },
+      { userId: "dm", position: [0.366830721, 1.41, 2.268] },
+    ];
+    const resolved = resolveMemberTrayLayout(seeds, PERSONAL_TRAY_RADIUS, chairs);
+    for (const [x, , z] of resolved.values()) {
+      for (const chair of chairs) {
+        expect(Math.hypot(x - chair.x, z - chair.z)).toBeGreaterThanOrEqual(PERSONAL_TRAY_RADIUS + chair.radius);
+      }
+    }
+  });
+
+  it("slides a rim-floating tray along the rim, clear of a chair dropped on it, without pulling it over the table", () => {
+    const tray = rimPropPosition([0, 0, 3.37], 1, TABLE_SURFACE_Y + 0.01);
+    const chair = { x: tray[0], z: tray[2], radius: PLAYER_CHAIR_FRONTAGE / 2 };
+    const resolved = resolveMemberTrayLayout([{ userId: "a", position: tray }], PERSONAL_TRAY_RADIUS, [chair])
+      .get("a")!;
+    expect(Math.hypot(resolved[0] - chair.x, resolved[2] - chair.z)).toBeGreaterThanOrEqual(
+      PERSONAL_TRAY_RADIUS + chair.radius
+    );
+    const clearOnX = Math.abs(resolved[0]) >= COMBINED_TABLE_VISIBLE_TOP.width / 2 + PERSONAL_TRAY_RADIUS;
+    const clearOnZ = Math.abs(resolved[2]) >= COMBINED_TABLE_VISIBLE_TOP.depth / 2 + PERSONAL_TRAY_RADIUS;
+    expect(clearOnX || clearOnZ).toBe(true);
+  });
+
   it("returns each seed's own ideal position unchanged when there's only one connected member (nothing to conflict with)", () => {
     const layout = computeCampaignSeatLayout(makeMembers(4));
     const seat = layout.seats[0];

@@ -800,9 +800,18 @@ try {
     x: aliceDefault.position[0] + aliceRowAfterTrayDrag.seat_offset.dx,
     z: aliceDefault.position[2] + aliceRowAfterTrayDrag.seat_offset.dz,
   };
+  // Measured against bob's tray where it ended up: a tray floating off the
+  // rim slides along it clear of a chair dropped on its spot (seating.ts's
+  // spreadAlongHeadRim), so either the chair or the tray may have given way
+  // — what matters is that the two don't overlap.
+  await sleep(500);
+  const bobTrayAfter = (await diceTrayLayoutState(alicePage)).trays.find((t) => t.userId === bob.id);
+  // The chair as actually rendered (the stored offset is applied in the
+  // seat's own rotated frame, so default + offset is only approximate).
+  const aliceChairRendered = (await chairDragState(alicePage)).ownChairRender;
   const distanceFromTray = Math.hypot(
-    aliceFinalAfterTray.x - bobTrayBefore.position[0],
-    aliceFinalAfterTray.z - bobTrayBefore.position[2]
+    aliceChairRendered[0] - bobTrayAfter.position[0],
+    aliceChairRendered[2] - bobTrayAfter.position[2]
   );
   check(
     "the aimed drag actually landed alice's chair meaningfully closer to bob's dice tray than her own starting spot",
@@ -811,9 +820,15 @@ try {
     JSON.stringify({ aliceFinalAfterTray, aliceDefault, bobTray: bobTrayBefore.position })
   );
   check(
-    "the final position does NOT overlap bob's dice tray — nudged clear of it",
+    "the final position does NOT overlap bob's dice tray",
     distanceFromTray >= PLAYER_CHAIR_FRONTAGE / 2 + trayRadius - 0.02,
-    JSON.stringify({ distanceFromTray, required: PLAYER_CHAIR_FRONTAGE / 2 + trayRadius })
+    JSON.stringify({
+      distanceFromTray,
+      required: PLAYER_CHAIR_FRONTAGE / 2 + trayRadius,
+      aliceChairRendered,
+      trays: (await diceTrayLayoutState(alicePage)).trays.map((t) => [t.userId.slice(0, 4), t.position]),
+      seats: JSON.parse((await alicePage.textContent('[data-testid="seat-layout-state"]')) ?? "null"),
+    })
   );
   check(
     "the tray-avoiding drop still respects the clamp radius around the table",

@@ -1075,23 +1075,139 @@ export function rimPropPosition(
   return [roundCoord(dirX * t), y, roundCoord(dirZ * t)];
 }
 
-/** True when (x, z) is clear of the head square's rim band. */
-function isOffHeadRim(x: number, z: number, clearance: number): boolean {
+/** True when (x, z) sits exactly on the head square's rim band — where
+ * rimPropPosition floats props — rather than over the table or out at an
+ * appended table. */
+function isOnHeadRim(x: number, z: number, clearance: number): boolean {
   const { hx, hz } = rimHalfExtents(clearance);
-  return Math.abs(x) >= hx - 1e-6 || Math.abs(z) >= hz - 1e-6;
+  const onEdgeX = Math.abs(Math.abs(x) - hx) < 1e-6 && Math.abs(z) <= hz + 1e-6;
+  const onEdgeZ = Math.abs(Math.abs(z) - hz) < 1e-6 && Math.abs(x) <= hx + 1e-6;
+  return onEdgeX || onEdgeZ;
 }
 
-/** Pushes (x, z) straight out from the table center until it clears the
- * head square's rim band; a no-op for a point already clear of it. */
-function pushOffHeadRim(x: number, z: number, clearance: number): [number, number] {
-  if (isOffHeadRim(x, z, clearance)) return [x, z];
-  const { hx, hz } = rimHalfExtents(clearance);
-  if (Math.abs(x) < 1e-9 && Math.abs(z) < 1e-9) return [0, hz];
-  const t = Math.min(
-    Math.abs(x) > 1e-9 ? hx / Math.abs(x) : Infinity,
-    Math.abs(z) > 1e-9 ? hz / Math.abs(z) : Infinity
-  );
-  return [x * t, z * t];
+/** Arc-length position round the head square's rim band (a rectangle of
+ * half-extents hx, hz), measured from (hx, 0) counterclockwise, for a
+ * point on it — and back. Lets rim props be spaced out along the rim. */
+function rimArcFromPoint(x: number, z: number, hx: number, hz: number): number {
+  const perimeter = 4 * (hx + hz);
+  let arc: number;
+  if (Math.abs(x - hx) < 1e-6) arc = z >= 0 ? z : perimeter + z;
+  else if (Math.abs(z - hz) < 1e-6) arc = hz + (hx - x);
+  else if (Math.abs(x + hx) < 1e-6) arc = hz + 2 * hx + (hz - z);
+  else arc = 3 * hz + 2 * hx + (x + hx);
+  return ((arc % perimeter) + perimeter) % perimeter;
+}
+
+function rimPointFromArc(arc: number, hx: number, hz: number): [number, number] {
+  const perimeter = 4 * (hx + hz);
+  let t = ((arc % perimeter) + perimeter) % perimeter;
+  if (t < hz) return [hx, t];
+  t -= hz;
+  if (t < 2 * hx) return [hx - t, hz];
+  t -= 2 * hx;
+  if (t < 2 * hz) return [-hx, hz - t];
+  t -= 2 * hz;
+  if (t < 2 * hx) return [-hx + t, -hz];
+  t -= 2 * hx;
+  return [hx, -hz + t];
+}
+
+// Relaxation budget for spreadAlongHeadRim — ample for any party the head
+// square can seat; a ring genuinely too full to fit everyone just stops
+// improving, the same honest limit the nudge loop below accepts.
+const RIM_SPREAD_PASSES = 200;
+
+// Arc-length step of spreadAlongHeadRim's final hop search.
+const RIM_HOP_STEP = 0.02;
+
+/**
+ * Spreads every rim-floating tray along the head square's rim band so no
+ * two overlap and none overlaps a chair: each tray only ever moves ALONG
+ * the rim (a straight-line nudge away from a chair, which sits further
+ * out, would shove it back over the table and the map). Works on the whole
+ * set at once — placing trays one by one fragments the rim into gaps too
+ * small to use once a big party fills it.
+ */
+function spreadAlongHeadRim(
+  trays: readonly { userId: string; x: number; z: number }[],
+  trayRadius: number,
+  chairObstacles: readonly ChairObstacle[]
+): Map<string, [number, number]> {
+  const { hx, hz } = rimHalfExtents(RIM_PROP_CLEARANCE);
+  const arcs = trays.map((tray) => rimArcFromPoint(tray.x, tray.z, hx, hz));
+  const points = () => arcs.map((arc) => rimPointFromArc(arc, hx, hz));
+
+  for (let pass = 0; pass < RIM_SPREAD_PASSES; pass++) {
+    let moved = false;
+    const current = points();
+    for (let i = 0; i < arcs.length; i++) {
+      for (let j = i + 1; j < arcs.length; j++) {
+        const deficit =
+          2 * trayRadius + TRAY_NUDGE_MARGIN -
+          Math.hypot(current[i][0] - current[j][0], current[i][1] - current[j][1]);
+        if (deficit <= 1e-9) continue;
+        // Push the pair apart along the rim, each half the shortfall, in
+        // whichever direction round the ring separates them.
+        const perimeter = 4 * (hx + hz);
+        const forward = (((arcs[j] - arcs[i]) % perimeter) + perimeter) % perimeter;
+        const sign = forward <= perimeter / 2 ? 1 : -1;
+        arcs[i] -= (sign * deficit) / 2;
+        arcs[j] += (sign * deficit) / 2;
+        moved = true;
+      }
+      for (const chair of chairObstacles) {
+        const [x, z] = rimPointFromArc(arcs[i], hx, hz);
+        const deficit = trayRadius + chair.radius + TRAY_NUDGE_MARGIN - Math.hypot(x - chair.x, z - chair.z);
+        if (deficit <= 1e-9) continue;
+        // Slide away from the chair's own nearest point on the rim.
+        const nearest = rimArcFromPoint(
+          Math.abs(chair.x) >= hx ? Math.sign(chair.x) * hx : chair.x,
+          Math.abs(chair.x) >= hx ? Math.max(-hz, Math.min(hz, chair.z)) : Math.sign(chair.z || 1) * hz,
+          hx,
+          hz
+        );
+        const perimeter = 4 * (hx + hz);
+        const forward = (((arcs[i] - nearest) % perimeter) + perimeter) % perimeter;
+        arcs[i] += forward <= perimeter / 2 ? deficit : -deficit;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+
+  // Relaxation only ever nudges locally, so a tray wedged between two
+  // chairs (say one dropped right on the rim beside the DM's corner throne)
+  // can't get past either. Any tray still colliding hops to the nearest
+  // clear spot round the rim, searching both ways.
+  const perimeter = 4 * (hx + hz);
+  const clearAt = (index: number, arc: number) => {
+    const [x, z] = rimPointFromArc(arc, hx, hz);
+    const clearOfChairs = chairObstacles.every(
+      (chair) => Math.hypot(x - chair.x, z - chair.z) >= trayRadius + chair.radius + TRAY_NUDGE_MARGIN - 1e-6
+    );
+    return (
+      clearOfChairs &&
+      arcs.every((other, j) => {
+        if (j === index) return true;
+        const [ox, oz] = rimPointFromArc(other, hx, hz);
+        return Math.hypot(x - ox, z - oz) >= 2 * trayRadius + TRAY_NUDGE_MARGIN - 1e-6;
+      })
+    );
+  };
+  for (let i = 0; i < arcs.length; i++) {
+    if (clearAt(i, arcs[i])) continue;
+    for (let step = 1; step * RIM_HOP_STEP <= perimeter / 2; step++) {
+      const found = [arcs[i] + step * RIM_HOP_STEP, arcs[i] - step * RIM_HOP_STEP].find((arc) => clearAt(i, arc));
+      if (found !== undefined) {
+        arcs[i] = found;
+        break;
+      }
+    }
+  }
+
+  const result = new Map<string, [number, number]>();
+  points().forEach(([x, z], index) => result.set(trays[index].userId, [roundCoord(x), roundCoord(z)]));
+  return result;
 }
 
 /** One connected member's own ideal (unresolved) personal tray spot —
@@ -1157,7 +1273,22 @@ export function resolveMemberTrayLayout(
   const placedTrays: ChairObstacle[] = [];
   const result = new Map<string, [number, number, number]>();
 
+  // Trays floating off the head square's rim are spread along it together
+  // (spreadAlongHeadRim); only the rest go through the nudge loop below.
+  const rimSeeds = seeds.filter((seed) => isOnHeadRim(seed.position[0], seed.position[2], RIM_PROP_CLEARANCE));
+  const rimSpread = spreadAlongHeadRim(
+    rimSeeds.map((seed) => ({ userId: seed.userId, x: seed.position[0], z: seed.position[2] })),
+    trayRadius,
+    chairObstacles
+  );
+  for (const seed of rimSeeds) {
+    const [x, z] = rimSpread.get(seed.userId)!;
+    placedTrays.push({ x, z, radius: trayRadius });
+    result.set(seed.userId, [x, seed.position[1], z]);
+  }
+
   for (const seed of seeds) {
+    if (result.has(seed.userId)) continue;
     let x = seed.position[0];
     let z = seed.position[2];
     const obstacles = [...chairObstacles, ...placedTrays];
@@ -1184,12 +1315,6 @@ export function resolveMemberTrayLayout(
         x = obstacle.x + (x - obstacle.x) * scale;
         z = obstacle.z + (z - obstacle.z) * scale;
       }
-    }
-
-    // A tray floating beside the head square must never be nudged back over
-    // it (and onto the map) — push it straight back out past the rim.
-    if (isOffHeadRim(seed.position[0], seed.position[2], RIM_PROP_CLEARANCE)) {
-      [x, z] = pushOffHeadRim(x, z, RIM_PROP_CLEARANCE);
     }
 
     placedTrays.push({ x, z, radius: trayRadius });

@@ -462,6 +462,40 @@ try {
     quickAddDisabledWithMap === false
   );
 
+  // Wheel over the open book scrolls the book, never the camera: drei
+  // renders the book inside the canvas's own event wrapper — the element
+  // the free camera's OrbitControls listens on for wheel-zoom.
+  await dmPage.click('[data-testid="camera-mode-toggle"]');
+  await sleep(500);
+  await dmPage.evaluate(() => {
+    window.__wheelsAtCanvasWrapper = 0;
+    document.querySelector("canvas").parentElement.addEventListener("wheel", () => {
+      window.__wheelsAtCanvasWrapper += 1;
+    });
+  });
+  const bookPageBox = await dmPage.locator('[data-testid="dm-book-page"]').boundingBox();
+  const scrollBefore = await dmPage.$eval('[data-testid="dm-book-page"]', (el) => ({
+    top: el.scrollTop,
+    scrollable: el.scrollHeight > el.clientHeight + 1,
+  }));
+  await dmPage.mouse.move(bookPageBox.x + bookPageBox.width / 2, bookPageBox.y + bookPageBox.height / 2);
+  await dmPage.mouse.wheel(0, 300);
+  await sleep(400);
+  const wheelsAtWrapper = await dmPage.evaluate(() => window.__wheelsAtCanvasWrapper);
+  const scrollAfter = await dmPage.$eval('[data-testid="dm-book-page"]', (el) => el.scrollTop);
+  check(
+    "a wheel over the open book never reaches the free camera's zoom listener",
+    wheelsAtWrapper === 0,
+    JSON.stringify({ wheelsAtWrapper })
+  );
+  check(
+    "a wheel over the open book scrolls the book's page",
+    !scrollBefore.scrollable || scrollAfter > scrollBefore.top,
+    JSON.stringify({ scrollBefore, scrollAfter })
+  );
+  await dmPage.click('[data-testid="camera-mode-toggle"]');
+  await sleep(500);
+
   // -- 5a. Enemies: a real create round trip. --
   await dmPage.fill('[data-testid="stat-block-name-input"]', "Cave Bear");
   await dmPage.fill('[data-testid="stat-block-hp-input"]', "42");
