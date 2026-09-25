@@ -1,4 +1,10 @@
-import { COMBINED_TABLE_TOP, TABLE_TOP, TABLE_SURFACE_Y, singleTableOffsetZ } from "./table";
+import {
+  COMBINED_TABLE_TOP,
+  COMBINED_TABLE_VISIBLE_TOP,
+  TABLE_TOP,
+  TABLE_SURFACE_Y,
+  singleTableOffsetZ,
+} from "./table";
 
 /**
  * Structurally matches data-access's CampaignMember so callers can pass that
@@ -1003,6 +1009,10 @@ export function computeMemberTrayPosition(
   const seat = getEffectiveSeat(layout, userId, offsets);
   if (!seat) return null;
 
+  // The head square carries the live map edge to edge, so trays there float
+  // off its rim instead of sitting on (and hiding) the map.
+  if (seat.tableIndex === -1) return rimPropPosition(seat.position, 1, TABLE_SURFACE_Y + 0.01);
+
   const center = tableCenterForSeat(seat, layout.appendedTables);
   const fraction =
     seat.tableIndex === -1 ? HEAD_SQUARE_MEMBER_TRAY_FRACTION : APPENDED_TABLE_MEMBER_TRAY_FRACTION;
@@ -1011,6 +1021,77 @@ export function computeMemberTrayPosition(
     TABLE_SURFACE_Y + 0.01,
     center[1] + (seat.position[2] - center[1]) * fraction,
   ];
+}
+
+/**
+ * Props that float beside the head square rather than on it (every personal
+ * dice tray seated there, and the DM's book) sit this far past the visible
+ * tabletop's edge, center to edge — enough for a tray's whole footprint
+ * (PERSONAL_TRAY_RADIUS) or the book's to clear the wood.
+ */
+export const RIM_PROP_CLEARANCE = 0.42;
+
+/**
+ * How far round from its owner's seat a floating prop sits, measured at the
+ * table center from the seat's own outward direction. Anything just off the
+ * rim in front of a seat is below that seat's camera frame, so props go
+ * well round to the owner's side — past the table's end, where the seat's
+ * own camera still sees them.
+ */
+export const RIM_PROP_ANGLE = (110 * Math.PI) / 180;
+
+function rimHalfExtents(clearance: number): { hx: number; hz: number } {
+  return {
+    hx: COMBINED_TABLE_VISIBLE_TOP.width / 2 + clearance,
+    hz: COMBINED_TABLE_VISIBLE_TOP.depth / 2 + clearance,
+  };
+}
+
+/**
+ * Where a prop owned by the seat at `seatPosition` floats beside the head
+ * square: rotate the seat's outward direction by RIM_PROP_ANGLE toward
+ * `side` (+1 or -1) — or by `rimAngle`, to line a second prop up further
+ * round the same side — then walk out from the table center along it until
+ * clear of the rim.
+ */
+export function rimPropPosition(
+  seatPosition: readonly [number, number, number],
+  side: 1 | -1,
+  y: number,
+  clearance: number = RIM_PROP_CLEARANCE,
+  rimAngle: number = RIM_PROP_ANGLE
+): [number, number, number] {
+  const length = Math.hypot(seatPosition[0], seatPosition[2]);
+  const outX = length > 1e-6 ? seatPosition[0] / length : 0;
+  const outZ = length > 1e-6 ? seatPosition[2] / length : 1;
+  const angle = rimAngle * side;
+  const dirX = outX * Math.cos(angle) - outZ * Math.sin(angle);
+  const dirZ = outX * Math.sin(angle) + outZ * Math.cos(angle);
+  const { hx, hz } = rimHalfExtents(clearance);
+  const t = Math.min(
+    Math.abs(dirX) > 1e-9 ? hx / Math.abs(dirX) : Infinity,
+    Math.abs(dirZ) > 1e-9 ? hz / Math.abs(dirZ) : Infinity
+  );
+  return [roundCoord(dirX * t), y, roundCoord(dirZ * t)];
+}
+
+/** True when (x, z) is clear of the head square's rim band. */
+function isOffHeadRim(x: number, z: number, clearance: number): boolean {
+  const { hx, hz } = rimHalfExtents(clearance);
+  return Math.abs(x) >= hx - 1e-6 || Math.abs(z) >= hz - 1e-6;
+}
+
+/** Pushes (x, z) straight out from the table center until it clears the
+ * head square's rim band; a no-op for a point already clear of it. */
+function pushOffHeadRim(x: number, z: number, clearance: number): [number, number] {
+  if (isOffHeadRim(x, z, clearance)) return [x, z];
+  const { hx, hz } = rimHalfExtents(clearance);
+  if (Math.abs(x) < 1e-9 && Math.abs(z) < 1e-9) return [0, hz];
+  const t = Math.min(
+    Math.abs(x) > 1e-9 ? hx / Math.abs(x) : Infinity,
+    Math.abs(z) > 1e-9 ? hz / Math.abs(z) : Infinity
+  );
+  return [x * t, z * t];
 }
 
 /** One connected member's own ideal (unresolved) personal tray spot —
@@ -1103,6 +1184,12 @@ export function resolveMemberTrayLayout(
         x = obstacle.x + (x - obstacle.x) * scale;
         z = obstacle.z + (z - obstacle.z) * scale;
       }
+    }
+
+    // A tray floating beside the head square must never be nudged back over
+    // it (and onto the map) — push it straight back out past the rim.
+    if (isOffHeadRim(seed.position[0], seed.position[2], RIM_PROP_CLEARANCE)) {
+      [x, z] = pushOffHeadRim(x, z, RIM_PROP_CLEARANCE);
     }
 
     placedTrays.push({ x, z, radius: trayRadius });

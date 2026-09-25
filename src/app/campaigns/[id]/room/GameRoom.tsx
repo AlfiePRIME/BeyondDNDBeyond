@@ -205,6 +205,8 @@ import {
   clampToTableArrangement,
   computeCampaignSeatLayout,
   computeMemberTrayPosition,
+  rimPropPosition,
+  RIM_PROP_CLEARANCE,
   computeTableMapMetrics,
   DEFAULT_WHITEBOARD_BRUSH_SIZE,
   DEFAULT_WHITEBOARD_COLOR,
@@ -523,86 +525,10 @@ const WEATHER_TICK_INTERVAL_MS = 30_000;
 // replaying a stale backlog.
 const MAX_QUEUED_ALLEGIANCE_BANNERS = 5;
 
-// Prompt: doubling the table along its long edge (table.ts's
-// COMBINED_TABLE_TOP/TABLE_UNITS_LONG_EDGE) made seating.ts's ellipse fit
-// the full two-table footprint, which put every seat — including the DM's —
-// noticeably further from the world origin than before (the ellipse's
-// depth-axis half-extent nearly doubled). The DM's book still needs to land
-// on the SAME physical surface as before: the live map's own
-// single-table-sized footprint, which per the project owner's explicit call
-// stays centered on the world origin (the seam between the two tables — see
-// GameTableScene's CombinedTable/the live map's own group comment) rather
-// than resized or moved to either table.
-//
-// The book's own position (dmBookPosition below) is therefore expressed as
-// a FIXED absolute distance from that origin, in the direction of the DM's
-// own seat — NOT a fraction of the seat's own distance from center and NOT
-// a fixed step FORWARD FROM the seat (both tried and rejected; see git
-// history for the fuller reasoning) — while every connected member's own
-// personal dice tray (including the DM's) now instead uses seating.ts's
-// computeMemberTrayPosition, a fraction-of-the-seat's-own-reach formula
-// that generalizes to N simultaneous trays across a multi-table
-// arrangement — see that function's own doc comment for why a fixed
-// distance from center, workable for exactly one tray, stopped being the
-// right shape the moment more than one needed to coexist.
-function outwardFromOrigin(position: readonly [number, number, number]): [number, number] {
-  const [x, , z] = position;
-  const dist = Math.hypot(x, z);
-  // Never actually hit — SEAT_MARGIN (seating.ts) keeps every seat off the
-  // origin — but a stable direction beats NaN if it ever were.
-  return dist > 1e-6 ? [x / dist, z / dist] : [0, -1];
-}
-
-// Phase 5: the DM's book (a real 3D prop, DmBookProp) sits at a different
-// spot near the table's center than the private dice tray above — offset
-// to one side (lateral, perpendicular to the tray's own "toward the DM's
-// seat" direction) AND further from center (0.3 vs. the tray's 0.2), so
-// the two never compete for the same patch of table (verified numerically:
-// their centers stay over 1.6 units apart for every party size, well clear
-// of either prop's own footprint).
-//
-// UNLIKE the tray, this position is NOT free to land anywhere on the real
-// tabletop: verify-dm-book.mjs clicks the book at its own live-projected
-// screen position (DmBookPropProps.onProjectedPosition), and a click only
-// ever reaches the WebGL canvas if that point ISN'T covered by one of
-// DraggablePanel's own screen-anchored panels (quickActions/diceLog sit
-// CENTERED on the viewport — DraggablePanel.module.css's anchorTopCenter/
-// anchorBottomCenter — while handout/map anchor to the right edge). The
-// negative lateral value below (mirrored from Phase 5's original positive
-// one) deliberately projects the book to the RIGHT of center, in the real
-// measured gap between those two panel groups — re-derived from this
-// table's actual bigger seating ellipse and re-tuned camera (a fixed
-// lateral/forward step sized for the OLD, much-closer seat no longer lands
-// in a safe screen position once the seat moves this much further out —
-// this doesn't degrade gracefully the way the tray's origin-relative
-// distance does, so it needed a fresh empirical check, not just a
-// footprint-margin one). Confirmed both analytically (a plain perspective-
-// projection replay of this exact camera/seat math, for every party size
-// 2 through 8) AND empirically against a live DM Room with
-// verify-dm-book.mjs's own click search.
-const DM_BOOK_FORWARD_OFFSET = 0.3;
-// Flipped from -1.7 to +1.0 (2026-08-29): the original -1.7 projected the
-// book into screen-space "mid-right" for a real re-check against the
-// CURRENT codebase — exactly DraggablePanel.tsx's own DEFAULT_ANCHOR_CLASS
-// chatLog anchor (anchorMidRight), silently hiding the book behind the
-// default-positioned Chat panel and swallowing every click aimed at it
-// (confirmed directly: element hit-testing the book's own projected screen
-// point landed on the chat input, not the canvas, for both a solo-DM room
-// and a DM+1-player room). A first attempt just flipped the SIGN (-1.7 ->
-// +1.7), which cleared the chat panel but pushed the book's own left edge
-// (its up-to-480px-wide panel is screen-CENTERED on this projected point)
-// PAST the opposite viewport edge instead — a real regression caught
-// directly via verify-dm-book.mjs: the DM Controls tab landed outside the
-// viewport and could never be clicked. +1.7's magnitude turned out to be
-// right at the edge of viewport-safety in EITHER direction (confirmed: the
-// ORIGINAL -1.7 also left only ~16px of margin on ITS side) — the real fix
-// is a smaller magnitude, not just a different sign, landing comfortably
-// left-of-center with real margin on both edges. "Mid-left" has no
-// DEFAULT_ANCHOR_CLASS claim at all, so a positive value stays clear of any
-// default panel; +1.0 (down from +1.7) was re-verified clean against real
-// verify-dm-book.mjs runs for both party sizes, including clicking every
-// one of the book's 6 tabs.
-const DM_BOOK_LATERAL_OFFSET = 1.0;
+// How far round from the DM's seat the DM's book floats — past the DM's own
+// tray (seating.ts's RIM_PROP_ANGLE, 110°) toward the far corner, far
+// enough apart that the two never overlap.
+const DM_BOOK_RIM_ANGLE = (140 * Math.PI) / 180;
 
 // Bug report (2026-08-26, filed together with the "larger maps should
 // display bigger" one — both coupled through this same cellSize-derived
@@ -1922,32 +1848,14 @@ export function GameRoom({
       dmTrayDefaultPosition[2] + offset.dz,
     ];
   }, [dmTrayDefaultPosition, dmTrayOffset, liveDmTrayOffset]);
-  // Phase 5: the DM's book prop's position — same outward-from-origin
-  // direction as the DM's own personal tray's DEFAULT spot
-  // (dmTrayDefaultPosition above — the book's own placement is anchored to
-  // the seat's own geometry, not wherever the tray has since been manually
-  // dragged to), PLUS a
-  // lateral component (perpendicular to that direction: (-outZ, outX)
-  // instead of (outX, outZ)) so the book sits to one side of the tray
-  // rather than dead-center on top of it. The lateral magnitude (1.7)
-  // dominates the forward one (0.3) here — unlike the tray, the book's
-  // exact position is chosen to satisfy the on-screen click-safety
-  // constraint above, not to sit "further out toward the seat" — so the two
-  // offsets combined keep a real gap between the tray's own footprint
-  // (PERSONAL_TRAY_RADIUS in DiceTumble.tsx) and the book's own (visible
-  // geometry well under half a meter across — DmBookProp.tsx) regardless of
-  // party size or which side of the ellipse the DM's seat lands on.
-  const dmBookDefaultPosition = useMemo<[number, number, number]>(() => {
-    if (!dmSeat) return [DM_BOOK_LATERAL_OFFSET, TABLE_SURFACE_Y, 0];
-    const [outX, outZ] = outwardFromOrigin(dmSeat.position);
-    const lateralX = -outZ;
-    const lateralZ = outX;
-    return [
-      outX * DM_BOOK_FORWARD_OFFSET + lateralX * DM_BOOK_LATERAL_OFFSET,
-      TABLE_SURFACE_Y,
-      outZ * DM_BOOK_FORWARD_OFFSET + lateralZ * DM_BOOK_LATERAL_OFFSET,
-    ];
-  }, [dmSeat]);
+  // The DM's book floats off the head square's rim on the same side as the
+  // DM's own dice tray, further round (seating.ts's rimPropPosition), so
+  // neither sits on the live map. That side of the DM's view is the clear
+  // one — the map panel docks down the other.
+  const dmBookDefaultPosition = useMemo<[number, number, number]>(
+    () => rimPropPosition(dmSeat?.position ?? [0, 0, 1], 1, TABLE_SURFACE_Y, RIM_PROP_CLEARANCE, DM_BOOK_RIM_ANGLE),
+    [dmSeat]
+  );
   // DM book move: the book's ACTUAL current position — dmBookDefaultPosition
   // above, translated by whichever offset is currently in effect (this
   // client's own in-progress drag if any, else the last persisted one) —
@@ -4204,6 +4112,11 @@ export function GameRoom({
   // mid-combat mode flip, a DM's lighting toggle, or a weather change must
   // reach every connected player, including the flipping DM's other
   // windows.
+  // Whether this client has seen a session running (or paused) here — only
+  // then does "fully ended" mean the session was just ended. A DM who opened
+  // the room before hosting has no session to end, and must not be bounced
+  // out the first time they flip a setting.
+  const sawSessionRef = useRef(initialSessionActive || initialSessionStartedAt !== null);
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
     return subscribeToCampaignChanges(supabase, campaignId, (campaign) => {
@@ -4217,7 +4130,9 @@ export function GameRoom({
       setSessionStartedAt(campaign.session_started_at);
       // Fully ended (not merely paused): the durable backstop for a player
       // who missed the SESSION_ENDED broadcast.
-      if (!campaign.session_active && campaign.session_started_at === null) {
+      if (campaign.session_active || campaign.session_started_at !== null) {
+        sawSessionRef.current = true;
+      } else if (sawSessionRef.current) {
         router.push(`/campaigns/${campaignId}?sessionEnded=1`);
       }
     });

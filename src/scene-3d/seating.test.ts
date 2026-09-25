@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeSeatLayout, seatEllipseSemiAxes, type SeatMember } from "@/scene-3d";
-import { COMBINED_TABLE_TOP, TABLE_TOP, TABLE_SURFACE_Y, singleTableOffsetZ } from "./table";
+import { COMBINED_TABLE_TOP, COMBINED_TABLE_VISIBLE_TOP, TABLE_TOP, TABLE_SURFACE_Y, singleTableOffsetZ } from "./table";
 import {
   computeCampaignSeatLayout,
   HEAD_SQUARE_SEAT_CAPACITY,
@@ -13,6 +13,9 @@ import {
   HEAD_SQUARE_MEMBER_TRAY_FRACTION,
   APPENDED_TABLE_MEMBER_TRAY_FRACTION,
   resolveMemberTrayLayout,
+  rimPropPosition,
+  RIM_PROP_ANGLE,
+  RIM_PROP_CLEARANCE,
   CHAIR_DRAG_CLAMP_RADIUS,
   nearestTableCenter,
   clampToTableArrangement,
@@ -23,6 +26,7 @@ import {
   type MemberTraySeed,
 } from "./seating";
 import { PERSONAL_TRAY_RADIUS } from "./DiceTumble";
+import { DM_BOOK_FOOTPRINT_RADIUS } from "./DmBookProp";
 
 // Imports the real constants rather than hardcoded copies so these tests can
 // never silently drift from table.ts's actual dimensions. TABLE is the
@@ -786,14 +790,23 @@ describe("effective position tracks a reshaped default instead of going stale", 
 // not the function's own internals) rather than asserting against a
 // hand-copied literal that could silently drift from the real formula.
 describe("computeMemberTrayPosition", () => {
-  /** Replicates the fraction-of-the-way-from-center formula independently
-   * of seating.ts's own internals, so these assertions actually check the
-   * formula rather than just calling it twice. */
+  /** Replicates the placement formulas independently of seating.ts's own
+   * internals, so these assertions actually check the formula rather than
+   * just calling it twice: a head-square seat's tray floats off the rim
+   * (seat direction rotated RIM_PROP_ANGLE, walked out past the rim band);
+   * an appended-table seat's sits a fraction of the way toward the seat. */
   function expectedTrayPosition(
     seatPosition: readonly [number, number, number],
-    center: readonly [number, number] = [0, 0],
+    center?: readonly [number, number],
     fraction: number = HEAD_SQUARE_MEMBER_TRAY_FRACTION
   ): [number, number, number] {
+    if (!center) {
+      const angle = Math.atan2(seatPosition[2], seatPosition[0]) + RIM_PROP_ANGLE;
+      const hx = COMBINED_TABLE_VISIBLE_TOP.width / 2 + RIM_PROP_CLEARANCE;
+      const hz = COMBINED_TABLE_VISIBLE_TOP.depth / 2 + RIM_PROP_CLEARANCE;
+      const t = Math.min(hx / Math.abs(Math.cos(angle)), hz / Math.abs(Math.sin(angle)));
+      return [Math.cos(angle) * t, TABLE_SURFACE_Y + 0.01, Math.sin(angle) * t];
+    }
     return [
       center[0] + (seatPosition[0] - center[0]) * fraction,
       TABLE_SURFACE_Y + 0.01,
@@ -801,40 +814,51 @@ describe("computeMemberTrayPosition", () => {
     ];
   }
 
+  function expectCloseTo(actual: readonly number[] | null, expected: readonly number[]) {
+    expect(actual).not.toBeNull();
+    actual!.forEach((value, index) => expect(value).toBeCloseTo(expected[index], 6));
+  }
+
   it("returns null for a user_id not present in the layout at all", () => {
     const layout = computeCampaignSeatLayout(makeMembers(4));
     expect(computeMemberTrayPosition(layout, "not-a-member", new Map())).toBeNull();
   });
 
-  it("sits at HEAD_SQUARE_MEMBER_TRAY_FRACTION of the way from the world origin toward a head-square member's own default seat", () => {
+  it("floats a head-square member's tray off the rim, rotated round from their seat", () => {
     const layout = computeCampaignSeatLayout(makeMembers(4));
     const userId = layout.seats[1].member.user_id;
     const seat = findSeatByUserId(layout.seats, userId);
     expect(seat.tableIndex).toBe(-1); // the head square
 
     const position = computeMemberTrayPosition(layout, userId, new Map());
-    expect(position).not.toBeNull();
-    const [x, y, z] = position!;
-    expect(y).toBeCloseTo(TABLE_SURFACE_Y + 0.01);
-    expect(Math.hypot(x, z)).toBeCloseTo(
-      Math.hypot(seat.position[0], seat.position[2]) * HEAD_SQUARE_MEMBER_TRAY_FRACTION
-    );
-    expect(position).toEqual(expectedTrayPosition(seat.position));
+    expectCloseTo(position, expectedTrayPosition(seat.position));
   });
 
-  it("stays within the physical head-square tabletop for every seat angle — never past the real table edge", () => {
-    // The per-axis bound this file's own doc comment on
-    // HEAD_SQUARE_MEMBER_TRAY_FRACTION relies on: |x| ≤ fraction × semiX and
-    // |z| ≤ fraction × semiZ for EVERY angle (|cosθ|, |sinθ| ≤ 1), checked
-    // here against a large sweep of party sizes rather than trusted by
-    // algebra alone.
+  it("never lands a head-square tray over the tabletop (where the live map is), for every seat angle", () => {
     for (let n = 2; n <= 16; n++) {
       const layout = computeCampaignSeatLayout(makeMembers(n));
       for (const seat of layout.seats.filter((s) => s.tableIndex === -1)) {
-        const position = computeMemberTrayPosition(layout, seat.member.user_id, new Map())!;
-        expect(Math.abs(position[0])).toBeLessThan(COMBINED_TABLE.width / 2 - PERSONAL_TRAY_RADIUS);
-        expect(Math.abs(position[2])).toBeLessThan(COMBINED_TABLE.depth / 2 - PERSONAL_TRAY_RADIUS);
+        const [x, , z] = computeMemberTrayPosition(layout, seat.member.user_id, new Map())!;
+        const clearOnX = Math.abs(x) >= COMBINED_TABLE_VISIBLE_TOP.width / 2 + PERSONAL_TRAY_RADIUS;
+        const clearOnZ = Math.abs(z) >= COMBINED_TABLE_VISIBLE_TOP.depth / 2 + PERSONAL_TRAY_RADIUS;
+        expect(clearOnX || clearOnZ).toBe(true);
       }
+    }
+  });
+
+  it("lines the DM's book up further round the rim than the DM's tray, clear of it and off the tabletop", () => {
+    const bookAngle = (140 * Math.PI) / 180;
+    for (let n = 2; n <= 12; n++) {
+      const layout = computeCampaignSeatLayout(makeMembers(n));
+      const dmSeat = layout.seats.find((s) => s.member.role === "dm")!;
+      const tray = computeMemberTrayPosition(layout, dmSeat.member.user_id, new Map())!;
+      const book = rimPropPosition(dmSeat.position, 1, TABLE_SURFACE_Y, RIM_PROP_CLEARANCE, bookAngle);
+      expect(Math.hypot(tray[0] - book[0], tray[2] - book[2])).toBeGreaterThan(
+        PERSONAL_TRAY_RADIUS + DM_BOOK_FOOTPRINT_RADIUS
+      );
+      const clearOnX = Math.abs(book[0]) >= COMBINED_TABLE_VISIBLE_TOP.width / 2 + DM_BOOK_FOOTPRINT_RADIUS;
+      const clearOnZ = Math.abs(book[2]) >= COMBINED_TABLE_VISIBLE_TOP.depth / 2 + DM_BOOK_FOOTPRINT_RADIUS;
+      expect(clearOnX || clearOnZ).toBe(true);
     }
   });
 
@@ -842,7 +866,7 @@ describe("computeMemberTrayPosition", () => {
     const layout = computeCampaignSeatLayout(makeMembers(5));
     const dmSeat = layout.seats.find((s) => s.member.role === "dm")!;
     const position = computeMemberTrayPosition(layout, dmSeat.member.user_id, new Map());
-    expect(position).toEqual(expectedTrayPosition(dmSeat.position));
+    expectCloseTo(position, expectedTrayPosition(dmSeat.position));
   });
 
   it("tracks a stored seat offset: writing an offset moves the derived tray position accordingly", () => {
@@ -861,7 +885,7 @@ describe("computeMemberTrayPosition", () => {
     // And it moves to EXACTLY where the offset-applied effective seat
     // predicts, not just "somewhere different".
     const effectiveSeat = getEffectiveSeat(layout, userId, new Map([[userId, offset]]));
-    expect(withOffset).toEqual(expectedTrayPosition(effectiveSeat!.position));
+    expectCloseTo(withOffset, expectedTrayPosition(effectiveSeat!.position));
   });
 
   it("clearing a stored offset (back to null) moves the tray back to the un-offset default", () => {
@@ -938,9 +962,7 @@ describe("computeMemberTrayPosition", () => {
     const positionAfter = computeMemberTrayPosition(after, userId, offsets);
 
     expect(positionBefore).not.toEqual(positionAfter);
-    expect(positionAfter).toEqual(
-      expectedTrayPosition(getEffectiveSeat(after, userId, offsets)!.position)
-    );
+    expectCloseTo(positionAfter, expectedTrayPosition(getEffectiveSeat(after, userId, offsets)!.position));
   });
 });
 

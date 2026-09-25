@@ -158,6 +158,7 @@ async function makeTestUsers(count, label, batchSize = 8) {
 const TABLE_TOP = { width: 4.36, depth: 2.1 };
 const COMBINED_TABLE_TOP = { width: 4.36, depth: 4.2 };
 const TABLE_TOP_JOIN_DEPTH = 1.848;
+const COMBINED_TABLE_VISIBLE_TOP = { width: 4.36, depth: TABLE_TOP_JOIN_DEPTH * 2 };
 const PLAYER_CHAIR_FRONTAGE = 0.4669;
 const DM_CHAIR_FRONTAGE = 1.2935;
 // trayRadiusForScale(PERSONAL_TRAY_SCALE) — DiceTumble.tsx's own formula,
@@ -311,12 +312,14 @@ try {
     JSON.stringify({ worstTrayChairSlack: worstTrayChair })
   );
 
-  // Every tray also lands on the REAL combined tabletop surface, not off
-  // its edge (table.ts's own real half-dimensions).
-  const onTable = dmTrays.trays.every(
-    (t) => Math.abs(t.position[0]) < COMBINED_TABLE_TOP.width / 2 && Math.abs(t.position[2]) < COMBINED_TABLE_TOP.depth / 2
+  // Every tray floats off the head square's rim (seating.ts's
+  // rimPropPosition) — never over the tabletop, where the live map is.
+  const clearOfTable = dmTrays.trays.every(
+    (t) =>
+      Math.abs(t.position[0]) >= COMBINED_TABLE_VISIBLE_TOP.width / 2 + radius - 1e-6 ||
+      Math.abs(t.position[2]) >= COMBINED_TABLE_VISIBLE_TOP.depth / 2 + radius - 1e-6
   );
-  check("every connected member's tray lands on the real tabletop surface", onTable, JSON.stringify(dmTrays.trays));
+  check("every connected member's tray floats clear of the tabletop (never over the map)", clearOfTable, JSON.stringify(dmTrays.trays));
 
   // -------------------------------------------------------------------
   // 3. Live chair drag moves THAT member's own tray live (before release),

@@ -128,6 +128,8 @@ export {
   applySeatOffset,
   getEffectiveSeat,
   computeMemberTrayPosition,
+  rimPropPosition,
+  RIM_PROP_CLEARANCE,
   HEAD_SQUARE_MEMBER_TRAY_FRACTION,
   APPENDED_TABLE_MEMBER_TRAY_FRACTION,
   resolveMemberTrayLayout,

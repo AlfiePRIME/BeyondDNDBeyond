@@ -6,7 +6,7 @@ import { Billboard, Html } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
 import { CanvasTexture, Group, Plane, Raycaster, SRGBColorSpace, Vector2, Vector3 } from "three";
-import type { Camera } from "three";
+import type { Camera, Object3D } from "three";
 
 // Palette mirrored from the app's design tokens (src/ui-components/tokens.css)
 // and Chair.tsx's own re-mirroring precedent — scene-3d can't import CSS
@@ -208,6 +208,10 @@ function HoverLabel({ text }: { text: string }) {
       </mesh>
     </Billboard>
   );
+}
+
+function centerOfScreen(_el: Object3D, _camera: Camera, size: { width: number; height: number }): number[] {
+  return [size.width / 2, size.height / 2];
 }
 
 // Scratch vectors reused every frame (Html.js's own v1-v4 precedent) rather
@@ -580,8 +584,14 @@ export function DmBookProp({
         <Html
           position={[0, HTML_ANCHOR_Y, 0]}
           center
+          // The book floats off the table's end, often near the screen edge,
+          // so the open pages center on the screen rather than on the prop —
+          // a screen-edge anchor would push half the book out of view.
+          calculatePosition={centerOfScreen}
           transform={false}
-          zIndexRange={[500, 0]}
+          // Centered over the room like a dialog, so it stacks above the
+          // draggable panels (z 1000+) but under the toolbar (5000).
+          zIndexRange={[4500, 4000]}
           pointerEvents="auto"
         >
           {children}
